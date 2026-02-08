@@ -66,10 +66,10 @@ function createSubtitleWindow() {
   // 取得儲存的位置
   const bounds = store ? store.get('subtitleWindowBounds', {
     width: 800,
-    height: 120,
+    height: 200,
     x: undefined,
     y: undefined
-  }) : { width: 800, height: 120, x: undefined, y: undefined }
+  }) : { width: 800, height: 200, x: undefined, y: undefined }
 
   subtitleWindow = new BrowserWindow({
     width: bounds.width,

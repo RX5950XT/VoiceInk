@@ -136,6 +136,85 @@ export async function transcribeLive(apiKey, audioBase64, format, targetLanguage
 }
 
 /**
+ * 即時轉錄音訊片段（帶上下文）
+ * @param {string} apiKey - OpenRouter API Key
+ * @param {string} audioBase64 - Base64 編碼的音訊片段
+ * @param {string} format - 音訊格式
+ * @param {string} targetLanguage - 目標語言代碼
+ * @param {string} modelId - 模型 ID
+ * @param {string} previousText - 前一句轉錄結果（用於上下文連貫）
+ * @returns {Promise<string>} 字幕文字
+ */
+export async function transcribeLiveWithContext(apiKey, audioBase64, format, targetLanguage = 'zh-TW', modelId = DEFAULT_MODEL, previousText = '') {
+  const languageName = LANGUAGE_PROMPTS[targetLanguage] || '繁體中文（台灣）'
+  const model = modelId || DEFAULT_MODEL
+  
+  // 構建包含上下文的 prompt
+  let contextHint = ''
+  if (previousText && previousText.trim()) {
+    contextHint = `前一句話是：「${previousText}」\n這段音訊是接續前一句的內容。`
+  }
+  
+  const prompt = targetLanguage === 'auto'
+    ? `音訊轉錄任務。
+${contextHint}
+【嚴格規則 - 違反任何一條都是失敗】
+1. 你的輸出必須 100% 來自音訊中實際說出的話語
+2. 如果音訊是靜音、只有背景噪音、或聽不清楚 → 回覆空白
+3. 絕對禁止：猜測、補充、編造、想像任何內容
+4. 絕對禁止：輸出常見句子如「謝謝觀看」「歡迎訂閱」等除非真的聽到
+5. 如果與前一句重疊，只輸出新增部分
+6. 只輸出純文字字幕，無說明`
+    : `音訊轉錄任務，輸出${languageName}字幕。
+${contextHint}
+【嚴格規則 - 違反任何一條都是失敗】
+1. 你的輸出必須 100% 來自音訊中實際說出的話語
+2. 如果音訊是靜音、只有背景噪音、或聽不清楚 → 回覆空白
+3. 絕對禁止：猜測、補充、編造、想像任何內容
+4. 絕對禁止：輸出常見句子如「謝謝觀看」「歡迎訂閱」等除非真的聽到
+5. 自動偵測語言，若非${languageName}則翻譯為${languageName}
+6. 如果與前一句重疊，只輸出新增部分
+7. 只輸出純文字字幕，無說明`
+
+  const response = await fetch(API_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://voiceink.app',
+      'X-Title': 'VoiceInk'
+    },
+    body: JSON.stringify({
+      model: model,
+      messages: [{
+        role: 'user',
+        content: [
+          {
+            type: 'input_audio',
+            input_audio: {
+              data: audioBase64,
+              format: format
+            }
+          },
+          {
+            type: 'text',
+            text: prompt
+          }
+        ]
+      }]
+    })
+  })
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(error.error?.message || `API 錯誤: ${response.status}`)
+  }
+
+  const data = await response.json()
+  return data.choices[0]?.message?.content || ''
+}
+
+/**
  * 驗證 API Key
  * @param {string} apiKey - OpenRouter API Key
  * @returns {Promise<boolean>} 是否有效

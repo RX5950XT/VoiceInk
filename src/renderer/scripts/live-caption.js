@@ -2,7 +2,7 @@
  * VoiceInk - 即時字幕功能
  */
 
-import { transcribeLive } from './api.js'
+import { transcribeLive, transcribeLiveWithContext } from './api.js'
 import { showToast, getApiKey, getModelId } from './app.js'
 
 // ===== Electron API Fallback =====
@@ -29,9 +29,13 @@ let mediaStream = null
 let mediaRecorder = null
 let audioChunks = []
 let captureInterval = null
+let isProcessing = false // 防止重複請求
 
-// 音訊分段時間（毫秒）
-const CHUNK_DURATION = 4000
+// 前一句轉錄結果（用於上下文連貫）
+let previousTranscript = ''
+
+// 音訊分段時間（毫秒）- 3 秒以避免 API 請求過於頻繁
+const CHUNK_DURATION = 3000
 
 /**
  * 初始化即時字幕功能
@@ -114,82 +118,156 @@ async function startCapture() {
  */
 function startRecording(stream, apiKey, modelId) {
   // 建立 MediaRecorder
-  const options = { mimeType: 'audio/webm;codecs=opus' }
-  
-  try {
-    mediaRecorder = new MediaRecorder(stream, options)
-  } catch (e) {
-    // 如果不支援 webm，嘗試其他格式
-    mediaRecorder = new MediaRecorder(stream)
-  }
-
-  audioChunks = []
-
-  mediaRecorder.ondataavailable = (event) => {
-    if (event.data.size > 0) {
-      audioChunks.push(event.data)
+  // 每次錄製都使用完整的 MediaRecorder 實例，確保 WebM header 完整
+  function startNewRecording() {
+    if (!isCapturing || !stream) return
+    
+    const options = { mimeType: 'audio/webm;codecs=opus' }
+    
+    try {
+      mediaRecorder = new MediaRecorder(stream, options)
+    } catch (e) {
+      mediaRecorder = new MediaRecorder(stream)
     }
-  }
-
-  mediaRecorder.onstop = async () => {
-    if (audioChunks.length > 0 && isCapturing) {
-      await processAudioChunk(apiKey, modelId)
+    
+    const chunks = []
+    
+    mediaRecorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        chunks.push(event.data)
+      }
     }
-  }
-
-  // 開始錄製
-  mediaRecorder.start()
-
-  // 定期分段處理
-  captureInterval = setInterval(() => {
-    if (mediaRecorder && mediaRecorder.state === 'recording') {
-      mediaRecorder.stop()
-      audioChunks = []
+    
+    mediaRecorder.onstop = () => {
+      // 異步處理音訊（不阻塞下一次錄製）
+      if (chunks.length > 0 && isCapturing) {
+        processAudioChunkData(chunks, apiKey, modelId).catch(e => {
+          console.error('處理音訊失敗:', e)
+        })
+      }
       
-      // 短暫延遲後重新開始錄製
-      setTimeout(() => {
-        if (isCapturing && mediaRecorder) {
-          try {
-            mediaRecorder.start()
-          } catch (e) {
-            console.error('重新開始錄製失敗:', e)
-          }
-        }
-      }, 100)
+      // 如果還在擷取，開始下一輪錄製
+      if (isCapturing) {
+        startNewRecording()
+      }
     }
-  }, CHUNK_DURATION)
+    
+    // 開始錄製（不使用 timeslice，確保產生完整的 WebM）
+    mediaRecorder.start()
+    
+    // 設定在 CHUNK_DURATION 後停止
+    setTimeout(() => {
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        mediaRecorder.stop()
+      }
+    }, CHUNK_DURATION)
+  }
+  
+  // 開始第一輪錄製
+  startNewRecording()
 }
 
 /**
  * 處理音訊片段
+ * @param {Blob[]} chunks - 當前音訊片段陣列
  * @param {string} apiKey 
  * @param {string} modelId 
  */
-async function processAudioChunk(apiKey, modelId) {
-  if (audioChunks.length === 0) return
+async function processAudioChunkData(chunks, apiKey, modelId) {
+  if (chunks.length === 0) return
+  
+  // 如果正在處理中，跳過此片段以避免請求過於頻繁
+  if (isProcessing) return
+  isProcessing = true
 
   try {
-    // 合併音訊片段
-    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' })
+    // 只使用當前完整的 chunks（不合併前一片段，因為 WebM 需要完整檔案頭）
+    const webmBlob = new Blob(chunks, { type: 'audio/webm' })
+    
+    // 如果音訊太小，跳過
+    if (webmBlob.size < 1000) {
+      isProcessing = false
+      return
+    }
+    
+    // 將 WebM 轉換為 WAV 格式（包含音量檢測，靜音時返回 null）
+    let wavBlob
+    try {
+      wavBlob = await webmToWav(webmBlob)
+    } catch (e) {
+      // 格式轉換失敗，跳過此片段
+      isProcessing = false
+      return
+    }
+    
+    // 如果是靜音片段，跳過 API 呼叫
+    if (!wavBlob) {
+      isProcessing = false
+      return
+    }
     
     // 轉換為 Base64
-    const base64 = await blobToBase64(audioBlob)
+    const base64 = await blobToBase64(wavBlob)
     
     // 取得目標語言
     const targetLanguage = liveLanguage.value
 
-    // 呼叫 API
-    const text = await transcribeLive(apiKey, base64, 'webm', targetLanguage, modelId)
+    // 呼叫 API，傳入前一句作為上下文
+    const text = await transcribeLiveWithContext(
+      apiKey, 
+      base64, 
+      'wav', 
+      targetLanguage, 
+      modelId,
+      previousTranscript
+    )
     
     // 更新字幕
     if (text && text.trim()) {
-      await electronAPI.subtitle.update(text.trim())
+      // 移除與前一句明顯重複的部分
+      const cleanedText = removeOverlappingText(previousTranscript, text.trim())
+      
+      if (cleanedText) {
+        await electronAPI.subtitle.update(cleanedText)
+        previousTranscript = cleanedText
+      }
     }
 
   } catch (error) {
     console.error('處理音訊片段失敗:', error)
-    // 不顯示 toast，避免干擾使用者
+  } finally {
+    isProcessing = false
   }
+}
+
+/**
+ * 移除與前一句重複的文字
+ * @param {string} previous - 前一句轉錄
+ * @param {string} current - 當前轉錄
+ * @returns {string} 清理後的文字
+ */
+function removeOverlappingText(previous, current) {
+  if (!previous || !current) return current
+  
+  // 嘗試找出重疊部分
+  // 從前一句的後半部開始比對
+  const prevWords = previous.split('')
+  const currWords = current.split('')
+  
+  // 嘗試不同長度的重疊
+  for (let overlapLen = Math.min(prevWords.length, 20); overlapLen >= 3; overlapLen--) {
+    const prevEnd = prevWords.slice(-overlapLen).join('')
+    if (current.startsWith(prevEnd)) {
+      return current.slice(prevEnd.length).trim()
+    }
+  }
+  
+  // 如果當前文字完全包含在前一句中，可能是重複的
+  if (previous.includes(current)) {
+    return ''
+  }
+  
+  return current
 }
 
 /**
@@ -203,6 +281,9 @@ async function stopCapture() {
     clearInterval(captureInterval)
     captureInterval = null
   }
+  
+  // 清除狀態
+  previousTranscript = ''
 
   // 停止 MediaRecorder
   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
@@ -259,4 +340,142 @@ function blobToBase64(blob) {
     reader.onerror = reject
     reader.readAsDataURL(blob)
   })
+}
+
+/**
+ * 將 WebM 音訊轉換為 WAV 格式
+ * @param {Blob} webmBlob - WebM 格式的音訊 Blob
+ * @returns {Promise<Blob|null>} WAV 格式的音訊 Blob，如果音量太低則返回 null
+ */
+async function webmToWav(webmBlob) {
+  // 建立 AudioContext
+  const audioContext = new (window.AudioContext || window.webkitAudioContext)()
+  
+  try {
+    // 將 Blob 轉換為 ArrayBuffer
+    const arrayBuffer = await webmBlob.arrayBuffer()
+    
+    // 解碼音訊資料
+    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer)
+    
+    // 分析音訊 - 計算 RMS 和語音活動佔比
+    const { rms, speechRatio } = analyzeAudio(audioBuffer)
+    
+    // 靜音或語音活動太少則跳過
+    // RMS 閾值：0.015（整體音量）
+    // 語音佔比閾值：0.05（至少 5% 的採樣超過語音門檻）
+    const RMS_THRESHOLD = 0.015
+    const SPEECH_RATIO_THRESHOLD = 0.05
+    
+    if (rms < RMS_THRESHOLD || speechRatio < SPEECH_RATIO_THRESHOLD) {
+      // 音量太低或語音活動太少，視為靜音
+      return null
+    }
+    
+    // 編碼為 WAV
+    const wavBuffer = encodeWav(audioBuffer)
+    
+    return new Blob([wavBuffer], { type: 'audio/wav' })
+  } finally {
+    audioContext.close()
+  }
+}
+
+/**
+ * 計算 AudioBuffer 的 RMS（均方根）音量和語音活動
+ * @param {AudioBuffer} audioBuffer 
+ * @returns {{rms: number, speechRatio: number}} RMS 音量值和語音活動佔比
+ */
+function analyzeAudio(audioBuffer) {
+  const channelData = audioBuffer.getChannelData(0) // 使用第一個聲道
+  let sumSquares = 0
+  let speechSamples = 0
+  const SPEECH_THRESHOLD = 0.02 // 單一樣本的語音門檻
+  
+  for (let i = 0; i < channelData.length; i++) {
+    const sample = Math.abs(channelData[i])
+    sumSquares += sample * sample
+    
+    // 計算語音活動佔比
+    if (sample > SPEECH_THRESHOLD) {
+      speechSamples++
+    }
+  }
+  
+  const rms = Math.sqrt(sumSquares / channelData.length)
+  const speechRatio = speechSamples / channelData.length
+  
+  return { rms, speechRatio }
+}
+
+/**
+ * 將 AudioBuffer 編碼為 WAV 格式
+ * @param {AudioBuffer} audioBuffer
+ * @returns {ArrayBuffer}
+ */
+function encodeWav(audioBuffer) {
+  const numChannels = audioBuffer.numberOfChannels
+  const sampleRate = audioBuffer.sampleRate
+  const format = 1 // PCM
+  const bitDepth = 16
+  
+  // 取得所有聲道的資料
+  const channels = []
+  for (let i = 0; i < numChannels; i++) {
+    channels.push(audioBuffer.getChannelData(i))
+  }
+  
+  // 交錯聲道資料
+  const length = channels[0].length
+  const interleaved = new Float32Array(length * numChannels)
+  
+  for (let i = 0; i < length; i++) {
+    for (let ch = 0; ch < numChannels; ch++) {
+      interleaved[i * numChannels + ch] = channels[ch][i]
+    }
+  }
+  
+  // 轉換為 16-bit PCM
+  const dataLength = interleaved.length * (bitDepth / 8)
+  const buffer = new ArrayBuffer(44 + dataLength)
+  const view = new DataView(buffer)
+  
+  // WAV 標頭
+  writeString(view, 0, 'RIFF')
+  view.setUint32(4, 36 + dataLength, true)
+  writeString(view, 8, 'WAVE')
+  writeString(view, 12, 'fmt ')
+  view.setUint32(16, 16, true) // fmt chunk size
+  view.setUint16(20, format, true)
+  view.setUint16(22, numChannels, true)
+  view.setUint32(24, sampleRate, true)
+  view.setUint32(28, sampleRate * numChannels * (bitDepth / 8), true)
+  view.setUint16(32, numChannels * (bitDepth / 8), true)
+  view.setUint16(34, bitDepth, true)
+  writeString(view, 36, 'data')
+  view.setUint32(40, dataLength, true)
+  
+  // 寫入 PCM 資料
+  floatTo16BitPCM(view, 44, interleaved)
+  
+  return buffer
+}
+
+/**
+ * 寫入字串到 DataView
+ */
+function writeString(view, offset, string) {
+  for (let i = 0; i < string.length; i++) {
+    view.setUint8(offset + i, string.charCodeAt(i))
+  }
+}
+
+/**
+ * 將浮點數轉換為 16-bit PCM
+ */
+function floatTo16BitPCM(view, offset, input) {
+  for (let i = 0; i < input.length; i++, offset += 2) {
+    const s = Math.max(-1, Math.min(1, input[i]))
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true)
+  }
 }
