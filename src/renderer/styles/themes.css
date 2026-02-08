@@ -1,0 +1,79 @@
+/* ===== 主題變數 ===== */
+
+:root {
+  /* 深色主題（預設） */
+  --bg-primary: #0f0f0f;
+  --bg-secondary: #1a1a1a;
+  --bg-tertiary: #2d2d2d;
+  --bg-hover: #3d3d3d;
+
+  --text-primary: #ffffff;
+  --text-secondary: #a0a0a0;
+  --text-tertiary: #6a6a6a;
+
+  --accent-primary: #6366f1;
+  --accent-hover: #818cf8;
+  --accent-active: #4f46e5;
+
+  --border-color: #3d3d3d;
+  --border-light: #2d2d2d;
+
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+
+  --shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+
+  --transition: all 0.2s ease;
+}
+
+/* 淺色主題 */
+[data-theme="light"] {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f5f5f5;
+  --bg-tertiary: #e5e5e5;
+  --bg-hover: #d5d5d5;
+
+  --text-primary: #1a1a1a;
+  --text-secondary: #525252;
+  --text-tertiary: #a3a3a3;
+
+  --accent-primary: #4f46e5;
+  --accent-hover: #6366f1;
+  --accent-active: #4338ca;
+
+  --border-color: #e5e5e5;
+  --border-light: #f0f0f0;
+
+  --shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+
+/* 主題切換動畫 */
+body {
+  transition:
+    background-color 0.3s ease,
+    color 0.3s ease;
+}
+
+/* 主題切換按鈕圖示控制 */
+.icon-sun {
+  display: none;
+}
+
+.icon-moon {
+  display: inline;
+}
+
+[data-theme="light"] .icon-sun {
+  display: inline;
+}
+
+[data-theme="light"] .icon-moon {
+  display: none;
+}

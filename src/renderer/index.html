@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="zh-TW">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https://openrouter.ai"
+    />
+    <title>VoiceInk - 語音轉文字</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles/themes.css" />
+    <link rel="stylesheet" href="./styles/main.css" />
+  </head>
+  <body>
+    <div id="app" class="app-container">
+      <!-- 頂部導航列 -->
+      <header class="header">
+        <div class="header-left">
+          <div class="logo">
+            <span class="logo-icon">🖋️</span>
+            <span class="logo-text">VoiceInk</span>
+          </div>
+          <!-- 導航選項 -->
+          <nav class="header-nav">
+            <button class="nav-tab active" data-page="transcribe">
+              <span class="nav-icon">📁</span>
+              <span class="nav-text">檔案轉錄</span>
+            </button>
+            <button class="nav-tab" data-page="live">
+              <span class="nav-icon">🎙️</span>
+              <span class="nav-text">即時字幕</span>
+            </button>
+          </nav>
+        </div>
+        <div class="header-right">
+          <button id="themeToggle" class="icon-btn" title="切換主題">
+            <span class="icon-sun">☀️</span>
+            <span class="icon-moon">🌙</span>
+          </button>
+          <button id="settingsBtn" class="icon-btn" title="設定">⚙️</button>
+        </div>
+      </header>
+
+      <!-- 主要內容區域 -->
+      <div class="main-content">
+
+        <!-- 內容頁面 -->
+        <main class="content">
+          <!-- 檔案轉錄頁面 -->
+          <section id="page-transcribe" class="page active">
+            <div class="page-header">
+              <h1>音訊檔案轉錄</h1>
+              <p class="page-desc">拖入音訊檔案，AI 將自動轉錄為文字</p>
+            </div>
+
+            <!-- 拖放區域 -->
+            <div id="dropZone" class="drop-zone">
+              <div class="drop-zone-content">
+                <span class="drop-icon">📂</span>
+                <p class="drop-text">拖放音訊檔案到這裡</p>
+                <p class="drop-hint">支援 MP3, WAV, M4A, FLAC, OGG, AAC</p>
+                <button id="selectFileBtn" class="btn btn-secondary">
+                  或點擊選擇檔案
+                </button>
+              </div>
+              <input
+                type="file"
+                id="fileInput"
+                accept=".mp3,.wav,.m4a,.flac,.ogg,.aac,.wma,.aiff"
+                hidden
+              />
+            </div>
+
+            <!-- 檔案資訊 -->
+            <div id="fileInfo" class="file-info hidden">
+              <div class="file-details">
+                <span class="file-icon">🎵</span>
+                <div class="file-meta">
+                  <p class="file-name">filename.mp3</p>
+                  <p class="file-size">2.5 MB</p>
+                </div>
+                <button id="clearFileBtn" class="btn-icon" title="移除檔案">
+                  ❌
+                </button>
+              </div>
+            </div>
+
+            <!-- 語言選擇 -->
+            <div id="transcribeOptions" class="options-panel hidden">
+              <div class="option-group">
+                <label for="outputLanguage">輸出語言</label>
+                <select id="outputLanguage" class="select">
+                  <option value="zh-TW">繁體中文（台灣）</option>
+                  <option value="zh-CN">簡體中文</option>
+                  <option value="en">English</option>
+                  <option value="ja">日本語</option>
+                  <option value="ko">한국어</option>
+                  <option value="auto">自動偵測</option>
+                </select>
+              </div>
+              <button id="startTranscribeBtn" class="btn btn-primary">
+                <span>開始轉錄</span>
+              </button>
+            </div>
+
+            <!-- 進度顯示 -->
+            <div id="transcribeProgress" class="progress-panel hidden">
+              <div class="progress-bar">
+                <div class="progress-fill" style="width: 0%"></div>
+              </div>
+              <p class="progress-text">正在轉錄中...</p>
+            </div>
+
+            <!-- 結果區域 -->
+            <div id="transcribeResult" class="result-panel hidden">
+              <div class="result-header">
+                <h3>轉錄結果</h3>
+                <div class="result-actions">
+                  <button id="copyResultBtn" class="btn btn-secondary">
+                    📋 複製
+                  </button>
+                  <button id="saveResultBtn" class="btn btn-secondary">
+                    💾 儲存
+                  </button>
+                </div>
+              </div>
+              <div id="resultText" class="result-text"></div>
+            </div>
+          </section>
+
+          <!-- 即時字幕頁面 -->
+          <section id="page-live" class="page">
+            <div class="page-header">
+              <h1>即時字幕</h1>
+              <p class="page-desc">擷取系統音訊，即時顯示字幕</p>
+            </div>
+
+            <div class="live-content">
+              <!-- 語言選擇 -->
+              <div class="option-group">
+                <label for="liveLanguage">目標語言</label>
+                <select id="liveLanguage" class="select">
+                  <option value="zh-TW">繁體中文（台灣）</option>
+                  <option value="zh-CN">簡體中文</option>
+                  <option value="en">English</option>
+                  <option value="ja">日本語</option>
+                  <option value="ko">한국어</option>
+                  <option value="auto">自動偵測（不翻譯）</option>
+                </select>
+              </div>
+
+              <!-- 控制按鈕 -->
+              <div class="live-controls">
+                <button id="startLiveBtn" class="btn btn-primary btn-large">
+                  <span class="btn-icon">▶️</span>
+                  <span>開始字幕</span>
+                </button>
+                <button
+                  id="stopLiveBtn"
+                  class="btn btn-danger btn-large hidden"
+                >
+                  <span class="btn-icon">⏹️</span>
+                  <span>停止字幕</span>
+                </button>
+              </div>
+
+              <!-- 狀態指示 -->
+              <div id="liveStatus" class="live-status">
+                <span class="status-dot"></span>
+                <span class="status-text">未啟動</span>
+              </div>
+
+              <!-- 說明 -->
+              <div class="info-card">
+                <h4>💡 使用說明</h4>
+                <ul>
+                  <li>點擊「開始字幕」後會彈出懸浮字幕視窗</li>
+                  <li>字幕視窗可以自由拖動位置</li>
+                  <li>請確保電腦正在播放音訊</li>
+                  <li>建議在觀看影片或會議時使用</li>
+                </ul>
+              </div>
+            </div>
+          </section>
+        </main>
+      </div>
+
+      <!-- 設定面板 -->
+      <div id="settingsPanel" class="settings-panel hidden">
+        <div class="settings-overlay"></div>
+        <div class="settings-content">
+          <div class="settings-header">
+            <h2>設定</h2>
+            <button id="closeSettingsBtn" class="btn-icon">✕</button>
+          </div>
+          <div class="settings-body">
+            <div class="setting-group">
+              <label for="apiKeyInput">OpenRouter API Key</label>
+              <div class="input-group">
+                <input
+                  type="password"
+                  id="apiKeyInput"
+                  class="input"
+                  placeholder="sk-or-..."
+                />
+                <button id="toggleApiKeyVisibility" class="btn-icon">👁️</button>
+              </div>
+              <p class="setting-hint">
+                前往
+                <a href="https://openrouter.ai/keys" target="_blank" rel="noopener"
+                  >OpenRouter</a
+                >
+                取得 API Key
+              </p>
+            </div>
+            <div class="setting-group">
+              <label for="modelIdInput">模型 ID</label>
+              <div class="input-group">
+                <input
+                  type="text"
+                  id="modelIdInput"
+                  class="input"
+                  placeholder="google/gemini-3-flash-preview"
+                />
+              </div>
+              <p class="setting-hint">
+                支援 OpenRouter 上任何模型。
+                <a href="https://openrouter.ai/models" target="_blank" rel="noopener"
+                  >查看可用模型</a
+                >
+              </p>
+            </div>
+            <button id="saveSettingsBtn" class="btn btn-primary">儲存設定</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Toast 訊息 -->
+      <div id="toast" class="toast hidden">
+        <span class="toast-message"></span>
+      </div>
+    </div>
+
+    <script type="module" src="./scripts/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,41 @@
+{
+  "name": "voiceink",
+  "version": "1.0.0",
+  "description": "VoiceInk - Windows Desktop Speech-to-Text Application",
+  "main": "src/main/main.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "electron:build": "vite build && electron-builder",
+    "start": "electron ."
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "electron": "^35.0.0",
+    "electron-builder": "^26.0.0",
+    "vite": "^6.2.0",
+    "wait-on": "^8.0.3"
+  },
+  "dependencies": {
+    "electron-store": "^10.0.0",
+    "fluent-ffmpeg": "^2.1.3"
+  },
+  "build": {
+    "appId": "com.voiceink.app",
+    "productName": "VoiceInk",
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "resources/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
