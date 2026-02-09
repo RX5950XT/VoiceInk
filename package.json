@@ -30,8 +30,7 @@
       "output": "dist"
     },
     "win": {
-      "target": "nsis",
-      "icon": "resources/icon.ico"
+      "target": "nsis"
     },
     "nsis": {
       "oneClick": false,
