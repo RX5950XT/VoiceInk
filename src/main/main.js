@@ -77,18 +77,21 @@ function createSubtitleWindow() {
     x: bounds.x,
     y: bounds.y,
     frame: false,
-    transparent: true,
+    transparent: false,
+    backgroundColor: '#1a1a1a',
+    resizable: true,
     alwaysOnTop: true,
     skipTaskbar: true,
-    resizable: true,
-    movable: true,
-    hasShadow: false,
+    hasShadow: true,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, '../preload/preload.js')
     }
   })
+  
+  // 強制移除選單，避免出現白色選單列
+  subtitleWindow.setMenu(null)
 
   if (isDev) {
     subtitleWindow.loadURL('http://localhost:5173/pages/subtitle.html')
@@ -151,6 +154,10 @@ ipcMain.handle('subtitle:close', () => {
   if (subtitleWindow) {
     subtitleWindow.close()
     subtitleWindow = null
+  }
+  // 通知主視窗字幕已關閉，讓 UI 同步更新
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('subtitle:closed')
   }
   return true
 })

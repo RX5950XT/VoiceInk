@@ -1,267 +1,290 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-TW">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>VoiceInk 字幕</title>
-  <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VoiceInk 字幕</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
 
-    html, body {
-      height: 100%;
-      overflow: hidden;
-      background: transparent;
-    }
+      html,
+      body {
+        height: 100%;
+        overflow: hidden;
+        background: #1a1a1a;
+      }
 
-    body {
-      font-family: 'Microsoft JhengHei', '微軟正黑體', 'Noto Sans TC', sans-serif;
-      -webkit-app-region: drag;
-      user-select: none;
-    }
+      body {
+        font-family:
+          "Microsoft JhengHei", "微軟正黑體", "Noto Sans TC", sans-serif;
+        -webkit-user-select: none;
+        user-select: none;
+      }
 
-    .subtitle-container {
-      display: flex;
-      flex-direction: column;
-      height: 100%;
-      padding: 12px 16px;
-      background-color: rgba(0, 0, 0, 0.85);
-      border-radius: 8px;
-      position: relative;
-    }
+      .subtitle-container {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        background-color: #1a1a1a;
+      }
 
-    /* 頂部控制列 */
-    .subtitle-header {
-      display: flex;
-      justify-content: flex-end;
-      align-items: center;
-      margin-bottom: 8px;
-      gap: 8px;
-      -webkit-app-region: no-drag;
-    }
+      /* 頂部拖動區域 */
+      .drag-area {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 8px 12px;
+        background-color: #252525;
+        -webkit-app-region: drag;
+      }
 
-    .control-btn {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      width: 28px;
-      height: 28px;
-      border: none;
-      border-radius: 4px;
-      background: rgba(255, 255, 255, 0.15);
-      color: #fff;
-      font-size: 14px;
-      cursor: pointer;
-      transition: background 0.2s, transform 0.1s;
-      opacity: 0.7;
-    }
+      /* 拖動指示器 */
+      .drag-indicator {
+        width: 40px;
+        height: 4px;
+        background-color: rgba(255, 255, 255, 0.3);
+        border-radius: 2px;
+      }
 
-    .control-btn:hover {
-      background: rgba(255, 255, 255, 0.25);
-      opacity: 1;
-    }
+      /* 控制按鈕容器 */
+      .controls {
+        display: flex;
+        gap: 6px;
+        -webkit-app-region: no-drag;
+      }
 
-    .control-btn:active {
-      transform: scale(0.95);
-    }
+      .control-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        border: none;
+        border-radius: 4px;
+        background: rgba(255, 255, 255, 0.15);
+        color: #fff;
+        font-size: 14px;
+        cursor: pointer;
+        transition:
+          background 0.2s,
+          transform 0.1s;
+        opacity: 0.7;
+      }
 
-    .control-btn.copied {
-      background: rgba(34, 197, 94, 0.5);
-    }
+      .control-btn:hover {
+        background: rgba(255, 255, 255, 0.25);
+        opacity: 1;
+      }
 
-    /* 字幕歷史紀錄區域 */
-    .subtitle-history {
-      flex: 1;
-      overflow-y: auto;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      padding-right: 4px;
-      -webkit-app-region: no-drag;
-    }
+      .control-btn:active {
+        transform: scale(0.95);
+      }
 
-    /* 自訂捲軸樣式 */
-    .subtitle-history::-webkit-scrollbar {
-      width: 4px;
-    }
+      .control-btn.copied {
+        background: rgba(34, 197, 94, 0.5);
+      }
 
-    .subtitle-history::-webkit-scrollbar-track {
-      background: rgba(255, 255, 255, 0.1);
-      border-radius: 2px;
-    }
+      .control-btn.close-btn:hover {
+        background: rgba(239, 68, 68, 0.6);
+      }
 
-    .subtitle-history::-webkit-scrollbar-thumb {
-      background: rgba(255, 255, 255, 0.3);
-      border-radius: 2px;
-    }
+      /* 字幕歷史紀錄區域 */
+      .subtitle-history {
+        flex: 1;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 12px 16px;
+      }
 
-    .subtitle-history::-webkit-scrollbar-thumb:hover {
-      background: rgba(255, 255, 255, 0.5);
-    }
+      /* 自訂捲軸樣式 */
+      .subtitle-history::-webkit-scrollbar {
+        width: 6px;
+      }
 
-    .subtitle-line {
-      color: rgba(255, 255, 255, 0.5);
-      font-size: 18px;
-      font-weight: 400;
-      line-height: 1.4;
-      text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
-      padding: 4px 0;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-      transition: color 0.3s;
-    }
+      .subtitle-history::-webkit-scrollbar-track {
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 3px;
+      }
 
-    .subtitle-line:last-child {
-      color: #ffffff;
-      font-size: 22px;
-      font-weight: 500;
-      border-bottom: none;
-    }
+      .subtitle-history::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.3);
+        border-radius: 3px;
+      }
 
-    .subtitle-line.current {
-      color: #ffffff;
-      font-size: 22px;
-      font-weight: 500;
-    }
+      .subtitle-history::-webkit-scrollbar-thumb:hover {
+        background: rgba(255, 255, 255, 0.5);
+      }
 
-    /* 空狀態 */
-    .subtitle-empty {
-      color: rgba(255, 255, 255, 0.5);
-      font-size: 18px;
-      text-align: center;
-      font-style: italic;
-    }
+      .subtitle-line {
+        color: rgba(255, 255, 255, 0.5);
+        font-size: 18px;
+        font-weight: 400;
+        line-height: 1.4;
+        text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+        padding: 4px 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        transition: color 0.3s;
+      }
 
-    /* 拖動手柄指示 */
-    .drag-indicator {
-      position: absolute;
-      top: 4px;
-      left: 50%;
-      transform: translateX(-50%);
-      width: 40px;
-      height: 4px;
-      background-color: rgba(255, 255, 255, 0.3);
-      border-radius: 2px;
-      opacity: 0;
-      transition: opacity 0.2s ease;
-    }
+      .subtitle-line:last-child {
+        color: #ffffff;
+        font-size: 22px;
+        font-weight: 500;
+        border-bottom: none;
+      }
 
-    .subtitle-container:hover .drag-indicator {
-      opacity: 1;
-    }
+      .subtitle-line.current {
+        color: #ffffff;
+        font-size: 22px;
+        font-weight: 500;
+      }
 
-    /* Toast 通知 */
-    .toast {
-      position: fixed;
-      bottom: 10px;
-      left: 50%;
-      transform: translateX(-50%);
-      background: rgba(34, 197, 94, 0.9);
-      color: #fff;
-      padding: 6px 12px;
-      border-radius: 4px;
-      font-size: 12px;
-      opacity: 0;
-      transition: opacity 0.2s;
-      pointer-events: none;
-    }
+      /* 空狀態 */
+      .subtitle-empty {
+        color: rgba(255, 255, 255, 0.5);
+        font-size: 18px;
+        text-align: center;
+        font-style: italic;
+      }
 
-    .toast.show {
-      opacity: 1;
-    }
-  </style>
-</head>
-<body>
-  <div class="subtitle-container">
-    <div class="drag-indicator"></div>
-    
-    <div class="subtitle-header">
-      <button id="copyBtn" class="control-btn" title="複製全部字幕">📋</button>
+      /* Toast 通知 */
+      .toast {
+        position: fixed;
+        bottom: 10px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(34, 197, 94, 0.9);
+        color: #fff;
+        padding: 6px 12px;
+        border-radius: 4px;
+        font-size: 12px;
+        opacity: 0;
+        transition: opacity 0.2s;
+        pointer-events: none;
+      }
+
+      .toast.show {
+        opacity: 1;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="subtitle-container">
+      <!-- 頂部拖動區域 -->
+      <div class="drag-area">
+        <div class="drag-indicator"></div>
+        <div class="controls">
+          <button id="copyBtn" class="control-btn" title="複製全部字幕">
+            📋
+          </button>
+          <button
+            id="closeBtn"
+            class="control-btn close-btn"
+            title="關閉字幕視窗"
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+
+      <!-- 字幕內容區域（可滾動） -->
+      <div id="subtitleHistory" class="subtitle-history">
+        <p class="subtitle-empty">等待字幕...</p>
+      </div>
     </div>
-    
-    <div id="subtitleHistory" class="subtitle-history">
-      <p class="subtitle-empty">等待字幕...</p>
-    </div>
-  </div>
-  
-  <div id="toast" class="toast">已複製到剪貼簿</div>
 
-  <script>
-    const subtitleHistory = document.getElementById('subtitleHistory')
-    const copyBtn = document.getElementById('copyBtn')
-    const toast = document.getElementById('toast')
-    
-    // 儲存所有字幕
-    const subtitles = []
-    const MAX_HISTORY = 50 // 最多保留 50 條歷史紀錄
+    <div id="toast" class="toast">已複製到剪貼簿</div>
 
-    // 監聽字幕更新
-    window.electronAPI.subtitle.onTextUpdate((text) => {
-      if (!text || !text.trim()) return
-      
-      // 添加到歷史紀錄
-      subtitles.push(text.trim())
-      
-      // 限制歷史紀錄數量
-      if (subtitles.length > MAX_HISTORY) {
-        subtitles.shift()
+    <script>
+      const subtitleHistory = document.getElementById("subtitleHistory");
+      const copyBtn = document.getElementById("copyBtn");
+      const toast = document.getElementById("toast");
+
+      // 儲存所有字幕
+      const subtitles = [];
+      const MAX_HISTORY = 50; // 最多保留 50 條歷史紀錄
+
+      // 監聽字幕更新
+      window.electronAPI.subtitle.onTextUpdate((text) => {
+        if (!text || !text.trim()) return;
+
+        // 添加到歷史紀錄
+        subtitles.push(text.trim());
+
+        // 限制歷史紀錄數量
+        if (subtitles.length > MAX_HISTORY) {
+          subtitles.shift();
+        }
+
+        // 更新顯示
+        renderSubtitles();
+      });
+
+      // 渲染字幕
+      function renderSubtitles() {
+        if (subtitles.length === 0) {
+          subtitleHistory.innerHTML =
+            '<p class="subtitle-empty">等待字幕...</p>';
+          return;
+        }
+
+        subtitleHistory.innerHTML = subtitles
+          .map(
+            (text, index) => `<p class="subtitle-line">${escapeHtml(text)}</p>`,
+          )
+          .join("");
+
+        // 自動滾動到底部
+        subtitleHistory.scrollTop = subtitleHistory.scrollHeight;
       }
-      
-      // 更新顯示
-      renderSubtitles()
-    })
 
-    // 渲染字幕
-    function renderSubtitles() {
-      if (subtitles.length === 0) {
-        subtitleHistory.innerHTML = '<p class="subtitle-empty">等待字幕...</p>'
-        return
+      // 轉義 HTML
+      function escapeHtml(text) {
+        const div = document.createElement("div");
+        div.textContent = text;
+        return div.innerHTML;
       }
-      
-      subtitleHistory.innerHTML = subtitles
-        .map((text, index) => `<p class="subtitle-line">${escapeHtml(text)}</p>`)
-        .join('')
-      
-      // 自動滾動到底部
-      subtitleHistory.scrollTop = subtitleHistory.scrollHeight
-    }
 
-    // 轉義 HTML
-    function escapeHtml(text) {
-      const div = document.createElement('div')
-      div.textContent = text
-      return div.innerHTML
-    }
+      // 複製功能
+      copyBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
 
-    // 複製功能
-    copyBtn.addEventListener('click', async (e) => {
-      e.stopPropagation()
-      
-      if (subtitles.length === 0) {
-        showToast('沒有可複製的內容')
-        return
+        if (subtitles.length === 0) {
+          showToast("沒有可複製的內容");
+          return;
+        }
+
+        const allText = subtitles.join("\n");
+
+        try {
+          await navigator.clipboard.writeText(allText);
+          showToast("已複製到剪貼簿");
+          copyBtn.classList.add("copied");
+          setTimeout(() => copyBtn.classList.remove("copied"), 1000);
+        } catch (err) {
+          showToast("複製失敗");
+        }
+      });
+
+      // 關閉按鈕
+      const closeBtn = document.getElementById("closeBtn");
+      closeBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        await window.electronAPI.subtitle.close();
+      });
+
+      // 顯示 Toast
+      function showToast(message) {
+        toast.textContent = message;
+        toast.classList.add("show");
+        setTimeout(() => toast.classList.remove("show"), 1500);
       }
-      
-      const allText = subtitles.join('\n')
-      
-      try {
-        await navigator.clipboard.writeText(allText)
-        showToast('已複製到剪貼簿')
-        copyBtn.classList.add('copied')
-        setTimeout(() => copyBtn.classList.remove('copied'), 1000)
-      } catch (err) {
-        showToast('複製失敗')
-      }
-    })
-
-    // 顯示 Toast
-    function showToast(message) {
-      toast.textContent = message
-      toast.classList.add('show')
-      setTimeout(() => toast.classList.remove('show'), 1500)
-    }
-  </script>
-</body>
+    </script>
+  </body>
 </html>

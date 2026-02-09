@@ -18,6 +18,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     update: (text) => ipcRenderer.invoke('subtitle:update', text),
     onTextUpdate: (callback) => {
       ipcRenderer.on('subtitle:text', (event, text) => callback(text))
+    },
+    onClosed: (callback) => {
+      ipcRenderer.on('subtitle:closed', () => callback())
     }
   }
 })

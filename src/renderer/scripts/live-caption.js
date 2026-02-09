@@ -51,6 +51,14 @@ export function initLiveCaption() {
   // 綁定事件
   startLiveBtn.addEventListener('click', startCapture)
   stopLiveBtn.addEventListener('click', stopCapture)
+
+  // 監聽字幕視窗關閉事件（從懸浮視窗的關閉按鈕觸發）
+  electronAPI.subtitle.onClosed(() => {
+    // 只有在擷取中時才需要停止
+    if (isCapturing) {
+      stopCaptureFromSubtitle()
+    }
+  })
 }
 
 /**
@@ -303,6 +311,44 @@ async function stopCapture() {
 
   // 關閉字幕視窗
   await electronAPI.subtitle.close()
+
+  audioChunks = []
+  updateUI()
+}
+
+/**
+ * 從字幕視窗關閉時停止擷取
+ * 這個函式由 onClosed 事件呼叫，不需要再關閉字幕視窗
+ */
+function stopCaptureFromSubtitle() {
+  isCapturing = false
+
+  // 清除定時器
+  if (captureInterval) {
+    clearInterval(captureInterval)
+    captureInterval = null
+  }
+  
+  // 清除狀態
+  previousTranscript = ''
+
+  // 停止 MediaRecorder
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    try {
+      mediaRecorder.stop()
+    } catch (e) {
+      console.error('停止錄製失敗:', e)
+    }
+  }
+  mediaRecorder = null
+
+  // 停止媒體串流
+  if (mediaStream) {
+    mediaStream.getTracks().forEach(track => track.stop())
+    mediaStream = null
+  }
+
+  // 不需要再關閉字幕視窗，因為已經由那邊關閉了
 
   audioChunks = []
   updateUI()
