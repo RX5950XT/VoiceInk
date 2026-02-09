@@ -309,6 +309,33 @@ function filterInvalidOutput(text) {
     return ''
   }
   
+  // 過濾獨立的音訊標註（只允許「音樂」，其他標註太容易誤判）
+  // 只有當輸出「只有」標註時才過濾，如果混合人聲則保留
+  const AUDIO_LABEL_ONLY_PATTERNS = [
+    /^（掌聲）$/,
+    /^（笑聲）$/,
+    /^（歡呼）$/,
+    /^（嘆息）$/,
+    /^（咳嗽）$/,
+    /^（鈴聲）$/,
+    /^（爆炸聲）$/,
+    /^（警報聲）$/,
+    /^（環境音）$/,
+    /^（腳步聲）$/,
+    /^（敲門聲）$/,
+    /^\(掌聲\)$/,
+    /^\(笑聲\)$/,
+    /^\(歡呼\)$/,
+    /^\(音樂\)$/,  // 連音樂也可能誤判，先過濾
+  ]
+  
+  for (const pattern of AUDIO_LABEL_ONLY_PATTERNS) {
+    if (pattern.test(trimmed)) {
+      console.log('[過濾] 偵測到可疑音訊標註:', trimmed)
+      return ''
+    }
+  }
+  
   // 常見的 AI 編造模式
   const INVALID_PATTERNS = [
     /^謝謝(大家|觀看|收看|收聽)/,
