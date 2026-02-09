@@ -31,8 +31,10 @@ let audioChunks = []
 let captureInterval = null
 let isProcessing = false // 防止重複請求
 
-// 前一句轉錄結果（用於上下文連貫）
-let previousTranscript = ''
+// 歷史轉錄記錄（用於上下文連貫）
+let transcriptHistory = []
+// 最大保留的歷史記錄數量（避免 token 過多）
+const MAX_HISTORY_COUNT = 10
 
 // 音訊分段時間（毫秒）- 3 秒以避免 API 請求過於頻繁
 const CHUNK_DURATION = 3000
@@ -220,24 +222,36 @@ async function processAudioChunkData(chunks, apiKey, modelId) {
     // 取得目標語言
     const targetLanguage = liveLanguage.value
 
-    // 呼叫 API，傳入前一句作為上下文
+    // 呼叫 API，傳入完整歷史作為上下文
+    const historyText = transcriptHistory.join(' ')
     const text = await transcribeLiveWithContext(
       apiKey, 
       base64, 
       'wav', 
       targetLanguage, 
       modelId,
-      previousTranscript
+      historyText
     )
     
     // 更新字幕
     if (text && text.trim()) {
       // 移除與前一句明顯重複的部分
-      const cleanedText = removeOverlappingText(previousTranscript, text.trim())
+      const lastTranscript = transcriptHistory.length > 0 
+        ? transcriptHistory[transcriptHistory.length - 1] 
+        : ''
+      let cleanedText = removeOverlappingText(lastTranscript, text.trim())
+      
+      // 過濾 AI 無中生有的輸出
+      cleanedText = filterInvalidOutput(cleanedText)
       
       if (cleanedText) {
         await electronAPI.subtitle.update(cleanedText)
-        previousTranscript = cleanedText
+        // 累積到歷史記錄
+        transcriptHistory.push(cleanedText)
+        // 限制歷史記錄數量
+        if (transcriptHistory.length > MAX_HISTORY_COUNT) {
+          transcriptHistory.shift()
+        }
       }
     }
 
@@ -279,6 +293,49 @@ function removeOverlappingText(previous, current) {
 }
 
 /**
+ * 過濾 AI 無中生有的無效輸出
+ * @param {string} text - AI 回應的文字
+ * @returns {string} 過濾後的文字（無效則返回空字串）
+ */
+function filterInvalidOutput(text) {
+  if (!text) return ''
+  
+  const trimmed = text.trim()
+  
+  // 長度異常檢測：3 秒內正常說話約 20-40 字，超過 60 字很可能是編造
+  const MAX_CHARS_PER_CHUNK = 60
+  if (trimmed.length > MAX_CHARS_PER_CHUNK) {
+    console.log('[過濾] 輸出過長，可能是編造:', trimmed.length, '字')
+    return ''
+  }
+  
+  // 常見的 AI 編造模式
+  const INVALID_PATTERNS = [
+    /^謝謝(大家|觀看|收看|收聽)/,
+    /^感謝(大家|觀看|收看|收聽)/,
+    /^歡迎(訂閱|關注|按讚)/,
+    /^(請|記得)(訂閱|關注|按讚)/,
+    /^字幕(由|製作)/,
+    /^本(影片|節目|視頻)/,
+    /^(下集|下期|下次)再見/,
+    /^(再見|拜拜|掰掰)$/,
+    /^。+$/,  // 只有句號
+    /^\.+$/,  // 只有點
+    /^…+$/,  // 只有省略號
+  ]
+  
+  // 檢查是否符合無效模式
+  for (const pattern of INVALID_PATTERNS) {
+    if (pattern.test(trimmed)) {
+      console.log('[過濾] 偵測到無效輸出:', trimmed)
+      return ''
+    }
+  }
+  
+  return trimmed
+}
+
+/**
  * 停止擷取
  */
 async function stopCapture() {
@@ -291,7 +348,8 @@ async function stopCapture() {
   }
   
   // 清除狀態
-  previousTranscript = ''
+  transcriptHistory = []
+  isProcessing = false
 
   // 停止 MediaRecorder
   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
@@ -330,7 +388,8 @@ function stopCaptureFromSubtitle() {
   }
   
   // 清除狀態
-  previousTranscript = ''
+  transcriptHistory = []
+  isProcessing = false
 
   // 停止 MediaRecorder
   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
@@ -408,10 +467,10 @@ async function webmToWav(webmBlob) {
     const { rms, speechRatio } = analyzeAudio(audioBuffer)
     
     // 靜音或語音活動太少則跳過
-    // RMS 閾值：0.015（整體音量）
-    // 語音佔比閾值：0.05（至少 5% 的採樣超過語音門檻）
-    const RMS_THRESHOLD = 0.015
-    const SPEECH_RATIO_THRESHOLD = 0.05
+    // RMS 閾值：0.025（整體音量，提高以過濾低音量雜訊）
+    // 語音佔比閾值：0.12（至少 12% 的採樣超過語音門檻）
+    const RMS_THRESHOLD = 0.025
+    const SPEECH_RATIO_THRESHOLD = 0.12
     
     if (rms < RMS_THRESHOLD || speechRatio < SPEECH_RATIO_THRESHOLD) {
       // 音量太低或語音活動太少，視為靜音
