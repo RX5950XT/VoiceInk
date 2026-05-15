@@ -1,6 +1,6 @@
 {
   "name": "voiceink",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "VoiceInk - Windows Desktop Speech-to-Text Application",
   "main": "src/main/main.js",
   "scripts": {
@@ -30,7 +30,8 @@
       "output": "dist"
     },
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "assets/icon.ico"
     },
     "nsis": {
       "oneClick": false,
