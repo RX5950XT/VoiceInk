@@ -1,20 +1,8 @@
 /**
- * VoiceInk - 即時字幕功能
+ * VoiceInk - 即時字幕功能（本地 Qwen3-ASR）
  */
 
-import { transcribeLive, transcribeLiveWithContext } from './api.js'
-import { showToast, getApiKey, getModelId } from './app.js'
-
-// ===== Electron API Fallback =====
-const electronAPI = window.electronAPI || {
-  subtitle: {
-    show: async () => console.log('[Dev Mode] subtitle:show'),
-    hide: async () => console.log('[Dev Mode] subtitle:hide'),
-    close: async () => console.log('[Dev Mode] subtitle:close'),
-    update: async (text) => console.log('[Dev Mode] subtitle:update', text),
-    onTextUpdate: (callback) => {}
-  }
-}
+import { showToast, getSettings, electronAPI, cleanIpcError, ASR_MODEL_KEY } from './app.js'
 
 // ===== DOM 元素 =====
 let liveLanguage
@@ -22,44 +10,56 @@ let startLiveBtn
 let stopLiveBtn
 let liveStatus
 let statusText
+let liveEngine
+let levelFill
+let liveError
 
 // ===== 狀態 =====
 let isCapturing = false
 let mediaStream = null
 let mediaRecorder = null
-let audioChunks = []
-let captureInterval = null
-let isProcessing = false // 防止重複請求
+let settings = null
+let consecutiveFailures = 0
 
-// 歷史轉錄記錄（用於上下文連貫）
+// 音量指示
+let levelAudioCtx = null
+let levelRaf = null
+
+// 處理佇列：只保留最新一筆待處理，處理完立即接手（不丟棄、不堆積）
+let pendingChunks = null
+let isProcessing = false
+
+// 歷史轉錄記錄
 let transcriptHistory = []
-// 最大保留的歷史記錄數量（避免 token 過多）
 const MAX_HISTORY_COUNT = 10
 
-// 音訊分段時間（毫秒）- 3 秒以避免 API 請求過於頻繁
-const CHUNK_DURATION = 3000
+// 音訊分段時間（毫秒）
+const CHUNK_DURATION = 2000
+
+// 靜音門檻（放寬版：先做增益補償再檢測）
+const RMS_THRESHOLD = 0.01
+const SPEECH_RATIO_THRESHOLD = 0.05
+const SPEECH_SAMPLE_THRESHOLD = 0.01
 
 /**
  * 初始化即時字幕功能
  */
 export function initLiveCaption() {
-  // 取得 DOM 元素
   liveLanguage = document.getElementById('liveLanguage')
   startLiveBtn = document.getElementById('startLiveBtn')
   stopLiveBtn = document.getElementById('stopLiveBtn')
   liveStatus = document.getElementById('liveStatus')
   statusText = liveStatus.querySelector('.status-text')
+  liveEngine = document.getElementById('liveEngine')
+  levelFill = document.getElementById('levelFill')
+  liveError = document.getElementById('liveError')
 
-  // 綁定事件
   startLiveBtn.addEventListener('click', startCapture)
-  stopLiveBtn.addEventListener('click', stopCapture)
+  stopLiveBtn.addEventListener('click', () => stopCapture())
 
-  // 監聽字幕視窗關閉事件（從懸浮視窗的關閉按鈕觸發）
+  // 字幕視窗上的關閉按鈕觸發
   electronAPI.subtitle.onClosed(() => {
-    // 只有在擷取中時才需要停止
-    if (isCapturing) {
-      stopCaptureFromSubtitle()
-    }
+    if (isCapturing) stopCapture({ closeWindow: false })
   })
 }
 
@@ -67,48 +67,35 @@ export function initLiveCaption() {
  * 開始擷取系統音訊
  */
 async function startCapture() {
-  const apiKey = await getApiKey()
-  if (!apiKey) {
-    showToast('請先設定 API Key', 'error')
+  settings = await getSettings()
+
+  const status = await electronAPI.models.status()
+  if (!status.models[ASR_MODEL_KEY]?.downloaded) {
+    showToast('本地 ASR 模型尚未下載，請先到設定下載', 'error')
     return
   }
 
   try {
-    // 請求媒體權限（透過 Electron 的 setDisplayMediaRequestHandler）
     mediaStream = await navigator.mediaDevices.getDisplayMedia({
       audio: true,
-      video: {
-        width: 1,
-        height: 1,
-        frameRate: 1
-      }
+      video: { width: 1, height: 1, frameRate: 1 }
     })
 
-    // 檢查是否有音訊軌道
     const audioTracks = mediaStream.getAudioTracks()
     if (audioTracks.length === 0) {
       throw new Error('無法取得系統音訊')
     }
-
-    // 停止視訊軌道（我們只需要音訊）
     mediaStream.getVideoTracks().forEach(track => track.stop())
-
-    // 只保留音訊
     const audioStream = new MediaStream(audioTracks)
 
     isCapturing = true
+    consecutiveFailures = 0
+    setError(null)
     updateUI()
+    startLevelMeter(audioStream)
 
-    // 顯示字幕視窗
     await electronAPI.subtitle.show()
-
-    // 開始錄製
-    // 取得模型 ID
-    const modelId = await getModelId()
-
-    // 開始錄製
-    startRecording(audioStream, apiKey, modelId)
-
+    startRecording(audioStream)
   } catch (error) {
     console.error('開始擷取失敗:', error)
     if (error.name === 'NotAllowedError') {
@@ -121,264 +108,149 @@ async function startCapture() {
 }
 
 /**
- * 開始錄製音訊
- * @param {MediaStream} stream 
- * @param {string} apiKey 
- * @param {string} modelId 
+ * 循環錄製：每輪產生完整 WebM（含檔頭），結束即進佇列
  */
-function startRecording(stream, apiKey, modelId) {
-  // 建立 MediaRecorder
-  // 每次錄製都使用完整的 MediaRecorder 實例，確保 WebM header 完整
+function startRecording(stream) {
   function startNewRecording() {
     if (!isCapturing || !stream) return
-    
-    const options = { mimeType: 'audio/webm;codecs=opus' }
-    
+
     try {
-      mediaRecorder = new MediaRecorder(stream, options)
-    } catch (e) {
+      mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' })
+    } catch {
       mediaRecorder = new MediaRecorder(stream)
     }
-    
+
     const chunks = []
-    
     mediaRecorder.ondataavailable = (event) => {
-      if (event.data.size > 0) {
-        chunks.push(event.data)
-      }
+      if (event.data.size > 0) chunks.push(event.data)
     }
-    
     mediaRecorder.onstop = () => {
-      // 異步處理音訊（不阻塞下一次錄製）
-      if (chunks.length > 0 && isCapturing) {
-        processAudioChunkData(chunks, apiKey, modelId).catch(e => {
-          console.error('處理音訊失敗:', e)
-        })
-      }
-      
-      // 如果還在擷取，開始下一輪錄製
-      if (isCapturing) {
-        startNewRecording()
-      }
+      if (chunks.length > 0 && isCapturing) enqueueChunks(chunks)
+      if (isCapturing) startNewRecording()
     }
-    
-    // 開始錄製（不使用 timeslice，確保產生完整的 WebM）
+
     mediaRecorder.start()
-    
-    // 設定在 CHUNK_DURATION 後停止
     setTimeout(() => {
       if (mediaRecorder && mediaRecorder.state === 'recording') {
         mediaRecorder.stop()
       }
     }, CHUNK_DURATION)
   }
-  
-  // 開始第一輪錄製
+
   startNewRecording()
 }
 
 /**
- * 處理音訊片段
- * @param {Blob[]} chunks - 當前音訊片段陣列
- * @param {string} apiKey 
- * @param {string} modelId 
+ * 佇列：保留最新待處理片段，處理器空下來立即接手
  */
-async function processAudioChunkData(chunks, apiKey, modelId) {
-  if (chunks.length === 0) return
-  
-  // 如果正在處理中，跳過此片段以避免請求過於頻繁
-  if (isProcessing) return
+function enqueueChunks(chunks) {
+  pendingChunks = chunks
+  pumpQueue()
+}
+
+async function pumpQueue() {
+  if (isProcessing || !pendingChunks) return
   isProcessing = true
-
+  const chunks = pendingChunks
+  pendingChunks = null
   try {
-    // 只使用當前完整的 chunks（不合併前一片段，因為 WebM 需要完整檔案頭）
-    const webmBlob = new Blob(chunks, { type: 'audio/webm' })
-    
-    // 如果音訊太小，跳過
-    if (webmBlob.size < 1000) {
-      isProcessing = false
-      return
-    }
-    
-    // 將 WebM 轉換為 WAV 格式（包含音量檢測，靜音時返回 null）
-    let wavBlob
-    try {
-      wavBlob = await webmToWav(webmBlob)
-    } catch (e) {
-      // 格式轉換失敗，跳過此片段
-      isProcessing = false
-      return
-    }
-    
-    // 如果是靜音片段，跳過 API 呼叫
-    if (!wavBlob) {
-      isProcessing = false
-      return
-    }
-    
-    // 轉換為 Base64
-    const base64 = await blobToBase64(wavBlob)
-    
-    // 取得目標語言
-    const targetLanguage = liveLanguage.value
-
-    // 呼叫 API，傳入完整歷史作為上下文
-    const historyText = transcriptHistory.join(' ')
-    const text = await transcribeLiveWithContext(
-      apiKey, 
-      base64, 
-      'wav', 
-      targetLanguage, 
-      modelId,
-      historyText
-    )
-    
-    // 更新字幕
-    if (text && text.trim()) {
-      // 移除與前一句明顯重複的部分
-      const lastTranscript = transcriptHistory.length > 0 
-        ? transcriptHistory[transcriptHistory.length - 1] 
-        : ''
-      let cleanedText = removeOverlappingText(lastTranscript, text.trim())
-      
-      // 過濾 AI 無中生有的輸出
-      cleanedText = filterInvalidOutput(cleanedText)
-      
-      if (cleanedText) {
-        await electronAPI.subtitle.update(cleanedText)
-        // 累積到歷史記錄
-        transcriptHistory.push(cleanedText)
-        // 限制歷史記錄數量
-        if (transcriptHistory.length > MAX_HISTORY_COUNT) {
-          transcriptHistory.shift()
-        }
-      }
-    }
-
+    await processAudioChunkData(chunks)
+    consecutiveFailures = 0
+    setError(null)
   } catch (error) {
     console.error('處理音訊片段失敗:', error)
+    consecutiveFailures++
+    setError(cleanIpcError(error))
+    if (consecutiveFailures >= 3) {
+      showToast('連續轉錄失敗，已停止字幕', 'error')
+      stopCapture()
+      return
+    }
   } finally {
     isProcessing = false
   }
+  pumpQueue()
 }
 
 /**
- * 移除與前一句重複的文字
- * @param {string} previous - 前一句轉錄
- * @param {string} current - 當前轉錄
- * @returns {string} 清理後的文字
+ * 處理一段音訊：解碼 → 靜音檢測（含增益補償）→ 本地 ASR → 翻譯 → 上字幕
  */
-function removeOverlappingText(previous, current) {
-  if (!previous || !current) return current
-  
-  // 嘗試找出重疊部分
-  // 從前一句的後半部開始比對
-  const prevWords = previous.split('')
-  const currWords = current.split('')
-  
-  // 嘗試不同長度的重疊
-  for (let overlapLen = Math.min(prevWords.length, 20); overlapLen >= 3; overlapLen--) {
-    const prevEnd = prevWords.slice(-overlapLen).join('')
-    if (current.startsWith(prevEnd)) {
-      return current.slice(prevEnd.length).trim()
+async function processAudioChunkData(chunks) {
+  const webmBlob = new Blob(chunks, { type: 'audio/webm' })
+  if (webmBlob.size < 1000) return
+
+  const audioBuffer = await decodeAudio(webmBlob)
+  if (!audioBuffer) return
+
+  // 增益補償：loopback 音量偏低時放大（上限 8 倍），再做靜音檢測
+  applyGain(audioBuffer)
+  const { rms, speechRatio } = analyzeAudio(audioBuffer)
+  if (rms < RMS_THRESHOLD || speechRatio < SPEECH_RATIO_THRESHOLD) return
+
+  const targetLanguage = liveLanguage.value
+  const samples = await resampleTo16kMono(audioBuffer)
+  let text = await electronAPI.localAsr.transcribe({
+    samples,
+    sampleRate: 16000,
+    lang: targetLanguage,
+    modelKey: ASR_MODEL_KEY
+  })
+  text = (text || '').trim()
+
+  // 翻譯（依設定，目標語言與內容語言不同時才翻）
+  if (text && settings.translator !== 'none' && targetLanguage !== 'auto' &&
+      needsTranslation(text, targetLanguage)) {
+    try {
+      text = await electronAPI.translate(text, targetLanguage)
+    } catch (error) {
+      // 翻譯失敗降級顯示原文
+      setError(`翻譯失敗，顯示原文：${cleanIpcError(error)}`)
     }
   }
-  
-  // 如果當前文字完全包含在前一句中，可能是重複的
-  if (previous.includes(current)) {
-    return ''
+
+  // ASR 對音樂/雜訊可能輸出短語重複循環（如「我，我，我…」），直接丟棄
+  if (text && isRepetitionLoop(text)) {
+    console.log('[過濾] 重複循環輸出:', text.slice(0, 30))
+    return
   }
-  
-  return current
+
+  if (text) {
+    await electronAPI.subtitle.update(text)
+    transcriptHistory.push(text)
+    if (transcriptHistory.length > MAX_HISTORY_COUNT) transcriptHistory.shift()
+  }
 }
 
 /**
- * 過濾 AI 無中生有的無效輸出
- * @param {string} text - AI 回應的文字
- * @returns {string} 過濾後的文字（無效則返回空字串）
+ * 偵測短單位連續重複 8 次以上（ASR 重複循環）
  */
-function filterInvalidOutput(text) {
-  if (!text) return ''
-  
-  const trimmed = text.trim()
-  
-  // 長度異常檢測：3 秒內正常說話約 20-40 字，超過 60 字很可能是編造
-  const MAX_CHARS_PER_CHUNK = 60
-  if (trimmed.length > MAX_CHARS_PER_CHUNK) {
-    console.log('[過濾] 輸出過長，可能是編造:', trimmed.length, '字')
-    return ''
-  }
-  
-  // 過濾獨立的音訊標註（只允許「音樂」，其他標註太容易誤判）
-  // 只有當輸出「只有」標註時才過濾，如果混合人聲則保留
-  const AUDIO_LABEL_ONLY_PATTERNS = [
-    /^（掌聲）$/,
-    /^（笑聲）$/,
-    /^（歡呼）$/,
-    /^（嘆息）$/,
-    /^（咳嗽）$/,
-    /^（鈴聲）$/,
-    /^（爆炸聲）$/,
-    /^（警報聲）$/,
-    /^（環境音）$/,
-    /^（腳步聲）$/,
-    /^（敲門聲）$/,
-    /^\(掌聲\)$/,
-    /^\(笑聲\)$/,
-    /^\(歡呼\)$/,
-    /^\(音樂\)$/,  // 連音樂也可能誤判，先過濾
-  ]
-  
-  for (const pattern of AUDIO_LABEL_ONLY_PATTERNS) {
-    if (pattern.test(trimmed)) {
-      console.log('[過濾] 偵測到可疑音訊標註:', trimmed)
-      return ''
-    }
-  }
-  
-  // 常見的 AI 編造模式
-  const INVALID_PATTERNS = [
-    /^謝謝(大家|觀看|收看|收聽)/,
-    /^感謝(大家|觀看|收看|收聽)/,
-    /^歡迎(訂閱|關注|按讚)/,
-    /^(請|記得)(訂閱|關注|按讚)/,
-    /^字幕(由|製作)/,
-    /^本(影片|節目|視頻)/,
-    /^(下集|下期|下次)再見/,
-    /^(再見|拜拜|掰掰)$/,
-    /^。+$/,  // 只有句號
-    /^\.+$/,  // 只有點
-    /^…+$/,  // 只有省略號
-  ]
-  
-  // 檢查是否符合無效模式
-  for (const pattern of INVALID_PATTERNS) {
-    if (pattern.test(trimmed)) {
-      console.log('[過濾] 偵測到無效輸出:', trimmed)
-      return ''
-    }
-  }
-  
-  return trimmed
+function isRepetitionLoop(text) {
+  return /(.{1,6}?)(?:[，,、。.\s]*\1){7,}/.test(text)
+}
+
+/**
+ * 是否需要翻譯（粗略語言偵測，避免同語言白翻一趟）
+ */
+function needsTranslation(text, targetLang) {
+  const cjkCount = (text.match(/[一-鿿]/g) || []).length
+  const cjkRatio = cjkCount / text.length
+  if (targetLang.startsWith('zh')) return cjkRatio < 0.3
+  if (targetLang === 'en') return cjkRatio > 0.1 || /[぀-ヿ가-힯]/.test(text)
+  if (targetLang === 'ja') return !/[぀-ヿ]/.test(text)
+  if (targetLang === 'ko') return !/[가-힯]/.test(text)
+  return true
 }
 
 /**
  * 停止擷取
+ * @param {{closeWindow?: boolean}} options - closeWindow 為 false 時不再關閉字幕視窗（由視窗端觸發）
  */
-async function stopCapture() {
+async function stopCapture({ closeWindow = true } = {}) {
   isCapturing = false
-
-  // 清除定時器
-  if (captureInterval) {
-    clearInterval(captureInterval)
-    captureInterval = null
-  }
-  
-  // 清除狀態
   transcriptHistory = []
-  isProcessing = false
+  pendingChunks = null
+  stopLevelMeter()
 
-  // 停止 MediaRecorder
   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
     try {
       mediaRecorder.stop()
@@ -388,55 +260,14 @@ async function stopCapture() {
   }
   mediaRecorder = null
 
-  // 停止媒體串流
   if (mediaStream) {
     mediaStream.getTracks().forEach(track => track.stop())
     mediaStream = null
   }
 
-  // 關閉字幕視窗
-  await electronAPI.subtitle.close()
-
-  audioChunks = []
-  updateUI()
-}
-
-/**
- * 從字幕視窗關閉時停止擷取
- * 這個函式由 onClosed 事件呼叫，不需要再關閉字幕視窗
- */
-function stopCaptureFromSubtitle() {
-  isCapturing = false
-
-  // 清除定時器
-  if (captureInterval) {
-    clearInterval(captureInterval)
-    captureInterval = null
+  if (closeWindow) {
+    await electronAPI.subtitle.close()
   }
-  
-  // 清除狀態
-  transcriptHistory = []
-  isProcessing = false
-
-  // 停止 MediaRecorder
-  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-    try {
-      mediaRecorder.stop()
-    } catch (e) {
-      console.error('停止錄製失敗:', e)
-    }
-  }
-  mediaRecorder = null
-
-  // 停止媒體串流
-  if (mediaStream) {
-    mediaStream.getTracks().forEach(track => track.stop())
-    mediaStream = null
-  }
-
-  // 不需要再關閉字幕視窗，因為已經由那邊關閉了
-
-  audioChunks = []
   updateUI()
 }
 
@@ -444,170 +275,129 @@ function stopCaptureFromSubtitle() {
  * 更新 UI 狀態
  */
 function updateUI() {
+  startLiveBtn.classList.toggle('hidden', isCapturing)
+  stopLiveBtn.classList.toggle('hidden', !isCapturing)
+  liveStatus.classList.toggle('active', isCapturing)
+  statusText.textContent = isCapturing ? '擷取中' : '未啟動'
+
   if (isCapturing) {
-    startLiveBtn.classList.add('hidden')
-    stopLiveBtn.classList.remove('hidden')
-    liveStatus.classList.add('active')
-    statusText.textContent = '擷取中...'
+    liveEngine.textContent = '· 本地 Qwen3-ASR-0.6B'
   } else {
-    startLiveBtn.classList.remove('hidden')
-    stopLiveBtn.classList.add('hidden')
-    liveStatus.classList.remove('active')
-    statusText.textContent = '未啟動'
+    liveEngine.textContent = ''
+    levelFill.style.width = '0%'
   }
 }
 
 /**
- * 將 Blob 轉換為 Base64
- * @param {Blob} blob 
- * @returns {Promise<string>}
+ * 顯示/清除錯誤訊息
  */
-function blobToBase64(blob) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      const base64 = reader.result.split(',')[1]
-      resolve(base64)
-    }
-    reader.onerror = reject
-    reader.readAsDataURL(blob)
-  })
+function setError(message) {
+  liveError.classList.toggle('hidden', !message)
+  liveError.textContent = message || ''
 }
 
-/**
- * 將 WebM 音訊轉換為 WAV 格式
- * @param {Blob} webmBlob - WebM 格式的音訊 Blob
- * @returns {Promise<Blob|null>} WAV 格式的音訊 Blob，如果音量太低則返回 null
- */
-async function webmToWav(webmBlob) {
-  // 建立 AudioContext
-  const audioContext = new (window.AudioContext || window.webkitAudioContext)()
-  
-  try {
-    // 將 Blob 轉換為 ArrayBuffer
-    const arrayBuffer = await webmBlob.arrayBuffer()
-    
-    // 解碼音訊資料
-    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer)
-    
-    // 分析音訊 - 計算 RMS 和語音活動佔比
-    const { rms, speechRatio } = analyzeAudio(audioBuffer)
-    
-    // 靜音或語音活動太少則跳過
-    // RMS 閾值：0.025（整體音量，提高以過濾低音量雜訊）
-    // 語音佔比閾值：0.12（至少 12% 的採樣超過語音門檻）
-    const RMS_THRESHOLD = 0.025
-    const SPEECH_RATIO_THRESHOLD = 0.12
-    
-    if (rms < RMS_THRESHOLD || speechRatio < SPEECH_RATIO_THRESHOLD) {
-      // 音量太低或語音活動太少，視為靜音
-      return null
+// ===== 音量指示條 =====
+
+function startLevelMeter(stream) {
+  levelAudioCtx = new AudioContext()
+  const source = levelAudioCtx.createMediaStreamSource(stream)
+  const analyser = levelAudioCtx.createAnalyser()
+  analyser.fftSize = 512
+  source.connect(analyser)
+  const data = new Uint8Array(analyser.frequencyBinCount)
+
+  const tick = () => {
+    if (!isCapturing) return
+    analyser.getByteTimeDomainData(data)
+    let sum = 0
+    for (let i = 0; i < data.length; i++) {
+      const v = (data[i] - 128) / 128
+      sum += v * v
     }
-    
-    // 編碼為 WAV
-    const wavBuffer = encodeWav(audioBuffer)
-    
-    return new Blob([wavBuffer], { type: 'audio/wav' })
+    const rms = Math.sqrt(sum / data.length)
+    levelFill.style.width = Math.min(100, rms * 400) + '%'
+    levelRaf = requestAnimationFrame(tick)
+  }
+  tick()
+}
+
+function stopLevelMeter() {
+  if (levelRaf) cancelAnimationFrame(levelRaf)
+  levelRaf = null
+  if (levelAudioCtx) {
+    levelAudioCtx.close()
+    levelAudioCtx = null
+  }
+}
+
+// ===== 音訊處理工具 =====
+
+/**
+ * 解碼 WebM 為 AudioBuffer（失敗回 null）
+ */
+async function decodeAudio(webmBlob) {
+  const audioContext = new AudioContext()
+  try {
+    const arrayBuffer = await webmBlob.arrayBuffer()
+    return await audioContext.decodeAudioData(arrayBuffer)
+  } catch {
+    return null
   } finally {
     audioContext.close()
   }
 }
 
 /**
- * 計算 AudioBuffer 的 RMS（均方根）音量和語音活動
- * @param {AudioBuffer} audioBuffer 
- * @returns {{rms: number, speechRatio: number}} RMS 音量值和語音活動佔比
+ * 增益補償：峰值過低時就地放大（上限 8 倍）
+ */
+function applyGain(audioBuffer) {
+  let peak = 0
+  for (let ch = 0; ch < audioBuffer.numberOfChannels; ch++) {
+    const data = audioBuffer.getChannelData(ch)
+    for (let i = 0; i < data.length; i++) {
+      const abs = Math.abs(data[i])
+      if (abs > peak) peak = abs
+    }
+  }
+  if (peak >= 0.3 || peak === 0) return
+  const gain = Math.min(0.9 / peak, 8)
+  for (let ch = 0; ch < audioBuffer.numberOfChannels; ch++) {
+    const data = audioBuffer.getChannelData(ch)
+    for (let i = 0; i < data.length; i++) data[i] *= gain
+  }
+}
+
+/**
+ * 計算 RMS 音量與語音活動佔比
  */
 function analyzeAudio(audioBuffer) {
-  const channelData = audioBuffer.getChannelData(0) // 使用第一個聲道
+  const channelData = audioBuffer.getChannelData(0)
   let sumSquares = 0
   let speechSamples = 0
-  const SPEECH_THRESHOLD = 0.02 // 單一樣本的語音門檻
-  
+
   for (let i = 0; i < channelData.length; i++) {
     const sample = Math.abs(channelData[i])
     sumSquares += sample * sample
-    
-    // 計算語音活動佔比
-    if (sample > SPEECH_THRESHOLD) {
-      speechSamples++
-    }
+    if (sample > SPEECH_SAMPLE_THRESHOLD) speechSamples++
   }
-  
-  const rms = Math.sqrt(sumSquares / channelData.length)
-  const speechRatio = speechSamples / channelData.length
-  
-  return { rms, speechRatio }
-}
 
-/**
- * 將 AudioBuffer 編碼為 WAV 格式
- * @param {AudioBuffer} audioBuffer
- * @returns {ArrayBuffer}
- */
-function encodeWav(audioBuffer) {
-  const numChannels = audioBuffer.numberOfChannels
-  const sampleRate = audioBuffer.sampleRate
-  const format = 1 // PCM
-  const bitDepth = 16
-  
-  // 取得所有聲道的資料
-  const channels = []
-  for (let i = 0; i < numChannels; i++) {
-    channels.push(audioBuffer.getChannelData(i))
-  }
-  
-  // 交錯聲道資料
-  const length = channels[0].length
-  const interleaved = new Float32Array(length * numChannels)
-  
-  for (let i = 0; i < length; i++) {
-    for (let ch = 0; ch < numChannels; ch++) {
-      interleaved[i * numChannels + ch] = channels[ch][i]
-    }
-  }
-  
-  // 轉換為 16-bit PCM
-  const dataLength = interleaved.length * (bitDepth / 8)
-  const buffer = new ArrayBuffer(44 + dataLength)
-  const view = new DataView(buffer)
-  
-  // WAV 標頭
-  writeString(view, 0, 'RIFF')
-  view.setUint32(4, 36 + dataLength, true)
-  writeString(view, 8, 'WAVE')
-  writeString(view, 12, 'fmt ')
-  view.setUint32(16, 16, true) // fmt chunk size
-  view.setUint16(20, format, true)
-  view.setUint16(22, numChannels, true)
-  view.setUint32(24, sampleRate, true)
-  view.setUint32(28, sampleRate * numChannels * (bitDepth / 8), true)
-  view.setUint16(32, numChannels * (bitDepth / 8), true)
-  view.setUint16(34, bitDepth, true)
-  writeString(view, 36, 'data')
-  view.setUint32(40, dataLength, true)
-  
-  // 寫入 PCM 資料
-  floatTo16BitPCM(view, 44, interleaved)
-  
-  return buffer
-}
-
-/**
- * 寫入字串到 DataView
- */
-function writeString(view, offset, string) {
-  for (let i = 0; i < string.length; i++) {
-    view.setUint8(offset + i, string.charCodeAt(i))
+  return {
+    rms: Math.sqrt(sumSquares / channelData.length),
+    speechRatio: speechSamples / channelData.length
   }
 }
 
 /**
- * 將浮點數轉換為 16-bit PCM
+ * 重採樣為 16kHz 單聲道 Float32Array（本地 ASR 輸入格式）
  */
-function floatTo16BitPCM(view, offset, input) {
-  for (let i = 0; i < input.length; i++, offset += 2) {
-    const s = Math.max(-1, Math.min(1, input[i]))
-    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true)
-  }
+export async function resampleTo16kMono(audioBuffer) {
+  const targetLength = Math.ceil(audioBuffer.duration * 16000)
+  const offlineCtx = new OfflineAudioContext(1, targetLength, 16000)
+  const source = offlineCtx.createBufferSource()
+  source.buffer = audioBuffer
+  source.connect(offlineCtx.destination)
+  source.start()
+  const rendered = await offlineCtx.startRendering()
+  // 複製一份，避免傳遞 detached buffer
+  return new Float32Array(rendered.getChannelData(0))
 }

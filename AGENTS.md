@@ -17,7 +17,20 @@
 - **Electron 35+** - 桌面應用框架
 - **Vite** - 構建工具
 - **Vanilla JavaScript** - 無框架前端
-- **OpenRouter API** - AI 語音轉錄 (Gemini 3 Flash)
+- **本地 ASR** - sherpa-onnx（固定 Qwen3-ASR-0.6B，CPU 即時）+ opencc-js 轉繁
+- **翻譯** - none / 雲端（OpenAI 相容 chat completions）/ 本地（node-llama-cpp + Qwen3.5-0.8B GGUF）
+
+> 現行架構與驗證紀錄見 [CONTEXT.md](./CONTEXT.md)（接手前先讀）。
+
+### 建置與預覽
+
+```bash
+npm run electron:pack    # 免安裝快速預覽 → dist/win-unpacked/VoiceInk.exe
+npm run electron:build   # NSIS 安裝檔 + win-unpacked → dist/
+```
+
+> [!IMPORTANT]
+> **每次 UI／功能改動完成後，必須先跑 `npm run electron:pack` 更新免安裝預覽**，讓使用者可直接執行 `dist/win-unpacked/VoiceInk.exe` 驗證。完整 `.exe` 安裝檔（`electron:build`）只在發佈時再打。
 
 ---
 
@@ -45,94 +58,11 @@
 
 ---
 
-## 3. 開發階段
+## 3. 關鍵實作提示
 
-### Phase 1：基礎設定 ⚙️
-
-**目標**：建立專案骨架與基本 UI
-
-**步驟**：
-
-1. 使用 Vite 初始化 Electron 專案
-2. 建立主視窗 (`src/main/main.js`)
-3. 建立 preload 橋接 (`src/preload/preload.js`)
-4. 建立基本 HTML/CSS 結構
-5. 實作設定頁面與 API Key 儲存
-6. 實作深色/淺色主題切換
-
-**驗證**：
-
-- 應用程式可正常啟動
-- 可輸入並儲存 API Key
-- 可切換主題
-
----
-
-### Phase 2：檔案轉錄 📁
-
-**目標**：完成音訊檔案轉逐字稿功能
-
-**步驟**：
-
-1. 實作檔案拖放區域
-2. 讀取檔案並轉換為 Base64
-3. 實作 OpenRouter API 呼叫模組
-4. 實作轉錄進度顯示
-5. 實作結果顯示區
-6. 實作複製/儲存功能
-
-**驗證**：
-
-- 拖入 MP3/WAV 檔案可正確識別
-- 轉錄結果正確顯示
-- 複製/儲存功能正常
-
----
-
-### Phase 3：即時字幕 🎙️
-
-**目標**：完成系統音訊即時字幕功能
-
-**步驟**：
-
-1. 實作 desktopCapturer 音訊擷取
-2. 實作音訊串流分段處理
-3. 建立懸浮字幕視窗
-4. 實作即時轉錄與字幕更新
-5. 實作視窗拖動功能
-
-**驗證**：
-
-- 可擷取系統播放的音訊
-- 懸浮視窗正確顯示字幕
-- 視窗可自由拖動
-
----
-
-### Phase 4：潤飾與打包 🎨
-
-**目標**：完善 UI 並打包發布
-
-**步驟**：
-
-1. 調整 UI 細節與動畫
-2. 完善錯誤處理
-3. 配置 electron-builder
-4. 生成 Windows 安裝包
-
-**驗證**：
-
-- 安裝包可正常安裝
-- 所有功能正常運作
-
----
-
-## 4. 關鍵實作提示
-
-### 4.1 系統音訊擷取
+### 3.1 系統音訊擷取（Main Process）
 
 ```javascript
-// Main Process
 session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
   desktopCapturer.getSources({ types: ['screen'] }).then((sources) => {
     callback({ video: sources[0], audio: 'loopback' })
@@ -140,54 +70,37 @@ session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
 })
 ```
 
-### 4.2 OpenRouter API 呼叫
+### 3.2 雲端 API（僅翻譯）
+
+翻譯選「雲端 LLM」時，由 `src/main/local-llm.js` 的 `translateCloud()` 呼叫 `${apiUrl}/chat/completions`（純文字）。設定鍵：`apiUrl` / `apiKey` / `modelId`。
+
+### 3.3 懸浮字幕視窗
 
 ```javascript
-const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-  method: 'POST',
-  headers: {
-    'Authorization': `Bearer ${apiKey}`,
-    'Content-Type': 'application/json',
-  },
-  body: JSON.stringify({
-    model: 'google/gemini-2.5-flash-preview',
-    messages: [{ role: 'user', content: [...] }]
-  })
-})
-```
-
-### 4.3 懸浮視窗設定
-
-```javascript
-const subtitleWindow = new BrowserWindow({
+subtitleWindow = new BrowserWindow({
   frame: false,
-  transparent: true,
+  transparent: false, // 刻意設計：Windows 透明視窗有渲染 bug、resizable 會失效
+  backgroundColor: '#1a1a1a',
   alwaysOnTop: true,
   skipTaskbar: true,
   resizable: true,
-  movable: true,
 })
+subtitleWindow.setMenu(null)
 ```
 
 ---
 
-## 5. 重要注意事項
+## 4. 重要注意事項
 
 > [!IMPORTANT]
 >
-> - API Key 必須安全儲存，使用 electron-store
-> - 即時字幕需處理 API 速率限制
-> - 音訊分段建議 3-5 秒以平衡延遲與品質
+> - API Key 必須安全儲存，使用 electron-store（IPC 存取）
+> - 靜音檢測在客戶端做（RMS＋語音佔比），不要交給 AI 判斷
+> - 音訊分段：本地 2 秒，處理佇列「保留最新 pending」不丟塊
+> - ASR 固定 Qwen3-ASR-0.6B（`ASR_MODEL_KEY = 'qwen3asr'`），無引擎切換 UI
 
 > [!CAUTION]
 >
 > - 不要在 Renderer Process 儲存 API Key 明文
-> - 懸浮視窗需設定 `alwaysOnTop: true` 才能置頂
-
----
-
-## 6. 參考文件
-
-- [深度研究報告](./docs/research-VoiceInk.md)
-- [產品需求文件](./docs/PRD-VoiceInk-MVP.md)
-- [技術設計文件](./docs/TechDesign-VoiceInk-MVP.md)
+> - 不要把 MediaRecorder 改回 `timeslice` 模式（Blob 缺 WebM header）
+> - 歷史教訓清單見 [tasks/lessons.md](./tasks/lessons.md)，開發規範地雷見 [CLAUDE.md](./CLAUDE.md)

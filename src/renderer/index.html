@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https://openrouter.ai"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https: http:"
     />
     <link rel="icon" type="image/png" href="../../assets/icon.png" />
     <title>VoiceInk - 語音轉文字</title>
@@ -175,7 +175,12 @@
               <div id="liveStatus" class="live-status">
                 <span class="status-dot"></span>
                 <span class="status-text">未啟動</span>
+                <span id="liveEngine" class="live-engine"></span>
+                <div class="level-meter" title="系統音訊音量">
+                  <div id="levelFill" class="level-fill"></div>
+                </div>
               </div>
+              <p id="liveError" class="live-error hidden"></p>
 
               <!-- 說明 -->
               <div class="info-card">
@@ -201,43 +206,104 @@
             <button id="closeSettingsBtn" class="btn-icon">✕</button>
           </div>
           <div class="settings-body">
-            <div class="setting-group">
-              <label for="apiKeyInput">OpenRouter API Key</label>
-              <div class="input-group">
-                <input
-                  type="password"
-                  id="apiKeyInput"
-                  class="input"
-                  placeholder="sk-or-..."
-                />
-                <button id="toggleApiKeyVisibility" class="btn-icon">👁️</button>
+            <!-- 模型狀態摘要 -->
+            <section class="settings-section">
+              <h3 class="settings-section-title">模型狀態</h3>
+              <div class="engine-status-list">
+                <div class="engine-status-card" data-model-key="qwen3asr">
+                  <div class="engine-status-row">
+                    <div class="engine-status-info">
+                      <p class="engine-status-role">ASR 轉錄</p>
+                      <p class="engine-status-name">Qwen3-ASR-0.6B</p>
+                      <p class="engine-status-meta" id="asrStatusText">檢查中…</p>
+                    </div>
+                    <button type="button" id="asrDownloadBtn" class="btn btn-primary btn-sm engine-status-btn">下載</button>
+                  </div>
+                  <div class="model-progress hidden" id="asrProgress">
+                    <div class="model-progress-fill"></div>
+                  </div>
+                </div>
+                <div class="engine-status-card" data-model-key="qwen35translate">
+                  <div class="engine-status-row">
+                    <div class="engine-status-info">
+                      <p class="engine-status-role">本地翻譯</p>
+                      <p class="engine-status-name">Qwen3.5-0.8B</p>
+                      <p class="engine-status-meta" id="llmStatusText">檢查中…</p>
+                    </div>
+                    <button type="button" id="llmDownloadBtn" class="btn btn-primary btn-sm engine-status-btn">下載</button>
+                  </div>
+                  <div class="model-progress hidden" id="llmProgress">
+                    <div class="model-progress-fill"></div>
+                  </div>
+                </div>
+              </div>
+              <p class="setting-hint">轉錄固定使用上方 ASR；本地 LLM 翻譯需下載翻譯模型。</p>
+            </section>
+
+            <!-- 翻譯 -->
+            <section class="settings-section">
+              <h3 class="settings-section-title">翻譯</h3>
+              <div id="translatorSegment" class="segmented">
+                <button type="button" class="seg-btn" data-value="none">不翻譯</button>
+                <button type="button" class="seg-btn" data-value="cloud">雲端 LLM</button>
+                <button type="button" class="seg-btn" data-value="local">本地 LLM</button>
               </div>
               <p class="setting-hint">
-                前往
-                <a href="https://openrouter.ai/keys" target="_blank" rel="noopener"
-                  >OpenRouter</a
-                >
-                取得 API Key
+                目標語言與聲音語言不同時生效。本地 LLM 全程離線。
               </p>
-            </div>
-            <div class="setting-group">
-              <label for="modelIdInput">模型 ID</label>
-              <div class="input-group">
-                <input
-                  type="text"
-                  id="modelIdInput"
-                  class="input"
-                  placeholder="google/gemini-3-flash-preview"
-                />
+
+              <!-- 雲端 API：僅翻譯選「雲端 LLM」時展開 -->
+              <div id="cloudApiSection" class="cloud-api-section hidden">
+                <h4 class="settings-subsection-title">雲端 API</h4>
+                <div class="setting-group">
+                  <label for="apiUrlInput">API URL</label>
+                  <input
+                    type="text"
+                    id="apiUrlInput"
+                    class="input"
+                    placeholder="https://openrouter.ai/api/v1"
+                  />
+                  <p class="setting-hint">任何 OpenAI 相容端點</p>
+                </div>
+                <div class="setting-group">
+                  <label for="apiKeyInput">API Key</label>
+                  <div class="input-group">
+                    <input
+                      type="password"
+                      id="apiKeyInput"
+                      class="input"
+                      placeholder="sk-..."
+                    />
+                    <button id="toggleApiKeyVisibility" class="btn-icon">👁️</button>
+                  </div>
+                </div>
+                <div class="setting-group">
+                  <label for="modelIdInput">模型 ID</label>
+                  <input
+                    type="text"
+                    id="modelIdInput"
+                    class="input"
+                    placeholder="google/gemini-3-flash-preview"
+                  />
+                  <p class="setting-hint">
+                    文字翻譯用模型即可（不需支援音訊）。
+                    <a href="https://openrouter.ai/models" target="_blank" rel="noopener">查看 OpenRouter 模型</a>
+                  </p>
+                </div>
               </div>
-              <p class="setting-hint">
-                支援 OpenRouter 上任何模型。
-                <a href="https://openrouter.ai/models" target="_blank" rel="noopener"
-                  >查看可用模型</a
-                >
-              </p>
-            </div>
-            <button id="saveSettingsBtn" class="btn btn-primary">儲存設定</button>
+            </section>
+
+            <!-- 模型管理 -->
+            <section class="settings-section">
+              <h3 class="settings-section-title">本地模型管理</h3>
+              <div class="models-path">
+                <span id="modelsPathText" class="models-path-text" title="點擊開啟模型資料夾">…</span>
+                <button id="openModelsFolderBtn" class="btn btn-secondary btn-sm">開啟資料夾</button>
+              </div>
+              <div id="modelList" class="model-list"></div>
+            </section>
+
+            <button id="saveSettingsBtn" class="btn btn-primary btn-block">儲存設定</button>
           </div>
         </div>
       </div>

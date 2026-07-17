@@ -615,6 +615,287 @@ a:hover {
   border-left: 4px solid var(--danger);
 }
 
+/* ===== 設定分區 ===== */
+
+.settings-content {
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-body {
+  overflow-y: auto;
+}
+
+.settings-section {
+  padding-bottom: 20px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.settings-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+}
+
+.settings-section .setting-group {
+  margin-top: 16px;
+  margin-bottom: 0;
+}
+
+.select-full {
+  width: 100%;
+}
+
+.btn-block {
+  width: 100%;
+}
+
+.btn-sm {
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+/* ===== 分段選擇器 ===== */
+
+.segmented {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background-color: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+}
+
+.seg-btn {
+  flex: 1;
+  padding: 8px 12px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background-color: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.seg-btn:hover {
+  color: var(--text-primary);
+}
+
+.seg-btn.active {
+  background-color: var(--accent-primary);
+  color: white;
+}
+
+/* ===== 模型狀態摘要卡 ===== */
+
+.engine-status-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.engine-status-card {
+  padding: 12px 14px;
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+}
+
+.engine-status-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.engine-status-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.engine-status-role {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+  margin-bottom: 2px;
+}
+
+.engine-status-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.engine-status-meta {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.engine-status-meta.is-ready {
+  color: var(--success);
+}
+
+.engine-status-meta.is-busy {
+  color: var(--accent-primary);
+}
+
+.engine-status-btn {
+  flex-shrink: 0;
+  min-width: 64px;
+}
+
+.cloud-api-section {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--border-light);
+}
+
+.settings-subsection-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+}
+
+/* ===== 模型管理 ===== */
+
+.models-path {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.models-path-text {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+  cursor: pointer;
+}
+
+.models-path-text:hover {
+  color: var(--accent-primary);
+}
+
+.model-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.model-item {
+  padding: 12px 14px;
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+}
+
+.model-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.model-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.model-name {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.model-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background-color: var(--bg-hover);
+  color: var(--text-secondary);
+  font-size: 11px;
+  vertical-align: middle;
+}
+
+.model-size {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.model-size.downloaded {
+  color: var(--success);
+}
+
+.model-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.model-progress {
+  margin-top: 10px;
+  height: 4px;
+  background-color: var(--bg-primary);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.model-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--accent-primary), var(--accent-hover));
+  transition: width 0.3s ease;
+}
+
+/* ===== 即時字幕狀態列 ===== */
+
+.live-engine {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.level-meter {
+  flex: 1;
+  height: 6px;
+  margin-left: 8px;
+  background-color: var(--bg-tertiary);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.level-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--success), var(--warning));
+  border-radius: 3px;
+  transition: width 0.1s linear;
+}
+
+.live-error {
+  margin-top: 8px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background-color: rgba(239, 68, 68, 0.12);
+  border-left: 3px solid var(--danger);
+  color: var(--danger);
+  font-size: 13px;
+}
+
 /* ===== 工具類 ===== */
 
 .hidden {

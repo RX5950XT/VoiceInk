@@ -61,7 +61,8 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        width: 28px;
+        min-width: 28px;
+        padding: 0 5px;
         height: 28px;
         border: none;
         border-radius: 4px;
@@ -121,9 +122,13 @@
         background: rgba(255, 255, 255, 0.5);
       }
 
+      :root {
+        --subtitle-scale: 1;
+      }
+
       .subtitle-line {
         color: rgba(255, 255, 255, 0.5);
-        font-size: 18px;
+        font-size: calc(18px * var(--subtitle-scale));
         font-weight: 400;
         line-height: 1.4;
         text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
@@ -134,21 +139,21 @@
 
       .subtitle-line:last-child {
         color: #ffffff;
-        font-size: 22px;
+        font-size: calc(22px * var(--subtitle-scale));
         font-weight: 500;
         border-bottom: none;
       }
 
       .subtitle-line.current {
         color: #ffffff;
-        font-size: 22px;
+        font-size: calc(22px * var(--subtitle-scale));
         font-weight: 500;
       }
 
       /* 空狀態 */
       .subtitle-empty {
         color: rgba(255, 255, 255, 0.5);
-        font-size: 18px;
+        font-size: calc(18px * var(--subtitle-scale));
         text-align: center;
         font-style: italic;
       }
@@ -180,6 +185,9 @@
       <div class="drag-area">
         <div class="drag-indicator"></div>
         <div class="controls">
+          <button id="fontDownBtn" class="control-btn" title="縮小字級">A−</button>
+          <button id="fontUpBtn" class="control-btn" title="放大字級">A+</button>
+          <button id="opacityBtn" class="control-btn" title="調整視窗透明度">◐</button>
           <button id="copyBtn" class="control-btn" title="複製全部字幕">
             📋
           </button>
@@ -277,6 +285,45 @@
       closeBtn.addEventListener("click", async (e) => {
         e.stopPropagation();
         await window.electronAPI.subtitle.close();
+      });
+
+      // ===== 字級調整 =====
+      let fontScale = 1;
+      const FONT_SCALE_MIN = 0.7;
+      const FONT_SCALE_MAX = 2.0;
+
+      function applyFontScale() {
+        document.documentElement.style.setProperty("--subtitle-scale", fontScale);
+      }
+
+      window.electronAPI.store.get("subtitleFontScale", 1).then((v) => {
+        fontScale = v;
+        applyFontScale();
+      });
+
+      function adjustFont(delta) {
+        fontScale = Math.min(FONT_SCALE_MAX, Math.max(FONT_SCALE_MIN, +(fontScale + delta).toFixed(2)));
+        applyFontScale();
+        window.electronAPI.store.set("subtitleFontScale", fontScale);
+      }
+
+      document.getElementById("fontDownBtn").addEventListener("click", () => adjustFont(-0.15));
+      document.getElementById("fontUpBtn").addEventListener("click", () => adjustFont(0.15));
+
+      // ===== 視窗透明度（循環 100% → 85% → 70%）=====
+      const OPACITY_STEPS = [1, 0.85, 0.7];
+      let opacityIndex = 0;
+
+      window.electronAPI.store.get("subtitleOpacity", 1).then((v) => {
+        opacityIndex = Math.max(0, OPACITY_STEPS.indexOf(v));
+        window.electronAPI.subtitle.setOpacity(OPACITY_STEPS[opacityIndex]);
+      });
+
+      document.getElementById("opacityBtn").addEventListener("click", () => {
+        opacityIndex = (opacityIndex + 1) % OPACITY_STEPS.length;
+        const value = OPACITY_STEPS[opacityIndex];
+        window.electronAPI.subtitle.setOpacity(value);
+        window.electronAPI.store.set("subtitleOpacity", value);
       });
 
       // 顯示 Toast

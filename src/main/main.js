@@ -1,5 +1,8 @@
 const { app, BrowserWindow, ipcMain, session, desktopCapturer } = require('electron')
 const path = require('path')
+const models = require('./models')
+const localAsr = require('./local-asr')
+const localLlm = require('./local-llm')
 
 // 主視窗
 let mainWindow = null
@@ -167,6 +170,38 @@ ipcMain.handle('subtitle:update', (event, text) => {
     subtitleWindow.webContents.send('subtitle:text', text)
   }
   return true
+})
+
+ipcMain.handle('subtitle:setOpacity', (event, value) => {
+  if (subtitleWindow) {
+    subtitleWindow.setOpacity(value)
+  }
+  return true
+})
+
+// ===== 本地模型相關 =====
+
+ipcMain.handle('models:status', () => models.status())
+
+ipcMain.handle('models:download', async (event, key) => {
+  return models.download(key, (progress) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('models:progress', progress)
+    }
+  })
+})
+
+ipcMain.handle('models:cancel', (event, key) => models.cancelDownload(key))
+
+ipcMain.handle('models:delete', (event, key) => models.remove(key))
+
+ipcMain.handle('models:openFolder', (event, key) => models.openFolder(key))
+
+ipcMain.handle('localAsr:transcribe', (event, req) => localAsr.transcribe(req))
+
+ipcMain.handle('translate', async (event, text, targetLang) => {
+  if (!store) await initStore()
+  return localLlm.translate(store, text, targetLang)
 })
 
 // 設定系統音訊擷取的媒體請求處理器
