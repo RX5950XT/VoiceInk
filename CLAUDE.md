@@ -4,10 +4,11 @@
 
 ## 專案
 
-Windows Electron 語音轉文字：檔案轉錄＋系統音訊即時字幕。Vanilla JS + Vite，無前端框架。
+Windows Electron 語音轉文字：檔案轉錄＋即時字幕＋翻譯與 TTS。Vanilla JS + Vite，無前端框架。
 
 - ASR：固定本地 sherpa-onnx Qwen3-ASR-0.6B（無雲端轉錄、無其他 ASR 模型）
-- 翻譯：none / cloud / local（node-llama-cpp + Qwen3.5-0.8B GGUF）
+- 翻譯：none / cloud / local（node-llama-cpp + Qwen3.5-0.8B GGUF）；三頁共用
+- TTS：Edge TTS（`node-edge-tts` MIT）；設定鍵 `ttsVoices`；需連網
 - 模型 registry：`src/main/models.js`；下載至 `%APPDATA%/voiceink/models/`
 
 ## 指令
@@ -23,7 +24,7 @@ npm start                # 注意：未打包時 isDev=true，會連 localhost:5
 
 - 檔名 kebab-case、變數 camelCase、常數 UPPER_SNAKE_CASE；ES2022、async/await、JSDoc
 - Renderer 是 ESM（import/export）、Main/Preload 是 CJS
-- 設定一律走 electron-store IPC（鍵：translator/captionDisplayMode/apiUrl/apiKey/modelId/theme）
+- 設定一律走 electron-store IPC（鍵：translator/captionDisplayMode/apiUrl/apiKey/modelId/theme/ttsVoices）
 - ASR 模型 key 固定 `qwen3asr`（`ASR_MODEL_KEY`）
 - Commit 格式 `<type>: <description>`，訊息用繁體中文
 - **UI／功能改動完成後，先跑 `npm run electron:pack` 更新免安裝預覽**（`dist/win-unpacked/VoiceInk.exe`），方便使用者直接點開驗證；完整安裝檔（`electron:build`）僅在需要發佈時再打
@@ -42,7 +43,7 @@ npm start                # 注意：未打包時 isDev=true，會連 localhost:5
 - 檔案轉錄走 main `file-transcribe.js`（ffmpeg 串流 16k mono → 28s 切段），勿改回 renderer 整檔 `decodeAudioData`（長檔 OOM）
 - 打包跑的是 `src/` 原始碼（`files` 排除 `dist/**`，main `loadFile('../renderer/...')` 載入 asar 內原始檔）；`vite build` 只作驗證，改 renderer 直接改 `src/`
 - 字幕顯示模式（雙語/僅翻譯）由字幕彈窗獨佔（讀寫 store `captionDisplayMode`、單一 `currentMode` 渲染）；別再讓即時頁 payload 夾帶 `displayMode` 或加跨窗 IPC——兩端搶改同一狀態會打架
-- 引擎預熱綁分頁：進 live 分頁 `prewarmEngine`、離開 `cooldownEngine`；`users.live` 是布林、`prewarmed`/`engineAcquired` 互斥（擷取開始轉交所有權），別改成計數或漏清旗標；prewarm 用 `prewarmGen` 作廢 in-flight，成功後才設 `prewarmed`，擷取接手時不可對同一 owner 再 release
+- 引擎 owner：`live|file|translate` 布林；翻譯頁 prewarm 同樣 gen 作廢；切頁先 acquire 再 release；TTS IPC 只收 lang、回 Uint8Array（禁 base64／禁 AGPL 套件）
 - ASR 必須 `withAsrLock` + `loadEnabled`：unload 等 in-flight、禁止 stop 後幽靈重載；transcribe 有 samples 長度／sampleRate 驗證
 - store key 僅 allowlist；`models.openFolder` 僅 registry key 或根目錄
 - 兩窗 `sandbox: true`；displayMedia handler 失敗也要 `callback({})`

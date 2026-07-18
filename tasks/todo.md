@@ -76,3 +76,16 @@
 - [x] 非語言 ASR 碎片 persona 問候防護
 - [x] 翻譯冷啟動暖機、日文複誦／繁體、全專案審計修補
 - [x] 發佈 GitHub Release v1.4.0（不重複版本號）
+
+## v1.5.0（2026-07-18）— 翻譯與 TTS 頁
+
+- [x] 第三 tab 雙欄 UI + 按鈕式翻譯（stale／字數／Ctrl+Enter／⇄）
+- [x] engine owner `translate` + prewarm 契約；settings-changed 同步
+- [x] Edge TTS：`node-edge-tts` MIT、binary IPC、串播、voice allowlist
+- [x] 設定「語音（Edge TTS）」五語下拉 + `ttsVoices` 持久化
+- [x] CSP `media-src blob:` 修朗讀；左色條移除；temperature=0
+- [x] e2e `scripts/e2e-tts-translate.js` 16/16；`electron:pack`／`electron:build`；Release v1.5.0
+
+### Review
+- 對抗式審查已吸收：禁 AGPL、禁 base64、prewarmGen、none 空狀態、stale 態
+- 預覽：`dist/win-unpacked/VoiceInk.exe`

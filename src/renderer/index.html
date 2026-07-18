@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https: http:"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https: http:; media-src 'self' blob:"
     />
     <link rel="icon" type="image/png" href="../../assets/icon.png" />
     <title>VoiceInk - 語音轉文字</title>
@@ -29,13 +29,17 @@
           </div>
           <!-- 導航選項 -->
           <nav class="header-nav">
-            <button class="nav-tab active" data-page="transcribe">
+            <button class="nav-tab active" data-page="transcribe" title="檔案轉錄">
               <span class="nav-icon">📁</span>
               <span class="nav-text">檔案轉錄</span>
             </button>
-            <button class="nav-tab" data-page="live">
+            <button class="nav-tab" data-page="live" title="即時字幕">
               <span class="nav-icon">🎙️</span>
               <span class="nav-text">即時字幕</span>
+            </button>
+            <button class="nav-tab" data-page="translate" title="翻譯與 TTS">
+              <span class="nav-icon">🔤</span>
+              <span class="nav-text">翻譯與 TTS</span>
             </button>
           </nav>
         </div>
@@ -191,6 +195,91 @@
               <p id="liveError" class="live-error hidden"></p>
             </div>
           </section>
+
+          <!-- 翻譯與 TTS -->
+          <section id="page-translate" class="page">
+            <div class="page-header">
+              <h1>翻譯與 TTS</h1>
+              <p class="page-desc">文字翻譯與 Edge TTS 語音朗讀</p>
+            </div>
+
+            <div id="translateBanner" class="translate-banner hidden" role="status">
+              <span id="translateBannerText">翻譯未開啟</span>
+              <button type="button" id="translateOpenSettingsBtn" class="btn btn-secondary btn-sm">前往設定</button>
+            </div>
+
+            <div class="translate-lang-bar">
+              <div class="option-group">
+                <label for="translateSourceLang">來源語言</label>
+                <select id="translateSourceLang" class="select">
+                  <option value="auto">未指定（模型自行處理）</option>
+                  <option value="zh-TW">繁體中文（台灣）</option>
+                  <option value="zh-CN">簡體中文</option>
+                  <option value="en">English</option>
+                  <option value="ja">日本語</option>
+                  <option value="ko">한국어</option>
+                </select>
+              </div>
+              <button type="button" id="translateSwapBtn" class="btn btn-secondary translate-swap-btn" title="交換語言與文字">⇄</button>
+              <div class="option-group">
+                <label for="translateTargetLang">目標語言</label>
+                <select id="translateTargetLang" class="select">
+                  <option value="zh-TW">繁體中文（台灣）</option>
+                  <option value="zh-CN">簡體中文</option>
+                  <option value="en">English</option>
+                  <option value="ja">日本語</option>
+                  <option value="ko">한국어</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="translate-panes">
+              <div class="translate-pane">
+                <div class="pane-header">
+                  <span class="pane-title">輸入</span>
+                  <span id="translateInputCount" class="pane-meta">0 / 1500</span>
+                </div>
+                <textarea
+                  id="translateInput"
+                  class="pane-textarea"
+                  rows="10"
+                  maxlength="1500"
+                  placeholder="輸入或貼上要翻譯的文字…"
+                ></textarea>
+                <div class="pane-toolbar">
+                  <button type="button" id="translateCopyInputBtn" class="btn btn-secondary btn-sm">📋 複製</button>
+                  <button type="button" id="translateSpeakInputBtn" class="btn btn-secondary btn-sm" aria-pressed="false">🔊 朗讀</button>
+                  <button type="button" id="translateClearInputBtn" class="btn btn-secondary btn-sm">清空</button>
+                </div>
+              </div>
+              <div class="translate-pane">
+                <div class="pane-header">
+                  <span class="pane-title">譯文</span>
+                  <span id="translateOutputState" class="pane-meta">—</span>
+                </div>
+                <textarea
+                  id="translateOutput"
+                  class="pane-textarea"
+                  rows="10"
+                  readonly
+                  placeholder="譯文會顯示在這裡"
+                ></textarea>
+                <div class="pane-toolbar">
+                  <button type="button" id="translateCopyOutputBtn" class="btn btn-secondary btn-sm">📋 複製</button>
+                  <button type="button" id="translateSpeakOutputBtn" class="btn btn-secondary btn-sm" aria-pressed="false" disabled title="請先翻譯">🔊 朗讀</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="translate-actions">
+              <button type="button" id="translateRunBtn" class="btn btn-primary">
+                翻譯
+              </button>
+              <p class="setting-hint translate-hint">點擊翻譯，或 Ctrl+Enter。朗讀需連上網路（Edge TTS）。</p>
+            </div>
+            <p id="translateStatus" class="translate-status">翻譯：檢查中…</p>
+            <p id="translateError" class="live-error hidden"></p>
+          </section>
         </main>
       </div>
 
@@ -246,7 +335,7 @@
                 <button type="button" class="seg-btn" data-value="local">本地 LLM</button>
               </div>
               <p class="setting-hint">
-                目標語言與聲音語言不同時生效。本地 LLM 全程離線。雙語／僅翻譯請在字幕視窗右上角「雙／譯」鈕切換。
+                檔案轉錄、即時字幕、翻譯頁共用此後端。本地 LLM 全程離線。即時字幕雙語／僅翻譯請在字幕視窗右上角「雙／譯」鈕切換。
               </p>
 
               <!-- 雲端 API：僅翻譯選「雲端 LLM」時展開 -->
@@ -286,6 +375,34 @@
                     文字翻譯用模型即可（不需支援音訊）。
                     <a href="https://openrouter.ai/models" target="_blank" rel="noopener">查看 OpenRouter 模型</a>
                   </p>
+                </div>
+              </div>
+            </section>
+
+            <!-- 語音 TTS -->
+            <section class="settings-section">
+              <h3 class="settings-section-title">語音（Edge TTS）</h3>
+              <p class="setting-hint">朗讀永遠需要連上網路，與本地翻譯無關。各語系可選聲音：</p>
+              <div id="ttsVoicesFields" class="tts-voices-fields">
+                <div class="setting-group">
+                  <label for="ttsVoiceZhTw">繁體中文</label>
+                  <select id="ttsVoiceZhTw" class="select" data-tts-lang="zh-TW"></select>
+                </div>
+                <div class="setting-group">
+                  <label for="ttsVoiceZhCn">簡體中文</label>
+                  <select id="ttsVoiceZhCn" class="select" data-tts-lang="zh-CN"></select>
+                </div>
+                <div class="setting-group">
+                  <label for="ttsVoiceEn">English</label>
+                  <select id="ttsVoiceEn" class="select" data-tts-lang="en"></select>
+                </div>
+                <div class="setting-group">
+                  <label for="ttsVoiceJa">日本語</label>
+                  <select id="ttsVoiceJa" class="select" data-tts-lang="ja"></select>
+                </div>
+                <div class="setting-group">
+                  <label for="ttsVoiceKo">한국어</label>
+                  <select id="ttsVoiceKo" class="select" data-tts-lang="ko"></select>
                 </div>
               </div>
             </section>

@@ -225,7 +225,7 @@ async function translateLocal(text, targetLang, context = {}, options = {}) {
   session.setChatHistory(history)
   const out = await session.prompt(text, {
     maxTokens: resolveMaxTokens(options),
-    temperature: 0.2,
+    temperature: 0,
     budgets: { thoughtTokens: 0 }
   })
   return stripThink(out)
@@ -254,6 +254,7 @@ async function translateCloud(text, targetLang, cfg, context = {}, options = {})
       body: JSON.stringify({
         model: cfg.modelId,
         max_tokens: resolveMaxTokens(options),
+        temperature: 0,
         messages
       }),
       signal: AbortSignal.timeout(CLOUD_TIMEOUT_MS)

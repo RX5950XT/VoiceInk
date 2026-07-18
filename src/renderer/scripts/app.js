@@ -4,7 +4,21 @@
 
 import { initTranscribe } from './transcribe.js'
 import { initLiveCaption, prewarmEngine, cooldownEngine } from './live-caption.js'
+import {
+  initTranslatePage,
+  prewarmTranslatePage,
+  cooldownTranslatePage
+} from './translate-page.js'
 import { DEFAULT_API_URL, DEFAULT_MODEL } from './api.js'
+
+/** 預設 TTS 語音（與 main tts-voices.js 對齊） */
+export const DEFAULT_TTS_VOICES = {
+  'zh-TW': 'zh-TW-HsiaoChenNeural',
+  'zh-CN': 'zh-CN-XiaoxiaoNeural',
+  en: 'en-US-AvaNeural',
+  ja: 'ja-JP-NanamiNeural',
+  ko: 'ko-KR-SunHiNeural'
+}
 
 // ===== Electron API Fallback =====
 // 在純瀏覽器環境開發時提供 fallback
@@ -47,7 +61,16 @@ export const electronAPI = window.electronAPI || {
   localAsr: {
     transcribe: async () => { throw new Error('僅 Electron 環境可用') }
   },
-  translate: async (text) => text // opts 可選，瀏覽器 fallback 直接回原文
+  translate: async (text) => text,
+  tts: {
+    listVoices: async () => ({
+      langs: Object.keys(DEFAULT_TTS_VOICES),
+      voicesByLang: {},
+      defaults: { ...DEFAULT_TTS_VOICES }
+    }),
+    synthesize: async () => { throw new Error('僅 Electron 環境可用') },
+    cancel: async () => true
+  }
 }
 
 // ===== 設定 =====
@@ -58,7 +81,8 @@ const SETTING_DEFAULTS = {
   captionDisplayMode: 'bilingual',
   apiUrl: DEFAULT_API_URL,
   apiKey: '',
-  modelId: DEFAULT_MODEL
+  modelId: DEFAULT_MODEL,
+  ttsVoices: { ...DEFAULT_TTS_VOICES }
 }
 
 /** 固定本地 ASR 模型 key */
@@ -119,6 +143,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   initNavigation()
   initTranscribe()
   initLiveCaption()
+  initTranslatePage()
 })
 
 // ===== 主題管理 =====
@@ -151,9 +176,11 @@ function switchPage(pageName) {
   pages.forEach(page => {
     page.classList.toggle('active', page.id === `page-${pageName}`)
   })
-  // 進入即時字幕分頁即背景預熱模型；離開且未擷取時卸載
+  // 先啟動新頁 acquire，再 release 舊頁，避免中間 owner 歸零觸發 unload＋重付 warm
   if (pageName === 'live') prewarmEngine()
-  else cooldownEngine()
+  if (pageName === 'translate') prewarmTranslatePage()
+  if (pageName !== 'live') cooldownEngine()
+  if (pageName !== 'translate') cooldownTranslatePage()
 }
 
 // ===== 設定管理 =====
@@ -166,6 +193,8 @@ async function initSettings() {
   modelIdInput.value = settings.modelId
   initSegment('translatorSegment', settings.translator)
   updateCloudApiVisibility(settings.translator)
+  await populateTtsVoiceSelects()
+  applyTtsVoicesToForm(settings.ttsVoices || DEFAULT_TTS_VOICES)
 
   settingsBtn.addEventListener('click', openSettings)
   closeSettingsBtn.addEventListener('click', closeSettings)
@@ -189,6 +218,64 @@ async function initSettings() {
   modelsPathText.addEventListener('click', () => electronAPI.models.openFolder())
   electronAPI.models.onProgress(onModelProgress)
   await refreshModels()
+}
+
+/** @type {{ langs: string[], voicesByLang: Record<string, {id:string,label:string}[]>, defaults: Record<string,string> } | null} */
+let ttsVoiceCatalog = null
+
+async function populateTtsVoiceSelects() {
+  try {
+    ttsVoiceCatalog = await electronAPI.tts.listVoices()
+  } catch {
+    ttsVoiceCatalog = {
+      langs: Object.keys(DEFAULT_TTS_VOICES),
+      voicesByLang: {},
+      defaults: { ...DEFAULT_TTS_VOICES }
+    }
+  }
+  document.querySelectorAll('select[data-tts-lang]').forEach((sel) => {
+    const lang = sel.dataset.ttsLang
+    const list = ttsVoiceCatalog?.voicesByLang?.[lang] || []
+    sel.innerHTML = ''
+    if (list.length === 0) {
+      const id = DEFAULT_TTS_VOICES[lang]
+      const opt = document.createElement('option')
+      opt.value = id
+      opt.textContent = id
+      sel.appendChild(opt)
+      return
+    }
+    for (const v of list) {
+      const opt = document.createElement('option')
+      opt.value = v.id
+      opt.textContent = v.label
+      sel.appendChild(opt)
+    }
+  })
+}
+
+/**
+ * @param {Record<string, string>} voices
+ */
+function applyTtsVoicesToForm(voices) {
+  const v = { ...DEFAULT_TTS_VOICES, ...(voices || {}) }
+  document.querySelectorAll('select[data-tts-lang]').forEach((sel) => {
+    const lang = sel.dataset.ttsLang
+    const want = v[lang] || DEFAULT_TTS_VOICES[lang]
+    if ([...sel.options].some((o) => o.value === want)) sel.value = want
+  })
+}
+
+/**
+ * @returns {Record<string, string>}
+ */
+function readTtsVoicesFromForm() {
+  const out = { ...DEFAULT_TTS_VOICES }
+  document.querySelectorAll('select[data-tts-lang]').forEach((sel) => {
+    const lang = sel.dataset.ttsLang
+    if (sel.value) out[lang] = sel.value
+  })
+  return out
 }
 
 /**
@@ -233,6 +320,10 @@ async function loadSettingsForm() {
     btn.classList.toggle('active', btn.dataset.value === settings.translator)
   })
   updateCloudApiVisibility(settings.translator)
+  if (!ttsVoiceCatalog?.voicesByLang || !Object.keys(ttsVoiceCatalog.voicesByLang).length) {
+    await populateTtsVoiceSelects()
+  }
+  applyTtsVoicesToForm(settings.ttsVoices || DEFAULT_TTS_VOICES)
 }
 
 function openSettings() {
@@ -258,7 +349,8 @@ async function saveSettings() {
     electronAPI.store.set('translator', translator),
     electronAPI.store.set('apiUrl', apiUrlInput.value.trim() || DEFAULT_API_URL),
     electronAPI.store.set('apiKey', apiKey),
-    electronAPI.store.set('modelId', modelIdInput.value.trim() || DEFAULT_MODEL)
+    electronAPI.store.set('modelId', modelIdInput.value.trim() || DEFAULT_MODEL),
+    electronAPI.store.set('ttsVoices', readTtsVoicesFromForm())
   ])
 
   closeSettings()

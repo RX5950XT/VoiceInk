@@ -4,25 +4,28 @@
 
 ## 專案概況
 
-VoiceInk：Windows Electron 語音轉文字應用（檔案轉錄＋系統音訊即時字幕）。
-Vanilla JS + Vite，無前端框架。版本 **1.4.0**（GitHub Release `v1.4.0`）。
+VoiceInk：Windows Electron 語音轉文字應用（檔案轉錄＋即時字幕＋翻譯與 TTS）。
+Vanilla JS + Vite，無前端框架。版本 **1.5.0**（GitHub Release `v1.5.0`：翻譯與 TTS 頁）。
 
-## 架構（本地 ASR only，2026-07-17）
+## 架構（本地 ASR + 翻譯頁 TTS，2026-07-18）
 
 ```
 src/main/
-  main.js             視窗管理 + IPC 掛載（store / subtitle / models / localAsr / translate）
+  main.js             視窗管理 + IPC（store / subtitle / models / localAsr / translate / tts）
   models.js           本地模型 registry + 下載管理（qwen3asr、qwen35translate）
   local-asr.js        sherpa-onnx 本地轉錄（固定 Qwen3-ASR-0.6B；zh-TW 經 opencc 轉繁）
   local-llm.js        翻譯分流：雲端 chat completions / 本地 node-llama-cpp
   file-transcribe.js  長檔串流：ffmpeg→16k mono f32le→28s 切段 ASR（≥2h／≥100MB）
-src/preload/preload.js   contextBridge 暴露上述 IPC（含 getPathForFile）
+  edge-tts.js         Edge TTS facade（node-edge-tts MIT；Uint8Array；切塊）
+  tts-voices.js       語音 allowlist + ttsVoices sanitize
+  engine.js           owner: live | file | translate（布林；translate 預設不載 ASR）
+src/preload/preload.js   contextBridge（含 tts.synthesize / listVoices / cancel）
 src/renderer/
-  scripts/app.js          設定（translator/apiUrl/apiKey/modelId）+ 模型管理 UI
-  scripts/api.js          雲端 API 預設值（DEFAULT_API_URL / DEFAULT_MODEL）
-  scripts/live-caption.js 即時字幕（2s 切塊、佇列不丟塊、增益+靜音門檻、音量條）
-  scripts/transcribe.js   檔案轉錄（getPathForFile → main 串流；進度 UI）
-  pages/subtitle.html     懸浮字幕視窗（顯示模式 雙/譯、字級 A±、視窗透明度 ◐、複製）
+  scripts/app.js            設定 + 分頁 + ttsVoices 表單
+  scripts/translate-page.js 第三頁：按鈕式翻譯、stale 態、Edge TTS 串播
+  scripts/live-caption.js   即時字幕
+  scripts/transcribe.js     檔案轉錄
+  pages/subtitle.html       懸浮字幕視窗
 ```
 
 ## 轉錄引擎
@@ -31,9 +34,26 @@ src/renderer/
 |---|---|
 | ASR | 固定本地 Qwen3-ASR-0.6B（`ASR_MODEL_KEY = 'qwen3asr'`），無引擎選擇 UI、無 FireRed |
 | 路徑 | renderer 解碼→16k mono Float32→IPC→sherpa-onnx |
-| 翻譯 | `translator` = none / cloud（文字丟雲端 API）/ local（Qwen3.5-0.8B GGUF） |
+| 翻譯 | `translator` = none / cloud（文字丟雲端 API）/ local（Qwen3.5-0.8B GGUF）；三頁共用 |
+| TTS | Edge TTS（`node-edge-tts` MIT）；需連網；store `ttsVoices` 每語一聲 |
 
 模型存放：`%APPDATA%/voiceink/models/<key>/`，registry 在 `src/main/models.js`。
+
+## 最近變更（2026-07-18j）— TTS 播放／左色條／temperature
+
+- CSP 加 `media-src 'self' blob:`（修 Edge TTS blob 播放被擋）
+- 移除 `.toast.error`／`.live-error` 左側紅條；toast.error 改淡紅底＋紅字
+- 翻譯 local+cloud `temperature: 0`；TTS bytes 正規化
+
+## 最近變更（2026-07-18i）— 第三頁「翻譯與 TTS」
+
+- 導航第三 tab：雙欄輸入／譯文；複製 + Edge TTS 朗讀；Ctrl+Enter 翻譯
+- 翻譯沿用設定 `translator`；none 時空狀態引導設定（非整頁死灰）；字數上限 1500
+- 輸入變更 → 譯文 stale；⇄ 交換語言＋兩欄文字
+- engine owner `translate` + prewarmGen 鏡像 live；切頁先 acquire 再 release
+- TTS：`node-edge-tts`（禁 AGPL）；IPC 回 `Uint8Array`；renderer 串播；voice allowlist
+- 設定新增「語音（Edge TTS）」五語下拉；store key `ttsVoices` 深度校驗
+- 驗證：`npx electron scripts/e2e-tts-translate.js` 16/16；`npm run electron:pack`
 
 ## 關鍵技術備忘
 
@@ -46,6 +66,8 @@ src/renderer/
 - 靜音門檻：peak normalize 後 RMS>0.01 且 speechRatio>0.05。
 - dev 驗證技巧:`npx electron . --remote-debugging-port=9223` + CDP；e2e 腳本用 `npx electron <script>` 直測 main process。
 - **改動完成後必跑** `npm run electron:pack` → 更新 `dist/win-unpacked/VoiceInk.exe` 免安裝預覽；完整安裝檔才用 `npm run electron:build`。
+- **Edge TTS** 永遠需連網；與本地翻譯無關。voice 只允許 `tts-voices.js` allowlist；renderer 只傳 `lang`。
+- **engine owner `translate`**：prewarm 必用 gen 作廢；`settings-changed` 非 local 要 release；勿漏 `unloadAll` 清第三旗標。
 
 ## 最近變更（2026-07-18h）— 轉錄 JSON 控制字元崩潰
 

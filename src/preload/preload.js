@@ -70,5 +70,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }
   },
   translate: (text, targetLang, opts) =>
-    ipcRenderer.invoke('translate', text, targetLang, opts || {})
+    ipcRenderer.invoke('translate', text, targetLang, opts || {}),
+
+  // ===== Edge TTS =====
+  tts: {
+    listVoices: () => ipcRenderer.invoke('tts:listVoices'),
+    /**
+     * @param {string} text
+     * @param {string} lang  zh-TW | zh-CN | en | ja | ko
+     * @param {{ chunkIndex?: number }} [opts]
+     * @returns {Promise<{ mime: string, data: Uint8Array, chunkIndex: number, totalChunks: number, gen: number }>}
+     */
+    synthesize: (text, lang, opts) =>
+      ipcRenderer.invoke('tts:synthesize', {
+        text,
+        lang,
+        chunkIndex: opts?.chunkIndex
+      }),
+    cancel: () => ipcRenderer.invoke('tts:cancel')
+  }
 })

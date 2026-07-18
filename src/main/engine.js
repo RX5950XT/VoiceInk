@@ -7,8 +7,10 @@
 const localAsr = require('./local-asr')
 const localLlm = require('./local-llm')
 
-/** @type {{ live: boolean, file: boolean }} */
-const users = { live: false, file: false }
+/** @type {{ live: boolean, file: boolean, translate: boolean }} */
+const users = { live: false, file: false, translate: false }
+
+const OWNERS = new Set(['live', 'file', 'translate'])
 
 /** 生命週期 serial：acquire/release/unloadAll 不互踩 */
 let lifecycleChain = Promise.resolve()
@@ -35,15 +37,16 @@ function activeOwners() {
 
 /**
  * 佔用引擎並預熱需要的模型
- * @param {'live'|'file'} owner
+ * @param {'live'|'file'|'translate'} owner
  * @param {{ asr?: boolean, llm?: boolean }} needs
  * @returns {Promise<{ ok: boolean, asrLoaded: boolean, llmLoaded: boolean, warnings: string[] }>}
  */
 async function acquire(owner, needs = {}) {
-  if (owner !== 'live' && owner !== 'file') {
+  if (!OWNERS.has(owner)) {
     throw new Error(`未知 engine owner: ${owner}`)
   }
-  const wantAsr = needs.asr !== false
+  // translate 預設不載 ASR；live/file 預設載 ASR（needs.asr !== false）
+  const wantAsr = owner === 'translate' ? !!needs.asr : needs.asr !== false
   const wantLlm = !!needs.llm
 
   return withLifecycle(async () => {
@@ -76,10 +79,10 @@ async function acquire(owner, needs = {}) {
 
 /**
  * 釋放 owner；無人使用時卸載模型
- * @param {'live'|'file'} owner
+ * @param {'live'|'file'|'translate'} owner
  */
 async function release(owner) {
-  if (owner !== 'live' && owner !== 'file') return { ok: true, warnings: [] }
+  if (!OWNERS.has(owner)) return { ok: true, warnings: [] }
   return withLifecycle(async () => {
     users[owner] = false
     return maybeUnloadUnlocked()
@@ -107,6 +110,7 @@ async function unloadAll() {
   return withLifecycle(async () => {
     users.live = false
     users.file = false
+    users.translate = false
     const warnings = []
     const llm = await localLlm.unload()
     const asr = await localAsr.unload()

@@ -10,6 +10,7 @@
 
 - 音訊檔案轉錄功能
 - 系統音訊即時字幕功能
+- 翻譯與 TTS（Edge TTS 朗讀）
 - 深色/淺色主題切換
 
 ### 技術堆疊
@@ -18,7 +19,8 @@
 - **Vite** - 構建工具
 - **Vanilla JavaScript** - 無框架前端
 - **本地 ASR** - sherpa-onnx（固定 Qwen3-ASR-0.6B，CPU 即時）+ opencc-js 轉繁
-- **翻譯** - none / 雲端（OpenAI 相容 chat completions）/ 本地（node-llama-cpp + Qwen3.5-0.8B GGUF）
+- **翻譯** - none / 雲端（OpenAI 相容 chat completions）/ 本地（node-llama-cpp + Qwen3.5-0.8B GGUF）；檔案／即時／翻譯頁共用
+- **TTS** - Edge TTS（`node-edge-tts` MIT；`edge-tts.js` facade；需連網）
 
 > 現行架構與驗證紀錄見 [CONTEXT.md](./CONTEXT.md)（接手前先讀）。
 
@@ -93,7 +95,7 @@ subtitleWindow.setMenu(null)
 ### 3.4 模型載入加速
 
 - `engine.acquire` 內 ASR／LLM warm 以 `Promise.all` 並行。
-- 進入即時字幕分頁背景預熱（`switchPage('live') → prewarmEngine()`），離開且未擷取則 `cooldownEngine()` 卸載。`users.live` 為布林、`prewarmed`／`engineAcquired` 互斥旗標。
+- 進入 live → `prewarmEngine()`；進入 translate → `prewarmTranslatePage()`；離開各自 cooldown。owner 布林 `live|file|translate`；prewarm 以 gen 作廢 in-flight。切頁先 acquire 新頁再 release 舊頁。
 
 ---
 
@@ -112,7 +114,7 @@ subtitleWindow.setMenu(null)
 > - 不要把 MediaRecorder 改回 `timeslice` 模式（Blob 缺 WebM header）
 > - 翻譯前文不要塞進「【前文】【本段】」括號式 prompt（小模型會複誦）→ system prompt + chat history
 > - 顯示模式勿讓即時頁 payload 夾帶 `displayMode` 或加跨窗 IPC（由字幕彈窗獨佔 store `captionDisplayMode`，兩端搶改會打架）
-> - 引擎預熱／擷取共用布林 owner `users.live`，勿改成計數；`prewarmed`/`engineAcquired` 互斥旗標別漏清；prewarm 以 `prewarmGen` 作廢 in-flight
+> - 引擎 owner 布林 `live|file|translate`，勿改成計數；prewarm gen 作廢 in-flight；TTS 只傳 lang、回 Uint8Array（禁 base64／禁 AGPL 套件）
 > - ASR 有 serial lock + `loadEnabled`（防 stop 後幽靈重載），勿拿掉
 > - store key allowlist、`models.openFolder` 僅 registry key；兩窗 `sandbox: true`
 > - 打包跑的是 `src/` 原始碼（`files` 排除 `dist/**`），改 renderer 直接改 `src/`；`vite build` 只作驗證

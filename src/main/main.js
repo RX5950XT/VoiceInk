@@ -5,6 +5,8 @@ const localAsr = require('./local-asr')
 const localLlm = require('./local-llm')
 const engine = require('./engine')
 const fileTranscribe = require('./file-transcribe')
+const edgeTts = require('./edge-tts')
+const { sanitizeTtsVoices, DEFAULT_TTS_VOICES } = require('./tts-voices')
 
 // 主視窗
 let mainWindow = null
@@ -28,8 +30,12 @@ const STORE_ALLOWLIST = new Set([
   'theme',
   'subtitleFontScale',
   'subtitleOpacity',
-  'subtitleWindowBounds'
+  'subtitleWindowBounds',
+  'ttsVoices'
 ])
+
+const TRANSLATE_TARGET_LANGS = new Set(['zh-TW', 'zh-CN', 'en', 'ja', 'ko'])
+const MAX_TRANSLATE_CHARS = 1500
 
 /**
  * 初始化 electron-store（ESM 模組需要動態 import）
@@ -203,7 +209,9 @@ ipcMain.handle('store:get', async (event, key, defaultValue) => {
     throw new Error(`不允許的設定鍵: ${key}`)
   }
   if (!store) await initStore()
-  return store.get(key, defaultValue)
+  const val = store.get(key, defaultValue)
+  if (key === 'ttsVoices') return sanitizeTtsVoices(val)
+  return val
 })
 
 ipcMain.handle('store:set', async (event, key, value) => {
@@ -211,6 +219,11 @@ ipcMain.handle('store:set', async (event, key, value) => {
     throw new Error(`不允許的設定鍵: ${key}`)
   }
   if (!store) await initStore()
+  // ttsVoices 深度校驗（五語 + allowlist shortName）
+  if (key === 'ttsVoices') {
+    store.set(key, sanitizeTtsVoices(value))
+    return true
+  }
   store.set(key, value)
   return true
 })
@@ -293,7 +306,45 @@ ipcMain.handle('localAsr:cancelFileTranscribe', () => fileTranscribe.cancel())
 
 ipcMain.handle('translate', async (event, text, targetLang, opts) => {
   if (!store) await initStore()
-  return localLlm.translate(store, text, targetLang, opts || {})
+  if (typeof text !== 'string') throw new Error('翻譯文字必須是字串')
+  const trimmed = text.trim()
+  if (!trimmed) return ''
+  if (trimmed.length > MAX_TRANSLATE_CHARS) {
+    throw new Error(`文字過長（上限 ${MAX_TRANSLATE_CHARS} 字），請縮短後再翻譯`)
+  }
+  const lang = typeof targetLang === 'string' ? targetLang : 'zh-TW'
+  if (!TRANSLATE_TARGET_LANGS.has(lang)) {
+    throw new Error(`不支援的目標語言: ${lang}`)
+  }
+  return localLlm.translate(store, trimmed, lang, opts || {})
+})
+
+// ===== Edge TTS =====
+ipcMain.handle('tts:listVoices', () => edgeTts.listVoices())
+
+ipcMain.handle('tts:synthesize', async (event, req) => {
+  if (!store) await initStore()
+  const text = typeof req?.text === 'string' ? req.text : ''
+  const lang = typeof req?.lang === 'string' ? req.lang : 'zh-TW'
+  const safeLang = Object.prototype.hasOwnProperty.call(DEFAULT_TTS_VOICES, lang) ? lang : 'en'
+  const voice = edgeTts.resolveVoice(store, safeLang)
+  try {
+    return await edgeTts.synthesize({
+      text,
+      voice,
+      chunkIndex: req?.chunkIndex
+    })
+  } catch (err) {
+    const msg = err?.message || String(err)
+    const e = new Error(msg)
+    e.code = err?.code || 'REJECTED'
+    throw e
+  }
+})
+
+ipcMain.handle('tts:cancel', () => {
+  edgeTts.cancelAll()
+  return true
 })
 
 // 引擎生命週期：acquire / release / status
