@@ -365,29 +365,6 @@ a:hover {
   50% { opacity: 0.5; }
 }
 
-.info-card {
-  margin-top: 32px;
-  padding: 20px;
-  background-color: var(--bg-secondary);
-  border-radius: var(--radius-md);
-  border-left: 4px solid var(--accent-primary);
-}
-
-.info-card h4 {
-  margin-bottom: 12px;
-  font-size: 15px;
-}
-
-.info-card ul {
-  padding-left: 20px;
-  color: var(--text-secondary);
-  font-size: 14px;
-}
-
-.info-card li {
-  margin-bottom: 6px;
-}
-
 /* ===== 設定面板 ===== */
 
 .settings-panel {
@@ -607,10 +584,6 @@ a:hover {
   to { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
 
-.toast.success {
-  border-left: 4px solid var(--success);
-}
-
 .toast.error {
   border-left: 4px solid var(--danger);
 }
@@ -685,6 +658,17 @@ a:hover {
 
 .seg-btn:hover {
   color: var(--text-primary);
+}
+
+.seg-btn:disabled,
+.seg-btn.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.segmented.is-disabled {
+  opacity: 0.7;
 }
 
 .seg-btn.active {

@@ -15,7 +15,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     show: () => ipcRenderer.invoke('subtitle:show'),
     hide: () => ipcRenderer.invoke('subtitle:hide'),
     close: () => ipcRenderer.invoke('subtitle:close'),
-    update: (text) => ipcRenderer.invoke('subtitle:update', text),
+    /** @param {string | { id?: string, source?: string, translation?: string, action?: string, text?: string }} payload */
+    update: (payload) => ipcRenderer.invoke('subtitle:update', payload),
     setOpacity: (value) => ipcRenderer.invoke('subtitle:setOpacity', value),
     onTextUpdate: (callback) => {
       ipcRenderer.on('subtitle:text', (event, text) => callback(text))
@@ -23,6 +24,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onClosed: (callback) => {
       ipcRenderer.on('subtitle:closed', () => callback())
     }
+  },
+
+  // ===== 引擎生命週期（warm / unload via refcount）=====
+  engine: {
+    acquire: (owner, needs) => ipcRenderer.invoke('engine:acquire', owner, needs || {}),
+    release: (owner) => ipcRenderer.invoke('engine:release', owner),
+    status: () => ipcRenderer.invoke('engine:status')
   },
 
   // ===== 本地模型管理 =====
@@ -41,5 +49,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   localAsr: {
     transcribe: (req) => ipcRenderer.invoke('localAsr:transcribe', req)
   },
-  translate: (text, targetLang) => ipcRenderer.invoke('translate', text, targetLang)
+  translate: (text, targetLang, opts) =>
+    ipcRenderer.invoke('translate', text, targetLang, opts || {})
 })

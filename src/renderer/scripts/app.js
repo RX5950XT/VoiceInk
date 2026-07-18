@@ -3,7 +3,7 @@
  */
 
 import { initTranscribe } from './transcribe.js'
-import { initLiveCaption } from './live-caption.js'
+import { initLiveCaption, prewarmEngine, cooldownEngine } from './live-caption.js'
 import { DEFAULT_API_URL, DEFAULT_MODEL } from './api.js'
 
 // ===== Electron API Fallback =====
@@ -39,16 +39,23 @@ export const electronAPI = window.electronAPI || {
     openFolder: async () => true,
     onProgress: () => {}
   },
+  engine: {
+    acquire: async () => ({ ok: true, asrLoaded: false, llmLoaded: false, warnings: [] }),
+    release: async () => ({ ok: true }),
+    status: async () => ({ users: {}, asrLoaded: false, llmLoaded: false })
+  },
   localAsr: {
     transcribe: async () => { throw new Error('僅 Electron 環境可用') }
   },
-  translate: async (text) => text
+  translate: async (text) => text // opts 可選，瀏覽器 fallback 直接回原文
 }
 
 // ===== 設定 =====
 
 const SETTING_DEFAULTS = {
   translator: 'none',
+  /** 即時字幕：bilingual 雙語｜translation 僅翻譯 */
+  captionDisplayMode: 'bilingual',
   apiUrl: DEFAULT_API_URL,
   apiKey: '',
   modelId: DEFAULT_MODEL
@@ -98,7 +105,9 @@ const asrProgress = document.getElementById('asrProgress')
 const llmProgress = document.getElementById('llmProgress')
 
 // 分段選擇器目前的值
-const segmentValues = { translatorSegment: 'none' }
+const segmentValues = {
+  translatorSegment: 'none'
+}
 
 // 最近一次模型狀態快取（供上方摘要按鈕使用）
 let latestModels = {}
@@ -142,6 +151,9 @@ function switchPage(pageName) {
   pages.forEach(page => {
     page.classList.toggle('active', page.id === `page-${pageName}`)
   })
+  // 進入即時字幕分頁即背景預熱模型；離開且未擷取時卸載
+  if (pageName === 'live') prewarmEngine()
+  else cooldownEngine()
 }
 
 // ===== 設定管理 =====
@@ -231,7 +243,6 @@ async function saveSettings() {
     electronAPI.store.set('modelId', modelIdInput.value.trim() || DEFAULT_MODEL)
   ])
 
-  showToast('設定已儲存', 'success')
   closeSettings()
   document.dispatchEvent(new CustomEvent('settings-changed'))
 }
@@ -367,7 +378,6 @@ function renderModelItem(model) {
     actions.appendChild(actionBtn('📂', 'btn-secondary', () => electronAPI.models.openFolder(model.key)))
     actions.appendChild(actionBtn('刪除', 'btn-secondary', async () => {
       await electronAPI.models.delete(model.key)
-      showToast(`已刪除 ${model.label}`, 'success')
       refreshModels()
     }))
   } else {
@@ -387,7 +397,6 @@ function actionBtn(text, cls, onClick) {
 async function startDownload(model) {
   try {
     await refreshModelsAfter(() => electronAPI.models.download(model.key))
-    showToast(`${model.label} 下載完成`, 'success')
   } catch (error) {
     showToast(`下載失敗: ${cleanIpcError(error)}`, 'error')
     refreshModels()

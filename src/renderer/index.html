@@ -156,6 +156,12 @@
                 </select>
               </div>
 
+              <!-- 翻譯後端提示（雙語／僅翻譯切換已移至字幕視窗右上角）-->
+              <div class="option-group" id="liveCaptionDisplayGroup">
+                <p class="setting-hint" id="liveTranslatorHint">翻譯：檢查中…</p>
+                <p class="setting-hint">字幕顯示（雙語／僅翻譯）可在字幕視窗右上角「雙／譯」鈕切換</p>
+              </div>
+
               <!-- 控制按鈕 -->
               <div class="live-controls">
                 <button id="startLiveBtn" class="btn btn-primary btn-large">
@@ -181,17 +187,6 @@
                 </div>
               </div>
               <p id="liveError" class="live-error hidden"></p>
-
-              <!-- 說明 -->
-              <div class="info-card">
-                <h4>💡 使用說明</h4>
-                <ul>
-                  <li>點擊「開始字幕」後會彈出懸浮字幕視窗</li>
-                  <li>字幕視窗可以自由拖動位置</li>
-                  <li>請確保電腦正在播放音訊</li>
-                  <li>建議在觀看影片或會議時使用</li>
-                </ul>
-              </div>
             </div>
           </section>
         </main>
@@ -249,7 +244,7 @@
                 <button type="button" class="seg-btn" data-value="local">本地 LLM</button>
               </div>
               <p class="setting-hint">
-                目標語言與聲音語言不同時生效。本地 LLM 全程離線。
+                目標語言與聲音語言不同時生效。本地 LLM 全程離線。雙語／僅翻譯請在「即時字幕」頁切換。
               </p>
 
               <!-- 雲端 API：僅翻譯選「雲端 LLM」時展開 -->

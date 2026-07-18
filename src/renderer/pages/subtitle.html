@@ -32,7 +32,6 @@
         background-color: #1a1a1a;
       }
 
-      /* 頂部拖動區域 */
       .drag-area {
         display: flex;
         justify-content: space-between;
@@ -42,7 +41,6 @@
         -webkit-app-region: drag;
       }
 
-      /* 拖動指示器 */
       .drag-indicator {
         width: 40px;
         height: 4px;
@@ -50,7 +48,6 @@
         border-radius: 2px;
       }
 
-      /* 控制按鈕容器 */
       .controls {
         display: flex;
         gap: 6px;
@@ -93,7 +90,6 @@
         background: rgba(239, 68, 68, 0.6);
       }
 
-      /* 字幕歷史紀錄區域 */
       .subtitle-history {
         flex: 1;
         overflow-y: auto;
@@ -103,7 +99,6 @@
         padding: 12px 16px;
       }
 
-      /* 自訂捲軸樣式 */
       .subtitle-history::-webkit-scrollbar {
         width: 6px;
       }
@@ -144,13 +139,39 @@
         border-bottom: none;
       }
 
-      .subtitle-line.current {
+      .subtitle-line:last-child .subtitle-source {
+        color: rgba(255, 255, 255, 0.55);
+        font-size: calc(16px * var(--subtitle-scale));
+        font-weight: 400;
+      }
+
+      .subtitle-line:last-child .subtitle-translation {
         color: #ffffff;
         font-size: calc(22px * var(--subtitle-scale));
         font-weight: 500;
       }
 
-      /* 空狀態 */
+      .subtitle-source {
+        display: block;
+        color: rgba(255, 255, 255, 0.4);
+        font-size: calc(14px * var(--subtitle-scale));
+        font-weight: 400;
+        line-height: 1.35;
+        margin-bottom: 2px;
+      }
+
+      .subtitle-translation {
+        display: block;
+        color: inherit;
+        font-size: inherit;
+        font-weight: inherit;
+        line-height: 1.4;
+      }
+
+      .subtitle-line.provisional .subtitle-source {
+        font-style: italic;
+      }
+
       .subtitle-empty {
         color: rgba(255, 255, 255, 0.5);
         font-size: calc(18px * var(--subtitle-scale));
@@ -158,7 +179,6 @@
         font-style: italic;
       }
 
-      /* Toast 通知 */
       .toast {
         position: fixed;
         bottom: 10px;
@@ -181,13 +201,13 @@
   </head>
   <body>
     <div class="subtitle-container">
-      <!-- 頂部拖動區域 -->
       <div class="drag-area">
         <div class="drag-indicator"></div>
         <div class="controls">
           <button id="fontDownBtn" class="control-btn" title="縮小字級">A−</button>
           <button id="fontUpBtn" class="control-btn" title="放大字級">A+</button>
           <button id="opacityBtn" class="control-btn" title="調整視窗透明度">◐</button>
+          <button id="displayModeBtn" class="control-btn" title="字幕顯示模式">雙</button>
           <button id="copyBtn" class="control-btn" title="複製全部字幕">
             📋
           </button>
@@ -201,7 +221,6 @@
         </div>
       </div>
 
-      <!-- 字幕內容區域（可滾動） -->
       <div id="subtitleHistory" class="subtitle-history">
         <p class="subtitle-empty">等待字幕...</p>
       </div>
@@ -214,27 +233,104 @@
       const copyBtn = document.getElementById("copyBtn");
       const toast = document.getElementById("toast");
 
-      // 儲存所有字幕
+      /** @type {{ id: string, source: string, translation: string }[]} */
       const subtitles = [];
-      const MAX_HISTORY = 50; // 最多保留 50 條歷史紀錄
+      const MAX_HISTORY = 50;
+      let autoId = 0;
 
-      // 監聽字幕更新
-      window.electronAPI.subtitle.onTextUpdate((text) => {
-        if (!text || !text.trim()) return;
+      // 字幕彈窗獨佔顯示模式：bilingual 雙語｜translation 僅翻譯（持久化於 store）
+      let currentMode = "bilingual";
 
-        // 添加到歷史紀錄
-        subtitles.push(text.trim());
+      /**
+       * 正規化 payload：字串 → append 純文字；物件 → upsert/append
+       * @param {string | object} payload
+       */
+      function normalizePayload(payload) {
+        if (typeof payload === "string") {
+          const text = payload.trim();
+          if (!text) return null;
+          return {
+            id: `s-${++autoId}`,
+            source: text,
+            translation: "",
+            action: "append",
+          };
+        }
+        if (!payload || typeof payload !== "object") return null;
 
-        // 限制歷史紀錄數量
-        if (subtitles.length > MAX_HISTORY) {
-          subtitles.shift();
+        const source = String(payload.source || payload.text || "").trim();
+        const translation = String(payload.translation || "").trim();
+        if (!source && !translation) return null;
+
+        return {
+          id: payload.id ? String(payload.id) : `s-${++autoId}`,
+          source,
+          translation,
+          action: payload.action === "upsert" ? "upsert" : "append",
+        };
+      }
+
+      window.electronAPI.subtitle.onTextUpdate((payload) => {
+        const item = normalizePayload(payload);
+        if (!item) return;
+
+        if (item.action === "upsert") {
+          const idx = subtitles.findIndex((s) => s.id === item.id);
+          if (idx === -1) {
+            // 找不到 id：append 新行，絕不改 last
+            subtitles.push({
+              id: item.id,
+              source: item.source,
+              translation: item.translation,
+            });
+          } else {
+            const prev = subtitles[idx];
+            const raw = typeof payload === "object" && payload ? payload : {};
+            const next = {
+              id: item.id,
+              source: prev.source,
+              translation: prev.translation,
+            };
+            if (Object.prototype.hasOwnProperty.call(raw, "source")) {
+              const s = String(raw.source || "").trim();
+              if (s) next.source = s;
+            }
+            if (Object.prototype.hasOwnProperty.call(raw, "translation")) {
+              next.translation = String(raw.translation || "").trim();
+            }
+            subtitles[idx] = next;
+          }
+        } else {
+          subtitles.push({
+            id: item.id,
+            source: item.source,
+            translation: item.translation,
+          });
         }
 
-        // 更新顯示
+        while (subtitles.length > MAX_HISTORY) subtitles.shift();
         renderSubtitles();
       });
 
-      // 渲染字幕
+      function renderLineHtml(entry) {
+        const hasTr = !!entry.translation;
+        const mode = currentMode;
+        const provisional = !hasTr && !!entry.source;
+
+        if (mode === "translation") {
+          // 僅翻譯：有譯文只顯示譯文；暫態先顯示原文
+          const text = hasTr ? entry.translation : entry.source;
+          const cls = provisional ? "subtitle-line provisional" : "subtitle-line";
+          return `<div class="${cls}" data-id="${escapeAttr(entry.id)}"><span class="subtitle-translation">${escapeHtml(text)}</span></div>`;
+        }
+
+        // 雙語
+        if (hasTr) {
+          return `<div class="subtitle-line" data-id="${escapeAttr(entry.id)}"><span class="subtitle-source">${escapeHtml(entry.source)}</span><span class="subtitle-translation">${escapeHtml(entry.translation)}</span></div>`;
+        }
+        return `<div class="subtitle-line provisional" data-id="${escapeAttr(entry.id)}"><span class="subtitle-source">${escapeHtml(entry.source)}</span></div>`;
+      }
+
       function renderSubtitles() {
         if (subtitles.length === 0) {
           subtitleHistory.innerHTML =
@@ -242,24 +338,33 @@
           return;
         }
 
-        subtitleHistory.innerHTML = subtitles
-          .map(
-            (text, index) => `<p class="subtitle-line">${escapeHtml(text)}</p>`,
-          )
-          .join("");
-
-        // 自動滾動到底部
+        subtitleHistory.innerHTML = subtitles.map(renderLineHtml).join("");
         subtitleHistory.scrollTop = subtitleHistory.scrollHeight;
       }
 
-      // 轉義 HTML
       function escapeHtml(text) {
         const div = document.createElement("div");
-        div.textContent = text;
+        div.textContent = text || "";
         return div.innerHTML;
       }
 
-      // 複製功能
+      function escapeAttr(text) {
+        return String(text || "")
+          .replace(/&/g, "&amp;")
+          .replace(/"/g, "&quot;")
+          .replace(/</g, "&lt;");
+      }
+
+      /** 複製用純文字（依目前顯示模式） */
+      function entryToCopyText(entry) {
+        const hasTr = !!entry.translation;
+        if (currentMode === "translation") {
+          return hasTr ? entry.translation : entry.source;
+        }
+        if (hasTr && entry.source) return `${entry.source}\n${entry.translation}`;
+        return entry.translation || entry.source || "";
+      }
+
       copyBtn.addEventListener("click", async (e) => {
         e.stopPropagation();
 
@@ -268,7 +373,7 @@
           return;
         }
 
-        const allText = subtitles.join("\n");
+        const allText = subtitles.map(entryToCopyText).filter(Boolean).join("\n\n");
 
         try {
           await navigator.clipboard.writeText(allText);
@@ -280,14 +385,37 @@
         }
       });
 
-      // 關閉按鈕
       const closeBtn = document.getElementById("closeBtn");
       closeBtn.addEventListener("click", async (e) => {
         e.stopPropagation();
         await window.electronAPI.subtitle.close();
       });
 
-      // ===== 字級調整 =====
+      // ===== 顯示模式切換（雙語／僅翻譯，由字幕彈窗擁有）=====
+      const displayModeBtn = document.getElementById("displayModeBtn");
+
+      function applyDisplayModeButton() {
+        const isTr = currentMode === "translation";
+        displayModeBtn.textContent = isTr ? "譯" : "雙";
+        displayModeBtn.title = isTr
+          ? "僅翻譯（點擊切回雙語字幕）"
+          : "雙語字幕（點擊切為僅翻譯）";
+      }
+
+      window.electronAPI.store.get("captionDisplayMode", "bilingual").then((v) => {
+        currentMode = v === "translation" ? "translation" : "bilingual";
+        applyDisplayModeButton();
+        renderSubtitles();
+      });
+
+      displayModeBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        currentMode = currentMode === "translation" ? "bilingual" : "translation";
+        window.electronAPI.store.set("captionDisplayMode", currentMode);
+        applyDisplayModeButton();
+        renderSubtitles();
+      });
+
       let fontScale = 1;
       const FONT_SCALE_MIN = 0.7;
       const FONT_SCALE_MAX = 2.0;
@@ -302,15 +430,21 @@
       });
 
       function adjustFont(delta) {
-        fontScale = Math.min(FONT_SCALE_MAX, Math.max(FONT_SCALE_MIN, +(fontScale + delta).toFixed(2)));
+        fontScale = Math.min(
+          FONT_SCALE_MAX,
+          Math.max(FONT_SCALE_MIN, +(fontScale + delta).toFixed(2)),
+        );
         applyFontScale();
         window.electronAPI.store.set("subtitleFontScale", fontScale);
       }
 
-      document.getElementById("fontDownBtn").addEventListener("click", () => adjustFont(-0.15));
-      document.getElementById("fontUpBtn").addEventListener("click", () => adjustFont(0.15));
+      document
+        .getElementById("fontDownBtn")
+        .addEventListener("click", () => adjustFont(-0.15));
+      document
+        .getElementById("fontUpBtn")
+        .addEventListener("click", () => adjustFont(0.15));
 
-      // ===== 視窗透明度（循環 100% → 85% → 70%）=====
       const OPACITY_STEPS = [1, 0.85, 0.7];
       let opacityIndex = 0;
 
@@ -326,7 +460,6 @@
         window.electronAPI.store.set("subtitleOpacity", value);
       });
 
-      // 顯示 Toast
       function showToast(message) {
         toast.textContent = message;
         toast.classList.add("show");

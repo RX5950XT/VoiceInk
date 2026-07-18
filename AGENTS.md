@@ -88,6 +88,13 @@ subtitleWindow = new BrowserWindow({
 subtitleWindow.setMenu(null)
 ```
 
+字幕顯示模式（雙語／僅翻譯）由**字幕彈窗**獨佔：控制列「雙/譯」鈕讀寫 store `captionDisplayMode`、以單一 `currentMode` 統一渲染；即時頁不再放此切換、payload 不帶 `displayMode`。
+
+### 3.4 模型載入加速
+
+- `engine.acquire` 內 ASR／LLM warm 以 `Promise.all` 並行。
+- 進入即時字幕分頁背景預熱（`switchPage('live') → prewarmEngine()`），離開且未擷取則 `cooldownEngine()` 卸載。`users.live` 為布林、`prewarmed`／`engineAcquired` 互斥旗標。
+
 ---
 
 ## 4. 重要注意事項
@@ -103,4 +110,8 @@ subtitleWindow.setMenu(null)
 >
 > - 不要在 Renderer Process 儲存 API Key 明文
 > - 不要把 MediaRecorder 改回 `timeslice` 模式（Blob 缺 WebM header）
+> - 翻譯前文不要塞進「【前文】【本段】」括號式 prompt（小模型會複誦）→ system prompt + chat history
+> - 顯示模式勿讓即時頁 payload 夾帶 `displayMode` 或加跨窗 IPC（由字幕彈窗獨佔 store `captionDisplayMode`，兩端搶改會打架）
+> - 引擎預熱／擷取共用布林 owner `users.live`，勿改成計數；`prewarmed`/`engineAcquired` 互斥旗標別漏清
+> - 打包跑的是 `src/` 原始碼（`files` 排除 `dist/**`），改 renderer 直接改 `src/`；`vite build` 只作驗證
 > - 歷史教訓清單見 [tasks/lessons.md](./tasks/lessons.md)，開發規範地雷見 [CLAUDE.md](./CLAUDE.md)

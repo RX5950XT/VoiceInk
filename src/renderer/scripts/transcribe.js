@@ -2,7 +2,7 @@
  * VoiceInk - 檔案轉錄功能（本地 Qwen3-ASR）
  */
 
-import { showToast, getSettings, electronAPI, cleanIpcError, ASR_MODEL_KEY } from './app.js'
+import { showToast, getSettings, electronAPI, cleanIpcError, ASR_MODEL_KEY, TRANSLATE_MODEL_KEY } from './app.js'
 import { resampleTo16kMono } from './live-caption.js'
 
 // ===== DOM 元素 =====
@@ -194,12 +194,25 @@ async function startTranscription() {
     showToast('本地 ASR 模型尚未下載，請先到設定下載', 'error')
     return
   }
+  if (settings.translator === 'local' && !status.models[TRANSLATE_MODEL_KEY]?.downloaded) {
+    showToast('本地翻譯模型尚未下載，請先到設定下載', 'error')
+    return
+  }
 
   transcribeOptions.classList.add('hidden')
   transcribeProgress.classList.remove('hidden')
   transcribeResult.classList.add('hidden')
 
+  let acquired = false
   try {
+    updateProgress(2, '載入模型…')
+    const needLlm = settings.translator === 'local'
+    const warm = await electronAPI.engine.acquire('file', { asr: true, llm: needLlm })
+    if (!warm.ok) {
+      throw new Error((warm.warnings && warm.warnings[0]) || '模型載入失敗')
+    }
+    acquired = true
+
     const language = outputLanguage.value
     const result = await transcribeLocal(settings, language)
 
@@ -215,6 +228,10 @@ async function startTranscription() {
     showToast(`轉錄失敗: ${cleanIpcError(error)}`, 'error')
     transcribeProgress.classList.add('hidden')
     transcribeOptions.classList.remove('hidden')
+  } finally {
+    if (acquired) {
+      await electronAPI.engine.release('file').catch(() => {})
+    }
   }
 }
 
@@ -306,7 +323,6 @@ function setupResultActions() {
 async function copyResult() {
   try {
     await navigator.clipboard.writeText(resultText.textContent)
-    showToast('已複製到剪貼簿', 'success')
   } catch {
     showToast('複製失敗', 'error')
   }
@@ -327,6 +343,4 @@ function saveResult() {
   a.click()
   document.body.removeChild(a)
   URL.revokeObjectURL(url)
-
-  showToast('已儲存檔案', 'success')
 }

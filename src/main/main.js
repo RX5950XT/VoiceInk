@@ -1,8 +1,9 @@
-const { app, BrowserWindow, ipcMain, session, desktopCapturer } = require('electron')
+const { app, BrowserWindow, ipcMain, session, desktopCapturer, screen } = require('electron')
 const path = require('path')
 const models = require('./models')
 const localAsr = require('./local-asr')
 const localLlm = require('./local-llm')
+const engine = require('./engine')
 
 // 主視窗
 let mainWindow = null
@@ -10,6 +11,8 @@ let mainWindow = null
 let subtitleWindow = null
 // 設定儲存實例（延遲初始化）
 let store = null
+/** 正在執行 before-quit 卸載 */
+let isQuitting = false
 
 // 開發模式判斷
 const isDev = !app.isPackaged
@@ -63,6 +66,22 @@ function createMainWindow() {
 }
 
 /**
+ * 儲存的視窗位置是否仍落在某個螢幕的可視範圍內（外接螢幕拔除後座標會失效）
+ */
+function isBoundsOnScreen(bounds) {
+  if (bounds.x === undefined || bounds.y === undefined) return true
+  return screen.getAllDisplays().some((d) => {
+    const wa = d.workArea
+    return (
+      bounds.x < wa.x + wa.width &&
+      bounds.x + bounds.width > wa.x &&
+      bounds.y < wa.y + wa.height &&
+      bounds.y + bounds.height > wa.y
+    )
+  })
+}
+
+/**
  * 建立懸浮字幕視窗
  */
 function createSubtitleWindow() {
@@ -74,7 +93,13 @@ function createSubtitleWindow() {
     y: undefined
   }) : { width: 800, height: 200, x: undefined, y: undefined }
 
-  subtitleWindow = new BrowserWindow({
+  // 座標已不在任何螢幕內（拔掉外接螢幕）→ 回到置中，避免視窗開在看不見的地方
+  if (!isBoundsOnScreen(bounds)) {
+    bounds.x = undefined
+    bounds.y = undefined
+  }
+
+  const win = new BrowserWindow({
     width: bounds.width,
     height: bounds.height,
     x: bounds.x,
@@ -92,7 +117,8 @@ function createSubtitleWindow() {
       preload: path.join(__dirname, '../preload/preload.js')
     }
   })
-  
+  subtitleWindow = win
+
   // 強制移除選單，避免出現白色選單列
   subtitleWindow.setMenu(null)
 
@@ -117,8 +143,14 @@ function createSubtitleWindow() {
     }
   })
 
-  subtitleWindow.on('closed', () => {
+  win.on('closed', () => {
+    // subtitle:close 會先同步把 subtitleWindow 設 null；此處仍 === win 代表是 OS 層關閉
+    // （Alt+F4／主視窗連帶關閉），需通知 renderer 停止擷取，否則管線在無視窗下空轉
+    if (subtitleWindow !== win) return
     subtitleWindow = null
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('subtitle:closed')
+    }
   })
 }
 
@@ -166,14 +198,14 @@ ipcMain.handle('subtitle:close', () => {
 })
 
 ipcMain.handle('subtitle:update', (event, text) => {
-  if (subtitleWindow) {
+  if (subtitleWindow && !subtitleWindow.isDestroyed()) {
     subtitleWindow.webContents.send('subtitle:text', text)
   }
   return true
 })
 
 ipcMain.handle('subtitle:setOpacity', (event, value) => {
-  if (subtitleWindow) {
+  if (subtitleWindow && !subtitleWindow.isDestroyed()) {
     subtitleWindow.setOpacity(value)
   }
   return true
@@ -199,20 +231,28 @@ ipcMain.handle('models:openFolder', (event, key) => models.openFolder(key))
 
 ipcMain.handle('localAsr:transcribe', (event, req) => localAsr.transcribe(req))
 
-ipcMain.handle('translate', async (event, text, targetLang) => {
+ipcMain.handle('translate', async (event, text, targetLang, opts) => {
   if (!store) await initStore()
-  return localLlm.translate(store, text, targetLang)
+  return localLlm.translate(store, text, targetLang, opts || {})
 })
+
+// 引擎生命週期：acquire / release / status
+ipcMain.handle('engine:acquire', async (event, owner, needs) => {
+  return engine.acquire(owner, needs || {})
+})
+
+ipcMain.handle('engine:release', async (event, owner) => {
+  return engine.release(owner)
+})
+
+ipcMain.handle('engine:status', () => engine.status())
 
 // 設定系統音訊擷取的媒體請求處理器
 app.whenReady().then(async () => {
-  // 初始化 store
   await initStore()
 
-  // 設定 DisplayMedia 請求處理器（用於系統音訊擷取）
   session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
     desktopCapturer.getSources({ types: ['screen'] }).then((sources) => {
-      // 返回第一個螢幕並啟用系統音訊 loopback
       callback({ video: sources[0], audio: 'loopback' })
     })
   }, { useSystemPicker: false })
@@ -220,12 +260,22 @@ app.whenReady().then(async () => {
   createMainWindow()
 })
 
-// 所有視窗關閉時退出
+// 關閉前同步卸載模型，再真正退出
+app.on('before-quit', (e) => {
+  if (isQuitting) return
+  e.preventDefault()
+  isQuitting = true
+  engine.unloadAll()
+    .catch((err) => console.error('[engine] unloadAll on quit failed:', err))
+    .finally(() => {
+      app.exit(0)
+    })
+})
+
 app.on('window-all-closed', () => {
   app.quit()
 })
 
-// macOS 點擊 dock 圖示時重建視窗
 app.on('activate', () => {
   if (mainWindow === null) {
     createMainWindow()
