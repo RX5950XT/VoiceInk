@@ -115,13 +115,17 @@ a:hover {
 
 .main-content {
   flex: 1;
+  min-height: 0;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 /* ===== 內容區域 ===== */
 
 .content {
   flex: 1;
+  min-height: 0;
   padding: 32px;
   overflow-y: auto;
 }
@@ -262,19 +266,39 @@ a:hover {
 
 .progress-panel {
   margin-top: 24px;
-  padding: 20px;
+  padding: 32px 24px;
+  min-height: 180px;
   background-color: var(--bg-secondary);
   border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
   text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.progress-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--bg-tertiary);
+  border-top-color: var(--accent-primary);
+  border-radius: 50%;
+  animation: progressSpin 0.8s linear infinite;
+}
+
+@keyframes progressSpin {
+  to { transform: rotate(360deg); }
 }
 
 .progress-bar {
   width: 100%;
-  height: 8px;
+  max-width: 480px;
+  height: 10px;
   background-color: var(--bg-tertiary);
   border-radius: 4px;
   overflow: hidden;
-  margin-bottom: 12px;
 }
 
 .progress-fill {
@@ -284,8 +308,14 @@ a:hover {
 }
 
 .progress-text {
-  color: var(--text-secondary);
-  font-size: 14px;
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.progress-percent {
+  color: var(--text-tertiary);
+  font-size: 13px;
 }
 
 /* ===== 結果面板 ===== */

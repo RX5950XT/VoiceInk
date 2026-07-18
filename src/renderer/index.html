@@ -112,10 +112,12 @@
 
             <!-- 進度顯示 -->
             <div id="transcribeProgress" class="progress-panel hidden">
+              <div class="progress-spinner" aria-hidden="true"></div>
               <div class="progress-bar">
                 <div class="progress-fill" style="width: 0%"></div>
               </div>
               <p class="progress-text">正在轉錄中...</p>
+              <p class="progress-percent">0%</p>
             </div>
 
             <!-- 結果區域 -->
@@ -244,7 +246,7 @@
                 <button type="button" class="seg-btn" data-value="local">本地 LLM</button>
               </div>
               <p class="setting-hint">
-                目標語言與聲音語言不同時生效。本地 LLM 全程離線。雙語／僅翻譯請在「即時字幕」頁切換。
+                目標語言與聲音語言不同時生效。本地 LLM 全程離線。雙語／僅翻譯請在字幕視窗右上角「雙／譯」鈕切換。
               </p>
 
               <!-- 雲端 API：僅翻譯選「雲端 LLM」時展開 -->

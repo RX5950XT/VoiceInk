@@ -158,19 +158,42 @@ function cancelDownload(key) {
 }
 
 /**
- * 刪除模型
+ * 刪除模型（先取消下載，避免寫入與 rm 競態）
  */
 async function remove(key) {
   if (!MODELS[key]) throw new Error(`未知的模型: ${key}`)
+  if (activeDownloads.has(key)) {
+    cancelDownload(key)
+    // 等 download 的 finally 清掉 activeDownloads（最多等幾秒）
+    const deadline = Date.now() + 15000
+    while (activeDownloads.has(key) && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 50))
+    }
+  }
   await fsp.rm(modelDir(key), { recursive: true, force: true })
   return status()
 }
 
 /**
+ * 路徑必須落在 models 根目錄內（防 openFolder 路徑遍歷）
+ * @param {string} dir
+ */
+function assertUnderModelsRoot(dir) {
+  const root = path.resolve(modelsRoot())
+  const resolved = path.resolve(dir)
+  if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+    throw new Error('非法路徑')
+  }
+}
+
+/**
  * 在檔案總管中開啟模型資料夾
+ * @param {string} [key] 省略則開 models 根目錄；否則必須是 registry 內 key
  */
 async function openFolder(key) {
+  if (key && !MODELS[key]) throw new Error(`未知的模型: ${key}`)
   const dir = key ? modelDir(key) : modelsRoot()
+  assertUnderModelsRoot(dir)
   await fsp.mkdir(dir, { recursive: true })
   await shell.openPath(dir)
   return true

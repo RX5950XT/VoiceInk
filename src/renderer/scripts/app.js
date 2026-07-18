@@ -218,8 +218,26 @@ function updateCloudApiVisibility(translator) {
   cloudApiSection.classList.toggle('hidden', translator !== 'cloud')
 }
 
+/**
+ * 從 store 重灌設定表單（開啟面板時呼叫，丟棄未儲存的髒狀態）
+ */
+async function loadSettingsForm() {
+  const settings = await getSettings()
+  apiUrlInput.value = settings.apiUrl
+  apiKeyInput.value = settings.apiKey
+  modelIdInput.value = settings.modelId
+  // 重設 translator 分段（不重複綁 click：只更新 active 樣式與值）
+  segmentValues.translatorSegment = settings.translator
+  const segment = document.getElementById('translatorSegment')
+  segment.querySelectorAll('.seg-btn').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.value === settings.translator)
+  })
+  updateCloudApiVisibility(settings.translator)
+}
+
 function openSettings() {
   settingsPanel.classList.remove('hidden')
+  loadSettingsForm()
   refreshModels()
 }
 
@@ -245,6 +263,7 @@ async function saveSettings() {
 
   closeSettings()
   document.dispatchEvent(new CustomEvent('settings-changed'))
+  showToast('設定已儲存') // 中性提示（非綠色）：讓「儲存」這個明確動作有回饋
 }
 
 // ===== 模型管理 UI =====
@@ -377,8 +396,17 @@ function renderModelItem(model) {
   } else if (model.downloaded) {
     actions.appendChild(actionBtn('📂', 'btn-secondary', () => electronAPI.models.openFolder(model.key)))
     actions.appendChild(actionBtn('刪除', 'btn-secondary', async () => {
-      await electronAPI.models.delete(model.key)
-      refreshModels()
+      try {
+        const st = await electronAPI.engine.status()
+        if (st.asrLoaded || st.llmLoaded) {
+          showToast('請先停止字幕／轉錄並離開即時分頁後再刪除模型', 'error')
+          return
+        }
+        await electronAPI.models.delete(model.key)
+        refreshModels()
+      } catch (e) {
+        showToast(`刪除失敗: ${cleanIpcError(e)}`, 'error')
+      }
     }))
   } else {
     actions.appendChild(actionBtn('下載', 'btn-primary', () => startDownload(model)))
@@ -415,7 +443,9 @@ async function refreshModelsAfter(fn) {
  * 下載進度：同步更新下方列表與上方狀態卡
  */
 function onModelProgress({ key, receivedBytes, totalBytes }) {
-  const percent = Math.min(100, (receivedBytes / totalBytes) * 100)
+  const percent = totalBytes > 0
+    ? Math.min(100, (receivedBytes / totalBytes) * 100)
+    : 0
   const text = `${formatBytes(receivedBytes)} / ${formatBytes(totalBytes)} (${percent.toFixed(0)}%)`
 
   const item = modelList.querySelector(`.model-item[data-key="${key}"]`)
@@ -464,13 +494,18 @@ export function cleanIpcError(error) {
  * @param {string} message - 訊息內容
  * @param {string} type - 類型 (success/error)
  */
+let toastTimer = null
+
 export function showToast(message, type = 'success') {
   const toastMessage = toast.querySelector('.toast-message')
   toastMessage.textContent = message
 
   toast.className = 'toast ' + type
+  toast.classList.remove('hidden')
 
-  setTimeout(() => {
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => {
     toast.classList.add('hidden')
+    toastTimer = null
   }, 3000)
 }

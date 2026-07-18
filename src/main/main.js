@@ -1,9 +1,10 @@
-const { app, BrowserWindow, ipcMain, session, desktopCapturer, screen } = require('electron')
+const { app, BrowserWindow, ipcMain, session, desktopCapturer, screen, shell } = require('electron')
 const path = require('path')
 const models = require('./models')
 const localAsr = require('./local-asr')
 const localLlm = require('./local-llm')
 const engine = require('./engine')
+const fileTranscribe = require('./file-transcribe')
 
 // 主視窗
 let mainWindow = null
@@ -16,6 +17,19 @@ let isQuitting = false
 
 // 開發模式判斷
 const isDev = !app.isPackaged
+
+/** electron-store 允許的 key（防任意讀寫／XSS 後改 apiUrl 外洩 key） */
+const STORE_ALLOWLIST = new Set([
+  'translator',
+  'captionDisplayMode',
+  'apiUrl',
+  'apiKey',
+  'modelId',
+  'theme',
+  'subtitleFontScale',
+  'subtitleOpacity',
+  'subtitleWindowBounds'
+])
 
 /**
  * 初始化 electron-store（ESM 模組需要動態 import）
@@ -38,6 +52,7 @@ function createMainWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      sandbox: true,
       preload: path.join(__dirname, '../preload/preload.js')
     },
     backgroundColor: '#1a1a1a',
@@ -57,11 +72,35 @@ function createMainWindow() {
     mainWindow.show()
   })
 
+  attachWindowSecurity(mainWindow)
+
   mainWindow.on('closed', () => {
     mainWindow = null
     if (subtitleWindow) {
       subtitleWindow.close()
     }
+  })
+}
+
+/**
+ * 禁止任意導覽／開窗；外連改系統瀏覽器
+ * @param {BrowserWindow} win
+ */
+function attachWindowSecurity(win) {
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    try {
+      const u = new URL(url)
+      if (u.protocol === 'https:' || u.protocol === 'http:') {
+        shell.openExternal(url).catch(() => {})
+      }
+    } catch { /* ignore bad url */ }
+    return { action: 'deny' }
+  })
+  win.webContents.on('will-navigate', (event, url) => {
+    // 允許 dev Vite 與 file:// 本機頁；其餘擋下
+    if (isDev && url.startsWith('http://localhost:5173')) return
+    if (url.startsWith('file://')) return
+    event.preventDefault()
   })
 }
 
@@ -114,6 +153,7 @@ function createSubtitleWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      sandbox: true,
       preload: path.join(__dirname, '../preload/preload.js')
     }
   })
@@ -121,6 +161,7 @@ function createSubtitleWindow() {
 
   // 強制移除選單，避免出現白色選單列
   subtitleWindow.setMenu(null)
+  attachWindowSecurity(subtitleWindow)
 
   if (isDev) {
     subtitleWindow.loadURL('http://localhost:5173/pages/subtitle.html')
@@ -158,11 +199,17 @@ function createSubtitleWindow() {
 
 // 設定相關
 ipcMain.handle('store:get', async (event, key, defaultValue) => {
+  if (typeof key !== 'string' || !STORE_ALLOWLIST.has(key)) {
+    throw new Error(`不允許的設定鍵: ${key}`)
+  }
   if (!store) await initStore()
   return store.get(key, defaultValue)
 })
 
 ipcMain.handle('store:set', async (event, key, value) => {
+  if (typeof key !== 'string' || !STORE_ALLOWLIST.has(key)) {
+    throw new Error(`不允許的設定鍵: ${key}`)
+  }
   if (!store) await initStore()
   store.set(key, value)
   return true
@@ -206,7 +253,9 @@ ipcMain.handle('subtitle:update', (event, text) => {
 
 ipcMain.handle('subtitle:setOpacity', (event, value) => {
   if (subtitleWindow && !subtitleWindow.isDestroyed()) {
-    subtitleWindow.setOpacity(value)
+    const n = Number(value)
+    const opacity = Number.isFinite(n) ? Math.min(1, Math.max(0.3, n)) : 1
+    subtitleWindow.setOpacity(opacity)
   }
   return true
 })
@@ -231,6 +280,17 @@ ipcMain.handle('models:openFolder', (event, key) => models.openFolder(key))
 
 ipcMain.handle('localAsr:transcribe', (event, req) => localAsr.transcribe(req))
 
+/** 長檔案串流轉錄（ffmpeg 切段，支援 ≥2h / ≥100MB） */
+ipcMain.handle('localAsr:transcribeFile', async (event, req) => {
+  return fileTranscribe.transcribeFile(req || {}, (progress) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('localAsr:fileProgress', progress)
+    }
+  })
+})
+
+ipcMain.handle('localAsr:cancelFileTranscribe', () => fileTranscribe.cancel())
+
 ipcMain.handle('translate', async (event, text, targetLang, opts) => {
   if (!store) await initStore()
   return localLlm.translate(store, text, targetLang, opts || {})
@@ -252,9 +312,19 @@ app.whenReady().then(async () => {
   await initStore()
 
   session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
-    desktopCapturer.getSources({ types: ['screen'] }).then((sources) => {
-      callback({ video: sources[0], audio: 'loopback' })
-    })
+    desktopCapturer.getSources({ types: ['screen'] })
+      .then((sources) => {
+        if (!sources || sources.length === 0) {
+          // 拒絕：無可用畫面來源（callback 空物件）
+          callback({})
+          return
+        }
+        callback({ video: sources[0], audio: 'loopback' })
+      })
+      .catch((err) => {
+        console.error('[displayMedia] getSources failed:', err)
+        callback({})
+      })
   }, { useSystemPicker: false })
 
   createMainWindow()
@@ -262,7 +332,11 @@ app.whenReady().then(async () => {
 
 // 關閉前同步卸載模型，再真正退出
 app.on('before-quit', (e) => {
-  if (isQuitting) return
+  if (isQuitting) {
+    // 卸載進行中再次 quit：繼續擋，只允許 app.exit 那條路結束
+    e.preventDefault()
+    return
+  }
   e.preventDefault()
   isQuitting = true
   engine.unloadAll()

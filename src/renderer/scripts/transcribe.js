@@ -1,9 +1,11 @@
 /**
  * VoiceInk - 檔案轉錄功能（本地 Qwen3-ASR）
+ *
+ * 長檔走 main 端 ffmpeg 串流切段（≥2 小時／≥100MB），
+ * 不再整檔 decodeAudioData 進 renderer RAM。
  */
 
 import { showToast, getSettings, electronAPI, cleanIpcError, ASR_MODEL_KEY, TRANSLATE_MODEL_KEY } from './app.js'
-import { resampleTo16kMono } from './live-caption.js'
 
 // ===== DOM 元素 =====
 let dropZone
@@ -17,6 +19,7 @@ let startTranscribeBtn
 let transcribeProgress
 let progressFill
 let progressText
+let progressPercent
 let transcribeResult
 let resultText
 let copyResultBtn
@@ -24,14 +27,32 @@ let saveResultBtn
 
 // ===== 狀態 =====
 let selectedFile = null
+/** 重入鎖：避免連點開始轉錄導致雙重 release 卸載進行中模型 */
+let isTranscribing = false
+/** 清除檔案／重開時作廢未完成的 UI 更新 */
+let transcribeEpoch = 0
+/** @type {null | (() => void)} */
+let unsubFileProgress = null
 
 /**
  * 支援的音訊格式
  */
-const SUPPORTED_FORMATS = ['mp3', 'wav', 'm4a', 'flac', 'ogg', 'aac', 'wma', 'aiff']
+const SUPPORTED_FORMATS = ['mp3', 'wav', 'm4a', 'flac', 'ogg', 'aac', 'wma', 'aiff', 'aif']
 
-// 本地轉錄的每段長度（秒）
-const LOCAL_CHUNK_SECONDS = 28
+/** 原始檔案上限（與 main file-transcribe 對齊；保證 ≥100MB） */
+const MAX_FILE_BYTES = 200 * 1024 * 1024
+
+/**
+ * 等瀏覽器畫完一幀（隱藏選項／顯示進度後必須，否則 main 忙載模型時看起來像黑屏）
+ * @returns {Promise<void>}
+ */
+function waitForPaint() {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => resolve())
+    })
+  })
+}
 
 /**
  * 初始化檔案轉錄功能
@@ -46,8 +67,10 @@ export function initTranscribe() {
   outputLanguage = document.getElementById('outputLanguage')
   startTranscribeBtn = document.getElementById('startTranscribeBtn')
   transcribeProgress = document.getElementById('transcribeProgress')
-  progressFill = document.querySelector('.progress-fill')
-  progressText = document.querySelector('.progress-text')
+  // 限定在進度面板內，避免日後其他 .progress-fill 搶到
+  progressFill = transcribeProgress.querySelector('.progress-fill')
+  progressText = transcribeProgress.querySelector('.progress-text')
+  progressPercent = transcribeProgress.querySelector('.progress-percent')
   transcribeResult = document.getElementById('transcribeResult')
   resultText = document.getElementById('resultText')
   copyResultBtn = document.getElementById('copyResultBtn')
@@ -133,6 +156,14 @@ function handleFileSelect(file) {
     return
   }
 
+  if (file.size > MAX_FILE_BYTES) {
+    showToast(
+      `檔案過大（${formatFileSize(file.size)}），上限 ${formatFileSize(MAX_FILE_BYTES)}`,
+      'error'
+    )
+    return
+  }
+
   selectedFile = file
 
   const fileName = fileInfo.querySelector('.file-name')
@@ -151,8 +182,11 @@ function handleFileSelect(file) {
  * 清除選擇的檔案
  */
 function clearFile() {
+  if (isTranscribing) return
   selectedFile = null
   fileInput.value = ''
+  transcribeEpoch++
+  electronAPI.localAsr.cancelFileTranscribe?.().catch(() => {})
 
   dropZone.classList.remove('hidden')
   fileInfo.classList.add('hidden')
@@ -180,101 +214,163 @@ function setupTranscription() {
 }
 
 /**
- * 開始轉錄
+ * 解析本機絕對路徑
+ * @param {File} file
+ * @returns {string}
  */
-async function startTranscription() {
-  if (!selectedFile) {
-    showToast('請先選擇檔案', 'error')
-    return
+function resolveLocalPath(file) {
+  if (!file) return ''
+  if (typeof electronAPI.getPathForFile === 'function') {
+    const p = electronAPI.getPathForFile(file)
+    if (p) return p
   }
-
-  const settings = await getSettings()
-  const status = await electronAPI.models.status()
-  if (!status.models[ASR_MODEL_KEY]?.downloaded) {
-    showToast('本地 ASR 模型尚未下載，請先到設定下載', 'error')
-    return
-  }
-  if (settings.translator === 'local' && !status.models[TRANSLATE_MODEL_KEY]?.downloaded) {
-    showToast('本地翻譯模型尚未下載，請先到設定下載', 'error')
-    return
-  }
-
-  transcribeOptions.classList.add('hidden')
-  transcribeProgress.classList.remove('hidden')
-  transcribeResult.classList.add('hidden')
-
-  let acquired = false
-  try {
-    updateProgress(2, '載入模型…')
-    const needLlm = settings.translator === 'local'
-    const warm = await electronAPI.engine.acquire('file', { asr: true, llm: needLlm })
-    if (!warm.ok) {
-      throw new Error((warm.warnings && warm.warnings[0]) || '模型載入失敗')
-    }
-    acquired = true
-
-    const language = outputLanguage.value
-    const result = await transcribeLocal(settings, language)
-
-    updateProgress(100, '轉錄完成！')
-
-    setTimeout(() => {
-      transcribeProgress.classList.add('hidden')
-      transcribeResult.classList.remove('hidden')
-      resultText.textContent = result
-    }, 500)
-  } catch (error) {
-    console.error('轉錄失敗:', error)
-    showToast(`轉錄失敗: ${cleanIpcError(error)}`, 'error')
-    transcribeProgress.classList.add('hidden')
-    transcribeOptions.classList.remove('hidden')
-  } finally {
-    if (acquired) {
-      await electronAPI.engine.release('file').catch(() => {})
-    }
-  }
+  // 舊 Electron 後援
+  if (typeof file.path === 'string' && file.path) return file.path
+  return ''
 }
 
 /**
- * 本地轉錄：解碼 → 16k 單聲道 → 28 秒切段逐段轉錄 → 依設定翻譯
+ * 訂閱 main 端串流進度
+ * @param {number} epoch
  */
-async function transcribeLocal(settings, language) {
-  updateProgress(5, '正在解碼音訊...')
-  const audioContext = new AudioContext()
-  let audioBuffer
-  try {
-    audioBuffer = await audioContext.decodeAudioData(await selectedFile.arrayBuffer())
-  } finally {
-    audioContext.close()
+function subscribeFileProgress(epoch) {
+  unsubscribeFileProgress()
+  if (typeof electronAPI.localAsr.onFileProgress !== 'function') return
+  unsubFileProgress = electronAPI.localAsr.onFileProgress((p) => {
+    if (epoch !== transcribeEpoch || !p) return
+    // main 回報 0–88；翻譯階段 renderer 接 90–100
+    const pct = typeof p.percent === 'number' ? Math.min(88, p.percent) : 10
+    updateProgress(pct, p.text || '轉錄中…')
+  })
+}
+
+function unsubscribeFileProgress() {
+  if (typeof unsubFileProgress === 'function') {
+    try { unsubFileProgress() } catch { /* ignore */ }
+  }
+  unsubFileProgress = null
+}
+
+/**
+ * 開始轉錄
+ */
+async function startTranscription() {
+  if (!selectedFile || isTranscribing) {
+    if (!selectedFile) showToast('請先選擇檔案', 'error')
+    return
   }
 
-  updateProgress(10, '正在重採樣...')
-  const samples = await resampleTo16kMono(audioBuffer)
+  if (selectedFile.size > MAX_FILE_BYTES) {
+    showToast(
+      `檔案過大（${formatFileSize(selectedFile.size)}），上限 ${formatFileSize(MAX_FILE_BYTES)}`,
+      'error'
+    )
+    return
+  }
 
-  const chunkSize = LOCAL_CHUNK_SECONDS * 16000
-  const chunkCount = Math.max(1, Math.ceil(samples.length / chunkSize))
-  const parts = []
+  const filePath = resolveLocalPath(selectedFile)
+  if (!filePath) {
+    showToast('無法取得檔案路徑，請改用「選擇檔案」從本機選取', 'error')
+    return
+  }
 
-  for (let i = 0; i < chunkCount; i++) {
-    const chunk = samples.subarray(i * chunkSize, (i + 1) * chunkSize)
-    const text = await electronAPI.localAsr.transcribe({
-      samples: new Float32Array(chunk),
-      sampleRate: 16000,
+  isTranscribing = true
+  startTranscribeBtn.disabled = true
+  clearFileBtn.disabled = true
+  const epoch = ++transcribeEpoch
+
+  // 立刻切到進度 UI 並等一幀，避免 await 載模型時畫面還停在空白深色區
+  transcribeOptions.classList.add('hidden')
+  transcribeResult.classList.add('hidden')
+  transcribeProgress.classList.remove('hidden')
+  updateProgress(1, '準備中…')
+  await waitForPaint()
+
+  let acquired = false
+  subscribeFileProgress(epoch)
+
+  try {
+    if (epoch !== transcribeEpoch) return
+
+    updateProgress(2, '讀取設定…')
+    const settings = await getSettings()
+    const status = await electronAPI.models.status()
+    if (!status.models?.[ASR_MODEL_KEY]?.downloaded) {
+      throw new Error('本地 ASR 模型尚未下載，請先到設定下載')
+    }
+
+    const language = outputLanguage.value
+    const willTranslate = settings.translator !== 'none' && language !== 'auto'
+    if (willTranslate && settings.translator === 'local' && !status.models?.[TRANSLATE_MODEL_KEY]?.downloaded) {
+      throw new Error('本地翻譯模型尚未下載，請先到設定下載')
+    }
+    if (willTranslate && settings.translator === 'cloud' && !settings.apiKey) {
+      throw new Error('雲端翻譯需要 API Key，請到設定填寫')
+    }
+
+    // 先只載 ASR（串流過程長，LLM 等 ASR 完再載，降記憶體尖峰）
+    updateProgress(8, '載入 ASR 模型…')
+    await waitForPaint()
+    const warmAsr = await electronAPI.engine.acquire('file', { asr: true, llm: false })
+    if (!warmAsr.ok) {
+      throw new Error((warmAsr.warnings && warmAsr.warnings[0]) || 'ASR 模型載入失敗')
+    }
+    acquired = true
+    if (epoch !== transcribeEpoch) return
+
+    updateProgress(10, '正在解碼並轉錄…')
+    await waitForPaint()
+
+    const asrResult = await electronAPI.localAsr.transcribeFile({
+      filePath,
       lang: language,
       modelKey: ASR_MODEL_KEY
     })
-    if (text) parts.push(text)
-    updateProgress(10 + ((i + 1) / chunkCount) * 75, `正在轉錄中... (${i + 1}/${chunkCount})`)
-  }
+    if (epoch !== transcribeEpoch) return
 
-  let result = parts.join('\n')
+    let result = (asrResult && asrResult.text) || ''
 
-  // 翻譯（本地 ASR 僅原文轉錄）
-  if (result && settings.translator !== 'none' && language !== 'auto') {
-    updateProgress(88, '正在翻譯...')
-    result = await translateLong(result, language)
+    if (result && willTranslate) {
+      if (settings.translator === 'local') {
+        updateProgress(90, '載入翻譯模型…')
+        await waitForPaint()
+        const warmLlm = await electronAPI.engine.acquire('file', { asr: true, llm: true })
+        if (!warmLlm.ok) {
+          throw new Error((warmLlm.warnings && warmLlm.warnings[0]) || '翻譯模型載入失敗')
+        }
+      }
+      updateProgress(92, '正在翻譯…')
+      result = await translateLong(result, language)
+    }
+
+    if (epoch !== transcribeEpoch) return
+
+    updateProgress(100, '轉錄完成！')
+    await new Promise((r) => setTimeout(r, 350))
+    if (epoch !== transcribeEpoch) return
+    transcribeProgress.classList.add('hidden')
+    transcribeResult.classList.remove('hidden')
+    resultText.textContent = result || '（未辨識到語音內容）'
+  } catch (error) {
+    console.error('轉錄失敗:', error)
+    if (epoch === transcribeEpoch) {
+      const msg = cleanIpcError(error)
+      // 取消不噴錯誤 toast
+      if (!/取消|cancel/i.test(msg)) {
+        showToast(`轉錄失敗: ${msg}`, 'error')
+      }
+      transcribeProgress.classList.add('hidden')
+      transcribeOptions.classList.remove('hidden')
+    }
+  } finally {
+    unsubscribeFileProgress()
+    if (acquired) {
+      await electronAPI.engine.release('file').catch(() => {})
+    }
+    isTranscribing = false
+    startTranscribeBtn.disabled = false
+    clearFileBtn.disabled = false
   }
-  return result
 }
 
 /**
@@ -293,8 +389,25 @@ async function translateLong(text, targetLang) {
   if (current) groups.push(current)
 
   const results = []
-  for (const group of groups) {
-    results.push(await electronAPI.translate(group, targetLang))
+  let prevSrc = ''
+  let prevTr = ''
+  const total = groups.length
+  for (let i = 0; i < groups.length; i++) {
+    const group = groups[i]
+    if (total > 1) {
+      updateProgress(92 + ((i + 1) / total) * 6, `正在翻譯… (${i + 1}/${total})`)
+    }
+    const translated = await electronAPI.translate(group, targetLang, {
+      previousSource: prevSrc,
+      previousTranslation: prevTr,
+      mode: 'file'
+    })
+    results.push(translated)
+    // 下一組前文：僅在有非 identity 譯文時延續（與 live buildContextPair 一致）
+    if (translated && translated.trim() !== group.trim()) {
+      prevSrc = group
+      prevTr = translated
+    }
   }
   return results.join('\n')
 }
@@ -305,8 +418,10 @@ async function translateLong(text, targetLang) {
  * @param {string} text
  */
 function updateProgress(percent, text) {
-  progressFill.style.width = percent + '%'
-  progressText.textContent = text
+  const p = Math.max(0, Math.min(100, Math.round(percent)))
+  if (progressFill) progressFill.style.width = p + '%'
+  if (progressText) progressText.textContent = text
+  if (progressPercent) progressPercent.textContent = p + '%'
 }
 
 /**

@@ -3,6 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'"
+    />
     <title>VoiceInk 字幕</title>
     <style>
       * {
@@ -425,7 +429,10 @@
       }
 
       window.electronAPI.store.get("subtitleFontScale", 1).then((v) => {
-        fontScale = v;
+        const n = Number(v);
+        fontScale = Number.isFinite(n)
+          ? Math.min(FONT_SCALE_MAX, Math.max(FONT_SCALE_MIN, n))
+          : 1;
         applyFontScale();
       });
 

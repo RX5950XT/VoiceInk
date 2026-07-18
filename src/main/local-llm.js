@@ -30,6 +30,8 @@ let resources = null
 let loadPromise = null
 /** unload 時遞增；in-flight load 完成後 gen 不符則 dispose 丟棄 */
 let loadGen = 0
+/** 是否已跑過拋棄式暖機推論（首次推論的 compute-graph 冷啟動 ~12s，預熱時先付掉） */
+let warmedUp = false
 
 /** 翻譯 serial lock */
 let translateChain = Promise.resolve()
@@ -112,13 +114,31 @@ async function getSession() {
 }
 
 /**
- * 預熱本地翻譯模型
+ * 拋棄式暖機推論：首次 prompt 會做 compute-graph 冷啟動（實測 ~12s），
+ * 若拖到使用者「開始字幕」後第一句才付，該 12s 內 ASR 持續產批、翻譯佇列塞爆丟批次，
+ * 僅翻譯模式會整段只剩原文。預熱時先跑一次 maxTokens:1 把成本挪到背景。
+ * @param {object} session
+ */
+async function warmupInference(session) {
+  try {
+    session.setChatHistory([{ type: 'system', text: '你是翻譯引擎。' }])
+    await session.prompt('warmup', { maxTokens: 1, temperature: 0, budgets: { thoughtTokens: 0 } })
+  } catch { /* 暖機失敗不影響實際翻譯 */ }
+}
+
+/**
+ * 預熱本地翻譯模型（載入 ＋ 首次推論冷啟動）
  * @returns {Promise<{ ok: boolean, warnings: string[] }>}
  */
 async function warm() {
   const warnings = []
   try {
-    await getSession()
+    const session = await getSession()
+    // 與實際翻譯共用 serial lock，暖機期間不與 translate/unload 互踩
+    if (!warmedUp) {
+      await withTranslateLock(() => warmupInference(session))
+      warmedUp = true
+    }
     return { ok: true, warnings }
   } catch (e) {
     return { ok: false, warnings: [e.message || String(e)] }
@@ -132,6 +152,7 @@ async function warm() {
 async function unload() {
   const warnings = []
   loadGen += 1
+  warmedUp = false
 
   // 等進行中的翻譯跑完再卸
   await withTranslateLock(async () => {})
@@ -165,10 +186,11 @@ function stripThink(text) {
 function buildSystemPrompt(targetLang, mode) {
   const langName = LANGUAGE_NAMES[targetLang] || targetLang
   if (mode === 'live') {
-    // 明確指出來源可能是與目標語共用漢字的日/韓文，並嚴禁原樣輸出——降低 0.8B 對漢字密集句的複誦傾向
-    return `你是即時字幕翻譯引擎。使用者訊息可能是任何語言（含日文、韓文等與目標語共用文字的語言）。無論來源為何，一律翻譯成${langName}，嚴禁原樣輸出或複製輸入；只輸出${langName}譯文，不要解釋。`
+    // 祈使句、弱化 persona 自稱：避免極短/退化輸入時 0.8B 自我介紹成「即時字幕翻譯引擎」
+    // 仍明示來源可含與目標語共用漢字的日/韓文，嚴禁原樣輸出
+    return `將使用者訊息翻譯成${langName}。訊息可能是任何語言（含日文、韓文等與目標語共用文字的語言）。即使很短也一律視為待譯文本直接翻譯；只輸出${langName}譯文，嚴禁原樣輸出、回問、解釋或寒暄。`
   }
-  return `你是翻譯引擎。將使用者訊息的內容翻譯成${langName}。口語可補全省略主語使譯文通順。只輸出譯文，不要解釋、不要重複原文。`
+  return `將使用者訊息翻譯成${langName}。口語可補全省略主語使譯文通順。只輸出譯文，不要解釋、不要重複原文、不要寒暄。`
 }
 
 /**
@@ -242,12 +264,23 @@ async function translateCloud(text, targetLang, cfg, context = {}, options = {})
     }
     throw e
   }
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.error?.message || `翻譯 API 錯誤: ${res.status}`)
+  const rawBody = await res.text()
+  let data = null
+  try {
+    data = rawBody ? JSON.parse(rawBody) : null
+  } catch {
+    // API 偶爾回含控制字元／非 JSON 的 body
+    const preview = (rawBody || '').replace(/[\u0000-\u001F]+/g, ' ').slice(0, 120)
+    throw new Error(
+      res.ok
+        ? `翻譯 API 回傳無法解析的內容${preview ? `：${preview}` : ''}`
+        : `翻譯 API 錯誤: ${res.status}${preview ? ` ${preview}` : ''}`
+    )
   }
-  const data = await res.json()
-  return stripThink(data.choices[0]?.message?.content || '')
+  if (!res.ok) {
+    throw new Error(data?.error?.message || `翻譯 API 錯誤: ${res.status}`)
+  }
+  return stripThink(data?.choices?.[0]?.message?.content || '')
 }
 
 /**
@@ -256,9 +289,20 @@ async function translateCloud(text, targetLang, cfg, context = {}, options = {})
  * @param {string} targetLang
  * @param {{ previousSource?: string, previousTranslation?: string, mode?: 'live' | 'file' }} [opts]
  */
+/**
+ * 是否含足夠語言性字元（與 renderer hasLinguisticContent 同構）。
+ * 純符號／♪／零寬等餵給 0.8B 會觸發 persona 問候而非翻譯。
+ * @param {string} text
+ */
+function hasLinguisticContent(text) {
+  return (text || '').replace(/[^\p{L}]/gu, '').length >= 2
+}
+
 async function translate(store, text, targetLang, opts = {}) {
   const translator = store.get('translator', 'none')
   if (translator === 'none' || !text.trim()) return text
+  // 縱深：renderer 應已擋；此處再擋一次避免任何路徑把 ♪♪♪／…… 送進小模型
+  if (!hasLinguisticContent(text)) return text
 
   return withTranslateLock(async () => {
     const context = {
@@ -267,19 +311,25 @@ async function translate(store, text, targetLang, opts = {}) {
     }
     const options = { mode: opts.mode || 'file' }
 
-    const result = translator === 'local'
-      ? await translateLocal(text, targetLang, context, options)
-      : await translateCloud(
-          text,
-          targetLang,
-          {
-            apiUrl: store.get('apiUrl', 'https://openrouter.ai/api/v1'),
-            apiKey: store.get('apiKey', ''),
-            modelId: store.get('modelId', 'google/gemini-3-flash-preview')
-          },
-          context,
-          options
-        )
+    let result
+    if (translator === 'local') {
+      result = await translateLocal(text, targetLang, context, options)
+    } else if (translator === 'cloud') {
+      result = await translateCloud(
+        text,
+        targetLang,
+        {
+          apiUrl: store.get('apiUrl', 'https://openrouter.ai/api/v1'),
+          apiKey: store.get('apiKey', ''),
+          modelId: store.get('modelId', 'google/gemini-3-flash-preview')
+        },
+        context,
+        options
+      )
+    } else {
+      // 未知 translator 值：原樣回傳，避免誤打雲端
+      return text
+    }
 
     // 模型自我複誦（含日文頑固句）：回原文、不轉繁——s2twp 會 mangle 使 renderer 的 echo 去重失效
     if (result.trim() === text.trim()) return result

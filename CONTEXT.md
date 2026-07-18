@@ -5,22 +5,23 @@
 ## 專案概況
 
 VoiceInk：Windows Electron 語音轉文字應用（檔案轉錄＋系統音訊即時字幕）。
-Vanilla JS + Vite，無前端框架。版本 **1.3.0**（GitHub Release `v1.3.0`）。
+Vanilla JS + Vite，無前端框架。版本 **1.4.0**（GitHub Release `v1.4.0`）。
 
 ## 架構（本地 ASR only，2026-07-17）
 
 ```
 src/main/
-  main.js        視窗管理 + IPC 掛載（store / subtitle / models / localAsr / translate）
-  models.js      本地模型 registry + 下載管理（qwen3asr、qwen35translate）
-  local-asr.js   sherpa-onnx 本地轉錄（固定 Qwen3-ASR-0.6B；zh-TW 經 opencc 轉繁）
-  local-llm.js   翻譯分流：雲端 chat completions / 本地 node-llama-cpp
-src/preload/preload.js   contextBridge 暴露上述 IPC
+  main.js             視窗管理 + IPC 掛載（store / subtitle / models / localAsr / translate）
+  models.js           本地模型 registry + 下載管理（qwen3asr、qwen35translate）
+  local-asr.js        sherpa-onnx 本地轉錄（固定 Qwen3-ASR-0.6B；zh-TW 經 opencc 轉繁）
+  local-llm.js        翻譯分流：雲端 chat completions / 本地 node-llama-cpp
+  file-transcribe.js  長檔串流：ffmpeg→16k mono f32le→28s 切段 ASR（≥2h／≥100MB）
+src/preload/preload.js   contextBridge 暴露上述 IPC（含 getPathForFile）
 src/renderer/
   scripts/app.js          設定（translator/apiUrl/apiKey/modelId）+ 模型管理 UI
   scripts/api.js          雲端 API 預設值（DEFAULT_API_URL / DEFAULT_MODEL）
   scripts/live-caption.js 即時字幕（2s 切塊、佇列不丟塊、增益+靜音門檻、音量條）
-  scripts/transcribe.js   檔案轉錄（28s 切段 + 翻譯）
+  scripts/transcribe.js   檔案轉錄（getPathForFile → main 串流；進度 UI）
   pages/subtitle.html     懸浮字幕視窗（顯示模式 雙/譯、字級 A±、視窗透明度 ◐、複製）
 ```
 
@@ -45,6 +46,68 @@ src/renderer/
 - 靜音門檻：peak normalize 後 RMS>0.01 且 speechRatio>0.05。
 - dev 驗證技巧:`npx electron . --remote-debugging-port=9223` + CDP；e2e 腳本用 `npx electron <script>` 直測 main process。
 - **改動完成後必跑** `npm run electron:pack` → 更新 `dist/win-unpacked/VoiceInk.exe` 免安裝預覽；完整安裝檔才用 `npm run electron:build`。
+
+## 最近變更（2026-07-18h）— 轉錄 JSON 控制字元崩潰
+
+- **症狀**：開始轉錄 toast `SyntaxError: Bad control character in string literal in JSON at position N`。
+- **根因**：`sherpa-onnx-node` 的 `decodeAsync` 對 native JSON 做 `JSON.parse`；辨識文本含未跳脫 `\t`/`\n`/C0 控制字元時直接炸掉（長檔／雜訊段較易踩到）。
+- **修法**：`local-asr.js` 載入後 patch `OfflineRecognizer.decodeAsync/getResult` → `parseSherpaJson`（先 parse，失敗則修字串內控制字元再 parse，再失敗 regex 抽 text）；輸出再 strip C0。雲端翻譯 `res.text()`+安全 parse 防同類。
+- 驗證：`node scripts/test-sherpa-json.js` ALL PASS；`electron:pack`。
+
+## 最近變更（2026-07-18g）— 長檔／大檔轉錄（≥2h／≥100MB）
+
+- **症狀**：長檔或大檔按「開始轉錄」易黑屏／OOM——renderer `decodeAudioData` 把整段 PCM 展開（2h 立體聲 44.1k ≈ 數 GB）。
+- **修法**：main 端串流管線 `src/main/file-transcribe.js`：
+  1. 依賴 `ffmpeg-static`（`asarUnpack` 含 `ffmpeg-static`）
+  2. `ffmpeg -i file -ac 1 -ar 16000 -f f32le pipe:1` 串流；每 **28s** 切一段送 sherpa，**不常駐整檔 Float32**
+  3. 上限：**200MB**（保證 ≥100MB）、**4 小時**（保證 ≥2 小時）；進度經 `localAsr:fileProgress`
+  4. renderer：`webUtils.getPathForFile` → `localAsr.transcribeFile`；不再整檔 WebAudio decode
+  5. 注意：勿在 promise chain 內 `await` 會再 enqueue 自己的函式（尾段會死鎖）
+- 驗證：`npx electron scripts/e2e-file-long.js` → 60s wav **3 段**、duration=60、ALL PASS；`npm run electron:pack` 更新預覽。
+
+## 最近變更（2026-07-18f）— 檔案轉錄「黑屏」
+
+- **症狀**：拖入檔案按「開始轉錄」後內容區幾乎全黑、像當掉。
+- **根因**：按開始後先 hide 選項再 `await` 載入模型（ASR+LLM 並行可 >12s），進度 UI 未強制 paint；深色主題下只剩小檔案卡 → 視覺像黑屏。大檔再疊 decode+雙模型記憶體尖峰更糟。
+- **修法**（`transcribe.js` + 進度面板 CSS）：立刻進度卡 + rAF×2；ASR/LLM 分階段（後續 18g 改串流後解碼亦在 main）。
+- 驗證：進度可見、無 crash；`electron:pack` 已更新。
+
+## 最近變更（2026-07-18e）— 非語言 ASR 碎片 → 翻譯 persona 問候
+
+- **症狀**：僅翻譯模式下字幕出現「你好，我是即時字幕翻譯引擎…請提供原文…您應該如何稱呼？」等聊天開場，看似翻譯壞了。
+- **根因**：系統音訊中音樂／靜音／音效被 ASR 轉成純符號碎片（`♪♪♪`、`……`、`>>`、零寬 `Cf` 等）。舊 guard `replace(/[\s\p{P}]/gu,'')` 只去掉空白與**標點**（`P`），漏掉 **Symbol `So`** 與 **Format `Cf`**，碎片仍 ≥2「字元」流進 0.8B；system prompt 又給了 persona 名，模型當聊天回問候。模組 e2e：正常英文全數正確、context 污染不擴散（各碎片獨立觸發）。
+- **修法**：
+  1. `live-caption.js`：`hasLinguisticContent` = `text.replace(/[^\p{L}]/gu,'').length >= 2`（只認字母／漢字／假名／諺文）。在 `processAudioChunkData` 進 `handleAsrResult` **前**丟棄 → 純符號連字幕行都不建；`shouldTranslate` 同構再擋一次。
+  2. `local-llm.js`：`translate` 入口同構短路徑（縱深）；live system prompt 改祈使句、弱化「你是…引擎」自稱。
+- **殘留**：單填充詞（如 `um`）仍可能觸發 chatty，罕見；要根除需更大模型或輸出端 persona 偵測。
+- 與 18d 的 `prewarmGen` 互不衝突，同一檔並存。
+
+## 最近變更（2026-07-18d）— 全專案審計修補
+
+四代理平行審查（main IPC／ASR-LLM／renderer／安全）後修補高信心問題：
+
+| 等級 | 修補 |
+|---|---|
+| High | ASR `withAsrLock` + `loadEnabled`：unload 等 in-flight、禁止無 warm 幽靈重載；並行 transcribe 串列化 |
+| High | `getDisplayMedia` handler：`getSources` catch + 空 sources 拒絕 |
+| High | `models.openFolder` key 白名單 + 路徑必須在 models root |
+| High | 檔案轉錄 `isTranscribing` 重入鎖；cloud 缺 apiKey 開跑前擋下 |
+| High | prewarm `prewarmGen`／`prewarmInFlight`：切頁作廢 in-flight、避免無人 release 洩漏 |
+| Med | ASR 來源 s2twp 條件化（日韓假名／諺文不轉繁）；engine 重入 acquire 失敗不卸已持有 owner |
+| Med | `models.remove` 先 cancel 下載；刪除 UI 擋已載入模型；store key allowlist |
+| Med | `sandbox: true`、will-navigate／setWindowOpenHandler、subtitle CSP、opacity clamp |
+| Med | 開設定重灌表單（丟髒狀態）；file 翻譯組間帶 previous 上下文；before-quit 卸載中持續 preventDefault |
+| Low | toast 單 timer、進度除零、設定文案改「字幕視窗雙／譯」 |
+
+驗證：`npx electron scripts/e2e-audit-fixes.js` 15/15；`node scripts/e2e-cdp-smoke.js` 8/8（含 sandbox + store allowlist）；`npm run electron:pack` 成功。
+
+## 最近變更（2026-07-18c）
+
+- **修「英文翻譯只剩原文」＋ 開始字幕卡頓（同源）**。根因不是翻譯邏輯（e2e 證明英文→繁中暖機後 ~110ms、零複誦）：`local-llm.warm()` 原本只**載入**模型、不跑推論，node-llama-cpp 首次 prompt 的 compute-graph 冷啟動 **~12.5s** 就落在使用者「開始字幕」後第一句翻譯上；那 12.5s 內 ASR 每 2s 產批、`translateQueue`（上限 5）塞爆丟批次，**僅翻譯顯示模式**（使用者設定 `captionDisplayMode:"translation"`）對沒譯文的行回退顯示原文 → 整段只剩英文。
+- **修法：`warm()` 內加拋棄式暖機推論**（`warmupInference`：`setChatHistory` 極簡 system + `prompt('warmup',{maxTokens:1})`），把 12.5s 冷啟動挪到背景預熱（進 live 分頁 `prewarmEngine` 時付掉）。`warmedUp` 旗標保證只跑一次、`unload` 時重置；走 `withTranslateLock` 不與 translate/unload 互踩。e2e：`warm()` 11.7s→第一句真實翻譯 **249ms**（原 12,493ms）；`engine.acquire('live')` 13s→第一句 462ms。開始字幕後翻譯佇列不再塞爆，僅翻譯模式正常出譯文、開頭不卡。
+- **診斷結論**：目標語預設 `zh-TW`（未持久化，讀下拉）；`translator=local`、opencc 正常皆已排除。翻譯壞掉純為冷啟動丟批次的表象。
+- **存設定回饋**：`saveSettings` 加回 `showToast('設定已儲存')`——base `.toast` 已是中性深色（綠色 `.toast.success` 前版已移除），故為中性提示非綠條，且只在明確「儲存」時觸發。
+- **預熱狀態提示**：`prewarmEngine` 期間 `statusText` 顯示「準備模型…」，就緒/失敗且未擷取時還原「未啟動」（不覆蓋 startCapture 的文字）。
 
 ## 最近變更（2026-07-18b）
 
@@ -96,6 +159,6 @@ src/renderer/
 
 - 固定 2s 切塊會切斷字詞邊界 → 升級路徑：silero-vad（sherpa-onnx 內建）做語音段偵測
 - 字幕透明度用整窗 setOpacity（文字也會變淡）→ 若要文字不透明需 transparent window（Windows 有坑）
-- 本地檔案轉錄 28s 硬切 → 同樣可用 VAD 改善
+- 本地檔案轉錄已串流切 28s（支援 ≥2h／≥100MB）→ 硬切邊界仍可用 VAD 改善
 - Qwen3-ASR-1.7B（更準，int8 ~2GB）可加入 registry
 - PRD 未實作的 backlog 見 `tasks/todo.md`

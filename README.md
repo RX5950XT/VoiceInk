@@ -2,14 +2,15 @@
 
 VoiceInk 是一款專為 Windows 桌面環境設計的語音轉文字應用程式，基於 Electron 構建。提供檔案轉錄與即時字幕功能，採**完全離線的本地 ASR**（Qwen3-ASR-0.6B），即使只有 CPU 也能即時轉錄；翻譯可選雲端或本地 LLM。
 
-**目前版本：v1.3.0** — [下載安裝檔（GitHub Releases）](https://github.com/RX5950XT/VoiceInk/releases)
+**目前版本：v1.4.0** — [下載安裝檔（GitHub Releases）](https://github.com/RX5950XT/VoiceInk/releases)
 
 ## ✨ 主要功能 (Features)
 
 ### 1. 📂 檔案轉錄 (File Transcription)
 
 - 拖放音訊檔案即可轉錄（MP3、WAV、M4A、FLAC、OGG、AAC…）。
-- 本地 ASR 自動切分長音訊（28 秒/段）逐段轉錄，再依設定翻譯。
+- 長檔串流轉錄（ffmpeg 解碼 + 28 秒/段 ASR），支援**至少 2 小時／100MB**（上限 4 小時／200MB），不整檔塞進記憶體。
+- 再依設定做翻譯（none／雲端／本地）。
 
 ### 2. 🎙️ 即時字幕 (Live Caption)
 

@@ -36,6 +36,10 @@ let consecutiveFailures = 0
 let engineAcquired = false
 /** 進入分頁時背景預熱所持有的引擎 owner（與 engineAcquired 互斥：擷取開始即轉交） */
 let prewarmed = false
+/** 作廢 in-flight prewarm（切頁／失敗／開始擷取時遞增） */
+let prewarmGen = 0
+/** 防止並行兩次 prewarm */
+let prewarmInFlight = false
 
 let levelAudioCtx = null
 let levelRaf = null
@@ -102,20 +106,38 @@ export function initLiveCaption() {
 /**
  * 進入即時字幕分頁時背景預熱模型，讓「開始字幕」近乎秒開。
  * 只在未擷取且未持有引擎時做；失敗（如模型未下載）僅記 log，不打擾使用者。
+ * acquire 成功後才設 prewarmed，並以 prewarmGen 作廢過期的 in-flight 結果（防洩漏）。
  */
 export async function prewarmEngine() {
-  if (isCapturing || prewarmed || !electronAPI.engine) return
-  prewarmed = true
+  if (isCapturing || isStarting || prewarmed || prewarmInFlight || !electronAPI.engine) return
+  const gen = ++prewarmGen
+  prewarmInFlight = true
+  if (statusText && !isCapturing) statusText.textContent = '準備模型…'
   try {
     const s = await getSettings()
     const r = await electronAPI.engine.acquire('live', {
       asr: true,
       llm: s.translator === 'local'
     })
-    if (!r || !r.ok) prewarmed = false // engine 於失敗時已自行釋放 owner
+    // 擷取已接手（或即將接手）同一個 live owner：不可 release
+    if (isCapturing || engineAcquired || isStarting) {
+      return
+    }
+    // 已作廢（切離分頁）：成功佔了 owner 要立刻放掉，避免無人 release
+    if (gen !== prewarmGen) {
+      if (r && r.ok) {
+        await electronAPI.engine.release('live').catch(() => {})
+      }
+      return
+    }
+    prewarmed = !!(r && r.ok)
   } catch (e) {
     console.warn('[預熱] 失敗:', e)
-    prewarmed = false
+    if (gen === prewarmGen) prewarmed = false
+  } finally {
+    prewarmInFlight = false
+    // 預熱完成後若尚未開始擷取，還原狀態文字（勿覆蓋 startCapture 已設的文字）
+    if (statusText && !isCapturing && !engineAcquired) statusText.textContent = '未啟動'
   }
 }
 
@@ -123,7 +145,9 @@ export async function prewarmEngine() {
  * 離開即時字幕分頁且未擷取時卸載預熱的模型，釋放記憶體。
  */
 export async function cooldownEngine() {
-  if (isCapturing || !prewarmed || !electronAPI.engine) return
+  prewarmGen++ // 作廢 in-flight prewarm
+  if (isCapturing || isStarting || !electronAPI.engine) return
+  if (!prewarmed) return
   prewarmed = false
   try {
     await electronAPI.engine.release('live')
@@ -210,10 +234,10 @@ async function startCapture() {
     } catch (error) {
       console.error('開始擷取失敗:', error)
       stopLevelMeter()
-      if (engineAcquired || prewarmed) {
+      // 只釋放本次擷取取得的引擎；保留背景 prewarm（取消權限不應拆掉預熱）
+      if (engineAcquired) {
         await electronAPI.engine.release('live').catch(() => {})
         engineAcquired = false
-        prewarmed = false
       }
       if (mediaStream) {
         mediaStream.getTracks().forEach(t => t.stop())
@@ -345,6 +369,13 @@ async function processAudioChunkData(chunks) {
     return
   }
 
+  // 非語言性片段（純符號、♪音樂、雜訊、零寬/格式字元）會讓 0.8B 翻譯模型改走對話模式，
+  // 吐出「你好，我是即時字幕翻譯引擎…請提供原文…」persona 問候而非譯文——進管線前直接丟棄
+  if (!hasLinguisticContent(sourceText)) {
+    console.log('[過濾] 無語言內容:', JSON.stringify(sourceText.slice(0, 20)))
+    return
+  }
+
   handleAsrResult(sourceText)
 }
 
@@ -355,7 +386,7 @@ function handleAsrResult(sourceText) {
   const shouldTranslate =
     settings.translator !== 'none' &&
     targetLanguage !== 'auto' &&
-    sourceText.replace(/[\s\p{P}]/gu, '').length >= MIN_TRANSLATE_CHARS &&
+    hasLinguisticContent(sourceText) &&
     needsTranslation(sourceText, targetLanguage)
 
   if (!shouldTranslate) {
@@ -490,6 +521,15 @@ function isRepetitionLoop(text) {
   return /(.{1,6}?)(?:[，,、。.\s]*\1){7,}/.test(text)
 }
 
+/**
+ * 是否含足夠語言性字元（字母／漢字／假名／諺文）。
+ * 純符號、♪音樂、數字、標點、零寬/格式字元不算——這類片段會讓小翻譯模型改用對話模式。
+ * @param {string} text
+ */
+function hasLinguisticContent(text) {
+  return text.replace(/[^\p{L}]/gu, '').length >= MIN_TRANSLATE_CHARS
+}
+
 function needsTranslation(text, targetLang) {
   const cjkCount = (text.match(/[一-鿿]/g) || []).length
   const cjkRatio = cjkCount / Math.max(1, text.length)
@@ -522,6 +562,12 @@ async function stopCapture({ closeWindow = true } = {}) {
   if (mediaStream) {
     mediaStream.getTracks().forEach(track => track.stop())
     mediaStream = null
+  }
+
+  // 等 in-flight ASR 結束再 release，配合 main 側 loadEnabled 避免幽靈重載
+  const waitStart = Date.now()
+  while (isProcessing && Date.now() - waitStart < 15000) {
+    await new Promise((r) => setTimeout(r, 50))
   }
 
   if (engineAcquired) {

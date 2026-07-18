@@ -103,7 +103,7 @@ subtitleWindow.setMenu(null)
 >
 > - API Key 必須安全儲存，使用 electron-store（IPC 存取）
 > - 靜音檢測在客戶端做（RMS＋語音佔比），不要交給 AI 判斷
-> - 音訊分段：本地 2 秒，處理佇列「保留最新 pending」不丟塊
+> - 音訊分段：即時 2 秒（佇列「保留最新 pending」不丟塊）；檔案 28 秒（main ffmpeg 串流，≥2h／≥100MB）
 > - ASR 固定 Qwen3-ASR-0.6B（`ASR_MODEL_KEY = 'qwen3asr'`），無引擎切換 UI
 
 > [!CAUTION]
@@ -112,6 +112,8 @@ subtitleWindow.setMenu(null)
 > - 不要把 MediaRecorder 改回 `timeslice` 模式（Blob 缺 WebM header）
 > - 翻譯前文不要塞進「【前文】【本段】」括號式 prompt（小模型會複誦）→ system prompt + chat history
 > - 顯示模式勿讓即時頁 payload 夾帶 `displayMode` 或加跨窗 IPC（由字幕彈窗獨佔 store `captionDisplayMode`，兩端搶改會打架）
-> - 引擎預熱／擷取共用布林 owner `users.live`，勿改成計數；`prewarmed`/`engineAcquired` 互斥旗標別漏清
+> - 引擎預熱／擷取共用布林 owner `users.live`，勿改成計數；`prewarmed`/`engineAcquired` 互斥旗標別漏清；prewarm 以 `prewarmGen` 作廢 in-flight
+> - ASR 有 serial lock + `loadEnabled`（防 stop 後幽靈重載），勿拿掉
+> - store key allowlist、`models.openFolder` 僅 registry key；兩窗 `sandbox: true`
 > - 打包跑的是 `src/` 原始碼（`files` 排除 `dist/**`），改 renderer 直接改 `src/`；`vite build` 只作驗證
 > - 歷史教訓清單見 [tasks/lessons.md](./tasks/lessons.md)，開發規範地雷見 [CLAUDE.md](./CLAUDE.md)

@@ -47,6 +47,8 @@ async function acquire(owner, needs = {}) {
   const wantLlm = !!needs.llm
 
   return withLifecycle(async () => {
+    // 已持有時再次 acquire（預熱後補 LLM / 重入）失敗不可整包卸掉既有模型
+    const alreadyHeld = users[owner]
     users[owner] = true
     const warnings = []
 
@@ -62,8 +64,8 @@ async function acquire(owner, needs = {}) {
     const llmLoaded = localLlm.isLoaded()
     const ok = (!wantAsr || asrLoaded) && (!wantLlm || llmLoaded)
 
-    if (!ok) {
-      // warm 失敗：釋放此 owner，避免卡 refcount
+    if (!ok && !alreadyHeld) {
+      // 本次才新佔用且 warm 失敗：釋放 owner，避免卡死
       users[owner] = false
       await maybeUnloadUnlocked()
     }

@@ -1,9 +1,21 @@
-const { contextBridge, ipcRenderer } = require('electron')
+const { contextBridge, ipcRenderer, webUtils } = require('electron')
 
 /**
  * 安全地將 API 暴露給 Renderer Process
  */
 contextBridge.exposeInMainWorld('electronAPI', {
+  /**
+   * 取得本機檔案絕對路徑（Electron 32+ 取代 File.path）
+   * @param {File} file
+   * @returns {string}
+   */
+  getPathForFile: (file) => {
+    try {
+      return webUtils.getPathForFile(file) || ''
+    } catch {
+      return ''
+    }
+  },
   // ===== 設定儲存 =====
   store: {
     get: (key, defaultValue) => ipcRenderer.invoke('store:get', key, defaultValue),
@@ -47,7 +59,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // ===== 本地 ASR 與翻譯 =====
   localAsr: {
-    transcribe: (req) => ipcRenderer.invoke('localAsr:transcribe', req)
+    transcribe: (req) => ipcRenderer.invoke('localAsr:transcribe', req),
+    /** 長檔串流轉錄（main 端 ffmpeg 切段） */
+    transcribeFile: (req) => ipcRenderer.invoke('localAsr:transcribeFile', req),
+    cancelFileTranscribe: () => ipcRenderer.invoke('localAsr:cancelFileTranscribe'),
+    onFileProgress: (callback) => {
+      const handler = (_event, progress) => callback(progress)
+      ipcRenderer.on('localAsr:fileProgress', handler)
+      return () => ipcRenderer.removeListener('localAsr:fileProgress', handler)
+    }
   },
   translate: (text, targetLang, opts) =>
     ipcRenderer.invoke('translate', text, targetLang, opts || {})
