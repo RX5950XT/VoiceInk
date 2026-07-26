@@ -9,7 +9,12 @@ import {
   prewarmTranslatePage,
   cooldownTranslatePage
 } from './translate-page.js'
-import { DEFAULT_API_URL, DEFAULT_MODEL } from './api.js'
+import {
+  DEFAULT_API_URL,
+  DEFAULT_MODEL,
+  DEFAULT_ASR_API_URL,
+  DEFAULT_ASR_MODEL
+} from './api.js'
 
 /** 預設 TTS 語音（與 main tts-voices.js 對齊） */
 export const DEFAULT_TTS_VOICES = {
@@ -70,26 +75,129 @@ export const electronAPI = window.electronAPI || {
     }),
     synthesize: async () => { throw new Error('僅 Electron 環境可用') },
     cancel: async () => true
+  },
+  window: {
+    minimize: async () => true,
+    toggleMaximize: async () => false,
+    close: async () => true,
+    isMaximized: async () => false,
+    onMaximized: () => () => {}
+  },
+  system: {
+    gpuCapability: async () => ({
+      ok: false,
+      name: '',
+      vramMiB: 0,
+      reason: '僅 Electron 環境',
+      hasCudaRuntime: false,
+      hasVulkan: false,
+      canInstallCuda: false,
+      backends: []
+    }),
+    refreshGpuCapability: async () => ({
+      ok: false,
+      name: '',
+      vramMiB: 0,
+      reason: '僅 Electron 環境',
+      hasCudaRuntime: false,
+      canInstallCuda: false,
+      backends: []
+    }),
+    installCudaEnv: async () => ({ ok: false, message: '僅 Electron 環境' }),
+    openCudaDownloadPage: async () => true,
+    onCudaInstallProgress: () => () => {}
+  },
+  llm: {
+    loadInfo: async () => ({ loaded: false, key: null, gpu: false, backend: 'cpu' })
   }
 }
 
 // ===== 設定 =====
 
 const SETTING_DEFAULTS = {
-  translator: 'none',
+  /** @type {'cloud'|'local'} */
+  translator: 'local',
   /** 即時字幕：bilingual 雙語｜translation 僅翻譯 */
   captionDisplayMode: 'bilingual',
   apiUrl: DEFAULT_API_URL,
   apiKey: '',
   modelId: DEFAULT_MODEL,
-  ttsVoices: { ...DEFAULT_TTS_VOICES }
+  /** @type {'local'|'cloud'} */
+  asrEngine: 'local',
+  asrApiUrl: DEFAULT_ASR_API_URL,
+  asrApiKey: '',
+  asrModelId: DEFAULT_ASR_MODEL,
+  ttsVoices: { ...DEFAULT_TTS_VOICES },
+  /** 語速百分比偏移 -50…100 */
+  ttsRate: 0,
+  /** @type {'qwen35translate'} */
+  localTranslateModel: 'qwen35translate',
+  /** 本地 LLM 是否使用 CUDA（需 NVIDIA ≥6GB） */
+  llmGpu: false
 }
 
 /** 固定本地 ASR 模型 key */
 export const ASR_MODEL_KEY = 'qwen3asr'
 
-/** 固定本地翻譯模型 key */
+/** 本地翻譯模型 key 白名單（linguaforge08 屏蔽中，修好後加回） */
+export const LLM_MODEL_KEYS = ['qwen35translate']
+
+/** @deprecated 請用 resolveTranslateModelKey(settings, modelsStatus)；保留常數供舊 e2e */
 export const TRANSLATE_MODEL_KEY = 'qwen35translate'
+
+const LLM_KEY_SET = new Set(LLM_MODEL_KEYS)
+
+/**
+ * @param {unknown} v
+ * @returns {'cloud'|'local'}
+ */
+function normalizeTranslator(v) {
+  return v === 'cloud' ? 'cloud' : 'local'
+}
+
+/**
+ * @param {unknown} v
+ * @returns {'local'|'cloud'}
+ */
+function normalizeAsrEngine(v) {
+  return v === 'cloud' ? 'cloud' : 'local'
+}
+
+/**
+ * @param {unknown} v
+ * @returns {number}
+ */
+function normalizeTtsRate(v) {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return 0
+  return Math.max(-50, Math.min(100, Math.round(n)))
+}
+
+/**
+ * @param {unknown} v
+ * @returns {'qwen35translate'}
+ */
+export function normalizeLocalTranslateModel(v) {
+  return LLM_KEY_SET.has(/** @type {string} */ (v)) ? /** @type {'qwen35translate'} */ (v) : 'qwen35translate'
+}
+
+/**
+ * 解析實際應檢查／使用的本地翻譯模型 key（選中未下載時 fallback 到已下載的 qwen）
+ * @param {{ localTranslateModel?: string }} settings
+ * @param {Record<string, { downloaded?: boolean }>|null|undefined} modelsMap
+ * @returns {string}
+ */
+export function resolveTranslateModelKey(settings, modelsMap) {
+  const preferred = normalizeLocalTranslateModel(settings?.localTranslateModel)
+  if (modelsMap?.[preferred]?.downloaded) return preferred
+  if (preferred !== 'qwen35translate' && modelsMap?.qwen35translate?.downloaded) {
+    return 'qwen35translate'
+  }
+  for (const k of LLM_MODEL_KEYS) {
+    if (modelsMap?.[k]?.downloaded) return k
+  }
+  return preferred
+}
 
 /**
  * 一次取得所有設定
@@ -102,43 +210,67 @@ export async function getSettings() {
       await electronAPI.store.get(key, def)
     ])
   )
-  return Object.fromEntries(entries)
+  const raw = Object.fromEntries(entries)
+  return {
+    ...raw,
+    translator: normalizeTranslator(raw.translator),
+    asrEngine: normalizeAsrEngine(raw.asrEngine),
+    ttsRate: normalizeTtsRate(raw.ttsRate),
+    ttsVoices: raw.ttsVoices || { ...DEFAULT_TTS_VOICES },
+    localTranslateModel: normalizeLocalTranslateModel(raw.localTranslateModel),
+    llmGpu: raw.llmGpu === true
+  }
 }
 
 // ===== DOM 元素 =====
 const navItems = document.querySelectorAll('.nav-tab')
 const pages = document.querySelectorAll('.page')
-const themeToggle = document.getElementById('themeToggle')
-const settingsBtn = document.getElementById('settingsBtn')
-const settingsPanel = document.getElementById('settingsPanel')
-const closeSettingsBtn = document.getElementById('closeSettingsBtn')
-const settingsOverlay = document.querySelector('.settings-overlay')
 const apiUrlInput = document.getElementById('apiUrlInput')
 const apiKeyInput = document.getElementById('apiKeyInput')
 const modelIdInput = document.getElementById('modelIdInput')
+const asrApiUrlInput = document.getElementById('asrApiUrlInput')
+const asrApiKeyInput = document.getElementById('asrApiKeyInput')
+const asrModelIdInput = document.getElementById('asrModelIdInput')
 const toggleApiKeyVisibility = document.getElementById('toggleApiKeyVisibility')
+const toggleAsrApiKeyVisibility = document.getElementById('toggleAsrApiKeyVisibility')
 const cloudApiSection = document.getElementById('cloudApiSection')
+const localLlmSection = document.getElementById('localLlmSection')
+const cloudAsrSection = document.getElementById('cloudAsrSection')
+const localAsrSection = document.getElementById('localAsrSection')
 const modelList = document.getElementById('modelList')
 const modelsPathText = document.getElementById('modelsPathText')
+const ttsRateInput = document.getElementById('ttsRateInput')
+const ttsRateLabel = document.getElementById('ttsRateLabel')
+const llmGpuHint = document.getElementById('llmGpuHint')
+const llmGpuBtn = document.getElementById('llmGpuBtn')
+const cudaEnvRow = document.getElementById('cudaEnvRow')
+const cudaEnvStatus = document.getElementById('cudaEnvStatus')
+const installCudaEnvBtn = document.getElementById('installCudaEnvBtn')
+const refreshGpuEnvBtn = document.getElementById('refreshGpuEnvBtn')
+const cudaInstallProgress = document.getElementById('cudaInstallProgress')
+const cudaInstallProgressFill = document.getElementById('cudaInstallProgressFill')
 const toast = document.getElementById('toast')
-const asrStatusText = document.getElementById('asrStatusText')
-const llmStatusText = document.getElementById('llmStatusText')
-const asrDownloadBtn = document.getElementById('asrDownloadBtn')
-const llmDownloadBtn = document.getElementById('llmDownloadBtn')
-const asrProgress = document.getElementById('asrProgress')
-const llmProgress = document.getElementById('llmProgress')
+
+/** @type {object | null} */
+let gpuCapability = null
+let cudaInstallInProgress = false
 
 // 分段選擇器目前的值
 const segmentValues = {
-  translatorSegment: 'none'
+  translatorSegment: 'local',
+  asrEngineSegment: 'local',
+  localTranslateModelSegment: 'qwen35translate',
+  llmGpuSegment: 'cpu',
+  themeSegment: 'dark'
 }
 
-// 最近一次模型狀態快取（供上方摘要按鈕使用）
+// 最近一次模型狀態快取
 let latestModels = {}
 
 // ===== 初始化 =====
 document.addEventListener('DOMContentLoaded', async () => {
   await initTheme()
+  initWindowControls()
   await initSettings()
   initNavigation()
   initTranscribe()
@@ -148,17 +280,60 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 // ===== 主題管理 =====
 
-async function initTheme() {
-  const savedTheme = await electronAPI.store.get('theme', 'dark')
-  document.documentElement.setAttribute('data-theme', savedTheme)
-  themeToggle.addEventListener('click', toggleTheme)
+/**
+ * @param {'dark'|'light'} theme
+ */
+function applyTheme(theme) {
+  const t = theme === 'light' ? 'light' : 'dark'
+  document.documentElement.setAttribute('data-theme', t)
+  segmentValues.themeSegment = t
+  setSegmentValue('themeSegment', t)
 }
 
-async function toggleTheme() {
-  const currentTheme = document.documentElement.getAttribute('data-theme')
-  const newTheme = currentTheme === 'dark' ? 'light' : 'dark'
-  document.documentElement.setAttribute('data-theme', newTheme)
-  await electronAPI.store.set('theme', newTheme)
+async function initTheme() {
+  const savedTheme = await electronAPI.store.get('theme', 'dark')
+  applyTheme(savedTheme === 'light' ? 'light' : 'dark')
+}
+
+/**
+ * 即時套用主題（設定頁 segmented）
+ * @param {string} value
+ */
+async function onThemeSegmentChange(value) {
+  const t = value === 'light' ? 'light' : 'dark'
+  applyTheme(t)
+  await electronAPI.store.set('theme', t)
+}
+
+// ===== 視窗控制（frameless）=====
+
+function initWindowControls() {
+  const win = electronAPI.window
+  if (!win) return
+
+  document.getElementById('winMin')?.addEventListener('click', () => win.minimize())
+  document.getElementById('winClose')?.addEventListener('click', () => win.close())
+
+  const maxBtn = document.getElementById('winMax')
+  const syncMax = (maximized) => {
+    document.body.classList.toggle('is-maximized', !!maximized)
+    if (maxBtn) {
+      maxBtn.textContent = maximized ? '❐' : '□'
+      maxBtn.setAttribute('aria-label', maximized ? '還原' : '最大化')
+      maxBtn.title = maximized ? '還原' : '最大化'
+    }
+  }
+  maxBtn?.addEventListener('click', async () => {
+    const m = await win.toggleMaximize()
+    syncMax(m)
+  })
+  win.isMaximized?.().then(syncMax).catch(() => {})
+  win.onMaximized?.(syncMax)
+
+  // 雙擊 drag spacer / brand 切換最大化
+  const toggleMax = () => maxBtn?.click()
+  document.querySelector('.header-drag-spacer')?.addEventListener('dblclick', toggleMax)
+  document.querySelector('.header-brand')?.addEventListener('dblclick', toggleMax)
 }
 
 // ===== 分頁導航 =====
@@ -169,7 +344,11 @@ function initNavigation() {
   })
 }
 
-function switchPage(pageName) {
+/**
+ * 切換主分頁
+ * @param {string} pageName
+ */
+export function switchPage(pageName) {
   navItems.forEach(item => {
     item.classList.toggle('active', item.dataset.page === pageName)
   })
@@ -179,43 +358,55 @@ function switchPage(pageName) {
   // 先啟動新頁 acquire，再 release 舊頁，避免中間 owner 歸零觸發 unload＋重付 warm
   if (pageName === 'live') prewarmEngine()
   if (pageName === 'translate') prewarmTranslatePage()
+  if (pageName === 'settings') {
+    loadSettingsForm()
+    refreshModels()
+  }
   if (pageName !== 'live') cooldownEngine()
   if (pageName !== 'translate') cooldownTranslatePage()
+}
+
+/** 供翻譯頁「前往設定」等呼叫 */
+export function openSettingsPage() {
+  switchPage('settings')
 }
 
 // ===== 設定管理 =====
 
 async function initSettings() {
-  const settings = await getSettings()
+  await loadSettingsForm()
 
-  apiUrlInput.value = settings.apiUrl
-  apiKeyInput.value = settings.apiKey
-  modelIdInput.value = settings.modelId
-  initSegment('translatorSegment', settings.translator)
-  updateCloudApiVisibility(settings.translator)
-  await populateTtsVoiceSelects()
-  applyTtsVoicesToForm(settings.ttsVoices || DEFAULT_TTS_VOICES)
+  if (toggleApiKeyVisibility) {
+    toggleApiKeyVisibility.addEventListener('click', () => {
+      const isPassword = apiKeyInput.type === 'password'
+      apiKeyInput.type = isPassword ? 'text' : 'password'
+      toggleApiKeyVisibility.textContent = isPassword ? '🙈' : '👁️'
+    })
+  }
+  if (toggleAsrApiKeyVisibility) {
+    toggleAsrApiKeyVisibility.addEventListener('click', () => {
+      const isPassword = asrApiKeyInput.type === 'password'
+      asrApiKeyInput.type = isPassword ? 'text' : 'password'
+      toggleAsrApiKeyVisibility.textContent = isPassword ? '🙈' : '👁️'
+    })
+  }
 
-  settingsBtn.addEventListener('click', openSettings)
-  closeSettingsBtn.addEventListener('click', closeSettings)
-  settingsOverlay.addEventListener('click', closeSettings)
+  if (ttsRateInput) {
+    ttsRateInput.addEventListener('input', () => {
+      updateTtsRateLabel(Number(ttsRateInput.value))
+    })
+  }
 
-  toggleApiKeyVisibility.addEventListener('click', () => {
-    const isPassword = apiKeyInput.type === 'password'
-    apiKeyInput.type = isPassword ? 'text' : 'password'
-    toggleApiKeyVisibility.textContent = isPassword ? '🙈' : '👁️'
-  })
+  document.getElementById('saveSettingsBtn')?.addEventListener('click', saveSettings)
 
-  document.getElementById('saveSettingsBtn').addEventListener('click', saveSettings)
-
-  asrDownloadBtn.addEventListener('click', () => handleStatusCardAction(ASR_MODEL_KEY))
-  llmDownloadBtn.addEventListener('click', () => handleStatusCardAction(TRANSLATE_MODEL_KEY))
+  installCudaEnvBtn?.addEventListener('click', () => onInstallCudaEnv())
+  refreshGpuEnvBtn?.addEventListener('click', () => refreshGpuCapabilityUi(true))
 
   // 模型管理
-  document.getElementById('openModelsFolderBtn').addEventListener('click', () => {
+  document.getElementById('openModelsFolderBtn')?.addEventListener('click', () => {
     electronAPI.models.openFolder()
   })
-  modelsPathText.addEventListener('click', () => electronAPI.models.openFolder())
+  modelsPathText?.addEventListener('click', () => electronAPI.models.openFolder())
   electronAPI.models.onProgress(onModelProgress)
   await refreshModels()
 }
@@ -279,10 +470,23 @@ function readTtsVoicesFromForm() {
 }
 
 /**
- * 初始化分段選擇器
+ * @param {number} rate
  */
-function initSegment(id, value) {
+function updateTtsRateLabel(rate) {
+  if (!ttsRateLabel) return
+  const mult = 1 + normalizeTtsRate(rate) / 100
+  ttsRateLabel.textContent = `${mult.toFixed(2)}×`
+}
+
+/**
+ * 初始化分段選擇器（只綁一次）
+ * @param {string} id
+ * @param {string} value
+ * @param {(v: string) => void} [onChange]
+ */
+function initSegment(id, value, onChange) {
   const segment = document.getElementById(id)
+  if (!segment) return
   segmentValues[id] = value
   const buttons = segment.querySelectorAll('.seg-btn')
   buttons.forEach(btn => {
@@ -290,72 +494,250 @@ function initSegment(id, value) {
     btn.addEventListener('click', () => {
       segmentValues[id] = btn.dataset.value
       buttons.forEach(b => b.classList.toggle('active', b === btn))
-      if (id === 'translatorSegment') {
-        updateCloudApiVisibility(btn.dataset.value)
-      }
+      onChange?.(btn.dataset.value)
     })
   })
 }
 
 /**
- * 翻譯選「雲端 LLM」才展開雲端 API 設定
- * @param {string} translator
+ * 只更新 active，不重複綁事件
+ * @param {string} id
+ * @param {string} value
  */
-function updateCloudApiVisibility(translator) {
-  cloudApiSection.classList.toggle('hidden', translator !== 'cloud')
+function setSegmentValue(id, value) {
+  segmentValues[id] = value
+  const segment = document.getElementById(id)
+  if (!segment) return
+  segment.querySelectorAll('.seg-btn').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.value === value)
+  })
 }
 
 /**
- * 從 store 重灌設定表單（開啟面板時呼叫，丟棄未儲存的髒狀態）
+ * @param {string} translator
+ */
+function updateTranslatorPanels(translator) {
+  const isCloud = translator === 'cloud'
+  cloudApiSection?.classList.toggle('hidden', !isCloud)
+  localLlmSection?.classList.toggle('hidden', isCloud)
+}
+
+/**
+ * @param {string} asrEngine
+ */
+function updateAsrPanels(asrEngine) {
+  const isCloud = asrEngine === 'cloud'
+  cloudAsrSection?.classList.toggle('hidden', !isCloud)
+  localAsrSection?.classList.toggle('hidden', isCloud)
+}
+
+/**
+ * 更新 GPU 選項可用性、CUDA 環境列與提示
+ * @param {boolean} [forceRefresh]
+ */
+async function refreshGpuCapabilityUi(forceRefresh = false) {
+  try {
+    gpuCapability = forceRefresh
+      ? await electronAPI.system.refreshGpuCapability()
+      : await electronAPI.system.gpuCapability()
+  } catch {
+    gpuCapability = {
+      ok: false,
+      name: '',
+      vramMiB: 0,
+      reason: '無法偵測 GPU',
+      hasCudaRuntime: false,
+      canInstallCuda: false,
+      backends: []
+    }
+  }
+  const ok = !!gpuCapability?.ok
+  const hasCuda = !!gpuCapability?.hasCudaRuntime
+  const hasVulkan = !!gpuCapability?.hasVulkan
+  const backends = Array.isArray(gpuCapability?.backends) ? gpuCapability.backends : []
+
+  if (llmGpuBtn) {
+    llmGpuBtn.disabled = !ok
+    llmGpuBtn.classList.toggle('disabled', !ok)
+    llmGpuBtn.title = ok
+      ? `${gpuCapability.name}（${gpuCapability.vramMiB} MiB）· ${backends.join('/') || '—'}`
+      : (gpuCapability?.reason || 'GPU 不可用')
+  }
+  if (llmGpuHint) {
+    if (ok) {
+      const be = backends.filter((b) => b !== 'cpu-fallback').join(' / ') || '將自動選擇'
+      llmGpuHint.textContent = `可用：${gpuCapability.name}，${gpuCapability.vramMiB} MiB。後端優先：${be}（僅本地翻譯；ASR 仍為 CPU）。`
+    } else {
+      llmGpuHint.textContent = gpuCapability?.reason
+        ? `${gpuCapability.reason}。將使用 CPU 推論。`
+        : '未達 GPU 門檻（需 NVIDIA 且 VRAM ≥ 6GB）。'
+    }
+  }
+
+  // CUDA 環境列：有 NVIDIA 夠 VRAM 就顯示
+  const showCudaRow = ok || !!gpuCapability?.canInstallCuda || !!gpuCapability?.hasNvidiaDriver
+  cudaEnvRow?.classList.toggle('hidden', !showCudaRow)
+  if (cudaEnvStatus) {
+    if (cudaInstallInProgress) {
+      // 進度文案由 onProgress 更新
+    } else if (hasCuda) {
+      cudaEnvStatus.textContent = 'CUDA Runtime：已就緒（可走 CUDA 加速）'
+    } else if (ok && hasVulkan) {
+      cudaEnvStatus.textContent =
+        'CUDA Runtime：未安裝（目前可用 Vulkan）。點「安裝 CUDA 環境」可啟用 CUDA。'
+    } else if (ok) {
+      cudaEnvStatus.textContent = 'CUDA Runtime：未安裝。建議安裝以獲得最佳 GPU 效能。'
+    } else {
+      cudaEnvStatus.textContent = gpuCapability?.reason || '無法使用 GPU'
+    }
+  }
+  if (installCudaEnvBtn) {
+    installCudaEnvBtn.disabled = cudaInstallInProgress || hasCuda || !gpuCapability?.canInstallCuda
+    installCudaEnvBtn.textContent = hasCuda ? 'CUDA 已就緒' : '安裝 CUDA 環境'
+  }
+
+  if (!ok && segmentValues.llmGpuSegment === 'gpu') {
+    setSegmentValue('llmGpuSegment', 'cpu')
+  }
+}
+
+/**
+ * 一鍵安裝 CUDA Toolkit／Runtime
+ */
+async function onInstallCudaEnv() {
+  if (cudaInstallInProgress) return
+  if (!electronAPI.system?.installCudaEnv) {
+    showToast('目前環境不支援自動安裝', 'error')
+    return
+  }
+  cudaInstallInProgress = true
+  if (installCudaEnvBtn) installCudaEnvBtn.disabled = true
+  cudaInstallProgress?.classList.remove('hidden')
+  if (cudaInstallProgressFill) cudaInstallProgressFill.style.width = '5%'
+  if (cudaEnvStatus) cudaEnvStatus.textContent = '準備安裝…將跳出系統管理員確認（UAC）'
+
+  const unsub = electronAPI.system.onCudaInstallProgress?.((p) => {
+    if (cudaEnvStatus && p?.message) cudaEnvStatus.textContent = p.message
+    if (cudaInstallProgressFill && typeof p?.percent === 'number') {
+      cudaInstallProgressFill.style.width = `${Math.max(0, Math.min(100, p.percent))}%`
+    }
+  })
+
+  try {
+    const result = await electronAPI.system.installCudaEnv()
+    if (result?.capability) gpuCapability = result.capability
+    await refreshGpuCapabilityUi(true)
+    if (result?.ok) {
+      showToast(result.message || 'CUDA 環境已安裝')
+    } else {
+      showToast(result?.message || '安裝失敗', 'error')
+      // 提供官網後備
+      if (result?.message && /手動|失敗|代碼/.test(result.message)) {
+        /* 使用者可再點官網；此處不強制開瀏覽器 */
+      }
+    }
+  } catch (e) {
+    showToast(`安裝失敗：${cleanIpcError(e)}`, 'error')
+  } finally {
+    cudaInstallInProgress = false
+    if (typeof unsub === 'function') unsub()
+    cudaInstallProgress?.classList.add('hidden')
+    if (cudaInstallProgressFill) cudaInstallProgressFill.style.width = '0%'
+    await refreshGpuCapabilityUi(true)
+  }
+}
+
+let segmentsInited = false
+
+/**
+ * 從 store 重灌設定表單
  */
 async function loadSettingsForm() {
   const settings = await getSettings()
-  apiUrlInput.value = settings.apiUrl
-  apiKeyInput.value = settings.apiKey
-  modelIdInput.value = settings.modelId
-  // 重設 translator 分段（不重複綁 click：只更新 active 樣式與值）
-  segmentValues.translatorSegment = settings.translator
-  const segment = document.getElementById('translatorSegment')
-  segment.querySelectorAll('.seg-btn').forEach((btn) => {
-    btn.classList.toggle('active', btn.dataset.value === settings.translator)
-  })
-  updateCloudApiVisibility(settings.translator)
+
+  if (apiUrlInput) apiUrlInput.value = settings.apiUrl || DEFAULT_API_URL
+  if (apiKeyInput) apiKeyInput.value = settings.apiKey || ''
+  if (modelIdInput) modelIdInput.value = settings.modelId || DEFAULT_MODEL
+  if (asrApiUrlInput) asrApiUrlInput.value = settings.asrApiUrl || DEFAULT_ASR_API_URL
+  if (asrApiKeyInput) asrApiKeyInput.value = settings.asrApiKey || ''
+  if (asrModelIdInput) asrModelIdInput.value = settings.asrModelId || DEFAULT_ASR_MODEL
+
+  const llmGpuSeg = settings.llmGpu ? 'gpu' : 'cpu'
+  const theme = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark'
+
+  if (!segmentsInited) {
+    initSegment('translatorSegment', settings.translator, updateTranslatorPanels)
+    initSegment('asrEngineSegment', settings.asrEngine, updateAsrPanels)
+    initSegment('localTranslateModelSegment', settings.localTranslateModel)
+    initSegment('llmGpuSegment', llmGpuSeg)
+    initSegment('themeSegment', theme, onThemeSegmentChange)
+    segmentsInited = true
+  } else {
+    setSegmentValue('translatorSegment', settings.translator)
+    setSegmentValue('asrEngineSegment', settings.asrEngine)
+    setSegmentValue('localTranslateModelSegment', settings.localTranslateModel)
+    setSegmentValue('llmGpuSegment', llmGpuSeg)
+    setSegmentValue('themeSegment', theme)
+  }
+  updateTranslatorPanels(settings.translator)
+  updateAsrPanels(settings.asrEngine)
+  await refreshGpuCapabilityUi()
+
+  if (ttsRateInput) {
+    ttsRateInput.value = String(settings.ttsRate)
+    updateTtsRateLabel(settings.ttsRate)
+  }
+
   if (!ttsVoiceCatalog?.voicesByLang || !Object.keys(ttsVoiceCatalog.voicesByLang).length) {
     await populateTtsVoiceSelects()
   }
   applyTtsVoicesToForm(settings.ttsVoices || DEFAULT_TTS_VOICES)
 }
 
-function openSettings() {
-  settingsPanel.classList.remove('hidden')
-  loadSettingsForm()
-  refreshModels()
-}
-
-function closeSettings() {
-  settingsPanel.classList.add('hidden')
-}
-
 async function saveSettings() {
-  const translator = segmentValues.translatorSegment
-  const apiKey = apiKeyInput.value.trim()
+  const translator = normalizeTranslator(segmentValues.translatorSegment)
+  const asrEngine = normalizeAsrEngine(segmentValues.asrEngineSegment)
+  const localTranslateModel = normalizeLocalTranslateModel(segmentValues.localTranslateModelSegment)
+  let llmGpu = segmentValues.llmGpuSegment === 'gpu'
+  const apiKey = (apiKeyInput?.value || '').trim()
+  const asrApiKey = (asrApiKeyInput?.value || '').trim()
 
   if (translator === 'cloud' && !apiKey) {
     showToast('雲端翻譯需要 API Key', 'error')
     return
   }
+  if (asrEngine === 'cloud' && !asrApiKey) {
+    showToast('雲端語音轉文字需要 API Key', 'error')
+    return
+  }
+  if (llmGpu) {
+    if (!gpuCapability) await refreshGpuCapabilityUi()
+    if (!gpuCapability?.ok) {
+      showToast(gpuCapability?.reason || '此裝置無法使用 GPU 推論', 'error')
+      llmGpu = false
+      setSegmentValue('llmGpuSegment', 'cpu')
+    }
+  }
+
+  const ttsRate = normalizeTtsRate(ttsRateInput ? Number(ttsRateInput.value) : 0)
 
   await Promise.all([
     electronAPI.store.set('translator', translator),
-    electronAPI.store.set('apiUrl', apiUrlInput.value.trim() || DEFAULT_API_URL),
+    electronAPI.store.set('apiUrl', (apiUrlInput?.value || '').trim() || DEFAULT_API_URL),
     electronAPI.store.set('apiKey', apiKey),
-    electronAPI.store.set('modelId', modelIdInput.value.trim() || DEFAULT_MODEL),
-    electronAPI.store.set('ttsVoices', readTtsVoicesFromForm())
+    electronAPI.store.set('modelId', (modelIdInput?.value || '').trim() || DEFAULT_MODEL),
+    electronAPI.store.set('asrEngine', asrEngine),
+    electronAPI.store.set('asrApiUrl', (asrApiUrlInput?.value || '').trim() || DEFAULT_ASR_API_URL),
+    electronAPI.store.set('asrApiKey', asrApiKey),
+    electronAPI.store.set('asrModelId', (asrModelIdInput?.value || '').trim() || DEFAULT_ASR_MODEL),
+    electronAPI.store.set('ttsVoices', readTtsVoicesFromForm()),
+    electronAPI.store.set('ttsRate', ttsRate),
+    electronAPI.store.set('localTranslateModel', localTranslateModel),
+    electronAPI.store.set('llmGpu', llmGpu)
   ])
 
-  closeSettings()
   document.dispatchEvent(new CustomEvent('settings-changed'))
-  showToast('設定已儲存') // 中性提示（非綠色）：讓「儲存」這個明確動作有回饋
+  showToast('設定已儲存')
 }
 
 // ===== 模型管理 UI =====
@@ -366,96 +748,16 @@ function formatBytes(bytes) {
 }
 
 async function refreshModels() {
+  if (!modelList || !modelsPathText) return
   const status = await electronAPI.models.status()
   latestModels = status.models || {}
   modelsPathText.textContent = status.root
   modelsPathText.title = status.root
 
-  updateStatusCards(latestModels)
-
   modelList.innerHTML = ''
   for (const model of Object.values(latestModels)) {
     modelList.appendChild(renderModelItem(model))
   }
-}
-
-/**
- * 更新上方 ASR / 翻譯狀態卡
- * @param {Record<string, object>} models
- */
-function updateStatusCards(models) {
-  updateOneStatusCard(
-    models[ASR_MODEL_KEY],
-    asrStatusText,
-    asrDownloadBtn,
-    asrProgress
-  )
-  updateOneStatusCard(
-    models[TRANSLATE_MODEL_KEY],
-    llmStatusText,
-    llmDownloadBtn,
-    llmProgress
-  )
-}
-
-/**
- * 更新單一狀態卡的文字、按鈕與進度條
- */
-function updateOneStatusCard(model, statusEl, btn, progressEl) {
-  if (!model) {
-    statusEl.textContent = '狀態未知'
-    statusEl.className = 'engine-status-meta'
-    btn.textContent = '重新整理'
-    btn.className = 'btn btn-secondary btn-sm engine-status-btn'
-    btn.disabled = false
-    progressEl.classList.add('hidden')
-    return
-  }
-
-  const size = formatBytes(model.totalBytes)
-  if (model.downloading) {
-    statusEl.textContent = `${size} · 下載中…`
-    statusEl.className = 'engine-status-meta is-busy'
-    btn.textContent = '取消'
-    btn.className = 'btn btn-secondary btn-sm engine-status-btn'
-    btn.disabled = false
-    progressEl.classList.remove('hidden')
-  } else if (model.downloaded) {
-    statusEl.textContent = `${size} · 已下載`
-    statusEl.className = 'engine-status-meta is-ready'
-    btn.textContent = '已就緒'
-    btn.className = 'btn btn-secondary btn-sm engine-status-btn'
-    btn.disabled = true
-    progressEl.classList.add('hidden')
-    progressEl.querySelector('.model-progress-fill').style.width = '0%'
-  } else {
-    statusEl.textContent = `${size} · 未下載`
-    statusEl.className = 'engine-status-meta'
-    btn.textContent = '下載'
-    btn.className = 'btn btn-primary btn-sm engine-status-btn'
-    btn.disabled = false
-    progressEl.classList.add('hidden')
-    progressEl.querySelector('.model-progress-fill').style.width = '0%'
-  }
-}
-
-/**
- * 上方狀態卡按鈕：下載／取消
- * @param {string} key
- */
-async function handleStatusCardAction(key) {
-  const model = latestModels[key]
-  if (!model) {
-    await refreshModels()
-    return
-  }
-  if (model.downloading) {
-    await electronAPI.models.cancel(key)
-    await refreshModels()
-    return
-  }
-  if (model.downloaded) return
-  await startDownload(model)
 }
 
 function renderModelItem(model) {
@@ -532,7 +834,7 @@ async function refreshModelsAfter(fn) {
 }
 
 /**
- * 下載進度：同步更新下方列表與上方狀態卡
+ * 下載進度
  */
 function onModelProgress({ key, receivedBytes, totalBytes }) {
   const percent = totalBytes > 0
@@ -540,7 +842,7 @@ function onModelProgress({ key, receivedBytes, totalBytes }) {
     : 0
   const text = `${formatBytes(receivedBytes)} / ${formatBytes(totalBytes)} (${percent.toFixed(0)}%)`
 
-  const item = modelList.querySelector(`.model-item[data-key="${key}"]`)
+  const item = modelList?.querySelector(`.model-item[data-key="${key}"]`)
   if (item) {
     const progress = item.querySelector('.model-progress')
     progress.classList.remove('hidden')
@@ -548,25 +850,6 @@ function onModelProgress({ key, receivedBytes, totalBytes }) {
     item.querySelector('.model-size').textContent = text
   }
 
-  if (key === ASR_MODEL_KEY) {
-    asrStatusText.textContent = text
-    asrStatusText.className = 'engine-status-meta is-busy'
-    asrProgress.classList.remove('hidden')
-    asrProgress.querySelector('.model-progress-fill').style.width = percent + '%'
-    asrDownloadBtn.textContent = '取消'
-    asrDownloadBtn.className = 'btn btn-secondary btn-sm engine-status-btn'
-    asrDownloadBtn.disabled = false
-  } else if (key === TRANSLATE_MODEL_KEY) {
-    llmStatusText.textContent = text
-    llmStatusText.className = 'engine-status-meta is-busy'
-    llmProgress.classList.remove('hidden')
-    llmProgress.querySelector('.model-progress-fill').style.width = percent + '%'
-    llmDownloadBtn.textContent = '取消'
-    llmDownloadBtn.className = 'btn btn-secondary btn-sm engine-status-btn'
-    llmDownloadBtn.disabled = false
-  }
-
-  // 更新快取，讓取消按鈕可立刻生效
   if (latestModels[key]) {
     latestModels[key] = { ...latestModels[key], downloading: true }
   }

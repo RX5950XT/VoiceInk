@@ -1,5 +1,57 @@
 # VoiceInk — 任務追蹤
 
+## 2026-07-27 — v1.6.0：屏蔽 LinguaForge + 翻譯不限字數
+
+- [x] LinguaForge 屏蔽：registry `hidden:true`、白名單只留 qwen、預設／normalize 全改 qwen
+- [x] 設定頁「模型設定」不列 LinguaForge；「翻譯模型」整組隱藏（僅剩單一選項）
+- [x] 翻譯頁移除 `maxlength=1500`：`splitForTranslate` 分 ≤600 字段落依序翻譯
+- [x] 進度 `(i/n)`＋逐段填入譯文；翻譯中可按「停止」
+- [x] 修 `translateCloud` 少傳 modelKey 給 `buildSystemPrompt`（雲端 prompt 曾變成「翻譯成 file」）
+- [x] e2e：CDP smoke 13/13、e2e-local-translate-settings ALL PASS、e2e-llm-device ALL PASS
+- [x] 版本 1.6.0、`electron:build` 安裝檔、GitHub Release
+
+### Review
+- 分段上限 600 綁定本地 `contextSize: 2048`（prompt＋輸出共用）；要放大得先調 contextSize 並重測記憶體
+- main `MAX_TRANSLATE_CHARS=1500` 刻意保留為 IPC 信任邊界，不隨 UI 解除
+- 停止只中斷 renderer 迴圈，已送出的那一段仍會在 main 跑完（serial chain，無法安全 abort）
+- CDP e2e 教訓：單次 `awaitPromise` 等數十秒會讓連線閒置斷開、node 靜默 exit 0 → 改 Node 端輪詢
+
+## 2026-07-26b — CUDA 環境安裝 + 自動安裝 UI
+
+- [x] winget 安裝 Nvidia.CUDA 13.3；驗證 cudart/cublas + getLlama cuda
+- [x] `cuda-env.js` 偵測／winget／官方 installer／PATH 注入
+- [x] 設定頁：安裝 CUDA 環境 + 重新偵測 + 進度
+- [x] e2e GPU backend=cuda；`electron:pack`
+
+## 2026-07-26 — frameless + LinguaForge + 雙模型 + GPU
+
+- [x] 主窗 frameless：標題列合併 header、min/max/close、標題 VoiceInk
+- [x] 主題鈕移設定「外觀」
+- [x] 模型 registry `linguaforge08` Q4；本地翻譯可選兩模型
+- [x] `localTranslateModel` / `llmGpu` allowlist；未下載 fallback qwen
+- [x] GPU：NVIDIA≥6GB；cuda→vulkan→CPU；e2e-llm-device
+- [x] pack 納入 win-x64-cuda；`electron:pack`
+
+### Review
+- 對抗式審查：預設不硬切壞舊用戶；dispose llama 在 Windows/Vulkan 易 AV → 只卸 session/context/model
+- 本機 CUDA prebuilt 不相容、Vulkan 可用；GPU 後端顯示為 vulkan
+- 擷取中鎖定模型/GPU 控件未做硬鎖（存檔後下次 warm 生效）
+
+## 2026-07-24 — 設定第四分頁 + 雲端 ASR + 語速
+
+- [x] 設定改為導航第四 tab，移除彈窗
+- [x] 四區塊：模型（合併狀態+管理）／翻譯（雲端|本地）／語音轉文字（本地|雲端）／語音（+語速）
+- [x] 移除翻譯「不翻譯」；舊 none→local；即時 auto 語言不譯
+- [x] 雲端 ASR：`cloud-asr.js` + 即時 samples→WAV；檔案 mp3 segment
+- [x] 翻譯／ASR 雲端憑證分開；store allowlist
+- [x] TTS `ttsRate` → Edge TTS rate
+- [x] 文件 + `electron:pack` + CDP smoke 更新
+
+### Review
+- 設定頁為一般 `.page` 捲動；segment 雙組 translator/asrEngine
+- IPC `localAsr:transcribe(File)` 依 store `asrEngine` 分流，renderer 介面不變
+- 雲端檔案依賴 ffmpeg `libmp3lame` segment；上游約 60s timeout 故 50s 切段
+
 ## v1.2.0（2026-07-17）
 
 - [x] 本地 ASR only：移除雲端轉錄、FireRed；固定 Qwen3-ASR-0.6B

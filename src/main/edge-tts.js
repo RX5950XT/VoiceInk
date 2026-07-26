@@ -95,12 +95,46 @@ function splitChunks(text, maxLen = MAX_CHUNK_CHARS) {
 }
 
 /**
+ * 語速百分比偏移 → Edge TTS rate 字串
+ * @param {unknown} raw
+ * @returns {string} 如 'default'、'+20%'、'-30%'
+ */
+function formatTtsRate(raw) {
+  const n = Number(raw)
+  if (!Number.isFinite(n) || n === 0) return 'default'
+  const clamped = Math.max(-50, Math.min(100, Math.round(n)))
+  if (clamped === 0) return 'default'
+  return clamped > 0 ? `+${clamped}%` : `${clamped}%`
+}
+
+/**
+ * 從 store 解析並正規化 ttsRate（-50…100）
+ * @param {import('electron-store').default | null} store
+ * @returns {number}
+ */
+function resolveTtsRate(store) {
+  if (!store) return 0
+  return sanitizeTtsRate(store.get('ttsRate', 0))
+}
+
+/**
+ * @param {unknown} val
+ * @returns {number}
+ */
+function sanitizeTtsRate(val) {
+  const n = Number(val)
+  if (!Number.isFinite(n)) return 0
+  return Math.max(-50, Math.min(100, Math.round(n)))
+}
+
+/**
  * 單塊合成 → Uint8Array
  * @param {string} text
  * @param {string} voice
+ * @param {string} [rate] Edge rate 字串
  * @returns {Promise<Uint8Array>}
  */
-async function synthesizeChunk(text, voice) {
+async function synthesizeChunk(text, voice, rate = 'default') {
   const trimmed = (text || '').trim()
   if (!trimmed) {
     const e = new Error('EMPTY')
@@ -126,6 +160,7 @@ async function synthesizeChunk(text, voice) {
     voice,
     lang: locale || langToEdgeLocale(voice.slice(0, 2)),
     outputFormat: 'audio-24khz-48kbitrate-mono-mp3',
+    rate: rate || 'default',
     timeout: TTS_TIMEOUT_MS
   })
 
@@ -155,7 +190,7 @@ async function synthesizeChunk(text, voice) {
  * 合成（可切塊；回傳第一塊 + 剩餘 chunks 元資料由 renderer 再請求）
  * MVP：一次 IPC 只合成「指定 chunk 索引」或整段（自動取第一塊）
  *
- * @param {{ text: string, voice: string, chunkIndex?: number }} req
+ * @param {{ text: string, voice: string, chunkIndex?: number, rate?: string }} req
  * @returns {Promise<{ mime: string, data: Uint8Array, chunkIndex: number, totalChunks: number, gen: number }>}
  */
 async function synthesize(req) {
@@ -174,11 +209,12 @@ async function synthesize(req) {
     throw new Error('無效的語音設定')
   }
 
+  const rate = typeof req?.rate === 'string' && req.rate ? req.rate : 'default'
   const chunks = splitChunks(text)
   const idx = Math.max(0, Math.min(chunks.length - 1, Number(req.chunkIndex) || 0))
   const myGen = ++ttsGen
 
-  const data = await synthesizeChunk(chunks[idx], voice)
+  const data = await synthesizeChunk(chunks[idx], voice, rate)
   if (myGen !== ttsGen) {
     const e = new Error('語音請求已取消')
     // @ts-ignore
@@ -222,6 +258,9 @@ module.exports = {
   synthesizeChunk,
   splitChunks,
   resolveVoice,
+  resolveTtsRate,
+  formatTtsRate,
+  sanitizeTtsRate,
   cancelAll,
   listVoices,
   sanitizeTtsVoices,

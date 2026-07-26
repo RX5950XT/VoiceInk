@@ -1,14 +1,19 @@
 /**
  * VoiceInk - 長檔案串流轉錄（Main Process）
  *
- * 用 ffmpeg 將音訊轉成 16k mono f32le 串流，每 28 秒切一段送 sherpa-onnx。
+ * 本地：ffmpeg → 16k mono f32le 串流，每 28 秒切一段送 sherpa-onnx。
+ * 雲端：ffmpeg segment → mp3 片段送 OpenRouter 相容 /audio/transcriptions。
  * 不把整檔解碼進 RAM，可穩定支援 ≥2 小時、≥100MB（上限見常數）。
  */
 
 const fs = require('fs')
+const fsp = require('fs/promises')
 const path = require('path')
+const os = require('os')
 const { spawn } = require('child_process')
+const { randomBytes } = require('crypto')
 const localAsr = require('./local-asr')
+const cloudAsr = require('./cloud-asr')
 
 /** 原始檔案上限（≥100MB 需求；留 200MB 餘裕） */
 const MAX_FILE_BYTES = 200 * 1024 * 1024
@@ -16,6 +21,8 @@ const MAX_FILE_BYTES = 200 * 1024 * 1024
 const MAX_DURATION_SEC = 4 * 60 * 60
 const MIN_GUARANTEED_DURATION_SEC = 2 * 60 * 60
 const CHUNK_SECONDS = 28
+/** 雲端 STT 片段秒數（避開上游 ~60s timeout） */
+const CLOUD_CHUNK_SECONDS = 50
 const SAMPLE_RATE = 16000
 const CHUNK_SAMPLES = CHUNK_SECONDS * SAMPLE_RATE
 const BYTES_PER_SAMPLE = 4
@@ -382,13 +389,222 @@ function formatDuration(sec) {
   return `${r} 秒`
 }
 
+/**
+ * 執行 ffmpeg 並等待結束
+ * @param {string} bin
+ * @param {string[]} args
+ * @param {{ onStderr?: (s: string) => void, killRef?: { child: import('child_process').ChildProcess|null } }} [opts]
+ * @returns {Promise<{ code: number|null, signal: string|null, stderr: string }>}
+ */
+function runFfmpeg(bin, args, opts = {}) {
+  return new Promise((resolve, reject) => {
+    let stderr = ''
+    let child
+    try {
+      child = spawn(bin, args, {
+        windowsHide: true,
+        stdio: ['ignore', 'ignore', 'pipe']
+      })
+    } catch (e) {
+      reject(e)
+      return
+    }
+    if (opts.killRef) opts.killRef.child = child
+    child.stderr.on('data', (buf) => {
+      const s = buf.toString('utf8')
+      stderr = (stderr + s).slice(-12000)
+      opts.onStderr?.(s)
+    })
+    child.on('error', (e) => reject(new Error(`無法啟動 ffmpeg: ${e.message || e}`)))
+    child.on('close', (code, signal) => {
+      if (opts.killRef) opts.killRef.child = null
+      resolve({ code, signal, stderr })
+    })
+  })
+}
+
+/**
+ * 雲端：ffmpeg 切成 mp3 段 → 逐段 transcriptions
+ * @param {{ filePath: string, lang: string, store: object }} req
+ * @param {(p: object) => void} [onProgress]
+ * @returns {Promise<{ text: string, durationSec: number|null, chunks: number }>}
+ */
+async function transcribeFileCloud(req, onProgress) {
+  const filePath = req?.filePath
+  const lang = req?.lang || 'zh-TW'
+  const store = req?.store
+  if (!store) throw new Error('雲端轉錄需要設定儲存')
+
+  const { size } = validateFilePath(filePath)
+  const resolved = path.resolve(filePath)
+
+  cancel()
+  const gen = ++jobGen
+  let killed = false
+  /** @type {{ child: import('child_process').ChildProcess|null }} */
+  const killRef = { child: null }
+
+  const kill = () => {
+    killed = true
+    if (killRef.child && !killRef.child.killed) {
+      try {
+        killRef.child.kill('SIGKILL')
+      } catch {
+        try { killRef.child.kill() } catch { /* ignore */ }
+      }
+    }
+  }
+  activeJob = { kill, gen }
+
+  const report = (percent, text, extra = {}) => {
+    if (killed || gen !== jobGen) return
+    try {
+      onProgress?.({
+        percent: Math.max(0, Math.min(99, Math.round(percent))),
+        text,
+        ...extra
+      })
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const tmpRoot = path.join(
+    os.tmpdir(),
+    `voiceink-cloud-asr-${process.pid}-${randomBytes(6).toString('hex')}`
+  )
+  await fsp.mkdir(tmpRoot, { recursive: true })
+  const pattern = path.join(tmpRoot, 'seg_%03d.mp3')
+
+  try {
+    report(3, '準備切割音訊（雲端）…')
+    const ffmpegBin = resolveFfmpegPath()
+
+    // 先 probe 時長
+    let durationSec = null
+    const probe = await runFfmpeg(
+      ffmpegBin,
+      ['-hide_banner', '-i', resolved, '-f', 'null', '-'],
+      {
+        killRef,
+        onStderr: (s) => {
+          if (durationSec == null) {
+            const d = parseDurationSec(s)
+            if (d != null && Number.isFinite(d) && d > 0) durationSec = d
+          }
+        }
+      }
+    )
+    if (killed || gen !== jobGen) throw new Error('轉錄已取消')
+    // probe 常以 non-zero 結束（無輸出），仍可能已解析 Duration
+    if (durationSec == null) {
+      const d = parseDurationSec(probe.stderr)
+      if (d != null && Number.isFinite(d) && d > 0) durationSec = d
+    }
+    if (durationSec != null && durationSec > MAX_DURATION_SEC) {
+      throw new Error(
+        `音訊過長（${formatDuration(durationSec)}），上限 ${formatDuration(MAX_DURATION_SEC)}`
+      )
+    }
+
+    report(8, durationSec != null
+      ? `音訊長度 ${formatDuration(durationSec)}，切割中…`
+      : '切割音訊中…', { durationSec: durationSec ?? undefined })
+
+    const segArgs = [
+      '-hide_banner',
+      '-nostdin',
+      '-i', resolved,
+      '-vn',
+      '-sn',
+      '-dn',
+      '-ac', '1',
+      '-ar', '16000',
+      '-c:a', 'libmp3lame',
+      '-b:a', '64k',
+      '-f', 'segment',
+      '-segment_time', String(CLOUD_CHUNK_SECONDS),
+      '-reset_timestamps', '1',
+      pattern
+    ]
+    const seg = await runFfmpeg(ffmpegBin, segArgs, { killRef })
+    if (killed || gen !== jobGen) throw new Error('轉錄已取消')
+    if (seg.code && seg.code !== 0) {
+      const hint = seg.stderr.trim().split('\n').slice(-3).join(' ')
+      throw new Error(`音訊切割失敗${hint ? `：${hint}` : `（ffmpeg exit ${seg.code}）`}`)
+    }
+
+    const files = (await fsp.readdir(tmpRoot))
+      .filter((n) => /^seg_\d+\.mp3$/i.test(n))
+      .sort()
+    if (files.length === 0) {
+      throw new Error('音訊切割後沒有可用片段')
+    }
+
+    const parts = []
+    for (let i = 0; i < files.length; i++) {
+      if (killed || gen !== jobGen) throw new Error('轉錄已取消')
+      const fp = path.join(tmpRoot, files[i])
+      const buf = await fsp.readFile(fp)
+      report(
+        10 + ((i + 0.5) / files.length) * 80,
+        `雲端轉錄中… (${i + 1}/${files.length})`,
+        {
+          chunk: i + 1,
+          totalChunks: files.length,
+          durationSec: durationSec ?? undefined
+        }
+      )
+      let text = ''
+      try {
+        text = await cloudAsr.transcribeEncoded(
+          { buffer: buf, format: 'mp3', language: lang },
+          store
+        )
+      } catch (e) {
+        throw e instanceof Error ? e : new Error(String(e))
+      }
+      if (text) parts.push(text)
+      report(
+        10 + ((i + 1) / files.length) * 80,
+        `雲端轉錄中… (${i + 1}/${files.length})`,
+        {
+          chunk: i + 1,
+          totalChunks: files.length,
+          durationSec: durationSec ?? undefined
+        }
+      )
+    }
+
+    const text = parts.join('\n')
+    report(95, '轉錄完成', {
+      chunk: files.length,
+      durationSec: durationSec ?? undefined
+    })
+    if (activeJob && activeJob.gen === gen) activeJob = null
+    return {
+      text,
+      durationSec,
+      chunks: files.length,
+      fileBytes: size
+    }
+  } catch (e) {
+    if (activeJob && activeJob.gen === gen) activeJob = null
+    throw e
+  } finally {
+    fsp.rm(tmpRoot, { recursive: true, force: true }).catch(() => {})
+  }
+}
+
 module.exports = {
   transcribeFile,
+  transcribeFileCloud,
   cancel,
   MAX_FILE_BYTES,
   MAX_DURATION_SEC,
   MIN_GUARANTEED_DURATION_SEC,
   CHUNK_SECONDS,
+  CLOUD_CHUNK_SECONDS,
   SUPPORTED_EXT,
   resolveFfmpegPath,
   validateFilePath,

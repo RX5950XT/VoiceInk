@@ -143,18 +143,42 @@ async function main() {
     )
     ok('live page no display-mode segment', noSeg === true)
 
-    // 設定面板文案
-    await cdp.eval(`document.getElementById('settingsBtn')?.click()`)
-    await sleep(300)
-    const hint = await cdp.eval(`
-      document.querySelector('#settingsPanel')?.innerText || ''
+    // 設定為第四分頁（非彈窗）
+    await cdp.eval(`document.querySelector('[data-page="settings"]')?.click()`)
+    await sleep(400)
+    const settingsActive = await cdp.eval(
+      `document.getElementById('page-settings')?.classList.contains('active')`
+    )
+    ok('switch to settings page', settingsActive === true)
+
+    const settingsUi = await cdp.eval(`
+      (() => {
+        const page = document.getElementById('page-settings')
+        const text = page?.innerText || ''
+        return {
+          noModal: !document.getElementById('settingsPanel'),
+          hasTranslatorCloud: !!document.querySelector('#translatorSegment [data-value="cloud"]'),
+          hasTranslatorLocal: !!document.querySelector('#translatorSegment [data-value="local"]'),
+          noNone: !document.querySelector('#translatorSegment [data-value="none"]'),
+          hasAsrCloud: !!document.querySelector('#asrEngineSegment [data-value="cloud"]'),
+          hasTtsRate: !!document.getElementById('ttsRateInput'),
+          hasModelList: !!document.getElementById('modelList'),
+          textHasAsr: /語音轉文字/.test(text),
+          textHasTranslate: /翻譯設定/.test(text)
+        }
+      })()
     `)
     ok(
-      'settings hint mentions subtitle window',
-      /字幕視窗/.test(String(hint)) && !/請在「即時字幕」頁切換/.test(String(hint)),
-      String(hint).includes('雙／譯') ? 'has 雙／譯' : 'check text'
+      'settings page structure',
+      settingsUi?.noModal &&
+        settingsUi?.hasTranslatorCloud &&
+        settingsUi?.hasTranslatorLocal &&
+        settingsUi?.noNone &&
+        settingsUi?.hasAsrCloud &&
+        settingsUi?.hasTtsRate &&
+        settingsUi?.hasModelList,
+      JSON.stringify(settingsUi)
     )
-    await cdp.eval(`document.getElementById('closeSettingsBtn')?.click()`)
 
     // 模型 status IPC
     const status = await cdp.eval(`(async () => {
@@ -162,6 +186,89 @@ async function main() {
       return { keys: Object.keys(s.models||{}), asr: !!s.models?.qwen3asr?.downloaded }
     })()`)
     ok('models.status', Array.isArray(status?.keys) && status.keys.includes('qwen3asr'), JSON.stringify(status))
+
+    // LinguaForge 屏蔽：模型清單／翻譯模型選項／store 值都不得出現
+    const hidden = await cdp.eval(`(async () => {
+      const seg = document.getElementById('localTranslateModelSegment')
+      return {
+        statusKeys: Object.keys((await window.electronAPI.models.status()).models || {}),
+        settingsText: /LinguaForge/i.test(document.getElementById('page-settings')?.innerText || ''),
+        segBtn: !!seg?.querySelector('[data-value="linguaforge08"]'),
+        segVisible: !!seg?.offsetParent,
+        stored: await window.electronAPI.store.get('localTranslateModel', 'qwen35translate')
+      }
+    })()`)
+    ok(
+      'linguaforge hidden',
+      !hidden?.statusKeys?.includes('linguaforge08') &&
+        hidden?.settingsText === false &&
+        hidden?.segBtn === false &&
+        hidden?.segVisible === false &&
+        hidden?.stored === 'qwen35translate',
+      JSON.stringify(hidden)
+    )
+
+    // 翻譯分段器單元檢查（直接 import 打包內的 renderer 模組）
+    const split = await cdp.eval(`(async () => {
+      const m = await import('./scripts/translate-page.js')
+      const long = ('這是一個測試句子。' .repeat(200))
+      const c = m.splitForTranslate(long)
+      const noPunct = 'a'.repeat(1500)
+      return {
+        multi: c.length > 1,
+        maxLen: Math.max(...c.map(s => s.length)),
+        rejoin: c.join('') === long,
+        para: m.splitForTranslate('第一段。\\n第二段。').length,
+        hard: m.splitForTranslate(noPunct).length,
+        empty: m.splitForTranslate('   ').length
+      }
+    })()`)
+    ok(
+      'splitForTranslate',
+      split?.multi && split.maxLen <= 600 && split.rejoin && split.hard === 3 && split.empty === 0,
+      JSON.stringify(split)
+    )
+
+    // 長文（>1500 字，舊上限）實際翻譯：分段依序跑完
+    const longRun = await cdp.eval(`(async () => {
+      document.querySelector('[data-page="translate"]')?.click()
+      await new Promise(r => setTimeout(r, 300))
+      const input = document.getElementById('translateInput')
+      input.value = 'The patient should take this medication twice a day. '.repeat(36)
+      input.dispatchEvent(new Event('input'))
+      return {
+        len: input.value.length,
+        maxlength: input.getAttribute('maxlength'),
+        count: document.getElementById('translateInputCount')?.textContent
+      }
+    })()`)
+    ok(
+      'long input accepted (no maxlength)',
+      longRun?.len > 1500 && longRun.maxlength === null && /段/.test(longRun.count || ''),
+      JSON.stringify(longRun)
+    )
+
+    // 由 Node 端輪詢（長時間 awaitPromise 會讓 CDP 連線閒置斷開）
+    await cdp.eval(`document.getElementById('translateRunBtn').click()`)
+    let translated = null
+    const tDeadline = Date.now() + 300000
+    while (Date.now() < tDeadline) {
+      await sleep(2000)
+      translated = await cdp.eval(`({
+        state: document.getElementById('translateOutputState').textContent,
+        out: (document.getElementById('translateOutput').value || '').slice(0, 120),
+        outLen: (document.getElementById('translateOutput').value || '').length,
+        outLines: (document.getElementById('translateOutput').value || '').split('\\n').filter(Boolean).length,
+        err: document.getElementById('translateError')?.textContent || ''
+      })`)
+      if (/完成|失敗/.test(translated?.state || '')) break
+    }
+    ok(
+      // 輸入是同句重複 → 每段譯文相同，故驗「段數」而非總長
+      'long text translated in chunks',
+      /完成/.test(translated?.state || '') && translated?.outLines === 4 && !translated?.err,
+      JSON.stringify(translated)
+    )
 
     cdp.close()
   } catch (e) {

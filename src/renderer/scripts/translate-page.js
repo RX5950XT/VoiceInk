@@ -8,10 +8,41 @@ import {
   getSettings,
   electronAPI,
   cleanIpcError,
-  TRANSLATE_MODEL_KEY
+  resolveTranslateModelKey
 } from './app.js'
 
-const MAX_TRANSLATE_CHARS = 1500
+/**
+ * 單次送模型的字數上限：本地 context 2048 tokens（prompt + 輸出）共用，
+ * 600 字（CJK 約 1:1 token）留足輸出空間；main 端 IPC 仍有 1500 字硬防線。
+ * 輸入總長不設限，超過即自動分段依序翻譯。
+ */
+const CHUNK_CHARS = 600
+
+/**
+ * 依句尾／換行切成單位再貪婪合併到 max（保留原始尾端空白供接回）
+ * @param {string} text
+ * @param {number} [max]
+ * @returns {string[]}
+ */
+export function splitForTranslate(text, max = CHUNK_CHARS) {
+  const units = String(text || '').split(/(?<=[。．.！!？?…；;\n])/)
+  const chunks = []
+  let buf = ''
+  for (const u of units) {
+    if (buf && buf.length + u.length > max) {
+      chunks.push(buf)
+      buf = ''
+    }
+    if (u.length > max) {
+      // 無標點的超長段：硬切
+      for (let i = 0; i < u.length; i += max) chunks.push(u.slice(i, i + max))
+      continue
+    }
+    buf += u
+  }
+  if (buf) chunks.push(buf)
+  return chunks.filter((c) => c.trim())
+}
 
 // ===== DOM =====
 let el = {}
@@ -63,7 +94,7 @@ export function initTranslatePage() {
   }
 
   el.openSettingsBtn?.addEventListener('click', () => {
-    document.getElementById('settingsBtn')?.click()
+    document.querySelector('.nav-tab[data-page="settings"]')?.click()
   })
   el.swapBtn?.addEventListener('click', onSwap)
   el.input?.addEventListener('input', onInputChange)
@@ -160,19 +191,21 @@ async function releaseTranslateEngine() {
 }
 
 /**
- * 設定變更後：local 確保 acquire，否則 release
+ * 設定變更後：在翻譯頁且 translator=local 時強制重載（模型／GPU 才會立刻生效）
+ * 非 local 則 release
  */
 async function syncEngineForSettings() {
   if (!electronAPI.engine) return
-  if (settings?.translator === 'local') {
-    if (!prewarmed && !prewarmInFlight) {
-      // 只在目前仍在翻譯頁時預熱（由 switchPage 管）；此處若已 prewarmed 略過
-      // 用 document 上 active page 判斷
-      const page = document.getElementById('page-translate')
-      if (page?.classList.contains('active')) {
-        await prewarmTranslatePage()
-      }
-    }
+  const page = document.getElementById('page-translate')
+  const onTranslatePage = !!page?.classList.contains('active')
+
+  if (settings?.translator === 'local' && onTranslatePage) {
+    // 已 prewarm 也要卸再載：localTranslateModel / llmGpu 指紋變更靠 getSession，
+    // 但使用者存檔後應立刻看到「準備模型」而非沿用舊權重
+    prewarmGen++
+    prewarmInFlight = false
+    await releaseTranslateEngine()
+    await prewarmTranslatePage()
   } else {
     prewarmGen++
     await releaseTranslateEngine()
@@ -181,24 +214,22 @@ async function syncEngineForSettings() {
 
 async function refreshUiState() {
   settings = settings || (await getSettings())
-  const translator = settings.translator || 'none'
-  let statusLabel = '翻譯：未開啟（設定 → 翻譯）'
+  const translator = settings.translator === 'cloud' ? 'cloud' : 'local'
+  let statusLabel = '翻譯：檢查中…'
   let canTranslate = false
   let bannerMsg = ''
 
-  if (translator === 'none') {
-    bannerMsg = '此頁翻譯使用設定中的翻譯引擎。目前為「不翻譯」。'
-    statusLabel = '翻譯：未開啟'
-  } else if (translator === 'local') {
+  if (translator === 'local') {
     statusLabel = '翻譯：本地 LLM'
     const st = await electronAPI.models.status().catch(() => null)
-    if (!st?.models?.[TRANSLATE_MODEL_KEY]?.downloaded) {
+    const llmKey = resolveTranslateModelKey(settings, st?.models)
+    if (!st?.models?.[llmKey]?.downloaded) {
       bannerMsg = '本地翻譯模型尚未下載，請到設定下載。'
       statusLabel = '翻譯：本地 LLM（模型未下載）'
     } else {
       canTranslate = true
     }
-  } else if (translator === 'cloud') {
+  } else {
     statusLabel = '翻譯：雲端 LLM'
     if (!settings.apiKey) {
       bannerMsg = '雲端翻譯需要 API Key，請到設定填寫。'
@@ -222,8 +253,8 @@ async function refreshUiState() {
 function updateCharCount() {
   const n = (el.input?.value || '').length
   if (el.inputCount) {
-    el.inputCount.textContent = `${n} / ${MAX_TRANSLATE_CHARS}`
-    el.inputCount.classList.toggle('is-warn', n > MAX_TRANSLATE_CHARS * 0.9)
+    const parts = n > CHUNK_CHARS ? `（${splitForTranslate(el.input.value).length} 段）` : ''
+    el.inputCount.textContent = `${n} 字${parts}`
   }
 }
 
@@ -237,7 +268,7 @@ function onInputChange() {
   }
 }
 
-function setOutputState(state) {
+function setOutputState(state, detail = '') {
   if (!el.outputState || !el.output) return
   el.output.classList.remove('is-stale', 'is-loading')
   const map = {
@@ -247,7 +278,7 @@ function setOutputState(state) {
     done: '完成',
     error: '失敗'
   }
-  el.outputState.textContent = map[state] || '—'
+  el.outputState.textContent = (map[state] || '—') + (detail ? ` ${detail}` : '')
   if (state === 'stale') el.output.classList.add('is-stale')
   if (state === 'loading') el.output.classList.add('is-loading')
 }
@@ -289,25 +320,21 @@ function resolveInputSpeakLang() {
 }
 
 async function runTranslate() {
-  if (isTranslating) return
-  settings = await getSettings()
-  await refreshUiState()
-  if (el.runBtn?.disabled && settings.translator === 'none') {
-    showToast('請先到設定啟用雲端或本地翻譯', 'error')
+  // 翻譯中再按＝停止（長文分段可能跑很久）
+  if (isTranslating) {
+    el._translateRequestId = 0
     return
   }
+  settings = await getSettings()
+  await refreshUiState()
   if (el.runBtn?.disabled) {
-    showToast(el.bannerText?.textContent || '翻譯尚未就緒', 'error')
+    showToast(el.bannerText?.textContent || '翻譯尚未就緒，請到設定檢查', 'error')
     return
   }
 
   const text = (el.input?.value || '').trim()
   if (!text) {
     showToast('請輸入要翻譯的文字', 'error')
-    return
-  }
-  if (text.length > MAX_TRANSLATE_CHARS) {
-    showToast(`文字過長（上限 ${MAX_TRANSLATE_CHARS} 字）`, 'error')
     return
   }
   if (!hasLinguisticContent(text)) {
@@ -328,9 +355,11 @@ async function runTranslate() {
     return
   }
 
+  const chunks = splitForTranslate(text)
   isTranslating = true
-  el.runBtn.disabled = true
-  setOutputState('loading')
+  el.runBtn.disabled = false
+  el.runBtn.textContent = '停止'
+  setOutputState('loading', chunks.length > 1 ? `(0/${chunks.length})` : '')
   setError(null)
   const requestId = Date.now()
   el._translateRequestId = requestId
@@ -340,14 +369,37 @@ async function runTranslate() {
     if (settings.translator === 'local' && !engineAcquired) {
       await prewarmTranslatePage()
     }
-    const result = await electronAPI.translate(text, target, { mode: 'file' })
-    if (el._translateRequestId !== requestId) return
 
-    const out = (result || '').trim()
+    let joined = ''
+    let prevSource = ''
+    let prevTranslation = ''
+    for (let i = 0; i < chunks.length; i++) {
+      if (el._translateRequestId !== requestId) break
+      const raw = chunks[i]
+      const src = raw.trim()
+      // 原始尾端空白（換行）原樣接回，保留段落結構
+      const sep = raw.slice(raw.trimEnd().length)
+      const result = await electronAPI.translate(src, target, {
+        mode: 'file',
+        previousSource: prevSource,
+        previousTranslation: prevTranslation
+      })
+      if (el._translateRequestId !== requestId) break
+
+      const piece = (result || '').trim()
+      joined += piece + (i < chunks.length - 1 ? sep || '\n' : '')
+      prevSource = src
+      prevTranslation = piece
+      el.output.value = joined
+      if (chunks.length > 1) setOutputState('loading', `(${i + 1}/${chunks.length})`)
+    }
+
+    const cancelled = el._translateRequestId !== requestId
+    const out = joined.trim()
     el.output.value = out
-    outputStale = false
-    hasFreshOutput = !!out
-    setOutputState('done')
+    outputStale = cancelled
+    hasFreshOutput = !cancelled && !!out
+    setOutputState(cancelled ? 'stale' : 'done', cancelled ? '（已停止）' : '')
     updateSpeakOutputEnabled()
   } catch (e) {
     if (el._translateRequestId !== requestId) return
@@ -357,6 +409,7 @@ async function runTranslate() {
     showToast(`翻譯失敗: ${cleanIpcError(e)}`, 'error')
   } finally {
     isTranslating = false
+    el.runBtn.textContent = '翻譯'
     await refreshUiState()
   }
 }
@@ -364,22 +417,12 @@ async function runTranslate() {
 function onSwap() {
   const src = el.sourceLang.value
   const tgt = el.targetLang.value
-  const inputText = el.input.value
-  const outputText = el.output.value
 
-  // 交換語言：來源變為原目標；目標變為原來源（auto 時以輸入腳本啟發式）
+  // 只交換語言下拉，不交換輸入／譯文欄位
+  // 來源為 auto 時，目標改為啟發式語言（避免目標被設成 auto）
   el.sourceLang.value = tgt
-  el.targetLang.value = src === 'auto' ? detectScriptLang(inputText) : src
-
-  // 交換兩欄文字，並重置過期態
-  el.input.value = outputText
-  el.output.value = inputText
-  outputStale = false
-  hasFreshOutput = !!(inputText && inputText.trim())
-  updateCharCount()
-  setOutputState(hasFreshOutput ? 'done' : 'idle')
-  updateSpeakOutputEnabled()
-  stopSpeak()
+  el.targetLang.value =
+    src === 'auto' ? detectScriptLang(el.input?.value || '') : src
 }
 
 async function copyText(text, okMsg) {

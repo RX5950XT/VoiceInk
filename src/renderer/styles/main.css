@@ -4,6 +4,36 @@
   margin: 0;
   padding: 0;
   box-sizing: border-box;
+  /* 主題化滾動條（Firefox） */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-color) var(--bg-secondary);
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--bg-secondary);
+  border-radius: 4px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--text-tertiary);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-corner {
+  background: var(--bg-secondary);
 }
 
 body {
@@ -31,38 +61,44 @@ a:hover {
   height: 100vh;
 }
 
-/* ===== 頂部導航列 ===== */
+/* ===== 頂部導航列（frameless 標題列） ===== */
 
 .header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  padding: 12px 24px;
+  gap: 0;
+  padding: 0 0 0 16px;
+  height: 48px;
   background-color: var(--bg-secondary);
   border-bottom: 1px solid var(--border-light);
   -webkit-app-region: drag;
+  user-select: none;
 }
 
-.header-left,
-.header-right {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  -webkit-app-region: no-drag;
-}
-
-.logo {
+/* brand 可拖；nav / 窗控不可拖 */
+.header-brand {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0;
+  padding-right: 16px;
+  /* 保持 drag（繼承 header） */
+}
+
+.header-drag-spacer {
+  flex: 1 1 auto;
+  min-width: 24px;
+  align-self: stretch;
+  /* drag 區 */
 }
 
 .logo-icon {
-  font-size: 24px;
+  font-size: 22px;
+  line-height: 1;
 }
 
 .logo-text {
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 700;
   background: linear-gradient(135deg, var(--accent-primary), var(--accent-hover));
   -webkit-background-clip: text;
@@ -76,9 +112,73 @@ a:hover {
   display: flex;
   align-items: center;
   gap: 4px;
-  margin-left: 24px;
-  padding-left: 24px;
+  padding-left: 16px;
   border-left: 1px solid var(--border-light);
+  -webkit-app-region: no-drag;
+}
+
+/* 視窗控制鈕 */
+.window-controls {
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;
+  height: 100%;
+  -webkit-app-region: no-drag;
+}
+
+.win-btn {
+  width: 46px;
+  height: 100%;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.win-btn:hover {
+  background-color: var(--bg-hover, rgba(128, 128, 128, 0.18));
+  color: var(--text-primary);
+}
+
+.win-btn:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
+.win-btn-close:hover {
+  background-color: #e81123;
+  color: #fff;
+}
+
+body.is-maximized .win-btn#winMax {
+  /* 還原圖示語意由 JS 改 title/aria；樣式可微調 */
+}
+
+.segmented-wrap {
+  flex-wrap: wrap;
+}
+
+.cuda-env-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.cuda-env-row .setting-hint {
+  flex: 1 1 100%;
+  margin: 0;
+}
+
+.cuda-env-row.hidden {
+  display: none;
 }
 
 .nav-tab {
@@ -513,9 +613,22 @@ a:hover {
 }
 
 /* ===== 即時字幕頁面 ===== */
+/* 注意：必須用 .active，不可裸寫 #page-live { display:flex }，否則會蓋掉 .page { display:none } 導致分頁重疊 */
+
+#page-live.active {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+#page-live .page-header {
+  width: 100%;
+  max-width: 520px;
+}
 
 .live-content {
-  max-width: 500px;
+  width: 100%;
+  max-width: 520px;
 }
 
 .live-controls {
@@ -551,60 +664,24 @@ a:hover {
   50% { opacity: 0.5; }
 }
 
-/* ===== 設定面板 ===== */
+/* ===== 設定分頁 ===== */
+/* 同上：display 只在 .active 時覆寫，避免分頁重疊 */
 
-.settings-panel {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
+#page-settings.active {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  z-index: 1000;
 }
 
-.settings-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-color: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(4px);
-}
-
-.settings-content {
-  position: relative;
+#page-settings .page-header {
   width: 100%;
-  max-width: 480px;
-  background-color: var(--bg-secondary);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow);
-  animation: slideUp 0.3s ease;
+  max-width: 640px;
 }
 
-@keyframes slideUp {
-  from { opacity: 0; transform: translateY(20px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.settings-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 20px 24px;
-  border-bottom: 1px solid var(--border-light);
-}
-
-.settings-header h2 {
-  font-size: 18px;
-  font-weight: 600;
-}
-
-.settings-body {
-  padding: 24px;
+.settings-page-body {
+  width: 100%;
+  max-width: 640px;
+  padding-bottom: 32px;
 }
 
 .setting-group {
@@ -621,7 +698,32 @@ a:hover {
 .setting-hint {
   margin-top: 8px;
   font-size: 12px;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.setting-hint code {
+  font-size: 11px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background-color: var(--bg-tertiary);
+}
+
+.setting-value-label {
+  font-weight: 600;
+  color: var(--accent-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.range-input {
+  width: 100%;
+  accent-color: var(--accent-primary);
+  cursor: pointer;
+}
+
+.settings-subpanel {
+  margin-top: 16px;
+  padding-top: 12px;
 }
 
 .input-group {
@@ -777,20 +879,14 @@ a:hover {
 
 /* ===== 設定分區 ===== */
 
-.settings-content {
-  max-height: 85vh;
-  display: flex;
-  flex-direction: column;
-}
-
-.settings-body {
-  overflow-y: auto;
-}
-
 .settings-section {
   padding-bottom: 20px;
   margin-bottom: 20px;
   border-bottom: 1px solid var(--border-light);
+}
+
+.settings-section:last-of-type {
+  border-bottom: none;
 }
 
 .settings-section-title {
@@ -861,66 +957,6 @@ a:hover {
 .seg-btn.active {
   background-color: var(--accent-primary);
   color: white;
-}
-
-/* ===== 模型狀態摘要卡 ===== */
-
-.engine-status-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.engine-status-card {
-  padding: 12px 14px;
-  background-color: var(--bg-tertiary);
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-md);
-}
-
-.engine-status-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.engine-status-info {
-  flex: 1;
-  min-width: 0;
-}
-
-.engine-status-role {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  color: var(--text-tertiary);
-  margin-bottom: 2px;
-}
-
-.engine-status-name {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--text-primary);
-}
-
-.engine-status-meta {
-  margin-top: 2px;
-  font-size: 12px;
-  color: var(--text-tertiary);
-  font-variant-numeric: tabular-nums;
-}
-
-.engine-status-meta.is-ready {
-  color: var(--success);
-}
-
-.engine-status-meta.is-busy {
-  color: var(--accent-primary);
-}
-
-.engine-status-btn {
-  flex-shrink: 0;
-  min-width: 64px;
 }
 
 .cloud-api-section {

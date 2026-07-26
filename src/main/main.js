@@ -6,6 +6,9 @@ const localLlm = require('./local-llm')
 const engine = require('./engine')
 const fileTranscribe = require('./file-transcribe')
 const edgeTts = require('./edge-tts')
+const cloudAsr = require('./cloud-asr')
+const { detectGpuCapability, clearGpuCapabilityCache } = require('./gpu-capability')
+const cudaEnv = require('./cuda-env')
 const { sanitizeTtsVoices, DEFAULT_TTS_VOICES } = require('./tts-voices')
 
 // 主視窗
@@ -27,12 +30,23 @@ const STORE_ALLOWLIST = new Set([
   'apiUrl',
   'apiKey',
   'modelId',
+  'asrEngine',
+  'asrApiUrl',
+  'asrApiKey',
+  'asrModelId',
   'theme',
   'subtitleFontScale',
   'subtitleOpacity',
   'subtitleWindowBounds',
-  'ttsVoices'
+  'ttsVoices',
+  'ttsRate',
+  'localTranslateModel',
+  'llmGpu'
 ])
+
+const TRANSLATOR_VALUES = new Set(['cloud', 'local'])
+const ASR_ENGINE_VALUES = new Set(['local', 'cloud'])
+const THEME_VALUES = new Set(['dark', 'light'])
 
 const TRANSLATE_TARGET_LANGS = new Set(['zh-TW', 'zh-CN', 'en', 'ja', 'ko'])
 const MAX_TRANSLATE_CHARS = 1500
@@ -46,7 +60,25 @@ async function initStore() {
 }
 
 /**
- * 建立主視窗
+ * 依主題決定視窗底色（frameless 避免淺色主題閃黑）
+ * @returns {string}
+ */
+function mainBackgroundColor() {
+  const theme = store?.get('theme', 'dark')
+  return theme === 'light' ? '#f5f5f5' : '#1a1a1a'
+}
+
+/**
+ * 僅允許主視窗呼叫的 window 控制
+ * @param {Electron.IpcMainInvokeEvent} event
+ */
+function assertMainWindowSender(event) {
+  if (!mainWindow || mainWindow.isDestroyed()) return false
+  return event.sender === mainWindow.webContents
+}
+
+/**
+ * 建立主視窗（frameless：標題列合併進 app header）
  */
 function createMainWindow() {
   mainWindow = new BrowserWindow({
@@ -54,16 +86,25 @@ function createMainWindow() {
     height: 800,
     minWidth: 900,
     minHeight: 600,
-    frame: true,
+    frame: false,
+    title: 'VoiceInk',
+    // Windows：保留 thickFrame 以支援邊緣縮放與陰影（勿關）
+    thickFrame: true,
+    hasShadow: true,
+    transparent: false,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
       preload: path.join(__dirname, '../preload/preload.js')
     },
-    backgroundColor: '#1a1a1a',
+    backgroundColor: mainBackgroundColor(),
+    autoHideMenuBar: true,
     show: false
   })
+
+  // 隱藏 File/Edit/View… 系統選單列
+  mainWindow.setMenu(null)
 
   // 載入頁面
   if (isDev) {
@@ -77,6 +118,14 @@ function createMainWindow() {
   mainWindow.once('ready-to-show', () => {
     mainWindow.show()
   })
+
+  const sendMaximized = () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('window:maximized', mainWindow.isMaximized())
+    }
+  }
+  mainWindow.on('maximize', sendMaximized)
+  mainWindow.on('unmaximize', sendMaximized)
 
   attachWindowSecurity(mainWindow)
 
@@ -211,6 +260,22 @@ ipcMain.handle('store:get', async (event, key, defaultValue) => {
   if (!store) await initStore()
   const val = store.get(key, defaultValue)
   if (key === 'ttsVoices') return sanitizeTtsVoices(val)
+  if (key === 'ttsRate') return edgeTts.sanitizeTtsRate(val)
+  if (key === 'translator') {
+    return TRANSLATOR_VALUES.has(val) ? val : (TRANSLATOR_VALUES.has(defaultValue) ? defaultValue : 'local')
+  }
+  if (key === 'asrEngine') {
+    return ASR_ENGINE_VALUES.has(val) ? val : (ASR_ENGINE_VALUES.has(defaultValue) ? defaultValue : 'local')
+  }
+  if (key === 'localTranslateModel') {
+    return models.isLlmKey(val) ? val : (models.isLlmKey(defaultValue) ? defaultValue : localLlm.DEFAULT_LLM_KEY)
+  }
+  if (key === 'llmGpu') {
+    return val === true
+  }
+  if (key === 'theme') {
+    return THEME_VALUES.has(val) ? val : (THEME_VALUES.has(defaultValue) ? defaultValue : 'dark')
+  }
   return val
 })
 
@@ -224,9 +289,116 @@ ipcMain.handle('store:set', async (event, key, value) => {
     store.set(key, sanitizeTtsVoices(value))
     return true
   }
+  if (key === 'ttsRate') {
+    store.set(key, edgeTts.sanitizeTtsRate(value))
+    return true
+  }
+  if (key === 'translator') {
+    const t = TRANSLATOR_VALUES.has(value) ? value : 'local'
+    store.set(key, t)
+    return true
+  }
+  if (key === 'asrEngine') {
+    const e = ASR_ENGINE_VALUES.has(value) ? value : 'local'
+    store.set(key, e)
+    return true
+  }
+  if (key === 'localTranslateModel') {
+    store.set(key, models.isLlmKey(value) ? value : localLlm.DEFAULT_LLM_KEY)
+    return true
+  }
+  if (key === 'llmGpu') {
+    // 硬體不符時強制 false
+    if (value === true) {
+      const cap = await detectGpuCapability()
+      store.set(key, !!cap.ok)
+    } else {
+      store.set(key, false)
+    }
+    return true
+  }
+  if (key === 'theme') {
+    const t = THEME_VALUES.has(value) ? value : 'dark'
+    store.set(key, t)
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.setBackgroundColor(t === 'light' ? '#f5f5f5' : '#1a1a1a')
+    }
+    return true
+  }
+  if (key === 'asrApiUrl' || key === 'apiUrl') {
+    store.set(key, typeof value === 'string' ? value.trim() : value)
+    return true
+  }
+  if (key === 'asrModelId' || key === 'modelId') {
+    store.set(key, typeof value === 'string' ? value.trim() : value)
+    return true
+  }
   store.set(key, value)
   return true
 })
+
+// ===== 主視窗控制（frameless）=====
+ipcMain.handle('window:minimize', (event) => {
+  if (!assertMainWindowSender(event)) return false
+  mainWindow.minimize()
+  return true
+})
+
+ipcMain.handle('window:toggleMaximize', (event) => {
+  if (!assertMainWindowSender(event)) return false
+  if (mainWindow.isMaximized()) mainWindow.unmaximize()
+  else mainWindow.maximize()
+  return mainWindow.isMaximized()
+})
+
+ipcMain.handle('window:close', (event) => {
+  if (!assertMainWindowSender(event)) return false
+  mainWindow.close()
+  return true
+})
+
+ipcMain.handle('window:isMaximized', (event) => {
+  if (!assertMainWindowSender(event)) return false
+  return mainWindow.isMaximized()
+})
+
+// GPU 能力（設定頁）
+ipcMain.handle('system:gpuCapability', async () => {
+  return detectGpuCapability()
+})
+
+ipcMain.handle('system:refreshGpuCapability', async () => {
+  clearGpuCapabilityCache()
+  return detectGpuCapability()
+})
+
+/**
+ * 自動安裝 CUDA Runtime／Toolkit（UAC 提升）
+ */
+ipcMain.handle('system:installCudaEnv', async (event) => {
+  if (!assertMainWindowSender(event)) {
+    return { ok: false, message: '僅主視窗可安裝' }
+  }
+  const send = (p) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('system:cudaInstallProgress', p)
+    }
+  }
+  try {
+    const result = await cudaEnv.installCudaEnv(send)
+    clearGpuCapabilityCache()
+    const cap = await detectGpuCapability()
+    return { ...result, capability: cap }
+  } catch (e) {
+    return { ok: false, message: e.message || String(e) }
+  }
+})
+
+ipcMain.handle('system:openCudaDownloadPage', async () => {
+  return cudaEnv.openCudaDownloadPage()
+})
+
+ipcMain.handle('llm:loadInfo', () => localLlm.getLoadInfo())
 
 // 字幕視窗控制
 ipcMain.handle('subtitle:show', () => {
@@ -291,15 +463,28 @@ ipcMain.handle('models:delete', (event, key) => models.remove(key))
 
 ipcMain.handle('models:openFolder', (event, key) => models.openFolder(key))
 
-ipcMain.handle('localAsr:transcribe', (event, req) => localAsr.transcribe(req))
+ipcMain.handle('localAsr:transcribe', async (event, req) => {
+  if (!store) await initStore()
+  const engine = store.get('asrEngine', 'local')
+  if (engine === 'cloud') {
+    return cloudAsr.transcribeSamples(req || {}, store)
+  }
+  return localAsr.transcribe(req)
+})
 
-/** 長檔案串流轉錄（ffmpeg 切段，支援 ≥2h / ≥100MB） */
+/** 長檔案串流轉錄（ffmpeg 切段，支援 ≥2h / ≥100MB；雲端走 mp3 segment） */
 ipcMain.handle('localAsr:transcribeFile', async (event, req) => {
-  return fileTranscribe.transcribeFile(req || {}, (progress) => {
+  if (!store) await initStore()
+  const engine = store.get('asrEngine', 'local')
+  const onProgress = (progress) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('localAsr:fileProgress', progress)
     }
-  })
+  }
+  if (engine === 'cloud') {
+    return fileTranscribe.transcribeFileCloud({ ...(req || {}), store }, onProgress)
+  }
+  return fileTranscribe.transcribeFile(req || {}, onProgress)
 })
 
 ipcMain.handle('localAsr:cancelFileTranscribe', () => fileTranscribe.cancel())
@@ -328,10 +513,12 @@ ipcMain.handle('tts:synthesize', async (event, req) => {
   const lang = typeof req?.lang === 'string' ? req.lang : 'zh-TW'
   const safeLang = Object.prototype.hasOwnProperty.call(DEFAULT_TTS_VOICES, lang) ? lang : 'en'
   const voice = edgeTts.resolveVoice(store, safeLang)
+  const rate = edgeTts.formatTtsRate(edgeTts.resolveTtsRate(store))
   try {
     return await edgeTts.synthesize({
       text,
       voice,
+      rate,
       chunkIndex: req?.chunkIndex
     })
   } catch (err) {
@@ -360,7 +547,16 @@ ipcMain.handle('engine:status', () => engine.status())
 
 // 設定系統音訊擷取的媒體請求處理器
 app.whenReady().then(async () => {
+  // 讓 node-llama-cpp 能載到 cudart/cublas（安裝後 Machine PATH 有時未灌進本行程）
+  try {
+    const added = cudaEnv.prependCudaBinToPath()
+    if (added.length) console.log('[cuda-env] PATH +=', added.join('; '))
+  } catch (e) {
+    console.warn('[cuda-env] prepend PATH failed:', e.message || e)
+  }
+
   await initStore()
+  localLlm.setStore(store)
 
   session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
     desktopCapturer.getSources({ types: ['screen'] })

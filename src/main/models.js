@@ -29,12 +29,47 @@ const MODELS = {
     ]
   },
   qwen35translate: {
-    label: 'Qwen3.5-0.8B（本地翻譯）',
+    label: 'Qwen3.5-0.8B（通用翻譯）',
     kind: 'llm',
     totalBytes: 532517120,
     base: 'https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/',
-    files: ['Qwen3.5-0.8B-Q4_K_M.gguf']
+    files: ['Qwen3.5-0.8B-Q4_K_M.gguf'],
+    gguf: 'Qwen3.5-0.8B-Q4_K_M.gguf'
+  },
+  /** 微調：繁中／英文／日文三語翻譯（Q4_K_M）；hidden：模型待修，暫時屏蔽（改回 false 即恢復） */
+  linguaforge08: {
+    label: 'LinguaForge 0.8B（繁中/英/日）',
+    kind: 'llm',
+    hidden: true,
+    totalBytes: 529296768,
+    base: 'https://huggingface.co/RX5950XT/LinguaForge-Qwen3.5-0.8B-zhTW-en-ja/resolve/main/',
+    files: ['gguf/linguaforge-v3-0.8b-Q4_K_M.gguf'],
+    gguf: 'gguf/linguaforge-v3-0.8b-Q4_K_M.gguf'
   }
+}
+
+/** 本地翻譯模型 key 白名單（順序：推薦在前）；linguaforge08 屏蔽中，修好後加回 */
+const LLM_MODEL_KEYS = ['qwen35translate']
+
+/**
+ * @param {unknown} key
+ * @returns {boolean}
+ */
+function isLlmKey(key) {
+  return typeof key === 'string' && LLM_MODEL_KEYS.includes(key)
+}
+
+/**
+ * GGUF 相對路徑（相對 modelDir）
+ * @param {string} key
+ * @returns {string | null}
+ */
+function ggufRelativePath(key) {
+  const def = MODELS[key]
+  if (!def || def.kind !== 'llm') return null
+  if (typeof def.gguf === 'string' && def.gguf) return def.gguf
+  const first = def.files?.[0]
+  return typeof first === 'string' ? first : null
 }
 
 // 進行中的下載（key → AbortController）
@@ -69,6 +104,7 @@ function isDownloaded(key) {
 function status() {
   const result = {}
   for (const [key, def] of Object.entries(MODELS)) {
+    if (def.hidden) continue
     result[key] = {
       key,
       label: def.label,
@@ -199,4 +235,16 @@ async function openFolder(key) {
   return true
 }
 
-module.exports = { MODELS, modelDir, isDownloaded, status, download, cancelDownload, remove, openFolder }
+module.exports = {
+  MODELS,
+  LLM_MODEL_KEYS,
+  isLlmKey,
+  ggufRelativePath,
+  modelDir,
+  isDownloaded,
+  status,
+  download,
+  cancelDownload,
+  remove,
+  openFolder
+}

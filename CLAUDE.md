@@ -6,9 +6,12 @@
 
 Windows Electron 語音轉文字：檔案轉錄＋即時字幕＋翻譯與 TTS。Vanilla JS + Vite，無前端框架。
 
-- ASR：固定本地 sherpa-onnx Qwen3-ASR-0.6B（無雲端轉錄、無其他 ASR 模型）
-- 翻譯：none / cloud / local（node-llama-cpp + Qwen3.5-0.8B GGUF）；三頁共用
-- TTS：Edge TTS（`node-edge-tts` MIT）；設定鍵 `ttsVoices`；需連網
+- ASR：local（sherpa Qwen3-ASR-0.6B）或 cloud（`cloud-asr.js` → `/audio/transcriptions`）
+- 翻譯：cloud / local（node-llama-cpp）；本地固定 `qwen35translate`（`linguaforge08` 屏蔽中，模型待修）；`llmGpu`（NVIDIA≥6GB → cuda/vulkan）
+- TTS：Edge TTS；`ttsVoices` + `ttsRate`（-50…100）
+- 翻譯頁輸入不限字數：renderer `splitForTranslate` 分 ≤600 字段落依序翻譯（main IPC 仍限單次 1500 字）
+- 設定：第四 nav tab；區塊模型／翻譯／語音轉文字／外觀／語音
+- 主窗 frameless（標題列合併 header）；標題僅 VoiceInk
 - 模型 registry：`src/main/models.js`；下載至 `%APPDATA%/voiceink/models/`
 
 ## 指令
@@ -24,8 +27,8 @@ npm start                # 注意：未打包時 isDev=true，會連 localhost:5
 
 - 檔名 kebab-case、變數 camelCase、常數 UPPER_SNAKE_CASE；ES2022、async/await、JSDoc
 - Renderer 是 ESM（import/export）、Main/Preload 是 CJS
-- 設定一律走 electron-store IPC（鍵：translator/captionDisplayMode/apiUrl/apiKey/modelId/theme/ttsVoices）
-- ASR 模型 key 固定 `qwen3asr`（`ASR_MODEL_KEY`）
+- 設定一律走 electron-store IPC（含 asrEngine/asrApi* / ttsRate；translator 僅 cloud|local）
+- 本地 ASR 模型 key 固定 `qwen3asr`；雲端 ASR 不需下載
 - Commit 格式 `<type>: <description>`，訊息用繁體中文
 - **UI／功能改動完成後，先跑 `npm run electron:pack` 更新免安裝預覽**（`dist/win-unpacked/VoiceInk.exe`），方便使用者直接點開驗證；完整安裝檔（`electron:build`）僅在需要發佈時再打
 
@@ -40,6 +43,7 @@ npm start                # 注意：未打包時 isDev=true，會連 localhost:5
 - 字幕視窗 `transparent: false` 是刻意設計：Windows 上透明視窗會白條殘留＋resizable 失效（詳見 tasks/lessons.md）
 - CSP `connect-src 'self' https: http:` 是自訂 API URL 的前提，不要改回白名單
 - 打包需保留 package.json 的 `asarUnpack`（sherpa-onnx*、node-llama-cpp、ffmpeg-static）與 `files` 排除（cuda/arm64 變體）
+- 翻譯分段上限 600 字是配合本地 `contextSize: 2048`（prompt＋輸出共用），不要往上調；main 的 `MAX_TRANSLATE_CHARS`（1500）是 IPC 信任邊界，不要拿掉
 - 檔案轉錄走 main `file-transcribe.js`（ffmpeg 串流 16k mono → 28s 切段），勿改回 renderer 整檔 `decodeAudioData`（長檔 OOM）
 - 打包跑的是 `src/` 原始碼（`files` 排除 `dist/**`，main `loadFile('../renderer/...')` 載入 asar 內原始檔）；`vite build` 只作驗證，改 renderer 直接改 `src/`
 - 字幕顯示模式（雙語/僅翻譯）由字幕彈窗獨佔（讀寫 store `captionDisplayMode`、單一 `currentMode` 渲染）；別再讓即時頁 payload 夾帶 `displayMode` 或加跨窗 IPC——兩端搶改同一狀態會打架

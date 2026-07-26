@@ -13,7 +13,7 @@ import {
   electronAPI,
   cleanIpcError,
   ASR_MODEL_KEY,
-  TRANSLATE_MODEL_KEY
+  resolveTranslateModelKey
 } from './app.js'
 
 // ===== DOM 元素 =====
@@ -100,6 +100,14 @@ export function initLiveCaption() {
     // 擷取中改設定也要刷新快照，否則 renderer 判斷與 main 即時讀取的 store 脫鉤
     settings = await getSettings()
     refreshLiveTranslatorHint()
+    // 未擷取且已預熱：重載以套用 localTranslateModel / llmGpu / translator / asrEngine
+    if (isCapturing || isStarting || !electronAPI.engine) return
+    const page = document.getElementById('page-live')
+    if (!page?.classList.contains('active')) return
+    if (prewarmed || prewarmInFlight) {
+      await cooldownEngine()
+    }
+    await prewarmEngine()
   })
 }
 
@@ -116,7 +124,7 @@ export async function prewarmEngine() {
   try {
     const s = await getSettings()
     const r = await electronAPI.engine.acquire('live', {
-      asr: true,
+      asr: s.asrEngine !== 'cloud',
       llm: s.translator === 'local'
     })
     // 擷取已接手（或即將接手）同一個 live owner：不可 release
@@ -157,15 +165,15 @@ export async function cooldownEngine() {
 }
 
 /**
- * 更新「翻譯：本地／雲端／未開啟」提示
+ * 更新翻譯／ASR 後端提示
  */
 async function refreshLiveTranslatorHint() {
   const s = await getSettings()
-  const translator = s.translator || 'none'
-  let label = '翻譯：未開啟（設定 → 翻譯）'
-  if (translator === 'local') label = '翻譯：本地 LLM'
-  if (translator === 'cloud') label = '翻譯：雲端 LLM'
-  if (liveTranslatorHint) liveTranslatorHint.textContent = label
+  const translator = s.translator === 'cloud' ? '雲端 LLM' : '本地 LLM'
+  const asr = s.asrEngine === 'cloud' ? '雲端 ASR' : '本地 ASR'
+  if (liveTranslatorHint) {
+    liveTranslatorHint.textContent = `語音轉文字：${asr}　翻譯：${translator}（目標語言選「自動偵測」則不翻譯）`
+  }
 }
 
 /**
@@ -180,13 +188,20 @@ async function startCapture() {
     targetLanguage = liveLanguage.value
 
     const status = await electronAPI.models.status()
-    if (!status.models[ASR_MODEL_KEY]?.downloaded) {
+    if (settings.asrEngine !== 'cloud' && !status.models[ASR_MODEL_KEY]?.downloaded) {
       showToast('本地 ASR 模型尚未下載，請先到設定下載', 'error')
       return
     }
-    if (settings.translator === 'local' && !status.models[TRANSLATE_MODEL_KEY]?.downloaded) {
-      showToast('本地翻譯模型尚未下載，請先到設定下載', 'error')
+    if (settings.asrEngine === 'cloud' && !settings.asrApiKey) {
+      showToast('雲端語音轉文字需要 API Key，請到設定填寫', 'error')
       return
+    }
+    if (settings.translator === 'local') {
+      const llmKey = resolveTranslateModelKey(settings, status.models)
+      if (!status.models[llmKey]?.downloaded) {
+        showToast('本地翻譯模型尚未下載，請先到設定下載', 'error')
+        return
+      }
     }
     if (settings.translator === 'cloud' && !settings.apiKey) {
       showToast('雲端翻譯需要 API Key，請到設定填寫', 'error')
@@ -211,11 +226,14 @@ async function startCapture() {
         if (isCapturing) stopCapture()
       }))
 
-      // 2) 預熱模型
-      statusText.textContent = '載入模型…'
+      // 2) 預熱模型（雲端 ASR 不載 sherpa）
+      statusText.textContent = settings.asrEngine === 'cloud' && settings.translator !== 'local'
+        ? '準備中…'
+        : '載入模型…'
       startLiveBtn.disabled = true
+      const needAsr = settings.asrEngine !== 'cloud'
       const needLlm = settings.translator === 'local'
-      const warm = await electronAPI.engine.acquire('live', { asr: true, llm: needLlm })
+      const warm = await electronAPI.engine.acquire('live', { asr: needAsr, llm: needLlm })
       if (!warm.ok) {
         throw new Error((warm.warnings && warm.warnings[0]) || '模型載入失敗')
       }
@@ -384,7 +402,6 @@ async function processAudioChunkData(chunks) {
  */
 function handleAsrResult(sourceText) {
   const shouldTranslate =
-    settings.translator !== 'none' &&
     targetLanguage !== 'auto' &&
     hasLinguisticContent(sourceText) &&
     needsTranslation(sourceText, targetLanguage)
@@ -399,7 +416,6 @@ function handleAsrResult(sourceText) {
     // 不 pushPair(原文,原文)：identity 前文會教 0.8B 模型「原樣輸出」，下一段日文被整段複誦（雙語變兩行日文）
 
     if (
-      settings.translator !== 'none' &&
       targetLanguage !== 'auto' &&
       !needsTranslation(sourceText, targetLanguage)
     ) {

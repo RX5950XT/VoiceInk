@@ -18,9 +18,11 @@
 - **Electron 35+** - 桌面應用框架
 - **Vite** - 構建工具
 - **Vanilla JavaScript** - 無框架前端
-- **本地 ASR** - sherpa-onnx（固定 Qwen3-ASR-0.6B，CPU 即時）+ opencc-js 轉繁
-- **翻譯** - none / 雲端（OpenAI 相容 chat completions）/ 本地（node-llama-cpp + Qwen3.5-0.8B GGUF）；檔案／即時／翻譯頁共用
-- **TTS** - Edge TTS（`node-edge-tts` MIT；`edge-tts.js` facade；需連網）
+- **ASR** - 本地 sherpa-onnx（Qwen3-ASR-0.6B）或雲端（OpenRouter 相容 `/audio/transcriptions`）
+- **翻譯** - 雲端 chat / 本地 GGUF（`qwen35translate`；`linguaforge08` 屏蔽中；`llmGpu` 可開 GPU）；即時「自動偵測」= 不譯
+- **TTS** - Edge TTS（`node-edge-tts` MIT；語速 `ttsRate`；需連網）
+- **翻譯頁** - 輸入不限字數：`splitForTranslate` 分 ≤600 字段落依序翻譯、可中途停止（IPC 單次上限 1500 字）
+- **設定** - 導航第四分頁：模型／翻譯／語音轉文字／外觀／語音；主窗 frameless
 
 > 現行架構與驗證紀錄見 [CONTEXT.md](./CONTEXT.md)（接手前先讀）。
 
@@ -106,7 +108,7 @@ subtitleWindow.setMenu(null)
 > - API Key 必須安全儲存，使用 electron-store（IPC 存取）
 > - 靜音檢測在客戶端做（RMS＋語音佔比），不要交給 AI 判斷
 > - 音訊分段：即時 2 秒（佇列「保留最新 pending」不丟塊）；檔案 28 秒（main ffmpeg 串流，≥2h／≥100MB）
-> - ASR 固定 Qwen3-ASR-0.6B（`ASR_MODEL_KEY = 'qwen3asr'`），無引擎切換 UI
+> - ASR：`asrEngine` local（`qwen3asr`）或 cloud（獨立 asrApi* 憑證）；設定為第四分頁
 
 > [!CAUTION]
 >

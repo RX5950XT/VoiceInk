@@ -5,39 +5,97 @@
 ## 專案概況
 
 VoiceInk：Windows Electron 語音轉文字應用（檔案轉錄＋即時字幕＋翻譯與 TTS）。
-Vanilla JS + Vite，無前端框架。版本 **1.5.0**（GitHub Release `v1.5.0`：翻譯與 TTS 頁）。
+Vanilla JS + Vite，無前端框架。版本 **1.6.0**（GitHub Release `v1.6.0`：雲端 ASR／設定第四分頁／GPU 翻譯／長文分段翻譯）。
 
-## 架構（本地 ASR + 翻譯頁 TTS，2026-07-18）
+## 架構（設定第四分頁 + 雲端 ASR，2026-07-24）
 
 ```
 src/main/
-  main.js             視窗管理 + IPC（store / subtitle / models / localAsr / translate / tts）
-  models.js           本地模型 registry + 下載管理（qwen3asr、qwen35translate）
-  local-asr.js        sherpa-onnx 本地轉錄（固定 Qwen3-ASR-0.6B；zh-TW 經 opencc 轉繁）
-  local-llm.js        翻譯分流：雲端 chat completions / 本地 node-llama-cpp
-  file-transcribe.js  長檔串流：ffmpeg→16k mono f32le→28s 切段 ASR（≥2h／≥100MB）
-  edge-tts.js         Edge TTS facade（node-edge-tts MIT；Uint8Array；切塊）
-  tts-voices.js       語音 allowlist + ttsVoices sanitize
-  engine.js           owner: live | file | translate（布林；translate 預設不載 ASR）
-src/preload/preload.js   contextBridge（含 tts.synthesize / listVoices / cancel）
+  main.js             frameless 主窗 + IPC；localAsr 依 asrEngine 分流
+  models.js           registry：qwen3asr、qwen35translate（linguaforge08 `hidden:true` 屏蔽中）
+  gpu-capability.js   NVIDIA VRAM 門檻（≥6GB）
+  local-asr.js        sherpa-onnx 本地 ASR（CPU）
+  cloud-asr.js        OpenRouter 相容 /audio/transcriptions
+  local-llm.js        翻譯 cloud/local；多 GGUF + CPU/GPU（cuda|vulkan）
+  file-transcribe.js  本地 f32le 28s；雲端 mp3 segment 50s
+  edge-tts.js         Edge TTS + ttsRate（%）
+  engine.js           owner live|file|translate；雲端 ASR 時 needs.asr=false
 src/renderer/
-  scripts/app.js            設定 + 分頁 + ttsVoices 表單
-  scripts/translate-page.js 第三頁：按鈕式翻譯、stale 態、Edge TTS 串播
-  scripts/live-caption.js   即時字幕
-  scripts/transcribe.js     檔案轉錄
-  pages/subtitle.html       懸浮字幕視窗
+  scripts/app.js            設定分頁（外觀／模型／GPU）；frameless 窗控
+  scripts/translate-page.js / live-caption.js / transcribe.js
 ```
 
-## 轉錄引擎
+## 轉錄／翻譯／TTS
 
 | 項目 | 說明 |
 |---|---|
-| ASR | 固定本地 Qwen3-ASR-0.6B（`ASR_MODEL_KEY = 'qwen3asr'`），無引擎選擇 UI、無 FireRed |
-| 路徑 | renderer 解碼→16k mono Float32→IPC→sherpa-onnx |
-| 翻譯 | `translator` = none / cloud（文字丟雲端 API）/ local（Qwen3.5-0.8B GGUF）；三頁共用 |
-| TTS | Edge TTS（`node-edge-tts` MIT）；需連網；store `ttsVoices` 每語一聲 |
+| ASR | `asrEngine` = local（Qwen3-ASR）/ cloud（`asrApiUrl`/`asrApiKey`/`asrModelId`） |
+| 翻譯 | `translator` = cloud / local；本地模型 `localTranslateModel` 固定 `qwen35translate`；`llmGpu` |
+| TTS | Edge TTS；`ttsVoices` + `ttsRate`（-50…100 → Edge rate %） |
+| 設定 UI | 導航第四 tab；區塊：模型／翻譯／語音轉文字／外觀／語音 |
+| 視窗 | 主窗 frameless（header 含 min/max/close）；標題 `VoiceInk` |
 
-模型存放：`%APPDATA%/voiceink/models/<key>/`，registry 在 `src/main/models.js`。
+模型存放：`%APPDATA%/voiceink/models/<key>/`。
+
+## 最近變更（2026-07-27b）— 翻譯頁解除字數限制（自動分段）
+
+- 移除 UI 硬限制：`index.html` textarea 去掉 `maxlength=1500`，字數改顯示「N 字（M 段）」
+- `translate-page.js` 新增 `splitForTranslate(text, max=600)`：依句尾／換行切單位 → 貪婪合併 ≤600 字；無標點超長段硬切；保留原尾端空白供接回
+  - 600 字＝本地 `contextSize: 2048`（prompt＋輸出共用）的安全值，**不要調高到 >1000**
+  - 逐段送 IPC，前一段當 `previousSource/previousTranslation` 維持上下文；譯文逐段即時填入
+  - 進度顯示 `翻譯中… (i/n)`；翻譯中按鈕變「停止」（`_translateRequestId=0` 中斷迴圈，已完成段落保留並標為 stale）
+- main `MAX_TRANSLATE_CHARS = 1500` **保留**（IPC 信任邊界防 DoS）；分段後每次呼叫遠低於此
+- 順修：`translateCloud` 呼叫 `buildSystemPrompt(targetLang, mode)` 少一個參數（modelKey），導致雲端 system prompt 變成「翻譯成 file」→ 已改 `buildSystemPrompt(null, targetLang, options.mode)`
+- 驗證：`node scripts/e2e-cdp-smoke.js` **13/13**（新增 `splitForTranslate` 單元檢查、無 maxlength、1908 字實際分 4 段翻譯完成）；`npx electron scripts/e2e-local-translate-settings.js` ALL PASS
+- 備忘：CDP e2e 不要用單次 `awaitPromise` 等數十秒（連線閒置會斷、node 靜默 exit 0）→ 改由 Node 端 2s 輪詢
+
+## 最近變更（2026-07-27）— 暫時屏蔽 LinguaForge
+
+- 原因：LinguaForge 0.8B 品質待修，先從 UI 與白名單移除，模型修好再恢復
+- 屏蔽點（恢復＝這 3 處反向改回）：
+  1. `models.js`：registry `linguaforge08.hidden = true`（`status()` 跳過 hidden）＋ `LLM_MODEL_KEYS = ['qwen35translate']`
+  2. `local-llm.js`：`DEFAULT_LLM_KEY = 'qwen35translate'`（LinguaForge 專用 prompt 分支保留，未刪）
+  3. renderer：`app.js` 預設／白名單／normalize 全指向 qwen；`index.html` 翻譯模型 setting-group 加 `hidden` 並移除 LinguaForge 按鈕
+- 舊 store 值 `linguaforge08` 由 `isLlmKey` 校驗自動正規化為 qwen（不需 migration）
+- 驗證：`node scripts/e2e-cdp-smoke.js` **10/10**（新增 `linguaforge hidden` 檢查：status keys、設定頁文字、seg 按鈕、可見性、store 值）；`npx electron scripts/e2e-local-translate-settings.js` **ALL PASS**（CPU/CUDA 實際翻譯）；`npm run electron:pack` 已更新預覽
+
+## 最近變更（2026-07-26d）— 本地翻譯設定全路徑驗證
+
+- e2e：`scripts/e2e-local-translate-settings.js` — 雙模型 × CPU/CUDA、指紋切換、llmGpu 開關、live mode **ALL PASS**
+- LinguaForge 改用訓練格式：`system=You are a professional translator.` + user=`翻譯成繁體中文：\n…`
+- `createLlama` 載入前 `prependCudaBinToPath`（確保設定 GPU 真走 CUDA）
+- 存檔後翻譯頁／即時頁未擷取時強制 re-prewarm（模型／GPU 立刻生效）
+- 注意：LinguaForge 0.8B 對極短寒暄句（Hello world / See you）可能吐 `？`；一般句子正常。Qwen 通用較穩
+
+## 最近變更（2026-07-26c）— 修 LLM load cancelled
+
+- **症狀**：預熱／開始翻譯時 toast `LLM load cancelled`
+- **根因**：`getSession` 在「指紋相同」時仍 cancel 進行中的 load（第二個呼叫者誤作廢）
+- **修法**：同指紋 in-flight **join**；僅 mismatch 才 bump `loadGen`；`unload` 清 `loadPromise`；`warm` 遇 cancel 重試一次並改中文提示
+- 驗證：`npx electron scripts/e2e-llm-load-cancel.js` → concurrent warm / after loaded / after unload 全 PASS
+
+## 最近變更（2026-07-26b）— CUDA 環境自動安裝
+
+- 本機已裝 **CUDA Toolkit 13.3**（winget `Nvidia.CUDA`）；`getLlama({gpu:'cuda'})` 通過
+- 新增 `src/main/cuda-env.js`：偵測 cudart/cublas/cublasLt；winget 或下載官方 installer（UAC）
+- 設定→本地翻譯：顯示 CUDA 狀態、「安裝 CUDA 環境」「重新偵測」
+- 啟動時 `prependCudaBinToPath`；e2e GPU 路徑 backend=**cuda**
+
+## 最近變更（2026-07-26）— frameless + LinguaForge + 本地雙模型 + GPU
+
+- 主窗 `frame:false` 標題列合併進 header（min/max/close）；標題僅 `VoiceInk`；主題移設定「外觀」
+- 模型 registry 新增 `linguaforge08`（Q4 GGUF 繁中/英/日）；`localTranslateModel` 可選兩本地翻譯模型
+- 未下載選中模型時 **fallback** 到已下載的 `qwen35translate`（不破壞舊用戶）
+- `llmGpu`：NVIDIA 且 VRAM≥6GB 才可開；載入 cuda→vulkan→CPU fallback
+- pack 納入 `win-x64-cuda`（仍排除 cuda-ext）
+
+## 最近變更（2026-07-24）— 設定第四分頁 + 雲端 ASR + 語速
+
+- 設定改嵌入式第四 tab（移除齒輪彈窗）；模型狀態與本地管理合併
+- 翻譯設定僅雲端/本地 LLM；舊 `translator=none` 正規化為 local
+- 語音轉文字：本地/雲端切換；雲端憑證與翻譯分開；`cloud-asr.js` + 檔案 mp3 切段
+- TTS 語速 slider（store `ttsRate`）
+- 驗證：模組單元檢查 + `electron:pack`；CDP smoke 改抓 `#page-settings`
 
 ## 最近變更（2026-07-18j）— TTS 播放／左色條／temperature
 

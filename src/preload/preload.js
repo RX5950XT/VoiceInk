@@ -88,5 +88,34 @@ contextBridge.exposeInMainWorld('electronAPI', {
         chunkIndex: opts?.chunkIndex
       }),
     cancel: () => ipcRenderer.invoke('tts:cancel')
+  },
+
+  // ===== 主視窗控制（frameless）=====
+  window: {
+    minimize: () => ipcRenderer.invoke('window:minimize'),
+    toggleMaximize: () => ipcRenderer.invoke('window:toggleMaximize'),
+    close: () => ipcRenderer.invoke('window:close'),
+    isMaximized: () => ipcRenderer.invoke('window:isMaximized'),
+    onMaximized: (callback) => {
+      const handler = (_event, value) => callback(value)
+      ipcRenderer.on('window:maximized', handler)
+      return () => ipcRenderer.removeListener('window:maximized', handler)
+    }
+  },
+
+  // ===== 系統／LLM 能力 =====
+  system: {
+    gpuCapability: () => ipcRenderer.invoke('system:gpuCapability'),
+    refreshGpuCapability: () => ipcRenderer.invoke('system:refreshGpuCapability'),
+    installCudaEnv: () => ipcRenderer.invoke('system:installCudaEnv'),
+    openCudaDownloadPage: () => ipcRenderer.invoke('system:openCudaDownloadPage'),
+    onCudaInstallProgress: (callback) => {
+      const handler = (_event, progress) => callback(progress)
+      ipcRenderer.on('system:cudaInstallProgress', handler)
+      return () => ipcRenderer.removeListener('system:cudaInstallProgress', handler)
+    }
+  },
+  llm: {
+    loadInfo: () => ipcRenderer.invoke('llm:loadInfo')
   }
 })

@@ -5,7 +5,7 @@
  * 不再整檔 decodeAudioData 進 renderer RAM。
  */
 
-import { showToast, getSettings, electronAPI, cleanIpcError, ASR_MODEL_KEY, TRANSLATE_MODEL_KEY } from './app.js'
+import { showToast, getSettings, electronAPI, cleanIpcError, ASR_MODEL_KEY, resolveTranslateModelKey } from './app.js'
 
 // ===== DOM 元素 =====
 let dropZone
@@ -295,30 +295,49 @@ async function startTranscription() {
     updateProgress(2, '讀取設定…')
     const settings = await getSettings()
     const status = await electronAPI.models.status()
-    if (!status.models?.[ASR_MODEL_KEY]?.downloaded) {
+    const useCloudAsr = settings.asrEngine === 'cloud'
+
+    if (!useCloudAsr && !status.models?.[ASR_MODEL_KEY]?.downloaded) {
       throw new Error('本地 ASR 模型尚未下載，請先到設定下載')
+    }
+    if (useCloudAsr && !settings.asrApiKey) {
+      throw new Error('雲端語音轉文字需要 API Key，請到設定填寫')
     }
 
     const language = outputLanguage.value
-    const willTranslate = settings.translator !== 'none' && language !== 'auto'
-    if (willTranslate && settings.translator === 'local' && !status.models?.[TRANSLATE_MODEL_KEY]?.downloaded) {
-      throw new Error('本地翻譯模型尚未下載，請先到設定下載')
+    const willTranslate = language !== 'auto'
+    if (willTranslate && settings.translator === 'local') {
+      const llmKey = resolveTranslateModelKey(settings, status.models)
+      if (!status.models?.[llmKey]?.downloaded) {
+        throw new Error('本地翻譯模型尚未下載，請先到設定下載')
+      }
     }
     if (willTranslate && settings.translator === 'cloud' && !settings.apiKey) {
       throw new Error('雲端翻譯需要 API Key，請到設定填寫')
     }
 
-    // 先只載 ASR（串流過程長，LLM 等 ASR 完再載，降記憶體尖峰）
-    updateProgress(8, '載入 ASR 模型…')
-    await waitForPaint()
-    const warmAsr = await electronAPI.engine.acquire('file', { asr: true, llm: false })
-    if (!warmAsr.ok) {
-      throw new Error((warmAsr.warnings && warmAsr.warnings[0]) || 'ASR 模型載入失敗')
+    // 本地：先載 ASR；雲端 ASR 不載 sherpa（串流過程長，LLM 等 ASR 完再載）
+    if (useCloudAsr) {
+      updateProgress(8, '準備雲端轉錄…')
+      await waitForPaint()
+      const warm = await electronAPI.engine.acquire('file', { asr: false, llm: false })
+      // 雲端可無模型；仍佔 owner 以便之後補 LLM
+      if (!warm.ok && warm.asrLoaded === false && warm.llmLoaded === false) {
+        // ok 在 asr/llm 皆不需時應為 true
+      }
+      acquired = true
+    } else {
+      updateProgress(8, '載入 ASR 模型…')
+      await waitForPaint()
+      const warmAsr = await electronAPI.engine.acquire('file', { asr: true, llm: false })
+      if (!warmAsr.ok) {
+        throw new Error((warmAsr.warnings && warmAsr.warnings[0]) || 'ASR 模型載入失敗')
+      }
+      acquired = true
     }
-    acquired = true
     if (epoch !== transcribeEpoch) return
 
-    updateProgress(10, '正在解碼並轉錄…')
+    updateProgress(10, useCloudAsr ? '正在雲端轉錄…' : '正在解碼並轉錄…')
     await waitForPaint()
 
     const asrResult = await electronAPI.localAsr.transcribeFile({
@@ -334,7 +353,10 @@ async function startTranscription() {
       if (settings.translator === 'local') {
         updateProgress(90, '載入翻譯模型…')
         await waitForPaint()
-        const warmLlm = await electronAPI.engine.acquire('file', { asr: true, llm: true })
+        const warmLlm = await electronAPI.engine.acquire('file', {
+          asr: !useCloudAsr,
+          llm: true
+        })
         if (!warmLlm.ok) {
           throw new Error((warmLlm.warnings && warmLlm.warnings[0]) || '翻譯模型載入失敗')
         }
