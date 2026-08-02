@@ -313,10 +313,15 @@
                 <div id="localLlmSection" class="settings-subpanel">
                   <h4 class="settings-subsection-title">本地</h4>
                   <p class="setting-hint">請先在「模型設定」下載所選模型。全程離線。</p>
-                  <!-- 翻譯模型：LinguaForge 屏蔽中，只剩單一選項故整組隱藏（恢復時移除 hidden 與 LinguaForge 按鈕註解） -->
-                  <div class="setting-group hidden">
+                  <div class="setting-group">
                     <label>翻譯模型</label>
                     <div id="localTranslateModelSegment" class="segmented segmented-wrap">
+                      <button type="button" class="seg-btn" data-value="linguaforge08" title="繁中／英／日微調（Q8：專名最準，774MB）">
+                        LinguaForge Q8
+                      </button>
+                      <button type="button" class="seg-btn" data-value="linguaforge08q4" title="同一顆模型的 Q4：小 269MB、CPU 快約 2.2×，罕見英文專名可能被音譯">
+                        LinguaForge Q4
+                      </button>
                       <button type="button" class="seg-btn" data-value="qwen35translate" title="通用多語">
                         Qwen3.5 通用
                       </button>

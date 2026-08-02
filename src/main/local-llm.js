@@ -14,6 +14,7 @@ const {
   isDownloaded
 } = require('./models')
 const { s2twp } = require('./opencc')
+const { stripThink, stripTranslationNoise, findRepetitionLoop } = require('./translate-clean')
 const { detectGpuCapability } = require('./gpu-capability')
 const { prependCudaBinToPath } = require('./cuda-env')
 
@@ -28,12 +29,74 @@ const LANGUAGE_NAMES = {
 /** 舊程式／e2e 相容別名（通用模型） */
 const TRANSLATE_MODEL_KEY = 'qwen35translate'
 const FALLBACK_LLM_KEY = 'qwen35translate'
-const DEFAULT_LLM_KEY = 'qwen35translate'
+const DEFAULT_LLM_KEY = 'linguaforge08'
+const LINGUAFORGE_KEY = 'linguaforge08'
+/** 同一顆 LinguaForge 的兩個量化（Q8 預設／Q4 省空間）共用整套 SFT 格式與 DECODE */
+const LINGUAFORGE_KEYS = Object.freeze(['linguaforge08', 'linguaforge08q4'])
+
+/**
+ * @param {unknown} key
+ * @returns {boolean}
+ */
+function isLinguaforge(key) {
+  return LINGUAFORGE_KEYS.includes(/** @type {string} */ (key))
+}
 
 // live 段落原文上限 120 字（MAX_BATCH_CHARS），256 tokens 足以容納中譯而不截斷半句
 const MAX_TOKENS_LIVE = 256
 const MAX_TOKENS_FILE = 1024
 const CLOUD_TIMEOUT_MS = 20000
+
+// ─── LinguaForge v5e 出貨解碼（evaluate.py / INTEGRATION.md）────────────────
+// transformers 主路徑：beam=4 + length_penalty=1.2 + 雙 EOS + 依目標語 DECODE
+// 本 app 走 GGUF／node-llama-cpp：無 beam／無 no_repeat_ngram → 映射到
+//   temperature=0、repeatPenalty、dryRepeatPenalty、thoughtTokens:0、s2twp
+/** SFT 收尾 <|im_end|> + base <|endoftext|>；只用單一 eos 會灌水到 max_new_tokens */
+const LINGUAFORGE_EOS_TOKEN_IDS = Object.freeze([248046, 248044])
+const LINGUAFORGE_NUM_BEAMS = 4
+const LINGUAFORGE_LENGTH_PENALTY = 1.2
+/** 長文單段建議上限（CJK 字元級）；超出在 main 再切 */
+const LINGUAFORGE_CHUNK_CHARS = 280
+/** 與訓練一致的指令（僅三語；勿發明 general-chat system） */
+const LINGUAFORGE_INSTR = Object.freeze({
+  'zh-TW': '翻譯成繁體中文：',
+  en: '翻譯成英文：',
+  ja: '翻譯成日文：'
+})
+/**
+ * evaluate.DECODE 依目標語：
+ *   ja/en: repetition_penalty=1.1 + no_repeat_ngram_size=4
+ *   zhtw:  僅 no_repeat_ngram_size=4（禁止 rep-penalty，否則繁簡洩漏飆升）
+ * @typedef {{ tgtKey: 'zhtw'|'en'|'ja', repetitionPenalty: number|null, noRepeatNgramSize: number, s2twp: boolean, numBeams: number, lengthPenalty: number, eosTokenIds: readonly number[] }} LinguaforgeDecode
+ */
+/** @type {Readonly<Record<'zh-TW'|'en'|'ja', Omit<LinguaforgeDecode, 'numBeams'|'lengthPenalty'|'eosTokenIds'>>>} */
+const LINGUAFORGE_DECODE = Object.freeze({
+  'zh-TW': { tgtKey: 'zhtw', repetitionPenalty: null, noRepeatNgramSize: 4, s2twp: true },
+  en: { tgtKey: 'en', repetitionPenalty: 1.1, noRepeatNgramSize: 4, s2twp: false },
+  ja: { tgtKey: 'ja', repetitionPenalty: 1.1, noRepeatNgramSize: 4, s2twp: false }
+})
+
+/**
+ * Qwen3.5 chat_template 在 enable_thinking 未開時，`<|im_start|>assistant\n` 之後
+ * **固定補空 think 區塊** `<think>\n\n</think>\n\n`（token 248068,271,248069,271）；
+ * 模型從頭到尾帶著它訓練與評測。node-llama-cpp 預設解析出的 Qwen wrapper 不補這 4 個 token，
+ * 掉出分布 → 憑空標籤前綴（說明：／問：）、拉丁專名整個消失、年份幻覺。
+ * `budgets.thoughtTokens:0` 只是「不生成 thinking」，補不了前綴，兩件事都要做。
+ *
+ * 實測（scripts/probe-prompt-path.js）：`thoughts:'discourage'` 產出的字串與
+ * transformers `apply_chat_template(..., add_generation_prompt=True)` 逐字元相同，
+ * 尾端 token 正是 248068,271,248069,271 → 不需自訂 subclass。
+ */
+const THINK_PREFIX = '<think>\n\n</think>\n\n'
+const THINK_PREFIX_TOKEN_IDS = Object.freeze([248068, 271, 248069, 271])
+
+/**
+ * @param {new (opts?: object) => object} QwenChatWrapper
+ * @returns {object}
+ */
+function newQwen35ChatWrapper(QwenChatWrapper) {
+  return new QwenChatWrapper({ thoughts: 'discourage' })
+}
 
 /** @type {import('electron-store').default | null} */
 let storeRef = null
@@ -259,12 +322,15 @@ async function getSession() {
   const warnings = []
 
   loadPromise = (async () => {
-    const { LlamaChatSession } = await import('node-llama-cpp')
+    const { LlamaChatSession, QwenChatWrapper } = await import('node-llama-cpp')
     const { llama, usedGpu, backend } = await createLlama(intentGpu, warnings)
     const modelPath = path.join(modelDir(key), rel)
     const model = await llama.loadModel({ modelPath })
     const context = await model.createContext({ contextSize: 2048 })
-    const session = new LlamaChatSession({ contextSequence: context.getSequence() })
+    const session = new LlamaChatSession({
+      contextSequence: context.getSequence(),
+      chatWrapper: newQwen35ChatWrapper(QwenChatWrapper)
+    })
     const built = {
       session,
       context,
@@ -389,24 +455,166 @@ function getLoadInfo() {
   }
 }
 
-function stripThink(text) {
-  const lastClose = text.lastIndexOf('</think>')
-  if (lastClose !== -1) return text.slice(lastClose + 8).trim()
-  return text.replace(/<think>[\s\S]*/g, '').trim()
+/**
+ * LinguaForge DECODE 查表（單一真相來源；對齊 evaluate.py）
+ * @param {string} targetLang
+ * @returns {LinguaforgeDecode}
+ */
+function resolveLinguaforgeDecode(targetLang) {
+  const row = LINGUAFORGE_DECODE[/** @type {'zh-TW'|'en'|'ja'} */ (targetLang)]
+    || LINGUAFORGE_DECODE.en
+  return {
+    ...row,
+    numBeams: LINGUAFORGE_NUM_BEAMS,
+    lengthPenalty: LINGUAFORGE_LENGTH_PENALTY,
+    eosTokenIds: LINGUAFORGE_EOS_TOKEN_IDS
+  }
 }
 
 /**
- * LinguaForge SFT 指令前綴（與訓練／HF 卡片一致）
+ * LinguaForge SFT 指令前綴（僅訓練三語；其餘 fallback 通用句以免硬編假指令）
  * @param {string} targetLang
  * @returns {string}
  */
 function linguaforgeInstr(targetLang) {
-  if (targetLang === 'zh-TW') return '翻譯成繁體中文：'
-  if (targetLang === 'zh-CN') return '翻譯成簡體中文：'
-  if (targetLang === 'en') return '翻譯成英文：'
-  if (targetLang === 'ja') return '翻譯成日文：'
-  if (targetLang === 'ko') return '翻譯成韓文：'
+  if (Object.prototype.hasOwnProperty.call(LINGUAFORGE_INSTR, targetLang)) {
+    return LINGUAFORGE_INSTR[/** @type {keyof typeof LINGUAFORGE_INSTR} */ (targetLang)]
+  }
   return `翻譯成${LANGUAGE_NAMES[targetLang] || targetLang}：`
+}
+
+/**
+ * 依源文長度估 max_new_tokens（約 1.5–2×，設上下限防 runaway）
+ * @param {string} text
+ * @param {'live' | 'file' | undefined} mode
+ * @param {boolean} isLinguaforge
+ */
+function resolveMaxTokens(text, mode, isLinguaforge = false) {
+  if (mode === 'live') return MAX_TOKENS_LIVE
+  if (!isLinguaforge) return MAX_TOKENS_FILE
+  const n = String(text || '').length
+  // CJK 約 1 token／字；輸出給 2× 空間，上限 768 防灌水
+  return Math.min(768, Math.max(64, Math.ceil(n * 2)))
+}
+
+/**
+ * GGUF 映射出貨 DECODE → node-llama-cpp prompt 選項
+ * - 無 beam／length_penalty（log 標 N/A）
+ * - zhtw 必須 repeatPenalty:false（套件省略時預設 1.1，會攪亂繁簡）
+ * - no_repeat_ngram_size≈ dry allowedLength=n-1
+ * - thinking 關：budgets.thoughtTokens=0
+ * @param {LinguaforgeDecode} decode
+ * @param {string} text
+ * @param {'live' | 'file' | undefined} mode
+ */
+function buildLinguaforgePromptOptions(decode, text, mode) {
+  const maxTokens = resolveMaxTokens(text, mode, true)
+  /** @type {Record<string, unknown>} */
+  const opts = {
+    maxTokens,
+    temperature: 0,
+    budgets: { thoughtTokens: 0 },
+    trimWhitespaceSuffix: true,
+    // DRY 近似 no_repeat_ngram_size（allowedLength=3 → 壓制 ≥4-token 重序列）
+    dryRepeatPenalty: {
+      strength: 0.8,
+      base: 1.75,
+      allowedLength: Math.max(1, (decode.noRepeatNgramSize || 4) - 1)
+    }
+  }
+  if (decode.repetitionPenalty != null) {
+    opts.repeatPenalty = {
+      penalty: decode.repetitionPenalty,
+      lastTokens: 64,
+      penalizeNewLine: false
+    }
+  } else {
+    // 出貨 zhtw 禁止 rep-penalty
+    opts.repeatPenalty = false
+  }
+  // 雙 EOS：chat wrapper 已 stop 於 <|im_end|>；補 <|endoftext|> 文字觸發
+  opts.customStopTriggers = ['<|im_end|>', '<|endoftext|>']
+  return opts
+}
+
+/**
+ * 單行按句切 ≤ max（與 renderer splitForTranslate 同構）
+ * @param {string} text
+ * @param {number} [max]
+ * @returns {string[]}
+ */
+function splitForLinguaforge(text, max = LINGUAFORGE_CHUNK_CHARS) {
+  const units = String(text || '').split(/(?<=[。．.！!？?…；;])/)
+  const chunks = []
+  let buf = ''
+  for (const u of units) {
+    if (buf && buf.length + u.length > max) {
+      chunks.push(buf)
+      buf = ''
+    }
+    if (u.length > max) {
+      for (let i = 0; i < u.length; i += max) chunks.push(u.slice(i, i + max))
+      continue
+    }
+    buf += u
+  }
+  if (buf) chunks.push(buf)
+  return chunks.filter((c) => c.trim())
+}
+
+/** 行首清單標記（`- ` `· ` `1. ` `(1) ` …）：不送模型，翻完原樣貼回 */
+const LIST_MARKER = /^[ 	]*(?:[-*•·‧+>]|\d{1,2}[.)、]|[（(]\d{1,2}[)）])[ 	]*/u
+
+/**
+ * 長文切段：**逐行**，行首清單標記剝除後才送模型。
+ * - 多段文字混進同一個 prompt，0.8B 會整段退化成重複迴圈並吃掉內容
+ * - 孤立的 bullet 區塊整塊送同樣會被「總結」掉
+ * - 連 `· ` 一起送，模型會把符號翻成標籤（實測「選擇器：」）
+ * 逐行送純句子最穩，一行翻壞也不會拖垮整段；空行保留以還原段落結構。
+ * @param {string} text
+ * @param {number} [max]
+ * @returns {{ prefix: string, parts: string[] }[]} 每行一組；parts 為空＝原樣輸出 prefix
+ */
+function splitLinesForLinguaforge(text, max = LINGUAFORGE_CHUNK_CHARS) {
+  return String(text || '')
+    .split(/\r?\n/)
+    .map((line) => {
+      if (!line.trim()) return { prefix: '', parts: [] }
+      const marker = (line.match(LIST_MARKER) || [''])[0]
+      const body = line.slice(marker.length).trim()
+      // 純符號行（分隔線等）原樣保留
+      if (!body) return { prefix: line.trim(), parts: [] }
+      const prefix = marker.trim() ? `${marker.trim()} ` : ''
+      return { prefix, parts: splitForLinguaforge(body, max) }
+    })
+}
+
+/**
+ * @param {LinguaforgeDecode} decode
+ * @param {{ maxTokens: number, stopReason?: string, s2twpApplied: boolean, chunkIndex?: number, chunkCount?: number }} meta
+ */
+function logLinguaforgeDecode(decode, meta) {
+  console.log(
+    '[linguaforge decode]',
+    JSON.stringify({
+      runtime: 'gguf/node-llama-cpp',
+      chat_wrapper: "Qwen{thoughts:'discourage'}",
+      think_prefix: JSON.stringify(THINK_PREFIX),
+      think_prefix_token_ids: [...THINK_PREFIX_TOKEN_IDS],
+      eos_token_id: [...decode.eosTokenIds],
+      num_beams: `${decode.numBeams} (N/A on GGUF; greedy)`,
+      length_penalty: `${decode.lengthPenalty} (N/A on GGUF)`,
+      repetition_penalty: decode.repetitionPenalty,
+      no_repeat_ngram_size: decode.noRepeatNgramSize,
+      dry_allowedLength: Math.max(1, decode.noRepeatNgramSize - 1),
+      s2twp: meta.s2twpApplied,
+      maxTokens: meta.maxTokens,
+      stopReason: meta.stopReason || null,
+      chunk: meta.chunkCount
+        ? `${(meta.chunkIndex || 0) + 1}/${meta.chunkCount}`
+        : null
+    })
+  )
 }
 
 /**
@@ -418,7 +626,7 @@ function linguaforgeInstr(targetLang) {
  * @param {'live' | 'file' | undefined} mode
  */
 function buildSystemPrompt(modelKey, targetLang, mode) {
-  if (modelKey === 'linguaforge08') {
+  if (isLinguaforge(modelKey)) {
     return 'You are a professional translator.'
   }
   const langName = LANGUAGE_NAMES[targetLang] || targetLang
@@ -435,7 +643,7 @@ function buildSystemPrompt(modelKey, targetLang, mode) {
  * @param {string} targetLang
  */
 function buildUserMessage(modelKey, text, targetLang) {
-  if (modelKey === 'linguaforge08') {
+  if (isLinguaforge(modelKey)) {
     return `${linguaforgeInstr(targetLang)}\n${text}`
   }
   return text
@@ -455,8 +663,91 @@ function buildContextPair(context = {}) {
   return { prevSrc, prevTr }
 }
 
-function resolveMaxTokens(options = {}) {
-  return options.mode === 'live' ? MAX_TOKENS_LIVE : MAX_TOKENS_FILE
+/**
+ * 單段本地翻譯（不切段）
+ * @param {string} text
+ * @param {string} targetLang
+ * @param {{ previousSource?: string, previousTranslation?: string }} context
+ * @param {{ mode?: 'live' | 'file' }} options
+ * @param {string} key
+ * @param {{ chunkIndex?: number, chunkCount?: number }} [chunkMeta]
+ */
+async function translateLocalOnce(text, targetLang, context, options, key, chunkMeta = {}) {
+  const session = await getSession()
+  const history = [{ type: 'system', text: buildSystemPrompt(key, targetLang, options.mode) }]
+  // LinguaForge 是單輪 SFT MT 模型：多一輪對話（前文）會讓 greedy 直接複誦上一輪譯文
+  // → 整篇長文每段都吐同一句。出貨格式就是 system + 單一 user，不給前文。
+  const pair = isLinguaforge(key) ? null : buildContextPair(context)
+  if (pair) {
+    history.push({ type: 'user', text: buildUserMessage(key, pair.prevSrc, targetLang) })
+    history.push({ type: 'model', response: [pair.prevTr] })
+  }
+  session.setChatHistory(history)
+  const userMsg = buildUserMessage(key, text, targetLang)
+
+  if (isLinguaforge(key)) {
+    const decode = resolveLinguaforgeDecode(targetLang)
+    const promptOpts = buildLinguaforgePromptOptions(decode, text, options.mode)
+
+    /** 單次推論（重試前必須還原 history，否則第二輪會帶著上一輪 → 複誦） */
+    const runOnce = async (opts) => {
+      session.setChatHistory(history)
+      if (typeof session.promptWithMeta !== 'function') {
+        return { out: await session.prompt(userMsg, opts), stopReason: '' }
+      }
+      const meta = await session.promptWithMeta(userMsg, opts)
+      const out = typeof meta?.responseText === 'string'
+        ? meta.responseText
+        : Array.isArray(meta?.response)
+          ? meta.response.filter((x) => typeof x === 'string').join('')
+          : String(meta?.response || '')
+      return { out, stopReason: meta?.stopReason || '' }
+    }
+
+    let { out, stopReason } = await runOnce(promptOpts)
+    if (process.env.VOICEINK_DEBUG_RAW) console.log('[linguaforge raw]', JSON.stringify(out))
+    let cleaned = stripTranslationNoise(stripThink(out), text)
+
+    // 退化迴圈救援：出貨 zhtw 禁 rep-penalty，條列／多段輸入偶爾整段吐重複片段並吃掉內容。
+    // 此時「開 rep-penalty（輕微繁簡風險）」遠優於「一段重複垃圾」→ 只在偵測到退化時重跑。
+    const loop = findRepetitionLoop(cleaned)
+    if (loop) {
+      const retryOpts = {
+        ...promptOpts,
+        repeatPenalty: { penalty: 1.15, lastTokens: 128, penalizeNewLine: false },
+        dryRepeatPenalty: { strength: 1, base: 1.75, allowedLength: 2 }
+      }
+      const retry = await runOnce(retryOpts)
+      const retryCleaned = stripTranslationNoise(stripThink(retry.out), text)
+      const retryLoop = findRepetitionLoop(retryCleaned)
+      console.warn(
+        `[linguaforge] 退化重複「${loop}」→ 重試 anti-repeat：${retryLoop ? `仍退化「${retryLoop}」` : 'ok'}`
+      )
+      if (!retryLoop && retryCleaned) {
+        out = retry.out
+        stopReason = retry.stopReason
+        cleaned = retryCleaned
+      }
+    }
+
+    const s2twpApplied = !!(decode.s2twp && cleaned && cleaned !== text.trim())
+    const finalOut = s2twpApplied ? s2twp(cleaned) : cleaned
+    logLinguaforgeDecode(decode, {
+      maxTokens: /** @type {number} */ (promptOpts.maxTokens),
+      stopReason,
+      s2twpApplied,
+      chunkIndex: chunkMeta.chunkIndex,
+      chunkCount: chunkMeta.chunkCount
+    })
+    return finalOut
+  }
+
+  const out = await session.prompt(userMsg, {
+    maxTokens: resolveMaxTokens(text, options.mode, false),
+    temperature: 0,
+    budgets: { thoughtTokens: 0 }
+  })
+  return stripTranslationNoise(stripThink(out), text)
 }
 
 async function translateLocal(text, targetLang, context = {}, options = {}) {
@@ -465,20 +756,35 @@ async function translateLocal(text, targetLang, context = {}, options = {}) {
     const label = MODELS[key]?.label || key
     throw new Error(`本地翻譯模型尚未下載（${label}），請先到設定下載`)
   }
-  const session = await getSession()
-  const history = [{ type: 'system', text: buildSystemPrompt(key, targetLang, options.mode) }]
-  const pair = buildContextPair(context)
-  if (pair) {
-    history.push({ type: 'user', text: buildUserMessage(key, pair.prevSrc, targetLang) })
-    history.push({ type: 'model', response: [pair.prevTr] })
+
+  // LinguaForge：file 模式逐行翻譯（清單標記不送模型），再還原行／段落結構
+  if (isLinguaforge(key) && options.mode !== 'live') {
+    const lines = splitLinesForLinguaforge(text)
+    const total = lines.reduce((n, l) => n + l.parts.length, 0)
+    if (total > 1) {
+      const outLines = []
+      let done = 0
+      for (const line of lines) {
+        if (!line.parts.length) {
+          outLines.push(line.prefix)
+          continue
+        }
+        const translated = []
+        for (const part of line.parts) {
+          translated.push(
+            await translateLocalOnce(part, targetLang, {}, options, key, {
+              chunkIndex: done++,
+              chunkCount: total
+            })
+          )
+        }
+        outLines.push(line.prefix + translated.join(''))
+      }
+      return outLines.join('\n').replace(/\s+$/, '')
+    }
   }
-  session.setChatHistory(history)
-  const out = await session.prompt(buildUserMessage(key, text, targetLang), {
-    maxTokens: resolveMaxTokens(options),
-    temperature: 0,
-    budgets: { thoughtTokens: 0 }
-  })
-  return stripThink(out)
+
+  return translateLocalOnce(text, targetLang, context, options, key)
 }
 
 async function translateCloud(text, targetLang, cfg, context = {}, options = {}) {
@@ -504,7 +810,7 @@ async function translateCloud(text, targetLang, cfg, context = {}, options = {})
       },
       body: JSON.stringify({
         model: cfg.modelId,
-        max_tokens: resolveMaxTokens(options),
+        max_tokens: resolveMaxTokens(text, options.mode, false),
         temperature: 0,
         messages
       }),
@@ -532,7 +838,7 @@ async function translateCloud(text, targetLang, cfg, context = {}, options = {})
   if (!res.ok) {
     throw new Error(data?.error?.message || `翻譯 API 錯誤: ${res.status}`)
   }
-  return stripThink(data?.choices?.[0]?.message?.content || '')
+  return stripTranslationNoise(stripThink(data?.choices?.[0]?.message?.content || ''), text)
 }
 
 /**
@@ -585,9 +891,14 @@ async function translate(store, text, targetLang, opts = {}) {
       return text
     }
 
+    // 出口再剝一次系統提示洩漏（防任何路徑漏網）
+    result = stripTranslationNoise(stripThink(result || ''), text)
     // 模型自我複誦（含日文頑固句）：回原文、不轉繁——s2twp 會 mangle 使 renderer 的 echo 去重失效
     if (result.trim() === text.trim()) return result
-    // 繁中目標：0.8B 偶爾吐簡體字，統一過 opencc 轉台灣繁體
+    // LinguaForge 已在 translateLocalOnce 依 DECODE.s2twp 處理；其餘本地／雲端 zh-TW 仍過 s2twp
+    if (translator === 'local' && isLinguaforge(resolveLocalTranslateModel())) {
+      return result
+    }
     return targetLang === 'zh-TW' ? s2twp(result) : result
   })
 }
@@ -600,6 +911,16 @@ module.exports = {
   setStore,
   resolveLocalTranslateModel,
   getLoadInfo,
+  resolveLinguaforgeDecode,
+  LINGUAFORGE_KEY,
+  LINGUAFORGE_KEYS,
+  isLinguaforge,
+  LINGUAFORGE_CHUNK_CHARS,
+  LINGUAFORGE_EOS_TOKEN_IDS,
+  LINGUAFORGE_DECODE,
+  THINK_PREFIX,
+  THINK_PREFIX_TOKEN_IDS,
+  newQwen35ChatWrapper,
   TRANSLATE_MODEL_KEY,
   DEFAULT_LLM_KEY,
   FALLBACK_LLM_KEY,

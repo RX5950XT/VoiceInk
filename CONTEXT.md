@@ -5,14 +5,14 @@
 ## 專案概況
 
 VoiceInk：Windows Electron 語音轉文字應用（檔案轉錄＋即時字幕＋翻譯與 TTS）。
-Vanilla JS + Vite，無前端框架。版本 **1.6.0**（GitHub Release `v1.6.0`：雲端 ASR／設定第四分頁／GPU 翻譯／長文分段翻譯）。
+Vanilla JS + Vite，無前端框架。版本 **1.7.0**（GitHub Release `v1.7.0`：LinguaForge think 前綴修正、Q8／Q4 量化可選、譯文清理獨立模組）。
 
 ## 架構（設定第四分頁 + 雲端 ASR，2026-07-24）
 
 ```
 src/main/
   main.js             frameless 主窗 + IPC；localAsr 依 asrEngine 分流
-  models.js           registry：qwen3asr、qwen35translate（linguaforge08 `hidden:true` 屏蔽中）
+  models.js           registry：qwen3asr、qwen35translate、linguaforge08(Q8)、linguaforge08q4
   gpu-capability.js   NVIDIA VRAM 門檻（≥6GB）
   local-asr.js        sherpa-onnx 本地 ASR（CPU）
   cloud-asr.js        OpenRouter 相容 /audio/transcriptions
@@ -30,12 +30,113 @@ src/renderer/
 | 項目 | 說明 |
 |---|---|
 | ASR | `asrEngine` = local（Qwen3-ASR）/ cloud（`asrApiUrl`/`asrApiKey`/`asrModelId`） |
-| 翻譯 | `translator` = cloud / local；本地模型 `localTranslateModel` 固定 `qwen35translate`；`llmGpu` |
+| 翻譯 | `translator` = cloud / local；本地模型 `localTranslateModel` = `linguaforge08`(Q8，預設) / `linguaforge08q4`(Q4) / `qwen35translate`；`llmGpu` |
 | TTS | Edge TTS；`ttsVoices` + `ttsRate`（-50…100 → Edge rate %） |
 | 設定 UI | 導航第四 tab；區塊：模型／翻譯／語音轉文字／外觀／語音 |
 | 視窗 | 主窗 frameless（header 含 min/max/close）；標題 `VoiceInk` |
 
 模型存放：`%APPDATA%/voiceink/models/<key>/`。
+
+## 最近變更（2026-08-03）— 補回 Qwen3.5 空 think 前綴（根因）＋ Q8／Q4 可選
+
+- **根因**：Qwen3.5 `chat_template.jinja` 在 `enable_thinking` 未開時，`<|im_start|>assistant\n` 後**固定補** `<think>\n\n</think>\n\n`（token `248068,271,248069,271`），模型是帶著它訓練與評測的。node-llama-cpp 3.19 自動解析出的 Qwen wrapper **不補**這 4 個 token → 掉出分布。先前記在「量化對照」的三精度共通缺陷（標籤前綴、專名消失、年份幻覺）其實全部出自這裡，不是權重或語料
+- **修法（一行）**：`local-llm.getSession` 的 `LlamaChatSession` 帶 `newQwen35ChatWrapper(QwenChatWrapper)` ＝ `new QwenChatWrapper({ thoughts: 'discourage' })`
+  - 實測（`node scripts/probe-prompt-path.js`）：`thoughts:'discourage'` 產出的 prompt 與 transformers `apply_chat_template(..., add_generation_prompt=True)` **逐字元相同**、尾端 token 正是 `248068,271,248069,271` → 不需 INTEGRATION.md 建議的自訂 subclass（subclass 亦驗過，輸出相同）
+  - 現況（自動解析）尾端只有 `…<|im_start|>assistant\n`，確認缺 4 token
+  - `budgets.thoughtTokens:0` 是「不生成 thinking」，補不了前綴，兩件事都要做
+- **量化改 Q8_0**（`models.js` `totalBytes: 811843008`）：補回前綴後，唯一還在的量化稅就是罕見專名音譯（Q4 `Kimi→金剛`、`Sol→索爾`；Q8/f16 保留）
+- **30 句客觀對照**（`node scripts/verify-chat-wrapper-fix.js`，樣本／指標共用 `scripts/bench-cases.js`）：
+
+| GGUF | 標籤前綴 | 拉丁專名保留率 | 憑空年份 | 缺陷總數 |
+|---|---|---|---|---|
+| Q4_K_M 修前 | 8 | 46.7% | 2 | 20 |
+| Q4_K_M 修後 | 0 | 80.0% | 0 | 5 |
+| Q8_0 修前 | 9 | 73.3% | 2 | 20 |
+| **Q8_0 修後（出貨）** | **0** | **93.3%** | **0** | **6** |
+
+  門檻（標籤=0／專名≥90%／年份=0／總數<8）**Q8_0 修後 ALL GATES PASS**；Q4 只差專名保留率
+- 逐句例：`The NVIDIA H200 has 141GB…` 修前「141GB HBM3e 記憶體。」→ 修後「NVIDIA H200 擁有 141GB HBM3e 記憶體。」；`A pig would break…` 修前「故事說，豬會…」→ 修後無前綴；`Up to 1M context` 修前「選擇 1M 上下文」→ 修後「最大 1M 上下文」
+- **未修（語料缺口，勿為此調 prompt）**：多行且各行互不相關（規格表）只譯第一行（m1）；`open weight`／`agentic` 等 2023 後 AI 術語
+- **Q4／Q8 改為可選**：Q4 另開 registry key `linguaforge08q4`（獨立資料夾、獨立下載），設定→翻譯模型三顆按鈕（LinguaForge Q8／LinguaForge Q4／Qwen3.5 通用）。預設 Q8（774MB）；Q4（505MB）CPU 約快 2.2×，代價是罕見專名音譯
+  - 同一顆模型兩個量化共用 SFT 格式與 DECODE → `local-llm.isLinguaforge(key)` 取代原本的 `key === LINGUAFORGE_KEY`；renderer 切段用 `startsWith('linguaforge08')`
+  - 實測同一句 `…beat Kimi k3 … around Sol level`：Q8「超越Kimi k3…和Sol一樣強」／Q4「比金剛大3倍…和索爾一樣強」
+  - 舊用戶模型資料夾裡的舊 Q4 檔（在 `linguaforge08/` 底下）不會自動刪，可手動清
+- 驗證：`npx electron scripts/e2e-linguaforge-quant.js` ALL PASS（雙 key 白名單／status／GGUF 路徑／各自實際翻譯）、`e2e-linguaforge-decode` A–E ALL PASS（log 已含 `chat_wrapper`／`think_prefix_token_ids`）、`-list`／`-leak`／`-context` ALL PASS、`e2e-local-translate-settings` ALL PASS（雙模型 × CPU/CUDA，qwen35translate 無回歸）、`node scripts/e2e-cdp-smoke.js` **13/13**、`electron:pack` 已更新預覽
+- 順修：cdp-smoke 的「長文分段」斷言寫死 4 段（LinguaForge 改 280 字切段後應為 8 段，自 2026-08-02 起就一直是假綠燈）→ 改成讀 UI 的「N 字（M 段）」
+
+## 量化對照（2026-08-02e）— ⚠️ 結論已被 2026-08-03 推翻，僅存歷史
+
+> 當時判定「三精度共通＝模型／語料問題」是錯的：三次都缺 think 前綴（同一個變因沒被控制），
+> f16 也壞只證明不是量化、不證明不是 prompt。補回前綴後缺陷 20→5/6。
+> 「維持 Q4_K_M」的決策同步作廢（改 Q8_0，理由見上一節）。
+
+- 工具：`scripts/bench-quant-quality.js`（30 句均衡樣本 + 客觀指標）、`scripts/bench-quant-compare.js`（少量句並列）
+- 30 句缺陷統計（越低越好）／CPU 耗時：**Q4 22 缺陷 76.7s｜Q8_0 20 缺陷 173.0s｜f16 22 缺陷 126.5s**
+- 三個版本**共通**（＝模型端問題，換量化救不了）：
+  - 標籤前綴 `說明：`／`選擇`／`圖為`／`圖 100 號：`／`問：`（訓練語料混了新聞圖說與 UI 選單格式）
+  - 專名丟失：NVIDIA、TSMC、H200 直接消失；年份幻覺（原文沒年份卻生出 2005／2008／2023）
+  - 多行輸入只翻第一行（app 端逐行切是必要的，不是繞路）
+  - AI 術語未學到：open weight、agentic
+- Q4 個案災難（n1 JPMorgan→SEC 幻覺、n2 Kimi→金剛）在 Q8 是對的，但 f16 在 n2 同樣翻錯 → 屬解碼路徑擾動，非系統性優勢
+- 決策：**維持 Q4_K_M**。Q8 只換到 2 個缺陷改善，代價是 +282MB 下載與 2.2× 推論時間
+- 另一項與量化無關的落差：出貨 `evaluate.py` 用 beam=4 + length_penalty=1.2，GGUF 只能 greedy——這部分無法用換量化補
+
+## 最近變更（2026-08-02d）— 條列貼文退化＋術語竄改
+
+- 症狀：貼含 bullet 的貼文，譯文只剩「…大躍進…」重複迴圈、條列內容整段消失；另有「說明：」「問：」標籤與「參數→引數」
+- 逐項根因與修法（每一步都實測過，前兩種切法失敗才收斂到現行做法）：
+  1. **切段**：跨段落合併 → 模型退化迴圈；改逐行又讓 `·` 被翻成「選擇器：」；孤立 bullet 區塊整塊送會被「總結」掉。最終：**逐行翻譯，行首清單標記（`· ` `- ` `1. `）剝除後才送模型，翻完貼回**（`splitLinesForLinguaforge` + `LIST_MARKER`），空行保留段落結構
+  2. **退化救援**：zhtw 依出貨規定 `repeatPenalty:false`，一旦進迴圈出不來 → `findRepetitionLoop` 偵測後以 `repeatPenalty 1.15 + DRY allowedLength 2` **重跑該段**（重試前必須 `setChatHistory(history)` 還原，否則第二輪帶著上一輪＝複誦）
+  3. **標籤**：模型自加 `說明：`／`問：` → 白名單 + **原文沒有冒號才剝**
+  4. **s2twp 竄改**：`to:'twp'` 會把已正確的「總參數」改成「總引數」、「記憶體參數設定」→「記憶體引數設定」。改為先用 `to:'tw'`（純字形）探測，**沒有簡體字就原樣回傳**，只有真的含簡體才套詞彙表（ASR 共用此函式，一併受益）
+- 驗證：`npx electron scripts/e2e-linguaforge-list.js` ALL PASS（結構 11 行、6 條 bullet 標記保留、無迴圈／標籤／引數）；`test-strip-prompt-leak` 23/23；`e2e-linguaforge-leak`／`-decode`／`-context`／`e2e-local-translate-settings`（CPU+CUDA）全 PASS；`electron:pack` 已更新預覽
+- 已知殘留（0.8B 能力，非工程層可修）：專名音譯（Kimi→金智美）、偶發整句幻覺（JPMorgan 那句被翻成 SEC 內容）、片語誤譯（Open weight release→開啟重量釋放）。e2e 斷言刻意只驗結構／污染／退化，不把模型用詞正確性當紅燈
+
+## 最近變更（2026-08-02c）— 譯文純淨度（persona／引號／列點）
+
+- 症狀：譯文出現 `譯者：` 標籤、憑空 `2. ` 列點編號、不成對的 `」`
+- 根因：(1) 0.8B 偶爾把 system persona 寫成說話者標籤（舊 `stripPromptLeak` 只認 `譯文：`／`Translation:`）；(2) 我方單側引號剝除無條件執行，把 `「引言」，某某說。` 的開頭 「 剝掉留下孤兒 」；(3) 模型把整段譯成編號清單
+- 修法：清理邏輯抽到 **`src/main/translate-clean.js`**（純文字、無 electron 依賴，測試可直接 require；原本 `scripts/test-strip-prompt-leak.js` 複製一份邏輯，改一次要改兩處）
+  - 新增 persona 標籤 `譯者|翻譯者|翻譯員|譯員|Translator[：:]`
+  - 引號：整段包覆才剝一層；**單側只在「找不到配對」時剝**
+  - 列點：`stripTranslationNoise(raw, source)` 帶原文，原文沒編號才剝譯文行首 `1. `／`2、`
+  - 除錯鉤子：`VOICEINK_DEBUG_RAW=1` 印模型原始輸出（判斷污染來自模型或我方清理）
+- 驗證：`node scripts/test-strip-prompt-leak.js` 19/19；`npx electron scripts/e2e-linguaforge-leak.js`（1349 字實測文）ALL PASS；`e2e-linguaforge-decode` / `e2e-linguaforge-context` 未回歸；`electron:pack` 已更新預覽
+- 已知殘留：0.8B 會幻覺出原文沒有的引述來源（如「…」，某某說），屬翻譯品質非提示洩漏，清理層不可能安全辨識
+
+## 最近變更（2026-08-02b）— 修 LinguaForge 長文每段吐同一句
+
+- 症狀：翻譯頁貼長文（8 段），譯文欄整篇重複第 1 段譯文
+- 根因：`translateLocalOnce` 把前文（`previousSource`/`previousTranslation`）當上一輪 user/assistant 塞進 chat history。LinguaForge 是**單輪 SFT MT 模型**，多一輪對話後 greedy 直接複誦上一輪的 assistant 譯文（off-by-one echo）；原版 evaluate.py 就是 system + 單一 user，故沒此問題
+- 修法：`key === LINGUAFORGE_KEY` 時 `pair = null`（不注入前文）；`translateLocal` 的 280 字切段迴圈同步停止串接 prevSrc/prevTr。qwen35translate／雲端不受影響
+- 驗證：`npx electron scripts/e2e-linguaforge-context.js`（4 段連續帶前文）修前 `dupes:2`、修後 `dupes:0 ALL PASS`；`npm run electron:pack` 已更新預覽
+
+## 最近變更（2026-08-02）— LinguaForge v5e 出貨解碼對齊（GGUF）
+
+- 權威：`evaluate.py` DECODE / INTEGRATION.md；本 app 走 **GGUF + node-llama-cpp**（無 beam／無 nrng）
+- `local-llm.js` 集中 `LINGUAFORGE_DECODE`：
+  - 雙 EOS 文件化 `[248046,248044]` + `customStopTriggers` `<|im_end|>`/`<|endoftext|>`
+  - **zhtw：`repeatPenalty: false`**（套件省略時預設 1.1，會攪繁簡——此為關鍵修）
+  - en/ja：`repeatPenalty.penalty=1.1`；全向 `dryRepeatPenalty.allowedLength=3` 近似 `no_repeat_ngram_size=4`
+  - `temperature=0`、`budgets.thoughtTokens=0`；`maxTokens≈源長×2`（64–768）
+  - 長文 file 模式 main 端 ≤280 字段落；renderer 選 LinguaForge 時同 280
+  - 後處理 strip 引號；zhtw 必 `s2twp`；每次 log `[linguaforge decode]`
+- 驗收：`npx electron scripts/e2e-linguaforge-decode.js` A–E ALL PASS（stopReason=`eogToken`）
+
+## 最近變更（2026-08-01）— LinguaForge v5e 模型路徑
+
+- HF repo 不變：`RX5950XT/LinguaForge-Qwen3.5-0.8B-zhTW-en-ja`
+- GGUF 路徑更新：`gguf-v5e/linguaforge-v5e-0.8b-Q4_K_M.gguf`（`totalBytes: 529296832`）；舊 v3 `gguf/linguaforge-v3-…` 作廢
+- 本機已刪舊目錄後重下 v5e；prompt 仍為 system=`You are a professional translator.` + user=`翻譯成…：\n`（與 v5e 卡片一致）；zh-TW 仍過 OpenCC s2twp
+- 驗證：`npx electron scripts/e2e-linguaforge-v5e.js` 下載＋八向翻譯 PASS；`e2e-llm-device` CPU+CUDA PASS；`e2e-local-translate-settings` ALL PASS；`npm run electron:pack` 已更新預覽
+- 抽樣譯文（v5e Q4 CPU）：en→繁「週末夜市人潮擁擠。」／醫囑「藥劑應每天服用兩次。」；ja→繁「我週末的夜市非常熱鬧。」；繁→en／en→ja 語意正確
+
+## 最近變更（2026-07-28）— 恢復 LinguaForge 選項
+
+- 2026-07-27 的屏蔽全部反向改回：`models.js` 移除 `hidden` 與 `status()` 的 hidden 跳過、`LLM_MODEL_KEYS = ['linguaforge08','qwen35translate']`；`local-llm.js` `DEFAULT_LLM_KEY = 'linguaforge08'`；`app.js` 預設／白名單／normalize 回 lingua；`index.html` 翻譯模型 setting-group 取消 hidden 並加回 LinguaForge 按鈕
+- e2e 斷言同步反轉：`e2e-cdp-smoke.js` 改測 `linguaforge selectable`（改用 setting-group 是否帶 hidden 判定，不用 `offsetParent`——translator=cloud 時整個本地區塊本來就隱藏）；`e2e-llm-device.js` 改測在白名單／在 status／resolve 落 lingua
+- e2e 測試句改成一般句子：LinguaForge 對 `Hello world.` 等極短寒暄句會吐「？」（既有已知行為），不是回歸
+- 驗證：`npx electron scripts/e2e-llm-device.js` ALL PASS（CPU + CUDA）、`npx electron scripts/e2e-local-translate-settings.js` ALL PASS（雙模型 × CPU/CUDA）、`node scripts/e2e-cdp-smoke.js` **13/13**、`npm run electron:pack` 已更新預覽
 
 ## 最近變更（2026-07-27b）— 翻譯頁解除字數限制（自動分段）
 
@@ -49,7 +150,7 @@ src/renderer/
 - 驗證：`node scripts/e2e-cdp-smoke.js` **13/13**（新增 `splitForTranslate` 單元檢查、無 maxlength、1908 字實際分 4 段翻譯完成）；`npx electron scripts/e2e-local-translate-settings.js` ALL PASS
 - 備忘：CDP e2e 不要用單次 `awaitPromise` 等數十秒（連線閒置會斷、node 靜默 exit 0）→ 改由 Node 端 2s 輪詢
 
-## 最近變更（2026-07-27）— 暫時屏蔽 LinguaForge
+## 最近變更（2026-07-27）— 暫時屏蔽 LinguaForge（已於 2026-07-28 恢復，僅存歷史）
 
 - 原因：LinguaForge 0.8B 品質待修，先從 UI 與白名單移除，模型修好再恢復
 - 屏蔽點（恢復＝這 3 處反向改回）：

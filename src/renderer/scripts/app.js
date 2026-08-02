@@ -130,8 +130,8 @@ const SETTING_DEFAULTS = {
   ttsVoices: { ...DEFAULT_TTS_VOICES },
   /** 語速百分比偏移 -50…100 */
   ttsRate: 0,
-  /** @type {'qwen35translate'} */
-  localTranslateModel: 'qwen35translate',
+  /** @type {'linguaforge08'|'linguaforge08q4'|'qwen35translate'} */
+  localTranslateModel: 'linguaforge08',
   /** 本地 LLM 是否使用 CUDA（需 NVIDIA ≥6GB） */
   llmGpu: false
 }
@@ -139,8 +139,8 @@ const SETTING_DEFAULTS = {
 /** 固定本地 ASR 模型 key */
 export const ASR_MODEL_KEY = 'qwen3asr'
 
-/** 本地翻譯模型 key 白名單（linguaforge08 屏蔽中，修好後加回） */
-export const LLM_MODEL_KEYS = ['qwen35translate']
+/** 本地翻譯模型 key 白名單（順序：推薦在前） */
+export const LLM_MODEL_KEYS = ['linguaforge08', 'linguaforge08q4', 'qwen35translate']
 
 /** @deprecated 請用 resolveTranslateModelKey(settings, modelsStatus)；保留常數供舊 e2e */
 export const TRANSLATE_MODEL_KEY = 'qwen35translate'
@@ -175,10 +175,12 @@ function normalizeTtsRate(v) {
 
 /**
  * @param {unknown} v
- * @returns {'qwen35translate'}
+ * @returns {'linguaforge08'|'linguaforge08q4'|'qwen35translate'}
  */
 export function normalizeLocalTranslateModel(v) {
-  return LLM_KEY_SET.has(/** @type {string} */ (v)) ? /** @type {'qwen35translate'} */ (v) : 'qwen35translate'
+  return LLM_KEY_SET.has(/** @type {string} */ (v))
+    ? /** @type {'linguaforge08'|'linguaforge08q4'|'qwen35translate'} */ (v)
+    : 'linguaforge08'
 }
 
 /**
@@ -259,7 +261,7 @@ let cudaInstallInProgress = false
 const segmentValues = {
   translatorSegment: 'local',
   asrEngineSegment: 'local',
-  localTranslateModelSegment: 'qwen35translate',
+  localTranslateModelSegment: 'linguaforge08',
   llmGpuSegment: 'cpu',
   themeSegment: 'dark'
 }

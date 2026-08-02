@@ -36,20 +36,32 @@ const MODELS = {
     files: ['Qwen3.5-0.8B-Q4_K_M.gguf'],
     gguf: 'Qwen3.5-0.8B-Q4_K_M.gguf'
   },
-  /** 微調：繁中／英文／日文三語翻譯（Q4_K_M）；hidden：模型待修，暫時屏蔽（改回 false 即恢復） */
+  /**
+   * 微調：繁中／英文／日文三語翻譯（v5e **Q8_0**，預設）
+   * 補回 think 前綴後，兩個量化的標籤前綴／年份幻覺都是 0，差別只剩罕見專名：
+   * 拉丁專名保留率 Q8 93.3% vs Q4 80%（Q4 會把 Kimi→金剛、Sol→索爾音譯掉）
+   */
   linguaforge08: {
-    label: 'LinguaForge 0.8B（繁中/英/日）',
+    label: 'LinguaForge 0.8B Q8（繁中/英/日）',
     kind: 'llm',
-    hidden: true,
-    totalBytes: 529296768,
+    totalBytes: 811843008,
     base: 'https://huggingface.co/RX5950XT/LinguaForge-Qwen3.5-0.8B-zhTW-en-ja/resolve/main/',
-    files: ['gguf/linguaforge-v3-0.8b-Q4_K_M.gguf'],
-    gguf: 'gguf/linguaforge-v3-0.8b-Q4_K_M.gguf'
+    files: ['gguf-v5e/linguaforge-v5e-0.8b-Q8_0.gguf'],
+    gguf: 'gguf-v5e/linguaforge-v5e-0.8b-Q8_0.gguf'
+  },
+  /** 同一顆模型的 Q4_K_M：小 269MB、CPU 快約 2.2×，代價是罕見專名會被音譯 */
+  linguaforge08q4: {
+    label: 'LinguaForge 0.8B Q4（省空間較快）',
+    kind: 'llm',
+    totalBytes: 529296832,
+    base: 'https://huggingface.co/RX5950XT/LinguaForge-Qwen3.5-0.8B-zhTW-en-ja/resolve/main/',
+    files: ['gguf-v5e/linguaforge-v5e-0.8b-Q4_K_M.gguf'],
+    gguf: 'gguf-v5e/linguaforge-v5e-0.8b-Q4_K_M.gguf'
   }
 }
 
-/** 本地翻譯模型 key 白名單（順序：推薦在前）；linguaforge08 屏蔽中，修好後加回 */
-const LLM_MODEL_KEYS = ['qwen35translate']
+/** 本地翻譯模型 key 白名單（順序：推薦在前） */
+const LLM_MODEL_KEYS = ['linguaforge08', 'linguaforge08q4', 'qwen35translate']
 
 /**
  * @param {unknown} key
@@ -104,7 +116,6 @@ function isDownloaded(key) {
 function status() {
   const result = {}
   for (const [key, def] of Object.entries(MODELS)) {
-    if (def.hidden) continue
     result[key] = {
       key,
       label: def.label,

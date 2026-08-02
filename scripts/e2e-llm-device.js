@@ -22,16 +22,18 @@ async function main() {
 
   // --- registry ---
   try {
-    // linguaforge08 目前屏蔽（registry 保留 hidden:true、不在白名單、不出現在 status）
-    if (!models.MODELS.linguaforge08?.hidden) throw new Error('linguaforge08 應為 hidden')
-    if (models.isLlmKey('linguaforge08') || !models.isLlmKey('qwen35translate')) {
+    if (!models.isLlmKey('linguaforge08') || !models.isLlmKey('qwen35translate')) {
       throw new Error('isLlmKey')
     }
-    if (models.status().models.linguaforge08) throw new Error('hidden 模型不該出現在 status')
+    if (models.isLlmKey('qwen3asr')) throw new Error('asr 不該是 llm key')
+    if (!models.status().models.linguaforge08) throw new Error('linguaforge08 應出現在 status')
+    if (!models.ggufRelativePath('linguaforge08')?.endsWith('.gguf')) {
+      throw new Error('lingua gguf path')
+    }
     if (!models.ggufRelativePath('qwen35translate')?.includes('Qwen3.5')) {
       throw new Error('qwen gguf path')
     }
-    pass('models registry（linguaforge08 屏蔽）+ gguf')
+    pass('models registry + gguf path')
   } catch (e) {
     fail('models registry', e)
   }
@@ -72,8 +74,8 @@ async function main() {
     const qwenDl = models.isDownloaded('qwen35translate')
     const lingDl = models.isDownloaded('linguaforge08')
     console.log(`  downloaded: qwen=${qwenDl} lingua=${lingDl} resolved=${key}`)
-    // lingua 屏蔽中：不論是否已下載，都應解析為 qwen
-    if (qwenDl && key !== 'qwen35translate') throw new Error(`expected qwen, got ${key}`)
+    if (lingDl && key !== 'linguaforge08') throw new Error(`expected lingua, got ${key}`)
+    if (!lingDl && qwenDl && key !== 'qwen35translate') throw new Error(`expected qwen, got ${key}`)
     pass('resolveLocalTranslateModel')
   } catch (e) {
     fail('resolveLocalTranslateModel', e)
@@ -100,7 +102,8 @@ async function main() {
       console.log('  loadInfo CPU:', JSON.stringify(info))
       if (info.backend !== 'cpu') throw new Error(`expected cpu, got ${info.backend}`)
 
-      const out = await localLlm.translate(store, 'Hello world.', 'zh-TW', { mode: 'file' })
+      // 一般句子（LinguaForge 對極短寒暄句可能吐「？」，見 CONTEXT）
+      const out = await localLlm.translate(store, 'The weather is nice today, so we went for a walk.', 'zh-TW', { mode: 'file' })
       console.log('  translate:', out)
       if (!out || out.length < 2) throw new Error('empty translation')
       pass('CPU warm + translate')
@@ -114,7 +117,7 @@ async function main() {
         const infoG = localLlm.getLoadInfo()
         console.log('  loadInfo GPU:', JSON.stringify(infoG))
         // CUDA 失敗會 fallback vulkan/cpu，仍算可接受
-        const outG = await localLlm.translate(store, 'Good morning.', 'zh-TW', { mode: 'file' })
+        const outG = await localLlm.translate(store, 'She opened the window and listened to the rain.', 'zh-TW', { mode: 'file' })
         console.log('  translate GPU path:', outG)
         if (!outG || outG.length < 2) throw new Error('empty gpu translation')
         if (!infoG.gpu && infoG.backend === 'cpu') {

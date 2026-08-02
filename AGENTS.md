@@ -19,9 +19,9 @@
 - **Vite** - 構建工具
 - **Vanilla JavaScript** - 無框架前端
 - **ASR** - 本地 sherpa-onnx（Qwen3-ASR-0.6B）或雲端（OpenRouter 相容 `/audio/transcriptions`）
-- **翻譯** - 雲端 chat / 本地 GGUF（`qwen35translate`；`linguaforge08` 屏蔽中；`llmGpu` 可開 GPU）；即時「自動偵測」= 不譯
+- **翻譯** - 雲端 chat / 本地 GGUF（`linguaforge08`(Q8) 預設／`linguaforge08q4`(Q4)／`qwen35translate`；`llmGpu` 可開 GPU）；即時「自動偵測」= 不譯
 - **TTS** - Edge TTS（`node-edge-tts` MIT；語速 `ttsRate`；需連網）
-- **翻譯頁** - 輸入不限字數：`splitForTranslate` 分 ≤600 字段落依序翻譯、可中途停止（IPC 單次上限 1500 字）
+- **翻譯頁** - 輸入不限字數：`splitForTranslate` 通用 ≤600／LinguaForge ≤280 字段落依序翻譯、可中途停止（IPC 單次上限 1500 字）；LinguaForge 解碼見 `local-llm` DECODE 查表
 - **設定** - 導航第四分頁：模型／翻譯／語音轉文字／外觀／語音；主窗 frameless
 
 > 現行架構與驗證紀錄見 [CONTEXT.md](./CONTEXT.md)（接手前先讀）。
@@ -115,6 +115,12 @@ subtitleWindow.setMenu(null)
 > - 不要在 Renderer Process 儲存 API Key 明文
 > - 不要把 MediaRecorder 改回 `timeslice` 模式（Blob 缺 WebM header）
 > - 翻譯前文不要塞進「【前文】【本段】」括號式 prompt（小模型會複誦）→ system prompt + chat history
+> - LinguaForge 不吃前文 chat history（單輪 SFT MT，多一輪就複誦上一輪譯文）→ 僅 system + 單一 user
+> - `LlamaChatSession` 必須帶 `new QwenChatWrapper({ thoughts: 'discourage' })`：Qwen3.5 template 在 assistant 起頭固定補 `<think>\n\n</think>\n\n`（248068,271,248069,271），node-llama-cpp 自動解析的 wrapper 不補；缺這 4 token 會標籤前綴／專名消失／年份幻覺（`budgets.thoughtTokens:0` 補不了）
+> - LinguaForge 兩個量化各自是獨立 registry key（`linguaforge08`=Q8 預設／`linguaforge08q4`=Q4，快但罕見專名會音譯）；共用同一套格式，判斷用 `isLinguaforge(key)` 不要比對單一 key
+> - 譯文清理只放 `src/main/translate-clean.js`（無 electron 依賴、可 node 直測），別在別處複製一份；單側引號僅在無配對時剝
+> - LinguaForge 長文逐行翻譯、清單標記不送模型；退化迴圈偵測到就開 rep-penalty 重跑（重試前還原 history）
+> - `s2twp` 僅在含簡體時套詞彙表（`twp` 會把「參數」竄改成「引數」）
 > - 顯示模式勿讓即時頁 payload 夾帶 `displayMode` 或加跨窗 IPC（由字幕彈窗獨佔 store `captionDisplayMode`，兩端搶改會打架）
 > - 引擎 owner 布林 `live|file|translate`，勿改成計數；prewarm gen 作廢 in-flight；TTS 只傳 lang、回 Uint8Array（禁 base64／禁 AGPL 套件）
 > - ASR 有 serial lock + `loadEnabled`（防 stop 後幽靈重載），勿拿掉

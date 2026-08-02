@@ -1,5 +1,44 @@
 # VoiceInk — 任務追蹤
 
+## 2026-08-02 — LinguaForge v5e 出貨解碼對齊
+
+- [x] DECODE 查表：eos 雙 id、beams/lp 文件化、en/ja rep=1.1、zhtw 禁 rep
+- [x] GGUF：`repeatPenalty:false`（zhtw）、dry≈nrng4、thoughtTokens:0、adaptive maxTokens
+- [x] 長文 main ≤280 切段；renderer LinguaForge 同 280
+- [x] 後處理 s2twp + strip 引號；`[linguaforge decode]` log
+- [x] 驗收 `e2e-linguaforge-decode.js` A–E ALL PASS
+- [x] `electron:pack`
+
+### Review
+- 根因：node-llama-cpp 省略 repeatPenalty 時預設 penalty=1.1，zhtw 被誤開 → 繁簡亂
+- GGUF 無法 beam=4；log 標 N/A，靠 eog + dry + 分段逼近
+
+## 2026-08-01 — LinguaForge 升級 v5e + 下載／翻譯驗證
+
+- [x] `models.js` 改指 `gguf-v5e/linguaforge-v5e-0.8b-Q4_K_M.gguf`（totalBytes 529296832）
+- [x] 刪除本機舊 v3：`%APPDATA%/voiceink/models/linguaforge08`
+- [x] 下載 v5e 成功（310.5s，529296832 bytes）
+- [x] 翻譯抽樣 8 向 PASS（en/ja/zh-TW 往返）
+- [x] e2e-llm-device ALL PASS（CPU+CUDA）；e2e-local-translate-settings ALL PASS
+- [x] `electron:pack` 更新預覽
+
+### Review
+- HF 路徑同 repo，GGUF 子目錄由 `gguf/` → `gguf-v5e/`、檔名 v3→v5e
+- 訓練格式不變（system professional translator + `翻譯成…：\n`）
+- unload 後 Windows 可能原生 exit -1073740791（既有），不影響翻譯結果
+
+## 2026-07-28 — 恢復 LinguaForge 選項
+
+- [x] `models.js` 移除 `hidden` 與 status 過濾；白名單加回 `linguaforge08`（推薦在前）
+- [x] `local-llm.js` `DEFAULT_LLM_KEY` 回 `linguaforge08`；renderer 預設／白名單／normalize 同步
+- [x] `index.html` 翻譯模型 setting-group 取消 hidden、加回 LinguaForge 按鈕
+- [x] e2e 斷言反轉（cdp smoke 改 `linguaforge selectable`、llm-device 改測可選＋resolve）
+- [x] 驗證：llm-device ALL PASS（CPU+CUDA）、local-translate-settings ALL PASS、CDP smoke 13/13、`electron:pack`
+
+### Review
+- smoke 原本用 `offsetParent` 判可見會誤判：translator=cloud 時整個本地區塊隱藏 → 改判 setting-group 是否帶 `hidden`
+- e2e 測試句換成一般句：LinguaForge 對極短寒暄句（`Hello world.`）吐「？」是既有已知行為
+
 ## 2026-07-27 — v1.6.0：屏蔽 LinguaForge + 翻譯不限字數
 
 - [x] LinguaForge 屏蔽：registry `hidden:true`、白名單只留 qwen、預設／normalize 全改 qwen
@@ -141,3 +180,51 @@
 ### Review
 - 對抗式審查已吸收：禁 AGPL、禁 base64、prewarmGen、none 空狀態、stale 態
 - 預覽：`dist/win-unpacked/VoiceInk.exe`
+
+## 2026-08-02b — 修 LinguaForge 長文重複同一句
+
+- [x] 重現：`scripts/e2e-linguaforge-context.js`（4 段帶前文 → dupes:2）
+- [x] 根因：LinguaForge 單輪 SFT，前文 chat history 導致複誦上一輪譯文
+- [x] 修：`translateLocalOnce` LinguaForge 不注入前文；切段迴圈停止串接 prev
+- [x] 驗證：dupes:0 ALL PASS；`npm run electron:pack` 更新預覽
+
+### Review
+- 只改 main 端一處判斷，renderer 仍照送 previousSource/Translation（qwen／雲端仍受益）
+- 文件同步：CLAUDE.md／AGENTS.md 地雷、CONTEXT.md、lessons.md
+
+## 2026-08-02c — 譯文純淨度
+
+- [x] 重現：`scripts/e2e-linguaforge-leak.js`（實測 1349 字）→ `譯者：` 標籤、孤兒 `」`
+- [x] 抽 `src/main/translate-clean.js`（消除測試腳本的邏輯複製）
+- [x] persona 標籤／單側引號僅無配對才剝／原文無列點才剝譯文編號
+- [x] 驗證：unit 19/19、leak e2e ALL PASS、decode+context 無回歸、pack 已更新
+
+### Review
+- 清理層只處理「可判定的非譯文內容」；模型幻覺引述來源不強行剝（會誤刪正文）
+
+## 2026-08-02d — 條列貼文退化＋術語竄改
+
+- [x] 重現：`scripts/e2e-linguaforge-list.js`（GLM 貼文，bullet ×6）
+- [x] 切段收斂到「逐行＋清單標記剝除」（前兩版切法皆實測失敗）
+- [x] `findRepetitionLoop` 退化偵測 → anti-repeat 重跑（重試前還原 history）
+- [x] 模型自加標籤（說明：／問：）白名單 + 原文無冒號才剝
+- [x] `s2twp` 僅在含簡體時套詞彙表（修「參數→引數」竄改）
+- [x] 驗證：list/leak/decode/context/local-translate-settings 全 PASS、unit 23/23、pack 已更新
+
+### Review
+- e2e 斷言改為只驗結構／污染／退化，模型用詞正確性列為已知殘留
+
+## 2026-08-03 — Qwen3.5 空 think 前綴（LinguaForge 根因）
+
+- [x] 定位：`node scripts/probe-prompt-path.js` 印出生產路徑 prompt，確認尾端缺 `<think>\n\n</think>\n\n`
+- [x] 修：`getSession` 的 `LlamaChatSession` 帶 `newQwen35ChatWrapper()`＝`QwenChatWrapper{thoughts:'discourage'}`（與 apply_chat_template 逐字元相同，免自訂 subclass）
+- [x] log 佐證：`[linguaforge decode]` 加 `chat_wrapper`／`think_prefix`／`think_prefix_token_ids`
+- [x] 量化改 Q8_0（`models.js` totalBytes 811843008）——補前綴後唯一剩的量化稅是罕見專名音譯
+- [x] Q8／Q4 改為使用者可選：新增 registry key `linguaforge08q4` + 設定第三顆按鈕；`isLinguaforge(key)` 取代單一 key 比對
+- [x] `npx electron scripts/e2e-linguaforge-quant.js` ALL PASS（雙 key 白名單／status／路徑／各自實譯）
+- [x] 30 句前後對照 `node scripts/verify-chat-wrapper-fix.js`：Q8_0 修後 標籤0／專名93.3%／年份0／總數6 **ALL GATES PASS**
+- [x] 回歸：decode A–E／list／leak／context／local-translate-settings 全 PASS；`electron:pack` 更新預覽
+
+### Review
+- 只改一行 session 建構 + 一行 registry；不新增後處理 regex（前綴消失是修對 prompt 的結果，不是剝出來的）
+- 已知未修（語料缺口）：多行互不相關只譯第一行、2023 後 AI 術語

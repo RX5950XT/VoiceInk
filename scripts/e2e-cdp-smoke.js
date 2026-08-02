@@ -187,25 +187,25 @@ async function main() {
     })()`)
     ok('models.status', Array.isArray(status?.keys) && status.keys.includes('qwen3asr'), JSON.stringify(status))
 
-    // LinguaForge 屏蔽：模型清單／翻譯模型選項／store 值都不得出現
-    const hidden = await cdp.eval(`(async () => {
+    // LinguaForge 可選：模型清單／翻譯模型選項都要出現
+    const lingua = await cdp.eval(`(async () => {
       const seg = document.getElementById('localTranslateModelSegment')
       return {
         statusKeys: Object.keys((await window.electronAPI.models.status()).models || {}),
         settingsText: /LinguaForge/i.test(document.getElementById('page-settings')?.innerText || ''),
         segBtn: !!seg?.querySelector('[data-value="linguaforge08"]'),
-        segVisible: !!seg?.offsetParent,
-        stored: await window.electronAPI.store.get('localTranslateModel', 'qwen35translate')
+        // 整組不再被 hidden 遮蔽（本地翻譯區塊本身在 translator=cloud 時才隱藏）
+        groupShown: !seg?.closest('.setting-group')?.classList.contains('hidden'),
+        translator: await window.electronAPI.store.get('translator', 'local')
       }
     })()`)
     ok(
-      'linguaforge hidden',
-      !hidden?.statusKeys?.includes('linguaforge08') &&
-        hidden?.settingsText === false &&
-        hidden?.segBtn === false &&
-        hidden?.segVisible === false &&
-        hidden?.stored === 'qwen35translate',
-      JSON.stringify(hidden)
+      'linguaforge selectable',
+      lingua?.statusKeys?.includes('linguaforge08') &&
+        lingua?.settingsText === true &&
+        lingua?.segBtn === true &&
+        lingua?.groupShown === true,
+      JSON.stringify(lingua)
     )
 
     // 翻譯分段器單元檢查（直接 import 打包內的 renderer 模組）
@@ -263,11 +263,16 @@ async function main() {
       })`)
       if (/完成|失敗/.test(translated?.state || '')) break
     }
+    // 期望段數取自 UI 的「N 字（M 段）」：段長依模型不同（通用 600／LinguaForge 280），不可寫死
+    const expectSegs = Number((longRun?.count || '').match(/（(\d+) 段）/)?.[1] || 0)
     ok(
       // 輸入是同句重複 → 每段譯文相同，故驗「段數」而非總長
       'long text translated in chunks',
-      /完成/.test(translated?.state || '') && translated?.outLines === 4 && !translated?.err,
-      JSON.stringify(translated)
+      /完成/.test(translated?.state || '') &&
+        expectSegs > 1 &&
+        translated?.outLines === expectSegs &&
+        !translated?.err,
+      JSON.stringify({ ...translated, expectSegs })
     )
 
     cdp.close()

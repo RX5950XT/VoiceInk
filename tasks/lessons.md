@@ -55,3 +55,19 @@
 - **獨立模型並行 warm**：ASR（sherpa）與 LLM（llama）互不相干，`Promise.all` 並行載入即可近乎減半等待；各自 `warm()` 已 catch 回傳 `{ok,warnings}`，並行不會 reject。實測同時載入無原生競態。
 - **打包跑的是 `src/` 原始碼**：`build.files` 排除 `dist/**`，main `loadFile('../renderer/...')` 直接載入 asar 內原始 ESM/HTML；`vite build` 只作驗證。改 renderer 改 `src/` 就生效，別被 `dist/renderer` 只有 index.html 誤導。
 - **e2e 用 `npx electron <script>` 時 app 名是 `Electron`**：`userData` 會指向 `Roaming/Electron`（找不到 `voiceink` 的模型）→ 開頭補 `app.setPath('userData', join(app.getPath('appData'),'voiceink'))`。UI 端可用內建 `WebSocket`（Node 22）走 CDP 驅動打包版驗證。
+- **單輪 SFT 翻譯模型別餵前文 chat history**：LinguaForge 0.8B 訓練格式是 system + 單一 user（`翻譯成…：\n<text>`）。多塞一輪 user/assistant 前文後，greedy 會直接複誦上一輪的 assistant 譯文（off-by-one echo）→ 長文分段時整篇都是第 1 段譯文。前文對 chat 型模型（qwen35translate／雲端）有益，對單輪 MT 模型是毒；別把「前文走 chat history」當通則套到所有模型。重現：`scripts/e2e-linguaforge-context.js` 連續 4 段帶前文，看 dupes。
+- **自家「清理」也會製造污染**：譯文後處理無條件剝單側引號，把合法的 `「引言」，某某說。` 開頭 「 剝掉，留下孤兒 」——看起來像模型出錯，其實是我方 regex。剝括號/引號一律先判配對。另：測試腳本為了避開 electron 依賴而**複製**一份清理邏輯，等於改一次要改兩處且測到的不是真程式碼 → 把純文字邏輯抽成無依賴模組（`translate-clean.js`）讓測試 require 真貨。除錯先看模型原始輸出（`VOICEINK_DEBUG_RAW=1`）再決定是修 prompt 還是修清理。
+- **在地化詞彙表會竄改正確譯文**：OpenCC `twp`（台灣詞彙）對已是繁體的文字照樣替換，「總參數」→「總引數」、「記憶體參數設定」→「記憶體引數設定」。看起來像模型翻錯，其實是後處理。作法：先用純字形 `tw` 探測，字串沒變＝沒有簡體字 → 原樣回傳，只有真的含簡體才套 `twp`。
+- **切段策略要用實測收斂，別靠推理**：LinguaForge 條列貼文退化，依序試了「空行為硬邊界」（bullet 區塊單獨送 → 被總結掉）、「純逐行」（`·` 被翻成「選擇器：」），最後才是「逐行＋清單標記剝除後再送、翻完貼回」。每一版都跑同一個 e2e 對照，才看得出哪個假設錯。
+- **e2e 別把小模型的用詞正確性當紅燈**：0.8B 會音譯專名（Kimi→金智美）、偶發整句幻覺，這些永遠修不好，寫進斷言只會讓測試長期是紅的而失去訊號。斷言只驗工程層能保證的：結構（行數／清單標記）、污染（persona 標籤／指令／special token）、退化（重複迴圈）、後處理竄改（引數）。
+- **重試推論前要還原 chat history**：`session.prompt` 會把這一輪寫進 history，直接重跑等於帶著剛才那段爛譯文當前文 → 複誦。重試分支第一件事就是 `setChatHistory(history)`。
+- **對照實驗的樣本不能從其中一組的失敗集挑**：先用 7 句（全部挑自 Q4 翻壞的句子）比 Q4/Q8/f16，看起來「Q8 完勝、量化是元兇」；換成 30 句預先設計的均衡樣本後，客觀缺陷 22/20/22——差距落在雜訊內，先前結論是選擇偏誤。凡是「A 比 B 好」的宣稱，樣本必須在看到任一方輸出之前就固定。
+- **量化不背模型的鍋**：0.8B 的專名丟失（NVIDIA/TSMC/H200）、幻覺年份、`說明：`／`選擇`／`圖為` 標籤前綴、多行輸入只翻第一行，f16 全精度照樣發生。個別句子 Q4 崩而 Q8 對（或反過來）是解碼路徑被擾動的隨機結果，不是系統性優勢。要判斷「模型 vs 量化」，看的是**同一批樣本的整體缺陷率**，不是幾個亮眼個案。
+
+## 2026-08-03 — 「三個精度都一樣壞」不等於權重問題
+
+- 錯誤推論：Q4／Q8／f16 缺陷數相近 → 判定是模型／語料，決定維持 Q4 並停止追查。
+- 實情：三次跑的都是**同一個壞 prompt**（缺 Qwen3.5 的空 think 前綴 4 token），變因根本沒被控制。
+- 教訓：比較實驗前先確認「送進模型的字串」與權威來源逐字元一致；prompt 是所有解碼參數的上游。
+- 通則：模型輸出出現憑空前綴／專名消失，先印 prompt，不要先寫 regex 剝前綴（剝掉的只是最顯眼的症狀）。
+- 也別盡信文件：INTEGRATION.md 說 node-llama-cpp 的 `thoughts` 六個選項都補不了，實測 3.19 的 `thoughts:'discourage'` 剛好就是；先跑 probe 再決定要不要自訂 subclass。
