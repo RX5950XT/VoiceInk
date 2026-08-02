@@ -23,6 +23,10 @@ npm run electron:build   # 完整打包：NSIS 安裝檔 + win-unpacked → dist
 npm start                # 注意：未打包時 isDev=true，會連 localhost:5173，需先開 vite
 ```
 
+打包前先關掉開著的 `dist/win-unpacked/VoiceInk.exe`（`Stop-Process -Name VoiceInk -Force`），
+否則 electron-builder 會卡 `d3dcompiler_47.dll: Access is denied`。
+發行：bump `package.json` 版本（不可與既有 tag 重複）→ commit → `git tag vX.Y.Z` → push → `electron:build` → `gh release create`。
+
 ## 慣例
 
 - 檔名 kebab-case、變數 camelCase、常數 UPPER_SNAKE_CASE；ES2022、async/await、JSDoc

@@ -6,7 +6,7 @@
 
 ## 1. 專案概覽
 
-**VoiceInk** 是一個 Windows 桌面端語音轉文字應用程式，具備：
+**VoiceInk**（v1.7.0）是一個 Windows 桌面端語音轉文字應用程式，具備：
 
 - 音訊檔案轉錄功能
 - 系統音訊即時字幕功能
@@ -35,6 +35,8 @@ npm run electron:build   # NSIS 安裝檔 + win-unpacked → dist/
 
 > [!IMPORTANT]
 > **每次 UI／功能改動完成後，必須先跑 `npm run electron:pack` 更新免安裝預覽**，讓使用者可直接執行 `dist/win-unpacked/VoiceInk.exe` 驗證。完整 `.exe` 安裝檔（`electron:build`）只在發佈時再打。
+> 打包前先關掉開著的 `dist/win-unpacked/VoiceInk.exe`（`Stop-Process -Name VoiceInk -Force`），否則會卡 `d3dcompiler_47.dll: Access is denied`。
+> 發行流程：bump 版本（不可與既有 tag 重複）→ commit → `git tag vX.Y.Z` → push → `electron:build` → `gh release create`。
 
 ---
 
