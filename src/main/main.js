@@ -7,6 +7,11 @@ const engine = require('./engine')
 const fileTranscribe = require('./file-transcribe')
 const edgeTts = require('./edge-tts')
 const cloudAsr = require('./cloud-asr')
+const chat = require('./chat')
+const chatStore = require('./chat-store')
+const chatImages = require('./chat-images')
+const usage = require('./usage')
+const { registerUsageIpc } = require('./usage/ipc')
 const { detectGpuCapability, clearGpuCapabilityCache } = require('./gpu-capability')
 const cudaEnv = require('./cuda-env')
 const { sanitizeTtsVoices, DEFAULT_TTS_VOICES } = require('./tts-voices')
@@ -41,7 +46,15 @@ const STORE_ALLOWLIST = new Set([
   'ttsVoices',
   'ttsRate',
   'localTranslateModel',
-  'llmGpu'
+  'llmGpu',
+  'asrThreads',
+  'chatApiUrl',
+  'chatApiKey',
+  'chatModels',
+  'chatModelId',
+  'chatPrompts',
+  'chatPromptId',
+  'chatThinking'
 ])
 
 const TRANSLATOR_VALUES = new Set(['cloud', 'local'])
@@ -51,12 +64,69 @@ const THEME_VALUES = new Set(['dark', 'light'])
 const TRANSLATE_TARGET_LANGS = new Set(['zh-TW', 'zh-CN', 'en', 'ja', 'ko'])
 const MAX_TRANSLATE_CHARS = 1500
 
+/** 聊天模型清單上限（設定 UI 可增刪，防有人塞爆 config.json） */
+const MAX_CHAT_MODELS = 30
+
+/**
+ * 本地 ASR 推論執行緒：0＝自動。
+ * 沒有 GPU 選項——npm 的 sherpa-onnx-win-x64 是 CPU-only 編譯，
+ * provider 傳 cuda/directml 只會靜默 fallback（見 local-asr.resolveThreads 註解）。
+ * @param {unknown} raw
+ * @returns {number}
+ */
+function sanitizeAsrThreads(raw) {
+  const n = Number(raw)
+  if (!Number.isInteger(n) || n < 2 || n > localAsr.MAX_ASR_THREADS) return 0
+  return n
+}
+
+/**
+ * 聊天模型清單正規化：去空白、去重、去空字串、限量
+ * @param {unknown} raw
+ * @returns {string[]}
+ */
+function sanitizeChatModels(raw) {
+  const list = chat.sanitizeModels(raw)
+  return (list.length ? list : [chat.DEFAULT_CHAT_MODEL]).slice(0, MAX_CHAT_MODELS)
+}
+
+/**
+ * 聊天 API URL：必須 http/https，否則回預設（防 XSS 後改成外洩端點）
+ * @param {unknown} raw
+ * @returns {string}
+ */
+function sanitizeChatApiUrl(raw) {
+  const url = typeof raw === 'string' ? raw.trim() : ''
+  return /^https?:\/\//i.test(url) ? url : chat.DEFAULT_CHAT_API_URL
+}
+
 /**
  * 初始化 electron-store（ESM 模組需要動態 import）
  */
 async function initStore() {
   const Store = (await import('electron-store')).default
   store = new Store()
+  migrateChatSystemPrompt()
+}
+
+/**
+ * 一次性搬移：舊版單一 `chatSystemPrompt` → 多組 `chatPrompts` 的第一筆。
+ * 搬完刪掉舊 key，之後只讀 chatPrompts / chatPromptId。
+ */
+function migrateChatSystemPrompt() {
+  const legacy = String(store.get('chatSystemPrompt', '') || '').trim()
+  if (!legacy) {
+    if (store.has('chatSystemPrompt')) store.delete('chatSystemPrompt')
+    return
+  }
+  const existing = chat.sanitizePrompts(store.get('chatPrompts', []))
+  if (!existing.length) {
+    const prompt = { id: 'p_legacy', name: '預設提示', content: legacy }
+    store.set('chatPrompts', [prompt])
+    store.set('chatPromptId', prompt.id)
+    console.log('[chat] 已將舊的 chatSystemPrompt 搬移為系統提示 preset')
+  }
+  store.delete('chatSystemPrompt')
 }
 
 /**
@@ -276,6 +346,20 @@ ipcMain.handle('store:get', async (event, key, defaultValue) => {
   if (key === 'theme') {
     return THEME_VALUES.has(val) ? val : (THEME_VALUES.has(defaultValue) ? defaultValue : 'dark')
   }
+  if (key === 'chatApiUrl') return sanitizeChatApiUrl(val)
+  if (key === 'chatModels') return sanitizeChatModels(val)
+  if (key === 'chatModelId') {
+    const list = sanitizeChatModels(store.get('chatModels', []))
+    return list.includes(val) ? val : list[0]
+  }
+  if (key === 'chatPrompts') return chat.sanitizePrompts(val)
+  if (key === 'chatPromptId') {
+    const list = chat.sanitizePrompts(store.get('chatPrompts', []))
+    return list.some((p) => p.id === val) ? val : ''
+  }
+  if (key === 'chatThinking') return val === true
+  if (key === 'asrThreads') return sanitizeAsrThreads(val)
+  if (key === 'chatApiKey') return typeof val === 'string' ? val : ''
   return val
 })
 
@@ -331,6 +415,46 @@ ipcMain.handle('store:set', async (event, key, value) => {
   }
   if (key === 'asrModelId' || key === 'modelId') {
     store.set(key, typeof value === 'string' ? value.trim() : value)
+    return true
+  }
+  if (key === 'chatApiUrl') {
+    store.set(key, sanitizeChatApiUrl(value))
+    return true
+  }
+  if (key === 'chatModels') {
+    const list = sanitizeChatModels(value)
+    store.set(key, list)
+    // 清單變動後目前選用的 model 可能已不存在 → 立刻收斂，避免聊天請求被拒
+    if (!list.includes(store.get('chatModelId', ''))) store.set('chatModelId', list[0])
+    return true
+  }
+  if (key === 'chatModelId') {
+    const list = sanitizeChatModels(store.get('chatModels', []))
+    store.set(key, list.includes(value) ? value : list[0])
+    return true
+  }
+  if (key === 'chatPrompts') {
+    const list = chat.sanitizePrompts(value)
+    store.set(key, list)
+    // 清單變動後選用的提示可能已被刪掉 → 收斂成「不使用」
+    if (!list.some((p) => p.id === store.get('chatPromptId', ''))) store.set('chatPromptId', '')
+    return true
+  }
+  if (key === 'chatPromptId') {
+    const list = chat.sanitizePrompts(store.get('chatPrompts', []))
+    store.set(key, list.some((p) => p.id === value) ? value : '')
+    return true
+  }
+  if (key === 'chatThinking') {
+    store.set(key, value === true)
+    return true
+  }
+  if (key === 'asrThreads') {
+    store.set(key, sanitizeAsrThreads(value))
+    return true
+  }
+  if (key === 'chatApiKey') {
+    store.set(key, typeof value === 'string' ? value.trim() : '')
     return true
   }
   store.set(key, value)
@@ -545,6 +669,33 @@ ipcMain.handle('engine:release', async (event, owner) => {
 
 ipcMain.handle('engine:status', () => engine.status())
 
+// ===== 聊天 =====
+// 會話內容與 model 都由 main 擁有；renderer 只給 conversationId 與文字
+ipcMain.handle('chat:list', () => chatStore.list())
+ipcMain.handle('chat:get', (event, id) => chatStore.get(id))
+ipcMain.handle('chat:create', () => chatStore.create())
+ipcMain.handle('chat:delete', (event, id) => chatStore.remove(id))
+ipcMain.handle('chat:rename', (event, id, title) => chatStore.rename(id, title))
+ipcMain.handle('chat:send', async (event, req) => {
+  if (!store) {
+    await initStore()
+    chat.setStore(store)
+    localAsr.setStore(store)
+  }
+  return chat.send(req || {}, event.sender)
+})
+ipcMain.handle('chat:abort', (event, reqId) => chat.abort(reqId))
+// 圖片實體存在 <userData>/chat-images/；renderer 只拿得到檔名，讀取由 main 驗證
+ipcMain.handle('chat:image', (event, name) => chatImages.toDataUrl(name))
+
+// ===== 額度儀錶板 =====
+// URL、憑證路徑、SQL 與 provider 清單固定在 main；renderer 只能觸發整體同步。
+registerUsageIpc({
+  ipcMain,
+  service: usage,
+  isMainSender: assertMainWindowSender
+})
+
 // 設定系統音訊擷取的媒體請求處理器
 app.whenReady().then(async () => {
   // 讓 node-llama-cpp 能載到 cudart/cublas（安裝後 Machine PATH 有時未灌進本行程）
@@ -557,6 +708,8 @@ app.whenReady().then(async () => {
 
   await initStore()
   localLlm.setStore(store)
+  chat.setStore(store)
+  localAsr.setStore(store)
 
   session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
     desktopCapturer.getSources({ types: ['screen'] })

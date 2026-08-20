@@ -16,9 +16,39 @@ const { s2twp } = require('./opencc')
 /** 單段音訊上限：略大於檔案 28s×16k，阻擋 IPC DoS */
 const MAX_SAMPLES = 30 * 16000
 
+/** 推論執行緒上限 */
+const MAX_ASR_THREADS = 16
+
 let sherpa = null
 let recognizer = null
 let loadedKey = null
+/** 建立目前 recognizer 時用的執行緒數；設定改動時要重建 */
+let loadedThreads = 0
+
+/** @type {import('electron-store') | null} */
+let store = null
+
+/**
+ * @param {import('electron-store')} value
+ */
+function setStore(value) {
+  store = value
+}
+
+/**
+ * 推論執行緒數。0／未設定＝自動（實體核心的一半，上限 8）。
+ *
+ * 沒有 GPU 選項是因為 npm 的 sherpa-onnx-win-x64 是 CPU-only 編譯：
+ * provider 傳 cuda／directml 只會印
+ * `Please compile with -DSHERPA_ONNX_ENABLE_GPU=ON ... Fallback to cpu!`
+ * 然後靜默退回 CPU。要 GPU 級速度請改用雲端 ASR。
+ * @returns {number}
+ */
+function resolveThreads() {
+  const raw = Number(store?.get('asrThreads', 0))
+  if (Number.isInteger(raw) && raw >= 2 && raw <= MAX_ASR_THREADS) return raw
+  return Math.min(8, Math.max(2, Math.floor(os.cpus().length / 2)))
+}
 
 /** 世代：unload 時遞增，in-flight load 完成後若不符則丟棄 */
 let loadGen = 0
@@ -172,10 +202,9 @@ function loadSherpa() {
 /**
  * Qwen3-ASR 的 sherpa offlineRecognizer modelConfig
  */
-function buildModelConfig(key) {
+function buildModelConfig(key, numThreads) {
   if (key !== ASR_MODEL_KEY) throw new Error(`未知的 ASR 模型: ${key}`)
   const dir = modelDir(key)
-  const numThreads = Math.min(8, Math.max(2, Math.floor(os.cpus().length / 2)))
   return {
     tokens: '',
     numThreads,
@@ -211,21 +240,22 @@ async function disposeRecognizer(rec, warnings) {
  * 取得（必要時建立）recognizer；須在 withAsrLock 內呼叫
  */
 async function getRecognizer(key) {
-  if (recognizer && loadedKey === key) return recognizer
+  const threads = resolveThreads()
+  if (recognizer && loadedKey === key && loadedThreads === threads) return recognizer
   if (!loadEnabled) throw new Error('ASR 已卸載')
   if (!isDownloaded(key)) throw new Error('模型尚未下載，請先到設定下載')
 
   if (loadPromise) {
     await loadPromise
-    if (recognizer && loadedKey === key) return recognizer
+    if (recognizer && loadedKey === key && loadedThreads === threads) return recognizer
     if (!loadEnabled) throw new Error('ASR 已卸載')
   }
 
   const myGen = loadGen
   loadPromise = (async () => {
     const s = loadSherpa()
-    // 若已有其他 key 的 recognizer，先卸
-    if (recognizer && loadedKey !== key) {
+    // 已有其他 key／其他執行緒數的 recognizer，先卸（numThreads 只在建構時吃）
+    if (recognizer && (loadedKey !== key || loadedThreads !== threads)) {
       const w = []
       await disposeRecognizer(recognizer, w)
       recognizer = null
@@ -233,7 +263,7 @@ async function getRecognizer(key) {
     }
     const rec = await s.OfflineRecognizer.createAsync({
       featConfig: { sampleRate: 16000, featureDim: 80 },
-      modelConfig: buildModelConfig(key)
+      modelConfig: buildModelConfig(key, threads)
     })
     if (myGen !== loadGen || !loadEnabled) {
       await disposeRecognizer(rec, [])
@@ -241,6 +271,7 @@ async function getRecognizer(key) {
     }
     recognizer = rec
     loadedKey = key
+    loadedThreads = threads
     return recognizer
   })()
 
@@ -284,6 +315,7 @@ async function unload() {
     await disposeRecognizer(recognizer, warnings)
     recognizer = null
     loadedKey = null
+    loadedThreads = 0
     return { ok: true, warnings }
   })
 }
@@ -360,11 +392,14 @@ async function transcribe({ samples, sampleRate, lang, modelKey = ASR_MODEL_KEY 
 }
 
 module.exports = {
+  setStore,
   transcribe,
   warm,
   unload,
   isLoaded,
+  resolveThreads,
   ASR_MODEL_KEY,
+  MAX_ASR_THREADS,
   // 測試／除錯用
   parseSherpaJson,
   repairJsonControlChars

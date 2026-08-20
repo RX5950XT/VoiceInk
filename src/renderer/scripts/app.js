@@ -10,6 +10,17 @@ import {
   cooldownTranslatePage
 } from './translate-page.js'
 import {
+  initChatPage,
+  refreshChatPage,
+  loadChatSettings,
+  saveChatSettings
+} from './chat-page.js'
+import {
+  initUsagePage,
+  refreshUsagePage,
+  cooldownUsagePage
+} from './usage-page.js'
+import {
   DEFAULT_API_URL,
   DEFAULT_MODEL,
   DEFAULT_ASR_API_URL,
@@ -65,6 +76,44 @@ export const electronAPI = window.electronAPI || {
   },
   localAsr: {
     transcribe: async () => { throw new Error('僅 Electron 環境可用') }
+  },
+  usage: {
+    load: async () => ({ ok: true, data: {
+      accounts: ['claude-code', 'codex', 'antigravity', 'opencode-go', 'grok'].map((provider, order) => ({
+        id: provider,
+        provider,
+        accountName: provider,
+        planName: provider,
+        status: 'disconnected',
+        accuracy: 'estimated',
+        lastUpdated: new Date(0).toISOString(),
+        windows: [],
+        notes: '僅 Electron 環境可同步',
+        order
+      })),
+      settings: {
+        visibleProviders: ['claude-code', 'codex', 'antigravity', 'opencode-go', 'grok'],
+        providerOrder: ['claude-code', 'codex', 'antigravity', 'opencode-go', 'grok'],
+        opencodeWeeklyReset: { day: 1, hour: 7, minute: 0 },
+        opencodeMonthlyReset: { day: 29, hour: 0, minute: 0 }
+      },
+      lastSyncedAt: null,
+      diagnostics: []
+    } }),
+    sync: async () => ({ ok: false, error: { code: 'ELECTRON_ONLY', message: '僅 Electron 環境可同步' } }),
+    saveSettings: async (settings) => ({ ok: true, data: { ...(await electronAPI.usage.load()).data, settings } }),
+    getDiagnostics: async () => ({ ok: true, data: [] })
+  },
+  chat: {
+    list: async () => [],
+    get: async () => null,
+    create: async () => ({ id: 'dev', title: '新對話', createdAt: 0, updatedAt: 0, messages: [] }),
+    delete: async () => true,
+    rename: async () => true,
+    send: async () => ({ ok: false, error: '僅 Electron 環境可用' }),
+    abort: async () => true,
+    image: async () => '',
+    onDelta: () => () => {}
   },
   translate: async (text) => text,
   tts: {
@@ -133,7 +182,9 @@ const SETTING_DEFAULTS = {
   /** @type {'linguaforge08'|'linguaforge08q4'|'qwen35translate'} */
   localTranslateModel: 'linguaforge08',
   /** 本地 LLM 是否使用 CUDA（需 NVIDIA ≥6GB） */
-  llmGpu: false
+  llmGpu: false,
+  /** 本地 ASR 推論執行緒；0＝自動（sherpa 官方 Windows 套件無 GPU 版，只有 CPU） */
+  asrThreads: 0
 }
 
 /** 固定本地 ASR 模型 key */
@@ -220,7 +271,8 @@ export async function getSettings() {
     ttsRate: normalizeTtsRate(raw.ttsRate),
     ttsVoices: raw.ttsVoices || { ...DEFAULT_TTS_VOICES },
     localTranslateModel: normalizeLocalTranslateModel(raw.localTranslateModel),
-    llmGpu: raw.llmGpu === true
+    llmGpu: raw.llmGpu === true,
+    asrThreads: normalizeAsrThreads(raw.asrThreads)
   }
 }
 
@@ -278,6 +330,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   initTranscribe()
   initLiveCaption()
   initTranslatePage()
+  await initUsagePage()
+  initChatPage()
+  await refreshChatPage()
 })
 
 // ===== 主題管理 =====
@@ -358,6 +413,8 @@ export function switchPage(pageName) {
     page.classList.toggle('active', page.id === `page-${pageName}`)
   })
   // 先啟動新頁 acquire，再 release 舊頁，避免中間 owner 歸零觸發 unload＋重付 warm
+  if (pageName === 'chat') refreshChatPage()
+  if (pageName === 'usage') refreshUsagePage()
   if (pageName === 'live') prewarmEngine()
   if (pageName === 'translate') prewarmTranslatePage()
   if (pageName === 'settings') {
@@ -366,11 +423,31 @@ export function switchPage(pageName) {
   }
   if (pageName !== 'live') cooldownEngine()
   if (pageName !== 'translate') cooldownTranslatePage()
+  if (pageName !== 'usage') cooldownUsagePage()
 }
 
 /** 供翻譯頁「前往設定」等呼叫 */
 export function openSettingsPage() {
   switchPage('settings')
+}
+
+/**
+ * 設定頁左側分類：六區一次只顯示一區（原本全部堆在同一欄捲到底）
+ */
+function initSettingsNav() {
+  const nav = document.getElementById('settingsNav')
+  if (!nav) return
+  const items = [...nav.querySelectorAll('.settings-nav-item')]
+  const sections = [...document.querySelectorAll('#page-settings .settings-section')]
+  items.forEach((item) => {
+    item.addEventListener('click', () => {
+      const target = item.dataset.section
+      items.forEach((i) => i.classList.toggle('active', i === item))
+      sections.forEach((sec) => sec.classList.toggle('active', sec.dataset.section === target))
+      const scroll = document.getElementById('settingsScroll')
+      if (scroll) scroll.scrollTop = 0
+    })
+  })
 }
 
 // ===== 設定管理 =====
@@ -486,6 +563,16 @@ function updateTtsRateLabel(rate) {
  * @param {string} value
  * @param {(v: string) => void} [onChange]
  */
+/**
+ * 本地 ASR 執行緒：只收 2…16 的整數，其餘一律「自動」（0）
+ * @param {unknown} value
+ * @returns {number}
+ */
+function normalizeAsrThreads(value) {
+  const n = Number(value)
+  return Number.isInteger(n) && n >= 2 && n <= 16 ? n : 0
+}
+
 function initSegment(id, value, onChange) {
   const segment = document.getElementById(id)
   if (!segment) return
@@ -672,13 +759,16 @@ async function loadSettingsForm() {
     initSegment('asrEngineSegment', settings.asrEngine, updateAsrPanels)
     initSegment('localTranslateModelSegment', settings.localTranslateModel)
     initSegment('llmGpuSegment', llmGpuSeg)
+    initSegment('asrThreadsSegment', String(settings.asrThreads))
     initSegment('themeSegment', theme, onThemeSegmentChange)
+    initSettingsNav()
     segmentsInited = true
   } else {
     setSegmentValue('translatorSegment', settings.translator)
     setSegmentValue('asrEngineSegment', settings.asrEngine)
     setSegmentValue('localTranslateModelSegment', settings.localTranslateModel)
     setSegmentValue('llmGpuSegment', llmGpuSeg)
+    setSegmentValue('asrThreadsSegment', String(settings.asrThreads))
     setSegmentValue('themeSegment', theme)
   }
   updateTranslatorPanels(settings.translator)
@@ -694,6 +784,7 @@ async function loadSettingsForm() {
     await populateTtsVoiceSelects()
   }
   applyTtsVoicesToForm(settings.ttsVoices || DEFAULT_TTS_VOICES)
+  await loadChatSettings()
 }
 
 async function saveSettings() {
@@ -735,8 +826,11 @@ async function saveSettings() {
     electronAPI.store.set('ttsVoices', readTtsVoicesFromForm()),
     electronAPI.store.set('ttsRate', ttsRate),
     electronAPI.store.set('localTranslateModel', localTranslateModel),
-    electronAPI.store.set('llmGpu', llmGpu)
+    electronAPI.store.set('llmGpu', llmGpu),
+    electronAPI.store.set('asrThreads', normalizeAsrThreads(segmentValues.asrThreadsSegment))
   ])
+
+  await saveChatSettings()
 
   document.dispatchEvent(new CustomEvent('settings-changed'))
   showToast('設定已儲存')

@@ -14,8 +14,10 @@
 - **串列 promise chain 內不可 await 會再 enqueue 自己的函式**：`chain.then(async () => { await processChunk() })` 而 `processChunk` 又做 `chain = chain.then(...)` 會死鎖（尾段永遠不 resolve）。尾段要先 enqueue 再 `chain.then(finalize)`，或在 chain 內直接跑 ASR 本體。
 - **目標語 zh-TW ≠ 來源是中文**：ASR 不可對所有 `lang===zh-TW` 一律 s2twp，否則日文漢字被 opencc 弄髒。有假名/諺文就跳過，且 CJK 比例夠才轉。
 - **透明視窗是坑**：Windows 上 `transparent: true` + `frame: false` → 白色標題列殘留、`resizable` 失效、滑鼠事件異常。字幕視窗用 `transparent: false` + 深色背景 + `setMenu(null)`，透明需求改用整窗 `setOpacity`。
-- **MediaRecorder timeslice 不可用**：`timeslice` 模式產生的 Blob 缺 WebM header，無法解碼。正確做法：每輪錄製新建 MediaRecorder 實例、錄滿即 stop 取完整檔。
+- **即時字幕不要用 MediaRecorder**：`timeslice` Blob 缺 WebM header；每輪新建 recorder 雖可解碼，但 stop→restart 仍有 20–100ms 無人錄音，且固定切句、opus 編解碼都是冤枉路。現行改為 `AudioContext({sampleRate:16000})` 直取 PCM + 能量 VAD 依停頓切句。
 - 打包後原生模組路徑要把 `app.asar` 換成 `app.asar.unpacked`（sherpa DLL PATH hack）。
+- **外部程序也讀不到 asar 內檔案**：Antigravity Credential Manager bridge 在 source e2e 正常、打包版卻找不到憑證，因 PowerShell `-File` 指向 `app.asar/...ps1`。腳本要列入 `asarUnpack`，呼叫前同樣把路徑換成 `app.asar.unpacked`；這類功能一定要驗 final package，source e2e 不足。
+- **來源未連線時不可合成保守額度**：Antigravity 的「缺 slot → 沒快取就視為 100% used」只適用已連線但 API 漏欄位；若 credential 根本沒讀到，套同一 merge 會同時顯示「未連線」與四條 100% 假額度。先判 account status，再做 slot merge。
 
 ## 音訊 / ASR
 
@@ -30,13 +32,16 @@
 
 - Qwen 系列思考模式會吃光 maxTokens 導致輸出為空 → node-llama-cpp 用 `budgets: { thoughtTokens: 0 }`，並保留 strip `<think>` 後備。
 - node-llama-cpp 是 ESM-only → CJS main process 用動態 `import()`。
-- **載入模型 ≠ 可快速推論**：`warm()` 只 `loadModel`＋`createContext` 不算就緒——node-llama-cpp **首次 `prompt` 的 compute-graph 冷啟動在 CPU 上 ~12.5s**（後續同 session ~110ms）。若這 12.5s 拖到使用者「開始字幕」後第一句才付，期間 ASR 每 2s 產批、`translateQueue`（上限 5）塞爆丟批次，**僅翻譯顯示模式**對沒譯文的行回退顯示原文 → 整段只剩英文原文，看似「翻譯壞了」。解法：預熱時多跑一次拋棄式推論（`setChatHistory(極簡 system)` + `prompt('warmup',{maxTokens:1})`）把冷啟動挪到背景，`warmedUp` 旗標只跑一次、`unload` 重置、走 `withTranslateLock`。實測第一句 12,493ms→249ms。
+- **載入模型 ≠ 可快速推論**：`warm()` 只 `loadModel`＋`createContext` 不算就緒——node-llama-cpp **首次 `prompt` 的 compute-graph 冷啟動在 CPU 上 ~12.5s**（後續同 session ~110ms）。若這 12.5s 拖到使用者「開始字幕」後第一句才付，舊版固定 2s ASR 管線會持續產批、`translateQueue`（上限 5）塞爆丟批次，**僅翻譯顯示模式**對沒譯文的行回退顯示原文 → 整段只剩英文原文，看似「翻譯壞了」。解法：預熱時多跑一次拋棄式推論（`setChatHistory(極簡 system)` + `prompt('warmup',{maxTokens:1})`）把冷啟動挪到背景，`warmedUp` 旗標只跑一次、`unload` 重置、走 `withTranslateLock`。實測第一句 12,493ms→249ms。
 - **括號式 meta-prompt 小模型會複誦**：把前文塞進「【前文】【本段】」單一 user 訊息，0.8B 模型會原樣吐回原文甚至整段 prompt（prompt 漏進字幕）。正解：指令放 system prompt、前文當上一輪 user/assistant 對話（本地 `setChatHistory`、雲端 messages 陣列），本地雲端同構。
 
 ## 流程
 
-- 忙碌時「丟棄」音訊塊會造成字幕大段缺失 → 用「保留最新 pending」的序列佇列（不丟塊、不堆積延遲）。
-- **非語言性片段餵給小翻譯模型會變「對話模式」**：擷取系統音訊時的音樂／靜音／音效被 ASR 轉成純符號（`♪♪♪`）、`……`、`>>`、零寬/格式字元等碎片。這些過得了「≥2 非標點字元」的弱 guard（`\p{P}` 不含 Symbol `So` 與 Format `Cf`），流進 0.8B 翻譯模型後，模型不翻譯而是**當成聊天開場**回「你好，我是即時字幕翻譯引擎…請提供原文…您應該如何稱呼？」persona 問候（system prompt 給了它 persona 名稱，它就照唸）。**僅翻譯顯示模式**下整個畫面被這些 babble 佔滿，看似「翻譯壞了」。真因是輸入端，不是翻譯邏輯（模組層 e2e：正常英文全數正確、context 污染不擴散——每個碎片各自獨立觸發，非級聯）。解法：進管線前用 `hasLinguisticContent`（`text.replace(/[^\p{L}]/gu,'').length>=2`，只認字母/漢字/假名/諺文）丟棄非語言片段——`processAudioChunkData` 在進 `handleAsrResult` 前就 return（連字幕行都不建）+ `shouldTranslate` 同構；main `translate` 再擋一次（縱深）。live system prompt 改祈使句、避免「你是…引擎」自稱（降極短輸入 chatty）。殘留：單一填充詞（如 "um"）仍可能觸發一次 chatty，罕見；要根除需更大模型或輸出端 persona 偵測。
+- **明確要求的功能不能只留在未來清單**：使用者指出額度儀錶板被遺漏後，才把原本的「階段二」真正落地。交付前要逐項對照使用者原始需求與核准 spec，不以 roadmap/backlog 文字冒充完成。
+- **「不回 renderer」不等於不洩漏**：聊天 API error body 原本仍整段寫入 main console，測試假 key 直接出現在 log。所有外部 body、token、外部 error message 都不可進 console／diagnostics；只記 provider、HTTP status、內部錯誤 code 等安全摘要，測試要同時攔 IPC 與 console。
+- **系統 loopback e2e 會混到其他 App 音訊**：打包 CDP 只用一個測試 TTS 關鍵字證明 loopback→VAD→ASR 通路；ASR 精準度由隔離的 `e2e-live-pipeline` 驗多關鍵字。把三個詞都綁在系統混音測試上會因背景影片／音樂假紅燈。
+- ASR 佇列不能無限堆積：現行 VAD 先切完整語句，ASR 忙時最多保留 2 句；第 3 句進來丟最舊未處理句，以即時性優先。正常本地 ASR 快於語音實時速度，不會觸發淘汰。
+- **非語言性片段餵給小翻譯模型會變「對話模式」**：擷取系統音訊時的音樂／靜音／音效被 ASR 轉成純符號（`♪♪♪`）、`……`、`>>`、零寬/格式字元等碎片。這些過得了「≥2 非標點字元」的弱 guard（`\p{P}` 不含 Symbol `So` 與 Format `Cf`），流進 0.8B 翻譯模型後，模型不翻譯而是**當成聊天開場**回「你好，我是即時字幕翻譯引擎…請提供原文…您應該如何稱呼？」persona 問候（system prompt 給了它 persona 名稱，它就照唸）。**僅翻譯顯示模式**下整個畫面被這些 babble 佔滿，看似「翻譯壞了」。真因是輸入端，不是翻譯邏輯（模組層 e2e：正常英文全數正確、context 污染不擴散——每個碎片各自獨立觸發，非級聯）。解法：進管線前用 `hasLinguisticContent`（`text.replace(/[^\p{L}]/gu,'').length>=2`，只認字母/漢字/假名/諺文）丟棄非語言片段——`transcribeUtterance` 在進 `handleAsrResult` 前就 return（連字幕行都不建）+ `shouldTranslate` 同構；main `translate` 再擋一次（縱深）。live system prompt 改祈使句、避免「你是…引擎」自稱（降極短輸入 chatty）。殘留：單一填充詞（如 "um"）仍可能觸發一次 chatty，罕見；要根除需更大模型或輸出端 persona 偵測。
 - **「翻譯不見了」先別假設翻譯邏輯回歸**：症狀（僅翻譯模式只剩原文）可能是顯示層 + 佇列丟批次造成。除錯順序：先在模組層 e2e 直測翻譯（本案證明英文→繁中正常、零複誦）排除 LLM，再查顯示模式（`captionDisplayMode`）與佇列行為。本案真因是冷啟動丟批次（見上），非翻譯壞掉。讀使用者實際 `%APPDATA%/voiceink/config.json`（遮蔽 apiKey）比猜設定快。
 - 錯誤必須浮上 UI（狀態區＋連續失敗自動停止），只進 console 等於使用者看到永遠的「擷取中…」。
 - **await 後要重檢 session 狀態**：`transcribe`／`translate` 這種長 await 之後、以及 promise 的 `finally` 裡，一律先 `if (!isCapturing || epoch !== sessionEpoch) return`。否則停止後才 resolve 的 stale 結果會建新 batch、觸發翻譯、幽靈重載已卸載的模型，或清掉新 session 的鎖。epoch 機制存在就是為了擋這個。
@@ -46,7 +51,7 @@
 - **譯文轉繁與 echo 去重的順序**：0.8B 譯文偶爾夾簡體字→翻譯 choke point（`translate` 收尾）統一過 `s2twp`（抽到 `src/main/opencc.js` 與 ASR 共用）。但**要先判 echo 再轉繁**：模型自我複誦（`result===text`，含日文頑固句）時回原文且**不轉繁**，否則 s2twp 會 mangle 原文使 renderer 的 `translated===source` 去重失效、把亂碼日文當譯文顯示。
 - **前文原文/譯文要成對過濾**：兩個 history 分開存、只單邊過濾會錯位（user 只有 X、assistant 卻含 X+Y）。存成 `{source, translation}` 成對陣列，過濾與取樣一起做。
 - **啟動要有重入旗標**：按鈕 `disabled` 若在多個 await 之後才設，雙擊會起兩條錄音管線且第一條永不停。用 JS 旗標（`isStarting`）在函式入口擋，別只靠 DOM disabled。
-- **下游佇列也要防堆積**：上游 pending 有 latest-wins，下游 `translateQueue` 也要設上限丟最舊，否則本地翻譯跟不上時延遲線性擴大。
+- **下游佇列也要防堆積**：上游 ASR 語句 pending 上限 2，下游 `translateQueue` 上限 5，超量皆丟最舊未處理項；否則任一後端跟不上時延遲會線性擴大。
 - **視窗還原座標要驗螢幕存在**：存的 bounds 可能在已拔除的外接螢幕（負座標）→ 開在看不見處。用 `screen.getAllDisplays()` 檢查重疊，否則置中。
 - **字幕視窗 OS 層關閉（Alt+F4）要通知 renderer**：只有 `subtitle:close` IPC 會發 `subtitle:closed`；視窗 `'closed'` 事件也要補發（用 `subtitleWindow !== win` 區分 OS 關閉與 IPC 關閉），否則管線在無視窗下持續擷取。
 - **跨行程 send 前檢查 `isDestroyed()`**、雲端 `fetch` 要帶 `AbortSignal.timeout`（翻譯走 serial chain，卡死會連帶鎖死停止與卸載）。
@@ -71,3 +76,38 @@
 - 教訓：比較實驗前先確認「送進模型的字串」與權威來源逐字元一致；prompt 是所有解碼參數的上游。
 - 通則：模型輸出出現憑空前綴／專名消失，先印 prompt，不要先寫 regex 剝前綴（剝掉的只是最顯眼的症狀）。
 - 也別盡信文件：INTEGRATION.md 說 node-llama-cpp 的 `thoughts` 六個選項都補不了，實測 3.19 的 `thoughts:'discourage'` 剛好就是；先跑 probe 再決定要不要自訂 subclass。
+
+## 2026-08-20 — 使用者要的功能可能物理上不存在
+
+- 需求：「語音轉文字跟翻譯一樣，可以選 CPU 或 GPU」。做法是先**實測**而不是先寫 UI：傳 `provider: 'cuda'` / `'directml'` 給 sherpa，得到
+  `Please compile with -DSHERPA_ONNX_ENABLE_GPU=ON. Available providers: CPUExecutionProvider, . Fallback to cpu!`
+  ——npm 的 `sherpa-onnx-win-x64` 是 CPU-only 編譯，三種 provider 耗時相同（673 / 769 / 654ms）。
+- 如果照做，會交出一個「切了也沒差」的開關，比不做更糟：使用者會以為 GPU 沒生效是別的問題。
+- 正確處置：交出**真的有效**的替代（`asrThreads`），在同一個位置用文字講清楚為什麼沒有 GPU、要快請走雲端，並把實測輸出寫進 CONTEXT/CLAUDE 以免下一個人再試一次。
+- 通則：功能請求先驗可行性再排版面。「先做 UI 之後再接後端」對這種硬體/相依性限制是反的。
+
+## 2026-08-20 — 「字體大小都差不多」的根因是權重反轉，不是字級不夠大
+
+- 症狀回報：設定選單「視覺上有些混亂、很難一眼看清楚」。
+- 直覺修法（把標題調大）只對一半。實際量出來：分區標題 13px + `--text-secondary`，欄位 label 14px + primary，說明 12px + secondary
+  ——**標題比它管轄的欄位更小更灰**，階層是倒的，所以整頁看起來是同一層。
+- 修法是把大小與顏色兩條階層同時擺正（標題 20/700 primary → 輸入 14 → 子標題與 label 13/600 secondary → 說明 12 tertiary），
+  再加資訊架構（左側分類 rail 一次顯示一區）減少單頁密度。
+- 可測：CDP 直接量 `getComputedStyle(...).fontSize`，斷言 `title > label > hint`——視覺階層是能寫成回歸測試的。
+
+## 2026-08-20 — 極小測試圖會被 vision API 拒絕
+
+- 用 8×8 PNG 當附件 fixture 測多模態，真實端點回 `400 Unable to process input image`，看起來像格式做錯。
+- 對照實驗才看得出來：只有 text 的陣列格式回 200 → 格式是對的，問題在圖太小。
+- 教訓：測 vision 的 fixture 要用真實尺寸（512×512 起跳），並且走與正式路徑相同的產生方式（這裡是 canvas → JPEG）。
+
+## 2026-08-21 — 「拖曳時變半透明」不是 CSS 調不調的問題，是拖曳實作選錯
+
+- 症狀回報：額度卡按住拖動會變半透明。第一直覺是去改 `.dragging { opacity }`，但那只解一半。
+- 真正原因：用的是 HTML5 Drag and Drop——瀏覽器一定會生一張半透明拖影跟著游標，來源元素還留在原位，
+  所以當初才用 `opacity: .18` 把來源淡掉；兩者相加就是「整張卡都半透明」。`setDragImage` 也控不到透明度。
+- 修法是換實作：pointer 事件直拖，被拖的就是卡片本體（`translate3d` 跟游標、完全不透明），
+  其他卡片維持 FLIP 推開。參考專案（dnd-kit）本來就是這個模型，「對齊使用體驗」＝對齊互動模型，不是對齊色票。
+- 兩個實作細節：預覽排序會 `appendChild` 搬動卡片，`setPointerCapture` 可能被隱式釋放 → 監聽掛 `window`；
+  插入點用幾何比對而非 `elementFromPoint`，就不用為了命中測試把卡片設 `pointer-events: none`。
+- 附帶好處：合成 PointerEvent 能完整驅動這條路徑，打包版 CDP 可以直接斷言「拖曳中 opacity=1、cursor=grabbing」。

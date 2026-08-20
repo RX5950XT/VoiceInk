@@ -38,14 +38,14 @@
       "**/node_modules/sherpa-onnx-*/**",
       "**/node_modules/node-llama-cpp/**",
       "**/node_modules/@node-llama-cpp/**",
-      "**/node_modules/ffmpeg-static/**"
+      "**/node_modules/ffmpeg-static/**",
+      "src/main/usage/read-windows-credential.ps1"
     ],
     "files": [
       "**/*",
       "!**/node_modules/@node-llama-cpp/win-x64-cuda-ext/**",
       "!**/node_modules/@node-llama-cpp/win-arm64/**",
       "!dist/**",
-      "!docs/**",
       "!tasks/**"
     ],
     "win": {

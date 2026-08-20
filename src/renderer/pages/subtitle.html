@@ -19,12 +19,14 @@
       body {
         height: 100%;
         overflow: hidden;
-        background: #1a1a1a;
+        background: #0d1012;
       }
 
       body {
-        font-family:
-          "Microsoft JhengHei", "微軟正黑體", "Noto Sans TC", sans-serif;
+        padding: 4px;
+        font-family: "Segoe UI", "Noto Sans TC", sans-serif;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
         -webkit-user-select: none;
         user-select: none;
       }
@@ -33,23 +35,28 @@
         display: flex;
         flex-direction: column;
         height: 100%;
-        background-color: #1a1a1a;
+        overflow: hidden;
+        border: 1px solid var(--subtitle-border-strong);
+        border-radius: var(--subtitle-radius);
+        background: var(--subtitle-bg);
+        box-shadow: 0 18px 54px rgba(0, 0, 0, 0.34);
       }
 
       .drag-area {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        padding: 8px 12px;
-        background-color: #252525;
+        padding: 8px 10px;
+        border-bottom: 1px solid var(--subtitle-border);
+        background: var(--subtitle-surface);
         -webkit-app-region: drag;
       }
 
       .drag-indicator {
         width: 40px;
         height: 4px;
-        background-color: rgba(255, 255, 255, 0.3);
-        border-radius: 2px;
+        border-radius: 999px;
+        background: var(--subtitle-border-strong);
       }
 
       .controls {
@@ -62,36 +69,51 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        min-width: 28px;
-        padding: 0 5px;
-        height: 28px;
-        border: none;
-        border-radius: 4px;
-        background: rgba(255, 255, 255, 0.15);
-        color: #fff;
-        font-size: 14px;
+        min-width: 32px;
+        height: 32px;
+        padding: 0 7px;
+        border: 1px solid var(--subtitle-border);
+        border-radius: var(--control-radius);
+        background: var(--subtitle-surface);
+        color: var(--subtitle-text);
+        font-family: inherit;
+        font-size: 13px;
         cursor: pointer;
+        opacity: 0.78;
         transition:
-          background 0.2s,
-          transform 0.1s;
-        opacity: 0.7;
+          background-color 140ms ease,
+          border-color 140ms ease,
+          color 140ms ease,
+          opacity 140ms ease,
+          transform 120ms var(--ease-out);
       }
 
-      .control-btn:hover {
-        background: rgba(255, 255, 255, 0.25);
+      @media (hover: hover) and (pointer: fine) {
+        .control-btn:hover {
+          border-color: var(--subtitle-border-strong);
+          background: var(--subtitle-surface-strong);
+          opacity: 1;
+        }
+
+        .control-btn:active:hover {
+          transform: scale(0.97);
+        }
+
+        .control-btn.close-btn:hover {
+          border-color: color-mix(in srgb, var(--subtitle-danger) 54%, transparent);
+          background: color-mix(in srgb, var(--subtitle-danger) 28%, transparent);
+        }
+      }
+
+      .control-btn:focus-visible {
+        outline: 2px solid var(--subtitle-accent);
+        outline-offset: 2px;
         opacity: 1;
       }
 
-      .control-btn:active {
-        transform: scale(0.95);
-      }
-
       .control-btn.copied {
-        background: rgba(34, 197, 94, 0.5);
-      }
-
-      .control-btn.close-btn:hover {
-        background: rgba(239, 68, 68, 0.6);
+        border-color: color-mix(in srgb, var(--subtitle-success) 54%, transparent);
+        background: color-mix(in srgb, var(--subtitle-success) 32%, transparent);
       }
 
       .subtitle-history {
@@ -123,45 +145,64 @@
 
       :root {
         --subtitle-scale: 1;
+        --subtitle-bg: rgba(20, 25, 27, 0.97);
+        --subtitle-surface: rgba(244, 241, 232, 0.07);
+        --subtitle-surface-strong: rgba(244, 241, 232, 0.11);
+        --subtitle-border: rgba(244, 241, 232, 0.14);
+        --subtitle-border-strong: rgba(244, 241, 232, 0.22);
+        --subtitle-text: #f4f1e8;
+        --subtitle-muted: #a6adab;
+        --subtitle-accent: #7da6b7;
+        --subtitle-success: #59c889;
+        --subtitle-danger: #e86960;
+        --subtitle-radius: 12px;
+        --control-radius: 10px;
+        --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
       }
 
       .subtitle-line {
-        color: rgba(255, 255, 255, 0.5);
+        padding: 8px 10px;
+        border: 1px solid transparent;
+        border-radius: var(--control-radius);
+        background: transparent;
+        color: color-mix(in srgb, var(--subtitle-text) 52%, transparent);
         font-size: calc(18px * var(--subtitle-scale));
         font-weight: 400;
         line-height: 1.4;
-        text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
-        padding: 4px 0;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-        transition: color 0.3s;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.72);
+        transition:
+          background-color 160ms ease,
+          border-color 160ms ease,
+          color 160ms ease;
       }
 
       .subtitle-line:last-child {
-        color: #ffffff;
+        border-color: var(--subtitle-border);
+        background: var(--subtitle-surface);
+        color: var(--subtitle-text);
         font-size: calc(22px * var(--subtitle-scale));
-        font-weight: 500;
-        border-bottom: none;
+        font-weight: 550;
       }
 
       .subtitle-line:last-child .subtitle-source {
-        color: rgba(255, 255, 255, 0.55);
+        color: var(--subtitle-muted);
         font-size: calc(16px * var(--subtitle-scale));
         font-weight: 400;
       }
 
       .subtitle-line:last-child .subtitle-translation {
-        color: #ffffff;
+        color: var(--subtitle-text);
         font-size: calc(22px * var(--subtitle-scale));
-        font-weight: 500;
+        font-weight: 550;
       }
 
       .subtitle-source {
         display: block;
-        color: rgba(255, 255, 255, 0.4);
+        margin-bottom: 3px;
+        color: color-mix(in srgb, var(--subtitle-muted) 72%, transparent);
         font-size: calc(14px * var(--subtitle-scale));
         font-weight: 400;
         line-height: 1.35;
-        margin-bottom: 2px;
       }
 
       .subtitle-translation {
@@ -185,21 +226,33 @@
 
       .toast {
         position: fixed;
-        bottom: 10px;
+        bottom: 14px;
         left: 50%;
-        transform: translateX(-50%);
-        background: rgba(34, 197, 94, 0.9);
-        color: #fff;
-        padding: 6px 12px;
-        border-radius: 4px;
+        padding: 7px 13px;
+        border: 1px solid color-mix(in srgb, var(--subtitle-success) 42%, transparent);
+        border-radius: var(--control-radius);
+        background: color-mix(in srgb, var(--subtitle-success) 28%, var(--subtitle-bg));
+        color: var(--subtitle-text);
+        box-shadow: 0 12px 34px rgba(0, 0, 0, 0.28);
         font-size: 12px;
         opacity: 0;
-        transition: opacity 0.2s;
+        transform: translateX(-50%);
+        transition: opacity 160ms ease;
         pointer-events: none;
       }
 
       .toast.show {
         opacity: 1;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
+        }
       }
     </style>
   </head>
@@ -208,17 +261,18 @@
       <div class="drag-area">
         <div class="drag-indicator"></div>
         <div class="controls">
-          <button id="fontDownBtn" class="control-btn" title="縮小字級">A−</button>
-          <button id="fontUpBtn" class="control-btn" title="放大字級">A+</button>
-          <button id="opacityBtn" class="control-btn" title="調整視窗透明度">◐</button>
-          <button id="displayModeBtn" class="control-btn" title="字幕顯示模式">雙</button>
-          <button id="copyBtn" class="control-btn" title="複製全部字幕">
+          <button id="fontDownBtn" class="control-btn" title="縮小字級" aria-label="縮小字級">A−</button>
+          <button id="fontUpBtn" class="control-btn" title="放大字級" aria-label="放大字級">A+</button>
+          <button id="opacityBtn" class="control-btn" title="調整視窗透明度" aria-label="調整視窗透明度">◐</button>
+          <button id="displayModeBtn" class="control-btn" title="字幕顯示模式" aria-label="字幕顯示模式">雙</button>
+          <button id="copyBtn" class="control-btn" title="複製全部字幕" aria-label="複製全部字幕">
             📋
           </button>
           <button
             id="closeBtn"
             class="control-btn close-btn"
             title="關閉字幕視窗"
+            aria-label="關閉字幕視窗"
           >
             ✕
           </button>
@@ -274,6 +328,98 @@
         };
       }
 
+      function isAtBottom() {
+        return (
+          subtitleHistory.scrollHeight -
+            subtitleHistory.clientHeight -
+            subtitleHistory.scrollTop <=
+          24
+        );
+      }
+
+      function createSubtitleLine(entry) {
+        const hasTranslation = !!entry.translation;
+        const line = document.createElement("div");
+        line.className = hasTranslation
+          ? "subtitle-line"
+          : "subtitle-line provisional";
+        line.dataset.id = entry.id;
+
+        if (currentMode === "translation") {
+          const translation = document.createElement("span");
+          translation.className = "subtitle-translation";
+          translation.textContent = hasTranslation
+            ? entry.translation
+            : entry.source;
+          line.appendChild(translation);
+          return line;
+        }
+
+        const source = document.createElement("span");
+        source.className = "subtitle-source";
+        source.textContent = entry.source;
+        line.appendChild(source);
+        if (hasTranslation) {
+          const translation = document.createElement("span");
+          translation.className = "subtitle-translation";
+          translation.textContent = entry.translation;
+          line.appendChild(translation);
+        }
+        return line;
+      }
+
+      function createEmptyState() {
+        const empty = document.createElement("p");
+        empty.className = "subtitle-empty";
+        empty.textContent = "等待字幕...";
+        return empty;
+      }
+
+      /** 顯示模式切換才整批重建；一般字幕更新只動一行。 */
+      function renderSubtitles() {
+        const stickToBottom = isAtBottom();
+        const nodes = subtitles.length
+          ? subtitles.map(createSubtitleLine)
+          : [createEmptyState()];
+        subtitleHistory.replaceChildren(...nodes);
+        if (stickToBottom) subtitleHistory.scrollTop = subtitleHistory.scrollHeight;
+      }
+
+      /**
+       * 增量更新單行，避免每次 ASR／翻譯回來都重建 50 行 DOM。
+       * @param {string} id
+       * @param {string | null} removedId
+       */
+      function renderSubtitleUpdate(id, removedId) {
+        const stickToBottom = isAtBottom();
+        const empty = subtitleHistory.querySelector(".subtitle-empty");
+        if (empty) empty.remove();
+
+        if (removedId) {
+          for (const node of subtitleHistory.children) {
+            if (node.dataset.id === removedId) {
+              node.remove();
+              break;
+            }
+          }
+        }
+
+        const entry = subtitles.find((item) => item.id === id);
+        if (!entry) return;
+        const next = createSubtitleLine(entry);
+        let existing = null;
+        for (const node of subtitleHistory.children) {
+          if (node.dataset.id === id) {
+            existing = node;
+            break;
+          }
+        }
+        if (existing) existing.replaceWith(next);
+        else subtitleHistory.appendChild(next);
+
+        if (stickToBottom) subtitleHistory.scrollTop = subtitleHistory.scrollHeight;
+      }
+
       window.electronAPI.subtitle.onTextUpdate((payload) => {
         const item = normalizePayload(payload);
         if (!item) return;
@@ -290,19 +436,15 @@
           } else {
             const prev = subtitles[idx];
             const raw = typeof payload === "object" && payload ? payload : {};
-            const next = {
+            subtitles[idx] = {
               id: item.id,
-              source: prev.source,
-              translation: prev.translation,
+              source: Object.prototype.hasOwnProperty.call(raw, "source")
+                ? String(raw.source || "").trim() || prev.source
+                : prev.source,
+              translation: Object.prototype.hasOwnProperty.call(raw, "translation")
+                ? String(raw.translation || "").trim()
+                : prev.translation,
             };
-            if (Object.prototype.hasOwnProperty.call(raw, "source")) {
-              const s = String(raw.source || "").trim();
-              if (s) next.source = s;
-            }
-            if (Object.prototype.hasOwnProperty.call(raw, "translation")) {
-              next.translation = String(raw.translation || "").trim();
-            }
-            subtitles[idx] = next;
           }
         } else {
           subtitles.push({
@@ -312,52 +454,10 @@
           });
         }
 
-        while (subtitles.length > MAX_HISTORY) subtitles.shift();
-        renderSubtitles();
+        let removedId = null;
+        while (subtitles.length > MAX_HISTORY) removedId = subtitles.shift().id;
+        renderSubtitleUpdate(item.id, removedId);
       });
-
-      function renderLineHtml(entry) {
-        const hasTr = !!entry.translation;
-        const mode = currentMode;
-        const provisional = !hasTr && !!entry.source;
-
-        if (mode === "translation") {
-          // 僅翻譯：有譯文只顯示譯文；暫態先顯示原文
-          const text = hasTr ? entry.translation : entry.source;
-          const cls = provisional ? "subtitle-line provisional" : "subtitle-line";
-          return `<div class="${cls}" data-id="${escapeAttr(entry.id)}"><span class="subtitle-translation">${escapeHtml(text)}</span></div>`;
-        }
-
-        // 雙語
-        if (hasTr) {
-          return `<div class="subtitle-line" data-id="${escapeAttr(entry.id)}"><span class="subtitle-source">${escapeHtml(entry.source)}</span><span class="subtitle-translation">${escapeHtml(entry.translation)}</span></div>`;
-        }
-        return `<div class="subtitle-line provisional" data-id="${escapeAttr(entry.id)}"><span class="subtitle-source">${escapeHtml(entry.source)}</span></div>`;
-      }
-
-      function renderSubtitles() {
-        if (subtitles.length === 0) {
-          subtitleHistory.innerHTML =
-            '<p class="subtitle-empty">等待字幕...</p>';
-          return;
-        }
-
-        subtitleHistory.innerHTML = subtitles.map(renderLineHtml).join("");
-        subtitleHistory.scrollTop = subtitleHistory.scrollHeight;
-      }
-
-      function escapeHtml(text) {
-        const div = document.createElement("div");
-        div.textContent = text || "";
-        return div.innerHTML;
-      }
-
-      function escapeAttr(text) {
-        return String(text || "")
-          .replace(/&/g, "&amp;")
-          .replace(/"/g, "&quot;")
-          .replace(/</g, "&lt;");
-      }
 
       /** 複製用純文字（依目前顯示模式） */
       function entryToCopyText(entry) {

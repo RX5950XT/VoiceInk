@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https: http:; media-src 'self' blob:"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https: http:; media-src 'self' blob:"
     />
     <link rel="icon" type="image/png" href="../../assets/icon.png" />
     <title>VoiceInk</title>
@@ -23,11 +23,23 @@
       <!-- 頂部導航列（frameless 標題列合併：可拖曳區 + 窗控） -->
       <header class="header" id="appHeader">
         <div class="header-brand" title="VoiceInk">
-          <span class="logo-icon">🖋️</span>
+          <span class="brand-mark" aria-hidden="true">
+            <span class="brand-mark-bar cool"></span>
+            <span class="brand-mark-bar warm"></span>
+            <span class="brand-mark-bar mint"></span>
+          </span>
           <span class="logo-text">VoiceInk</span>
         </div>
         <nav class="header-nav">
-          <button class="nav-tab active" data-page="transcribe" title="檔案轉錄">
+          <button class="nav-tab active" data-page="chat" title="聊天">
+            <span class="nav-icon">💬</span>
+            <span class="nav-text">聊天</span>
+          </button>
+          <button class="nav-tab" data-page="usage" title="額度">
+            <span class="nav-icon">📊</span>
+            <span class="nav-text">額度</span>
+          </button>
+          <button class="nav-tab" data-page="transcribe" title="檔案轉錄">
             <span class="nav-icon">📁</span>
             <span class="nav-text">檔案轉錄</span>
           </button>
@@ -57,8 +69,194 @@
 
         <!-- 內容頁面 -->
         <main class="content">
+          <!-- 聊天頁面 -->
+          <section id="page-chat" class="page active">
+            <div class="chat-layout">
+              <aside class="chat-sidebar">
+                <button type="button" id="chatNewBtn" class="btn btn-primary btn-sm chat-new-btn">
+                  ＋ 新對話
+                </button>
+                <input
+                  type="search"
+                  id="chatSearchInput"
+                  class="input input-sm chat-search"
+                  placeholder="搜尋對話…"
+                  aria-label="搜尋對話"
+                />
+                <div id="chatList" class="chat-list"></div>
+              </aside>
+
+              <div class="chat-main">
+                <div class="chat-toolbar">
+                  <input
+                    type="text"
+                    id="chatTitleInput"
+                    class="input chat-title-input"
+                    placeholder="新對話"
+                    aria-label="對話標題"
+                  />
+                  <div class="chat-toolbar-group">
+                    <select id="chatPromptSelect" class="select chat-prompt-select" aria-label="系統提示"></select>
+                    <button
+                      type="button"
+                      id="chatPromptManageBtn"
+                      class="btn-icon"
+                      title="管理系統提示"
+                      aria-label="管理系統提示"
+                    >⚙</button>
+                  </div>
+                  <select id="chatModelSelect" class="select chat-model-select" aria-label="聊天模型"></select>
+                  <button type="button" id="chatDeleteBtn" class="btn btn-secondary btn-sm">刪除</button>
+                </div>
+
+                <div id="chatBanner" class="translate-banner hidden" role="status">
+                  <span id="chatBannerText">尚未設定聊天 API</span>
+                  <button type="button" id="chatOpenSettingsBtn" class="btn btn-secondary btn-sm">
+                    前往設定
+                  </button>
+                </div>
+
+                <div id="chatMessages" class="chat-messages"></div>
+
+                <div class="chat-composer" id="chatComposer">
+                  <div id="chatAttachments" class="chat-attachments hidden"></div>
+                  <textarea
+                    id="chatInput"
+                    class="chat-input"
+                    rows="1"
+                    placeholder="輸入訊息…（Enter 送出，Shift+Enter 換行，可貼上或拖入圖片）"
+                  ></textarea>
+                  <div class="chat-composer-bar">
+                    <button
+                      type="button"
+                      id="chatAttachBtn"
+                      class="composer-btn"
+                      title="附加圖片"
+                      aria-label="附加圖片"
+                    >
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M20.5 11.5 12 20a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.7 3.7 0 0 1 5.2 5.2l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      id="chatThinkBtn"
+                      class="composer-btn composer-toggle"
+                      aria-pressed="false"
+                      title="思考模式：送出 reasoning_effort，部分模型才支援"
+                    >
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M12 3.5a4.5 4.5 0 0 0-4.4 5.4A3.6 3.6 0 0 0 9 15.8V18a1.5 1.5 0 0 0 1.5 1.5h3A1.5 1.5 0 0 0 15 18v-2.2a3.6 3.6 0 0 0 1.4-6.9A4.5 4.5 0 0 0 12 3.5Z" />
+                        <path d="M9.8 21.2h4.4" />
+                      </svg>
+                      <span>思考</span>
+                    </button>
+                    <span class="composer-spacer"></span>
+                    <span class="composer-hint" id="chatComposerHint">Enter 送出 · Shift+Enter 換行</span>
+                    <button type="button" id="chatSendBtn" class="btn btn-primary chat-send-btn">送出</button>
+                  </div>
+                  <input
+                    type="file"
+                    id="chatFileInput"
+                    accept="image/png,image/jpeg,image/webp"
+                    multiple
+                    hidden
+                  />
+                </div>
+                <p id="chatError" class="live-error hidden"></p>
+              </div>
+            </div>
+          </section>
+
+          <!-- 額度儀錶板 -->
+          <section id="page-usage" class="page">
+            <div class="usage-shell">
+              <header class="usage-header">
+                <div class="usage-heading">
+                  <p class="usage-eyebrow">本機訂閱狀態</p>
+                  <h1>額度儀錶板</h1>
+                  <p class="page-desc">集中查看五個 AI 工具的已用額度與重置時間；只有按下同步才會連線查詢。</p>
+                </div>
+                <div class="usage-actions" role="group" aria-label="額度操作">
+                  <button type="button" id="usageDiagnosticsBtn" class="btn btn-secondary btn-sm">診斷</button>
+                  <button type="button" id="usageSettingsBtn" class="btn btn-secondary btn-sm">顯示設定</button>
+                  <button type="button" id="usageSyncBtn" class="btn btn-primary btn-sm">
+                    <span class="usage-sync-icon" aria-hidden="true">↻</span>
+                    <span>同步</span>
+                  </button>
+                </div>
+              </header>
+
+              <div class="usage-pulse" aria-label="同步摘要">
+                <div id="usageProviderSummary" class="usage-provider-summary"></div>
+                <p id="usageLastSync" class="usage-last-sync" role="status" aria-live="polite">尚未同步</p>
+              </div>
+
+              <p id="usageError" class="live-error hidden" role="alert"></p>
+              <section id="usageGrid" class="usage-grid" aria-label="AI 工具額度卡片"></section>
+              <p id="usageSortStatus" class="visually-hidden" aria-live="polite"></p>
+            </div>
+
+            <dialog id="usageSettingsDialog" class="app-dialog usage-dialog" aria-labelledby="usageSettingsTitle">
+              <header class="dialog-head">
+                <h2 id="usageSettingsTitle" class="dialog-title">額度顯示設定</h2>
+                <p class="dialog-desc">選擇要顯示的工具、調整卡片順序，以及設定 OpenCode 本機估算的重置時間。</p>
+              </header>
+              <div class="usage-dialog-body">
+                <fieldset class="usage-settings-group">
+                  <legend>顯示項目</legend>
+                  <div id="usageProviderToggles" class="usage-provider-toggles"></div>
+                </fieldset>
+                <fieldset class="usage-settings-group">
+                  <legend>OpenCode 重置時間</legend>
+                  <p class="usage-settings-hint">5 小時視窗依最近一次使用自動計算；每週與每月只影響倒數，成本仍採 trailing window。</p>
+                  <label class="usage-reset-row">
+                    <span>每週重置</span>
+                    <span class="usage-reset-controls">
+                      <select id="usageWeeklyDay" class="select" aria-label="OpenCode 每週重置星期">
+                        <option value="0">星期日</option>
+                        <option value="1">星期一</option>
+                        <option value="2">星期二</option>
+                        <option value="3">星期三</option>
+                        <option value="4">星期四</option>
+                        <option value="5">星期五</option>
+                        <option value="6">星期六</option>
+                      </select>
+                      <input id="usageWeeklyTime" class="input" type="time" aria-label="OpenCode 每週重置時間" />
+                    </span>
+                  </label>
+                  <label class="usage-reset-row">
+                    <span>每月重置</span>
+                    <span class="usage-reset-controls">
+                      <select id="usageMonthlyDay" class="select" aria-label="OpenCode 每月重置日期"></select>
+                      <input id="usageMonthlyTime" class="input" type="time" aria-label="OpenCode 每月重置時間" />
+                    </span>
+                  </label>
+                </fieldset>
+              </div>
+              <footer class="dialog-actions">
+                <button type="button" id="usageSettingsCancel" class="btn btn-secondary">取消</button>
+                <button type="button" id="usageSettingsSave" class="btn btn-primary">儲存變更</button>
+              </footer>
+            </dialog>
+
+            <dialog id="usageDiagnosticsDialog" class="app-dialog usage-dialog" aria-labelledby="usageDiagnosticsTitle">
+              <header class="dialog-head">
+                <h2 id="usageDiagnosticsTitle" class="dialog-title">同步診斷</h2>
+                <p class="dialog-desc">只顯示連線狀態、HTTP status 與額度視窗；不包含 token 或憑證內容。</p>
+              </header>
+              <div class="usage-dialog-body">
+                <pre id="usageDiagnosticsText" class="usage-diagnostics-text">尚無診斷資料</pre>
+              </div>
+              <footer class="dialog-actions">
+                <button type="button" id="usageDiagnosticsCopy" class="btn btn-secondary">複製診斷</button>
+                <button type="button" id="usageDiagnosticsClose" class="btn btn-primary">關閉</button>
+              </footer>
+            </dialog>
+          </section>
+
           <!-- 檔案轉錄頁面 -->
-          <section id="page-transcribe" class="page active">
+          <section id="page-transcribe" class="page">
             <div class="page-header">
               <h1>音訊檔案轉錄</h1>
               <p class="page-desc">拖入音訊檔案，AI 將自動轉錄為文字</p>
@@ -282,227 +480,377 @@
 
           <!-- 設定 -->
           <section id="page-settings" class="page">
-            <div class="page-header">
-              <h1>設定</h1>
-              <p class="page-desc">模型、翻譯、語音轉文字、外觀與朗讀</p>
-            </div>
+            <div class="settings-shell">
+              <nav class="settings-nav" id="settingsNav" aria-label="設定分類">
+                <button type="button" class="settings-nav-item active" data-section="models">
+                  <span class="settings-nav-icon" aria-hidden="true">📦</span>模型
+                </button>
+                <button type="button" class="settings-nav-item" data-section="translate">
+                  <span class="settings-nav-icon" aria-hidden="true">🔤</span>翻譯
+                </button>
+                <button type="button" class="settings-nav-item" data-section="chat">
+                  <span class="settings-nav-icon" aria-hidden="true">💬</span>聊天
+                </button>
+                <button type="button" class="settings-nav-item" data-section="asr">
+                  <span class="settings-nav-icon" aria-hidden="true">🎙️</span>語音轉文字
+                </button>
+                <button type="button" class="settings-nav-item" data-section="appearance">
+                  <span class="settings-nav-icon" aria-hidden="true">🎨</span>外觀
+                </button>
+                <button type="button" class="settings-nav-item" data-section="voice">
+                  <span class="settings-nav-icon" aria-hidden="true">🔊</span>語音朗讀
+                </button>
+              </nav>
 
-            <div class="settings-page-body">
-              <!-- 1. 模型設定 -->
-              <section class="settings-section">
-                <h3 class="settings-section-title">模型設定</h3>
-                <p class="setting-hint">本地 ASR 與本地翻譯模型下載、刪除與路徑管理。</p>
-                <div class="models-path">
-                  <span id="modelsPathText" class="models-path-text" title="點擊開啟模型資料夾">…</span>
-                  <button type="button" id="openModelsFolderBtn" class="btn btn-secondary btn-sm">開啟資料夾</button>
-                </div>
-                <div id="modelList" class="model-list"></div>
-              </section>
-
-              <!-- 2. 翻譯設定 -->
-              <section class="settings-section">
-                <h3 class="settings-section-title">翻譯設定</h3>
-                <div id="translatorSegment" class="segmented">
-                  <button type="button" class="seg-btn" data-value="local">本地</button>
-                  <button type="button" class="seg-btn" data-value="cloud">雲端</button>
-                </div>
-                <p class="setting-hint">
-                  檔案轉錄、即時字幕、翻譯頁共用此後端。即時字幕若目標語言選「自動偵測」則不翻譯。
-                </p>
-
-                <div id="localLlmSection" class="settings-subpanel">
-                  <h4 class="settings-subsection-title">本地</h4>
-                  <p class="setting-hint">請先在「模型設定」下載所選模型。全程離線。</p>
-                  <div class="setting-group">
-                    <label>翻譯模型</label>
-                    <div id="localTranslateModelSegment" class="segmented segmented-wrap">
-                      <button type="button" class="seg-btn" data-value="linguaforge08" title="繁中／英／日微調（Q8：專名最準，774MB）">
-                        LinguaForge Q8
-                      </button>
-                      <button type="button" class="seg-btn" data-value="linguaforge08q4" title="同一顆模型的 Q4：小 269MB、CPU 快約 2.2×，罕見英文專名可能被音譯">
-                        LinguaForge Q4
-                      </button>
-                      <button type="button" class="seg-btn" data-value="qwen35translate" title="通用多語">
-                        Qwen3.5 通用
-                      </button>
+              <div class="settings-body">
+                <div class="settings-scroll" id="settingsScroll">
+                  <!-- 模型 -->
+                  <section class="settings-section active" id="set-models" data-section="models">
+                    <header class="settings-section-head">
+                      <h2 class="settings-section-title">模型</h2>
+                      <p class="settings-section-desc">本地 ASR 與本地翻譯模型的下載、刪除與存放路徑。</p>
+                    </header>
+                    <div class="settings-card">
+                      <div class="models-path">
+                        <span id="modelsPathText" class="models-path-text" title="點擊開啟模型資料夾">…</span>
+                        <button type="button" id="openModelsFolderBtn" class="btn btn-secondary btn-sm">開啟資料夾</button>
+                      </div>
+                      <div id="modelList" class="model-list"></div>
                     </div>
-                  </div>
-                  <div class="setting-group">
-                    <label>推論裝置</label>
-                    <div id="llmGpuSegment" class="segmented">
-                      <button type="button" class="seg-btn" data-value="cpu">CPU</button>
-                      <button type="button" class="seg-btn" data-value="gpu" id="llmGpuBtn">GPU</button>
+                  </section>
+
+                  <!-- 翻譯 -->
+                  <section class="settings-section" id="set-translate" data-section="translate">
+                    <header class="settings-section-head">
+                      <h2 class="settings-section-title">翻譯</h2>
+                      <p class="settings-section-desc">
+                        檔案轉錄、即時字幕、翻譯頁共用此後端。即時字幕若目標語言選「自動偵測」則不翻譯。
+                      </p>
+                    </header>
+                    <div class="settings-card">
+                      <div class="setting-group">
+                        <label>翻譯後端</label>
+                        <div id="translatorSegment" class="segmented">
+                          <button type="button" class="seg-btn" data-value="local">本地</button>
+                          <button type="button" class="seg-btn" data-value="cloud">雲端</button>
+                        </div>
+                      </div>
+
+                      <div id="localLlmSection" class="settings-subpanel">
+                        <h4 class="settings-subsection-title">本地</h4>
+                        <p class="setting-hint">請先在「模型」下載所選模型。全程離線。</p>
+                        <div class="setting-group">
+                          <label>翻譯模型</label>
+                          <div id="localTranslateModelSegment" class="segmented segmented-wrap">
+                            <button type="button" class="seg-btn" data-value="linguaforge08" title="繁中／英／日微調（Q8：專名最準，774MB）">
+                              LinguaForge Q8
+                            </button>
+                            <button type="button" class="seg-btn" data-value="linguaforge08q4" title="同一顆模型的 Q4：小 269MB、CPU 快約 2.2×，罕見英文專名可能被音譯">
+                              LinguaForge Q4
+                            </button>
+                            <button type="button" class="seg-btn" data-value="qwen35translate" title="通用多語">
+                              Qwen3.5 通用
+                            </button>
+                          </div>
+                        </div>
+                        <div class="setting-group">
+                          <label>推論裝置</label>
+                          <div id="llmGpuSegment" class="segmented">
+                            <button type="button" class="seg-btn" data-value="cpu">CPU</button>
+                            <button type="button" class="seg-btn" data-value="gpu" id="llmGpuBtn">GPU</button>
+                          </div>
+                          <p id="llmGpuHint" class="setting-hint">偵測中…</p>
+                          <div id="cudaEnvRow" class="cuda-env-row hidden">
+                            <button type="button" id="installCudaEnvBtn" class="btn btn-secondary btn-sm">
+                              安裝 CUDA 環境
+                            </button>
+                            <button type="button" id="refreshGpuEnvBtn" class="btn btn-secondary btn-sm">
+                              重新偵測
+                            </button>
+                            <p id="cudaEnvStatus" class="setting-hint">偵測 CUDA Runtime…</p>
+                          </div>
+                          <div id="cudaInstallProgress" class="model-progress hidden">
+                            <div id="cudaInstallProgressFill" class="model-progress-fill"></div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div id="cloudApiSection" class="cloud-api-section hidden">
+                        <h4 class="settings-subsection-title">雲端</h4>
+                        <div class="setting-group">
+                          <label for="apiUrlInput">API URL</label>
+                          <input
+                            type="text"
+                            id="apiUrlInput"
+                            class="input"
+                            placeholder="https://openrouter.ai/api/v1"
+                          />
+                          <p class="setting-hint">OpenAI 相容 chat completions 端點</p>
+                        </div>
+                        <div class="setting-group">
+                          <label for="apiKeyInput">API Key</label>
+                          <div class="input-group">
+                            <input
+                              type="password"
+                              id="apiKeyInput"
+                              class="input"
+                              placeholder="sk-..."
+                            />
+                            <button type="button" id="toggleApiKeyVisibility" class="btn-icon" aria-label="顯示或隱藏 API Key">👁️</button>
+                          </div>
+                        </div>
+                        <div class="setting-group">
+                          <label for="modelIdInput">模型 ID</label>
+                          <input
+                            type="text"
+                            id="modelIdInput"
+                            class="input"
+                            placeholder="google/gemini-3-flash-preview"
+                          />
+                          <p class="setting-hint">
+                            文字翻譯模型即可。
+                            <a href="https://openrouter.ai/models" target="_blank" rel="noopener">OpenRouter 模型</a>
+                          </p>
+                        </div>
+                      </div>
                     </div>
-                    <p id="llmGpuHint" class="setting-hint">偵測中…</p>
-                    <div id="cudaEnvRow" class="cuda-env-row hidden">
-                      <button type="button" id="installCudaEnvBtn" class="btn btn-secondary btn-sm">
-                        安裝 CUDA 環境
-                      </button>
-                      <button type="button" id="refreshGpuEnvBtn" class="btn btn-secondary btn-sm">
-                        重新偵測
-                      </button>
-                      <p id="cudaEnvStatus" class="setting-hint">偵測 CUDA Runtime…</p>
+                  </section>
+
+                  <!-- 聊天 -->
+                  <section class="settings-section" id="set-chat" data-section="chat">
+                    <header class="settings-section-head">
+                      <h2 class="settings-section-title">聊天</h2>
+                      <p class="settings-section-desc">
+                        聊天分頁專用，與翻譯的雲端設定各自獨立（翻譯可用便宜模型、聊天用強模型）。
+                        系統提示改在聊天頁的工具列切換與管理。
+                      </p>
+                    </header>
+                    <div class="settings-card">
+                      <div class="setting-group">
+                        <label for="chatApiUrlInput">API URL</label>
+                        <input
+                          type="text"
+                          id="chatApiUrlInput"
+                          class="input"
+                          placeholder="https://openrouter.ai/api/v1"
+                        />
+                        <p class="setting-hint">OpenAI 相容 chat completions 端點</p>
+                      </div>
+                      <div class="setting-group">
+                        <label for="chatApiKeyInput">API Key</label>
+                        <div class="input-group">
+                          <input type="password" id="chatApiKeyInput" class="input" placeholder="sk-..." />
+                          <button type="button" id="toggleChatApiKeyVisibility" class="btn-icon" aria-label="顯示或隱藏 API Key">👁️</button>
+                        </div>
+                      </div>
+                      <div class="setting-group">
+                        <label>模型清單</label>
+                        <div id="chatModelList" class="chat-model-list"></div>
+                        <button type="button" id="chatAddModelBtn" class="btn btn-secondary btn-sm">
+                          ＋ 新增模型
+                        </button>
+                        <p class="setting-hint">
+                          聊天頁可即時切換清單中的模型。
+                          <a href="https://openrouter.ai/models" target="_blank" rel="noopener">OpenRouter 模型</a>
+                        </p>
+                      </div>
                     </div>
-                    <div id="cudaInstallProgress" class="model-progress hidden">
-                      <div id="cudaInstallProgressFill" class="model-progress-fill"></div>
+                  </section>
+
+                  <!-- 語音轉文字 -->
+                  <section class="settings-section" id="set-asr" data-section="asr">
+                    <header class="settings-section-head">
+                      <h2 class="settings-section-title">語音轉文字</h2>
+                      <p class="settings-section-desc">
+                        檔案轉錄與即時字幕共用。本地為 Qwen3-ASR；雲端走 OpenAI 相容 transcriptions API。
+                      </p>
+                    </header>
+                    <div class="settings-card">
+                      <div class="setting-group">
+                        <label>辨識後端</label>
+                        <div id="asrEngineSegment" class="segmented">
+                          <button type="button" class="seg-btn" data-value="local">本地</button>
+                          <button type="button" class="seg-btn" data-value="cloud">雲端</button>
+                        </div>
+                      </div>
+
+                      <div id="localAsrSection" class="settings-subpanel">
+                        <h4 class="settings-subsection-title">本地 ASR</h4>
+                        <p class="setting-hint">請在「模型」下載 Qwen3-ASR-0.6B。全程離線。</p>
+                        <div class="setting-group">
+                          <label>推論執行緒</label>
+                          <div id="asrThreadsSegment" class="segmented">
+                            <button type="button" class="seg-btn" data-value="0">自動</button>
+                            <button type="button" class="seg-btn" data-value="2">2</button>
+                            <button type="button" class="seg-btn" data-value="4">4</button>
+                            <button type="button" class="seg-btn" data-value="8">8</button>
+                          </div>
+                          <p class="setting-hint">
+                            本地 ASR 只跑 CPU：官方 <code>sherpa-onnx</code> 的 Windows 套件未編譯 GPU 支援，
+                            指定 CUDA／DirectML 會被靜默退回 CPU。需要 GPU 級速度請改用上方的「雲端」。
+                            執行緒不是越多越好，不確定就留「自動」。
+                          </p>
+                        </div>
+                      </div>
+
+                      <div id="cloudAsrSection" class="cloud-api-section hidden">
+                        <h4 class="settings-subsection-title">雲端 ASR</h4>
+                        <div class="setting-group">
+                          <label for="asrApiUrlInput">API URL</label>
+                          <input
+                            type="text"
+                            id="asrApiUrlInput"
+                            class="input"
+                            placeholder="https://openrouter.ai/api/v1"
+                          />
+                          <p class="setting-hint">需支援 <code>/audio/transcriptions</code></p>
+                        </div>
+                        <div class="setting-group">
+                          <label for="asrApiKeyInput">API Key</label>
+                          <div class="input-group">
+                            <input
+                              type="password"
+                              id="asrApiKeyInput"
+                              class="input"
+                              placeholder="sk-..."
+                            />
+                            <button type="button" id="toggleAsrApiKeyVisibility" class="btn-icon" aria-label="顯示或隱藏 API Key">👁️</button>
+                          </div>
+                        </div>
+                        <div class="setting-group">
+                          <label for="asrModelIdInput">模型 ID</label>
+                          <input
+                            type="text"
+                            id="asrModelIdInput"
+                            class="input"
+                            placeholder="openai/whisper-1"
+                          />
+                          <p class="setting-hint">
+                            例如 <code>openai/whisper-1</code>、
+                            <code>openai/whisper-large-v3</code>。
+                            <a href="https://openrouter.ai/collections/speech-to-text-models" target="_blank" rel="noopener">STT 模型列表</a>
+                          </p>
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                </div>
+                  </section>
 
-                <div id="cloudApiSection" class="cloud-api-section hidden">
-                  <h4 class="settings-subsection-title">雲端</h4>
-                  <div class="setting-group">
-                    <label for="apiUrlInput">API URL</label>
-                    <input
-                      type="text"
-                      id="apiUrlInput"
-                      class="input"
-                      placeholder="https://openrouter.ai/api/v1"
-                    />
-                    <p class="setting-hint">OpenAI 相容 chat completions 端點</p>
-                  </div>
-                  <div class="setting-group">
-                    <label for="apiKeyInput">API Key</label>
-                    <div class="input-group">
-                      <input
-                        type="password"
-                        id="apiKeyInput"
-                        class="input"
-                        placeholder="sk-..."
-                      />
-                      <button type="button" id="toggleApiKeyVisibility" class="btn-icon">👁️</button>
+                  <!-- 外觀 -->
+                  <section class="settings-section" id="set-appearance" data-section="appearance">
+                    <header class="settings-section-head">
+                      <h2 class="settings-section-title">外觀</h2>
+                      <p class="settings-section-desc">主題即時套用，無需按儲存。</p>
+                    </header>
+                    <div class="settings-card">
+                      <div class="setting-group">
+                        <label>主題</label>
+                        <div id="themeSegment" class="segmented">
+                          <button type="button" class="seg-btn" data-value="dark">深色</button>
+                          <button type="button" class="seg-btn" data-value="light">淺色</button>
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                  <div class="setting-group">
-                    <label for="modelIdInput">模型 ID</label>
-                    <input
-                      type="text"
-                      id="modelIdInput"
-                      class="input"
-                      placeholder="google/gemini-3-flash-preview"
-                    />
-                    <p class="setting-hint">
-                      文字翻譯模型即可。
-                      <a href="https://openrouter.ai/models" target="_blank" rel="noopener">OpenRouter 模型</a>
-                    </p>
-                  </div>
-                </div>
-              </section>
+                  </section>
 
-              <!-- 3. 語音轉文字設定 -->
-              <section class="settings-section">
-                <h3 class="settings-section-title">語音轉文字設定</h3>
-                <div id="asrEngineSegment" class="segmented">
-                  <button type="button" class="seg-btn" data-value="local">本地</button>
-                  <button type="button" class="seg-btn" data-value="cloud">雲端</button>
-                </div>
-                <p class="setting-hint">檔案轉錄與即時字幕共用。本地為 Qwen3-ASR；雲端走 OpenRouter 相容 transcriptions API。</p>
-
-                <div id="localAsrSection" class="settings-subpanel">
-                  <h4 class="settings-subsection-title">本地 ASR</h4>
-                  <p class="setting-hint">請在「模型設定」下載 Qwen3-ASR-0.6B。CPU 即時、無需連網。</p>
-                </div>
-
-                <div id="cloudAsrSection" class="cloud-api-section hidden">
-                  <h4 class="settings-subsection-title">雲端 ASR</h4>
-                  <div class="setting-group">
-                    <label for="asrApiUrlInput">API URL</label>
-                    <input
-                      type="text"
-                      id="asrApiUrlInput"
-                      class="input"
-                      placeholder="https://openrouter.ai/api/v1"
-                    />
-                    <p class="setting-hint">需支援 <code>/audio/transcriptions</code></p>
-                  </div>
-                  <div class="setting-group">
-                    <label for="asrApiKeyInput">API Key</label>
-                    <div class="input-group">
-                      <input
-                        type="password"
-                        id="asrApiKeyInput"
-                        class="input"
-                        placeholder="sk-..."
-                      />
-                      <button type="button" id="toggleAsrApiKeyVisibility" class="btn-icon">👁️</button>
+                  <!-- 語音朗讀 -->
+                  <section class="settings-section" id="set-voice" data-section="voice">
+                    <header class="settings-section-head">
+                      <h2 class="settings-section-title">語音朗讀</h2>
+                      <p class="settings-section-desc">翻譯頁的朗讀使用 Edge TTS，需要連網。</p>
+                    </header>
+                    <div class="settings-card">
+                      <div class="setting-group">
+                        <label for="ttsRateInput">語速 <span id="ttsRateLabel" class="setting-value-label">1.0×</span></label>
+                        <input
+                          type="range"
+                          id="ttsRateInput"
+                          class="range-input"
+                          min="-50"
+                          max="100"
+                          step="5"
+                          value="0"
+                        />
+                        <p class="setting-hint">0.5×（慢）— 1.0×（預設）— 2.0×（快）</p>
+                      </div>
+                      <div id="ttsVoicesFields" class="tts-voices-fields">
+                        <div class="setting-group">
+                          <label for="ttsVoiceZhTw">繁體中文</label>
+                          <select id="ttsVoiceZhTw" class="select select-full" data-tts-lang="zh-TW"></select>
+                        </div>
+                        <div class="setting-group">
+                          <label for="ttsVoiceZhCn">簡體中文</label>
+                          <select id="ttsVoiceZhCn" class="select select-full" data-tts-lang="zh-CN"></select>
+                        </div>
+                        <div class="setting-group">
+                          <label for="ttsVoiceEn">English</label>
+                          <select id="ttsVoiceEn" class="select select-full" data-tts-lang="en"></select>
+                        </div>
+                        <div class="setting-group">
+                          <label for="ttsVoiceJa">日本語</label>
+                          <select id="ttsVoiceJa" class="select select-full" data-tts-lang="ja"></select>
+                        </div>
+                        <div class="setting-group">
+                          <label for="ttsVoiceKo">한국어</label>
+                          <select id="ttsVoiceKo" class="select select-full" data-tts-lang="ko"></select>
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                  <div class="setting-group">
-                    <label for="asrModelIdInput">模型 ID</label>
-                    <input
-                      type="text"
-                      id="asrModelIdInput"
-                      class="input"
-                      placeholder="openai/whisper-1"
-                    />
-                    <p class="setting-hint">
-                      例如 <code>openai/whisper-1</code>、
-                      <code>openai/whisper-large-v3</code>。
-                      <a href="https://openrouter.ai/collections/speech-to-text-models" target="_blank" rel="noopener">STT 模型列表</a>
-                    </p>
-                  </div>
+                  </section>
                 </div>
-              </section>
 
-              <!-- 4. 外觀 -->
-              <section class="settings-section">
-                <h3 class="settings-section-title">外觀</h3>
-                <div class="setting-group">
-                  <label>主題</label>
-                  <div id="themeSegment" class="segmented">
-                    <button type="button" class="seg-btn" data-value="dark">深色</button>
-                    <button type="button" class="seg-btn" data-value="light">淺色</button>
-                  </div>
-                  <p class="setting-hint">即時套用，無需按儲存。</p>
+                <div class="settings-footer">
+                  <p class="settings-footer-hint">主題會即時套用；其餘設定按「儲存設定」後生效。</p>
+                  <button type="button" id="saveSettingsBtn" class="btn btn-primary">儲存設定</button>
                 </div>
-              </section>
-
-              <!-- 5. 語音設定 -->
-              <section class="settings-section">
-                <h3 class="settings-section-title">語音設定</h3>
-                <p class="setting-hint">Edge TTS 朗讀（需連網）。</p>
-                <div class="setting-group">
-                  <label for="ttsRateInput">語速 <span id="ttsRateLabel" class="setting-value-label">1.0×</span></label>
-                  <input
-                    type="range"
-                    id="ttsRateInput"
-                    class="range-input"
-                    min="-50"
-                    max="100"
-                    step="5"
-                    value="0"
-                  />
-                  <p class="setting-hint">0.5×（慢）— 1.0×（預設）— 2.0×（快）</p>
-                </div>
-                <div id="ttsVoicesFields" class="tts-voices-fields">
-                  <div class="setting-group">
-                    <label for="ttsVoiceZhTw">繁體中文</label>
-                    <select id="ttsVoiceZhTw" class="select select-full" data-tts-lang="zh-TW"></select>
-                  </div>
-                  <div class="setting-group">
-                    <label for="ttsVoiceZhCn">簡體中文</label>
-                    <select id="ttsVoiceZhCn" class="select select-full" data-tts-lang="zh-CN"></select>
-                  </div>
-                  <div class="setting-group">
-                    <label for="ttsVoiceEn">English</label>
-                    <select id="ttsVoiceEn" class="select select-full" data-tts-lang="en"></select>
-                  </div>
-                  <div class="setting-group">
-                    <label for="ttsVoiceJa">日本語</label>
-                    <select id="ttsVoiceJa" class="select select-full" data-tts-lang="ja"></select>
-                  </div>
-                  <div class="setting-group">
-                    <label for="ttsVoiceKo">한국어</label>
-                    <select id="ttsVoiceKo" class="select select-full" data-tts-lang="ko"></select>
-                  </div>
-                </div>
-              </section>
-
-              <button type="button" id="saveSettingsBtn" class="btn btn-primary btn-block">儲存設定</button>
+              </div>
             </div>
           </section>
         </main>
       </div>
+
+      <!-- 系統提示管理（原生 dialog：Esc 關閉、焦點鎖定由瀏覽器處理） -->
+      <dialog id="chatPromptDialog" class="app-dialog" aria-label="管理系統提示">
+        <div class="dialog-head">
+          <h2 class="dialog-title">系統提示</h2>
+          <p class="dialog-desc">可存多組，聊天頁工具列隨時切換。內容留空的那組不會被儲存。</p>
+        </div>
+        <div class="prompt-editor">
+          <div class="prompt-list-pane">
+            <div id="promptList" class="prompt-list"></div>
+            <button type="button" id="promptAddBtn" class="btn btn-secondary btn-sm prompt-add-btn">
+              ＋ 新增
+            </button>
+          </div>
+          <div class="prompt-detail">
+            <div class="setting-group">
+              <label for="promptNameInput">名稱</label>
+              <input
+                type="text"
+                id="promptNameInput"
+                class="input"
+                maxlength="40"
+                placeholder="例：技術助理"
+              />
+            </div>
+            <div class="setting-group prompt-content-group">
+              <label for="promptContentInput">內容</label>
+              <textarea
+                id="promptContentInput"
+                class="input prompt-content"
+                maxlength="4000"
+                placeholder="例：你是一位精簡務實的技術助理，一律使用繁體中文，先給結論再給理由。"
+              ></textarea>
+            </div>
+            <button type="button" id="promptDeleteBtn" class="btn btn-secondary btn-sm prompt-delete-btn">
+              刪除這組
+            </button>
+          </div>
+        </div>
+        <div class="dialog-actions">
+          <button type="button" id="promptCancelBtn" class="btn btn-secondary btn-sm">取消</button>
+          <button type="button" id="promptSaveBtn" class="btn btn-primary btn-sm">儲存</button>
+        </div>
+      </dialog>
 
       <!-- Toast 訊息 -->
       <div id="toast" class="toast hidden">

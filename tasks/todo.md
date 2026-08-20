@@ -1,230 +1,185 @@
-# VoiceInk — 任務追蹤
+# VoiceInk — 設定頁重整 + 聊天對齊 Chatbox/Cherry Studio
 
-## 2026-08-02 — LinguaForge v5e 出貨解碼對齊
+## 背景
 
-- [x] DECODE 查表：eos 雙 id、beams/lp 文件化、en/ja rep=1.1、zhtw 禁 rep
-- [x] GGUF：`repeatPenalty:false`（zhtw）、dry≈nrng4、thoughtTokens:0、adaptive maxTokens
-- [x] 長文 main ≤280 切段；renderer LinguaForge 同 280
-- [x] 後處理 s2twp + strip 引號；`[linguaforge decode]` log
-- [x] 驗收 `e2e-linguaforge-decode.js` A–E ALL PASS
-- [x] `electron:pack`
+使用者回饋四項：
+1. 語音轉文字要能選 CPU／GPU（比照翻譯的 `llmGpu`）
+2. 設定選單字級都差不多、層級混亂、不好用
+3. 聊天設定只留 API URL／Key／模型清單；系統提示搬到聊天頁，且要能存多組自選
+4. 聊天輸入框滑動反直覺；要加 thinking 開關與圖片輸入
+外加：對齊 Chatbox / Cherry Studio 的常用功能
 
-### Review
-- 根因：node-llama-cpp 省略 repeatPenalty 時預設 penalty=1.1，zhtw 被誤開 → 繁簡亂
-- GGUF 無法 beam=4；log 標 N/A，靠 eog + dry + 分段逼近
+## 前置調查結論（已實測）
 
-## 2026-08-01 — LinguaForge 升級 v5e + 下載／翻譯驗證
+- [x] 本地 ASR GPU **不可行**：npm 的 `sherpa-onnx-win-x64` 是 CPU-only 編譯
+  `session.cc:GetSessionOptionsImpl:324 Please compile with -DSHERPA_ONNX_ENABLE_GPU=ON.`
+  `Available providers: CPUExecutionProvider, . Fallback to cpu!`
+  （provider 傳 cuda / directml 都只會靜默 fallback；npm 無 `sherpa-onnx-win-x64-gpu` 套件）
+  → 改成提供**真的有效**的 `asrThreads`（推論執行緒），並在 UI 明講 GPU 不可用與替代路徑（雲端 ASR）
 
-- [x] `models.js` 改指 `gguf-v5e/linguaforge-v5e-0.8b-Q4_K_M.gguf`（totalBytes 529296832）
-- [x] 刪除本機舊 v3：`%APPDATA%/voiceink/models/linguaforge08`
-- [x] 下載 v5e 成功（310.5s，529296832 bytes）
-- [x] 翻譯抽樣 8 向 PASS（en/ja/zh-TW 往返）
-- [x] e2e-llm-device ALL PASS（CPU+CUDA）；e2e-local-translate-settings ALL PASS
-- [x] `electron:pack` 更新預覽
+## 任務
 
-### Review
-- HF 路徑同 repo，GGUF 子目錄由 `gguf/` → `gguf-v5e/`、檔名 v3→v5e
-- 訓練格式不變（system professional translator + `翻譯成…：\n`）
-- unload 後 Windows 可能原生 exit -1073740791（既有），不影響翻譯結果
+### A. 設定頁資訊架構與字級
+- [x] 左側分類 rail（模型／翻譯／聊天／語音轉文字／外觀／語音），一次只顯示一區
+- [x] 字級階層修正：區塊標題 18px/700 primary、子標題 14px/600、欄位 label 13px/600、hint 12px tertiary
+- [x] 卡片化欄位群、sticky 儲存列、focus ring、reduced-motion
 
-## 2026-07-28 — 恢復 LinguaForge 選項
+### B. 語音轉文字推論設定
+- [x] 新 store key `asrThreads`（0=自動 / 2 / 4 / 8），main 驗證整數範圍
+- [x] `local-asr.js` 讀 store 決定 numThreads；threads 變動時強制重建 recognizer
+- [x] UI：本地 ASR 區塊加「推論執行緒」＋ GPU 不可用說明
 
-- [x] `models.js` 移除 `hidden` 與 status 過濾；白名單加回 `linguaforge08`（推薦在前）
-- [x] `local-llm.js` `DEFAULT_LLM_KEY` 回 `linguaforge08`；renderer 預設／白名單／normalize 同步
-- [x] `index.html` 翻譯模型 setting-group 取消 hidden、加回 LinguaForge 按鈕
-- [x] e2e 斷言反轉（cdp smoke 改 `linguaforge selectable`、llm-device 改測可選＋resolve）
-- [x] 驗證：llm-device ALL PASS（CPU+CUDA）、local-translate-settings ALL PASS、CDP smoke 13/13、`electron:pack`
+### C. 系統提示多組化（搬到聊天頁）
+- [x] 新 store key `chatPrompts`（`{id,name,content}[]`）、`chatPromptId`
+- [x] `initStore` 一次性搬移舊 `chatSystemPrompt` → preset 後刪除舊 key
+- [x] 設定頁移除系統提示欄位
+- [x] 聊天頁工具列加提示下拉 + `<dialog>` 管理彈窗（新增／改名／編輯／刪除）
 
-### Review
-- smoke 原本用 `offsetParent` 判可見會誤判：translator=cloud 時整個本地區塊隱藏 → 改判 setting-group 是否帶 `hidden`
-- e2e 測試句換成一般句：LinguaForge 對極短寒暄句（`Hello world.`）吐「？」是既有已知行為
+### D. 輸入框重做
+- [x] auto-grow textarea（1 行起跳、上限 40vh、`resize:none`）
+- [x] composer 工具列：附加圖片、thinking 開關、送出／停止
+- [x] 貼上與拖放圖片、canvas 縮圖（長邊 1568、JPEG 0.85）、縮圖列可移除
 
-## 2026-07-27 — v1.6.0：屏蔽 LinguaForge + 翻譯不限字數
+### E. thinking
+- [x] store `chatThinking`；開啟時 body 帶 `reasoning_effort`
+- [x] SSE 解析 `delta.reasoning_content` / `delta.reasoning`，以 `kind:'reasoning'` 分流
+- [x] 落盤到助理訊息的 `reasoning` 欄位；UI 以可摺疊區塊呈現
 
-- [x] LinguaForge 屏蔽：registry `hidden:true`、白名單只留 qwen、預設／normalize 全改 qwen
-- [x] 設定頁「模型設定」不列 LinguaForge；「翻譯模型」整組隱藏（僅剩單一選項）
-- [x] 翻譯頁移除 `maxlength=1500`：`splitForTranslate` 分 ≤600 字段落依序翻譯
-- [x] 進度 `(i/n)`＋逐段填入譯文；翻譯中可按「停止」
-- [x] 修 `translateCloud` 少傳 modelKey 給 `buildSystemPrompt`（雲端 prompt 曾變成「翻譯成 file」）
-- [x] e2e：CDP smoke 13/13、e2e-local-translate-settings ALL PASS、e2e-llm-device ALL PASS
-- [x] 版本 1.6.0、`electron:build` 安裝檔、GitHub Release
+### F. 圖片訊息（main 端所有權）
+- [x] `chat-images.js`：存 `<userData>/chat-images/`，驗證 data URL 前綴與大小
+- [x] 訊息新增 `images: string[]`（只存檔名）；送 API 時才讀檔轉 data URL
+- [x] `chat:image` IPC 供 renderer 顯示；CSP 加 `img-src 'self' data: blob:`
+- [x] 刪除對話時回收孤兒圖片
 
-### Review
-- 分段上限 600 綁定本地 `contextSize: 2048`（prompt＋輸出共用）；要放大得先調 contextSize 並重測記憶體
-- main `MAX_TRANSLATE_CHARS=1500` 刻意保留為 IPC 信任邊界，不隨 UI 解除
-- 停止只中斷 renderer 迴圈，已送出的那一段仍會在 main 跑完（serial chain，無法安全 abort）
-- CDP e2e 教訓：單次 `awaitPromise` 等數十秒會讓連線閒置斷開、node 靜默 exit 0 → 改 Node 端輪詢
+### G. 對齊參考專案的其他功能
+- [x] 每則訊息 hover 顯示「複製」；最後一則助理可「重新生成」
+- [x] 側欄搜尋
 
-## 2026-07-26b — CUDA 環境安裝 + 自動安裝 UI
-
-- [x] winget 安裝 Nvidia.CUDA 13.3；驗證 cudart/cublas + getLlama cuda
-- [x] `cuda-env.js` 偵測／winget／官方 installer／PATH 注入
-- [x] 設定頁：安裝 CUDA 環境 + 重新偵測 + 進度
-- [x] e2e GPU backend=cuda；`electron:pack`
-
-## 2026-07-26 — frameless + LinguaForge + 雙模型 + GPU
-
-- [x] 主窗 frameless：標題列合併 header、min/max/close、標題 VoiceInk
-- [x] 主題鈕移設定「外觀」
-- [x] 模型 registry `linguaforge08` Q4；本地翻譯可選兩模型
-- [x] `localTranslateModel` / `llmGpu` allowlist；未下載 fallback qwen
-- [x] GPU：NVIDIA≥6GB；cuda→vulkan→CPU；e2e-llm-device
-- [x] pack 納入 win-x64-cuda；`electron:pack`
-
-### Review
-- 對抗式審查：預設不硬切壞舊用戶；dispose llama 在 Windows/Vulkan 易 AV → 只卸 session/context/model
-- 本機 CUDA prebuilt 不相容、Vulkan 可用；GPU 後端顯示為 vulkan
-- 擷取中鎖定模型/GPU 控件未做硬鎖（存檔後下次 warm 生效）
-
-## 2026-07-24 — 設定第四分頁 + 雲端 ASR + 語速
-
-- [x] 設定改為導航第四 tab，移除彈窗
-- [x] 四區塊：模型（合併狀態+管理）／翻譯（雲端|本地）／語音轉文字（本地|雲端）／語音（+語速）
-- [x] 移除翻譯「不翻譯」；舊 none→local；即時 auto 語言不譯
-- [x] 雲端 ASR：`cloud-asr.js` + 即時 samples→WAV；檔案 mp3 segment
-- [x] 翻譯／ASR 雲端憑證分開；store allowlist
-- [x] TTS `ttsRate` → Edge TTS rate
-- [x] 文件 + `electron:pack` + CDP smoke 更新
-
-### Review
-- 設定頁為一般 `.page` 捲動；segment 雙組 translator/asrEngine
-- IPC `localAsr:transcribe(File)` 依 store `asrEngine` 分流，renderer 介面不變
-- 雲端檔案依賴 ffmpeg `libmp3lame` segment；上游約 60s timeout 故 50s 切段
-
-## v1.2.0（2026-07-17）
-
-- [x] 本地 ASR only：移除雲端轉錄、FireRed；固定 Qwen3-ASR-0.6B
-- [x] 設定 UI：模型狀態卡、雲端 API 僅 cloud 時展開
-- [x] 規範：任務結束先 `electron:pack` 更新免安裝預覽
-- [x] 文件維護（README / AGENTS / CLAUDE / CONTEXT）
-- [x] 建置安裝檔並發佈 GitHub Release v1.2.0
-- [x] 即時字幕翻譯上下文融合（模型外：前文 + prompt + live tokens + 先顯原文）
-- [x] 雙語／僅翻譯顯示模式 + ASR∥翻譯分離 + openBatch 合併 + upsert 字幕
-- [x] 即時頁顯示模式 UI；engine warm/unload；quit 清記憶體；修 pump／空譯文
-- [x] 修即時翻譯 prompt 複誦：括號式 prompt → system prompt + chat history（本地/雲端 e2e 驗證）
-- [x] 即時字幕全鏈路體檢：多代理審查＋對抗性驗證，修 15 項（stale in-flight guard、history 污染/錯位、重入、track ended、佇列上限、螢幕外還原、Alt+F4 通知、isDestroyed、雲端逾時、token 上限、設定快照、日韓判定）
-
-## v1.3.0（2026-07-18）
-
-- [x] 顯示模式（雙語／僅翻譯）搬進字幕彈窗，由彈窗獨佔 store `captionDisplayMode`；即時頁移除 segment＋清跨窗 IPC
-- [x] 關窗雙向同步實測確認（彈窗 ✕／Alt+F4 ↔ 即時頁開始/停止）
-- [x] 加快模型載入：engine warm 並行（Promise.all）＋進 live 分頁背景預熱、離開卸載
-- [x] CDP 驅動打包版全鏈驗證（結構／彈窗切換／預熱／冷卻／關窗訊號）＋ engine 並行 warm e2e
-- [x] 修日文翻譯被複誦（雙語兩行日文）：移除 identity 前文源頭（`pushPair(原文,原文)`）＋ echo 自我複誦守門 ＋ `buildContextPair` 過濾 identity；`repro-ja.js` e2e 驗證修前後
-- [x] UI 清理：移除「💡 使用說明」info-card ＋ 綠色成功 toast（僅留紅色錯誤 toast）
-- [x] 譯文轉繁 s2twp（抽 `opencc.js` 共用）＋ main 側 echo 守門（先判複誦再轉繁）；KO/JA/EN 譯文全繁體
-- [x] 語言偵測評估：實測 0.8B 當偵測器準確率 ~3/7、中文不保證 echo → 不採用，保留啟發式（見 CONTEXT）
-
-## v1.3.0 修補（2026-07-18c）
-
-- [x] 修「英文翻譯只剩原文」＋開始字幕卡頓（同源）：`local-llm.warm()` 加拋棄式暖機推論，把 ~12.5s compute-graph 冷啟動挪到背景預熱；e2e 第一句 12,493ms→249ms、`engine.acquire('live')` 後 462ms
-- [x] 診斷排除 LLM 邏輯（e2e 英文→繁中零複誦）、opencc、目標語；真因為冷啟動丟批次 × 僅翻譯顯示模式回退原文
-- [x] 存設定回饋：`saveSettings` 加回中性 `showToast('設定已儲存')`（非綠條）
-- [x] 預熱期間 `statusText` 顯示「準備模型…」
-- [x] `electron:pack` 重建預覽 + CDP 開機煙霧測試通過
-
-## 2026-07-18g — 長檔／大檔轉錄
-
-- [x] main `file-transcribe.js`：ffmpeg 串流 16k mono + 28s 切段 ASR
-- [x] 上限 200MB／4h（保證 ≥100MB／≥2h）；進度 IPC；cancel
-- [x] renderer 改 `getPathForFile` + `transcribeFile`；修 chain 尾段死鎖
-- [x] e2e `scripts/e2e-file-long.js` 60s→3 段 ALL PASS；`electron:pack`
-
-## v1.3.0 全專案審計修補（2026-07-18d）
-
-- [x] 四代理平行審查（main／ASR-LLM／renderer／安全）
-- [x] ASR serial lock + loadEnabled 防幽靈重載；displayMedia catch；openFolder 白名單
-- [x] 檔案轉錄重入鎖 + cloud apiKey 預檢；prewarm generation 防洩漏
-- [x] sandbox、store allowlist、導覽守衛、subtitle CSP、s2twp 條件化等
-- [x] 驗證：`scripts/e2e-audit-fixes.js` 15/15、`e2e-cdp-smoke.js` 8/8、`electron:pack`
-
-## v1.3.0 非語言碎片 persona 問候（2026-07-18e）
-
-- [x] 根因：ASR 純符號碎片（So/Cf）過舊 `\p{P}` guard → 0.8B 當聊天回 persona
-- [x] `hasLinguisticContent`（`\p{L}`≥2）擋在進管線前；純符號不建字幕行
-- [x] main `translate` 同構短路徑 + live system prompt 改祈使句
-- [x] 文件 CONTEXT／lessons；pack 更新預覽
+## 驗證
+- [x] `node scripts/test-markdown.js`
+- [x] `npx electron scripts/e2e-chat.js`（新增圖片／thinking／prompt preset 案例）
+- [x] `node scripts/e2e-cdp-smoke.js`
+- [x] `npm run electron:pack`
 
 ## Review
 
-- 既有 release：`v1.0.0`、`v1.1.0` → 本版用 **v1.2.0**（不重複）；目前 **v1.3.0**
-- 指令：`npm run electron:pack`（預覽）、`npm run electron:build`（安裝檔）
-- 對抗性審查納入：find-by-id upsert、batch 狀態機、epoch 清佇列、mutex、batch 勿同時砍 tokens
-- 2026-07-18d 審計：ASR 生命週期對齊 LLM 紀律；IPC 信任邊界（store/openFolder）；prewarm 旗標時序
+四項需求全部落地，外加對齊參考專案的訊息操作與側欄搜尋。
 
-## 已知未做（低優先／產品取捨）
+**唯一沒有照字面做的是第 1 項。** 本地 ASR 的 GPU 選項在現有相依下不存在：npm 的 `sherpa-onnx-win-x64`
+是 CPU-only 編譯（實測 provider 傳 cuda／directml 都印 `Please compile with -DSHERPA_ONNX_ENABLE_GPU=ON ...
+Fallback to cpu!`，三者耗時相同）。照做只會交出一個切了沒差的假開關，所以改成提供真的有效的
+`asrThreads`（實測 2 執行緒 1656ms、8 執行緒 1056ms，同一段音訊逐字相符），並在設定頁原地說明為什麼沒有
+GPU、要更快請走雲端 ASR。
 
-- 模型下載 SHA-256 完整性校驗
-- API Key `safeStorage` 加密
-- 下載 timeout / re-verify
-- 手動來源語言選單（取代 needsTranslation 啟發式）
+要真的上 GPU 得抽換 `sherpa-onnx-c-api.dll` ＋ onnxruntime GPU provider（~500MB ＋ CUDA/cuDNN），
+而且模型是 int8、CUDA EP 多半仍會回落 CPU——投報率極低，等使用者確認要不要做。
 
-## v1.4.0（2026-07-18）
+其餘三項：
+- 設定選單的根因是**字級與顏色階層反轉**（標題 13px 灰 vs 欄位 label 14px 白），不是字不夠大；
+  同時加左側分類 rail 降低單頁密度。字級階層已寫成 CDP 回歸斷言。
+- 系統提示改 preset 多組，設定頁只剩 API URL／Key／模型清單；舊值由 `initStore` 一次性搬移。
+- 輸入框 auto-grow ＋ 工具列（附圖／thinking／送出），圖片走 main 落檔不進 chats.json。
 
-- [x] 長檔串流轉錄：ffmpeg ≥2h／≥100MB（上限 4h／200MB）
-- [x] 檔案轉錄黑屏：進度 UI 先 paint、ASR/LLM 分階段
-- [x] sherpa JSON 控制字元崩潰修復
-- [x] 非語言 ASR 碎片 persona 問候防護
-- [x] 翻譯冷啟動暖機、日文複誦／繁體、全專案審計修補
-- [x] 發佈 GitHub Release v1.4.0（不重複版本號）
+驗證數字見 CONTEXT.md「最近變更（2026-08-20 下午）」。
 
-## v1.5.0（2026-07-18）— 翻譯與 TTS 頁
+---
 
-- [x] 第三 tab 雙欄 UI + 按鈕式翻譯（stale／字數／Ctrl+Enter／⇄）
-- [x] engine owner `translate` + prewarm 契約；settings-changed 同步
-- [x] Edge TTS：`node-edge-tts` MIT、binary IPC、串播、voice allowlist
-- [x] 設定「語音（Edge TTS）」五語下拉 + `ttsVoices` 持久化
-- [x] CSP `media-src blob:` 修朗讀；左色條移除；temperature=0
-- [x] e2e `scripts/e2e-tts-translate.js` 16/16；`electron:pack`／`electron:build`；Release v1.5.0
+# 2026-08-20 — 即時字幕優化（PCM 直取 + VAD 斷句）
 
-### Review
-- 對抗式審查已吸收：禁 AGPL、禁 base64、prewarmGen、none 空狀態、stale 態
-- 預覽：`dist/win-unpacked/VoiceInk.exe`
+## 根因
 
-## 2026-08-02b — 修 LinguaForge 長文重複同一句
+音訊路徑繞了一圈冤枉路：`MediaStream → MediaRecorder(opus 編碼) → Blob → decodeAudioData(解碼)
+→ AudioBuffer → OfflineAudioContext 重採樣 → Float32`，終點卻只要 16kHz mono Float32。
 
-- [x] 重現：`scripts/e2e-linguaforge-context.js`（4 段帶前文 → dupes:2）
-- [x] 根因：LinguaForge 單輪 SFT，前文 chat history 導致複誦上一輪譯文
-- [x] 修：`translateLocalOnce` LinguaForge 不注入前文；切段迴圈停止串接 prev
-- [x] 驗證：dupes:0 ALL PASS；`npm run electron:pack` 更新預覽
+三個後果：
+1. **每 2 秒丟一段音**：`stop()` → `onstop` → 建新 recorder → `start()` 之間沒人在錄，
+   固定丟在句子被切開的地方（20~100ms）。
+2. **固定 2 秒硬切**：句子攔腰斬斷，ASR 對半句話辨識率大掉；短句也要硬等滿 2 秒。
+3. **每塊建 2 個 AudioContext**：decode 一個、重採樣一個，Windows 每次都要初始化音訊裝置。
 
-### Review
-- 只改 main 端一處判斷，renderer 仍照送 previousSource/Translation（qwen／雲端仍受益）
-- 文件同步：CLAUDE.md／AGENTS.md 地雷、CONTEXT.md、lessons.md
+## 任務
 
-## 2026-08-02c — 譯文純淨度
+- [x] 1. live-caption.js：`new AudioContext({ sampleRate: 16000 })` + `createMediaStreamSource`
+      + `ScriptProcessorNode` 直接取 PCM（瀏覽器自動重採樣），連續取樣＝零丟音、零編解碼
+- [x] 2. VAD 狀態機（遲滯門檻 + pre-roll 防吃首字 + 最短/最長語句界）取代固定切塊
+- [x] 3. 刪除 `MediaRecorder` / `decodeAudio` / `analyzeAudio` / `resampleTo16kMono` 整條路徑
+- [x] 4. level meter 併入同一個 AudioContext（省一個 context + 一條 rAF 迴圈）
+- [x] 5. 修 `liveEngine` 引擎名寫死（雲端 ASR 時顯示錯誤）
+- [x] 6. subtitle.html：修無條件 `scrollTop = scrollHeight`（往上捲看歷史被強制拉回底部）
+- [x] 7. subtitle.html：`innerHTML` 整串重繪 → `createElement` 增量渲染
+- [x] 8. 寫 `scripts/test-vad.js`（純 node 驗 VAD 狀態機切點）
+- [x] 9. `npx electron scripts/e2e-live-pipeline.js`（TTS 合成含停頓語句 → 走真實 VAD → ASR 比對）
+- [x] 10. `npm run electron:pack` 更新免安裝預覽
+- [x] 11. 同步 CLAUDE.md / AGENTS.md / CONTEXT.md / README.md
 
-- [x] 重現：`scripts/e2e-linguaforge-leak.js`（實測 1349 字）→ `譯者：` 標籤、孤兒 `」`
-- [x] 抽 `src/main/translate-clean.js`（消除測試腳本的邏輯複製）
-- [x] persona 標籤／單側引號僅無配對才剝／原文無列點才剝譯文編號
-- [x] 驗證：unit 19/19、leak e2e ALL PASS、decode+context 無回歸、pack 已更新
+## Review
 
-### Review
-- 清理層只處理「可判定的非譯文內容」；模型幻覺引述來源不強行剝（會誤刪正文）
+- 音訊主路徑由 MediaRecorder/WebM 編解碼＋固定 2 秒硬切，改為 AudioContext 16kHz mono PCM 直取＋VAD 自然停頓切句；舊路徑約 100 行已刪除。
+- VAD 實際參數：128ms frame、250ms pre-roll、360ms hangover、0.5–6s 語句界；ASR pending 上限 2。
+- 字幕窗改為單行增量安全 DOM，零 innerHTML；手動上捲不再被更新強制拉回底部。
+- 順修：auto（不翻譯）不再要求翻譯 key／模型；雲端 ASR 狀態列顯示正確。
+- 驗證：VAD 11/11、TTS→VAD→ASR 2/2 句與 3/3 關鍵字、打包版真 loopback 5/5、Markdown 23/23、聊天 69/69、CDP smoke 19/19、Vite build 與 electron:pack 通過。
 
-## 2026-08-02d — 條列貼文退化＋術語竄改
+---
 
-- [x] 重現：`scripts/e2e-linguaforge-list.js`（GLM 貼文，bullet ×6）
-- [x] 切段收斂到「逐行＋清單標記剝除」（前兩版切法皆實測失敗）
-- [x] `findRepetitionLoop` 退化偵測 → anti-repeat 重跑（重試前還原 history）
-- [x] 模型自加標籤（說明：／問：）白名單 + 原文無冒號才剝
-- [x] `s2twp` 僅在含簡體時套詞彙表（修「參數→引數」竄改）
-- [x] 驗證：list/leak/decode/context/local-translate-settings 全 PASS、unit 23/23、pack 已更新
+# 2026-08-20 — 額度儀錶板整合
 
-### Review
-- e2e 斷言改為只驗結構／污染／退化，模型用詞正確性列為已知殘留
+## 任務
 
-## 2026-08-03 — Qwen3.5 空 think 前綴（LinguaForge 根因）
+- [x] 1. 共用資料合約、外部輸入驗證與 bounded I/O
+- [x] 2. Claude Code／Codex／Grok provider
+- [x] 3. OpenCode `node:sqlite` 唯讀 provider
+- [x] 4. Antigravity Credential Manager／OAuth／四視窗 provider
+- [x] 5. 獨立 usage store、6h 快取、同步協調、IPC／preload
+- [x] 6. 獨立額度頁、完整設定／排序／診斷互動與 RWD／a11y
+- [x] 7. 打包版真實同步與 CDP 驗證
+- [x] 8. 安全審查、全回歸、文件同步與最終 pack
 
-- [x] 定位：`node scripts/probe-prompt-path.js` 印出生產路徑 prompt，確認尾端缺 `<think>\n\n</think>\n\n`
-- [x] 修：`getSession` 的 `LlamaChatSession` 帶 `newQwen35ChatWrapper()`＝`QwenChatWrapper{thoughts:'discourage'}`（與 apply_chat_template 逐字元相同，免自訂 subclass）
-- [x] log 佐證：`[linguaforge decode]` 加 `chat_wrapper`／`think_prefix`／`think_prefix_token_ids`
-- [x] 量化改 Q8_0（`models.js` totalBytes 811843008）——補前綴後唯一剩的量化稅是罕見專名音譯
-- [x] Q8／Q4 改為使用者可選：新增 registry key `linguaforge08q4` + 設定第三顆按鈕；`isLinguaforge(key)` 取代單一 key 比對
-- [x] `npx electron scripts/e2e-linguaforge-quant.js` ALL PASS（雙 key 白名單／status／路徑／各自實譯）
-- [x] 30 句前後對照 `node scripts/verify-chat-wrapper-fix.js`：Q8_0 修後 標籤0／專名93.3%／年份0／總數6 **ALL GATES PASS**
-- [x] 回歸：decode A–E／list／leak／context／local-translate-settings 全 PASS；`electron:pack` 更新預覽
+## Review
 
-### Review
-- 只改一行 session 建構 + 一行 registry；不新增後處理 regex（前綴消失是修對 prompt 的結果，不是剝出來的）
-- 已知未修（語料缺口）：多行互不相關只譯第一行、2023 後 AI 術語
+- 完整移植 Claude Code／Codex／Antigravity／OpenCode／Grok：手動同步、6h soft cache、五卡倒數、顯示／排序、OpenCode reset 與去敏診斷；導覽為「聊天｜額度｜檔案轉錄｜即時字幕｜翻譯與 TTS｜設定」。
+- 信任邊界收在 main：固定 HTTPS／credential path／唯讀 SQLite SQL；IPC 只允許主視窗，renderer 不接觸 token、URL、路徑或 SQL；動態 UI 零 `innerHTML`。
+- 打包視覺檢查抓到並修正 Antigravity `.ps1` 未 unpack 與 disconnected 假額度；安全回歸另修聊天 API body 寫入 console。
+- 驗證：usage unit 24/24、真實五家 6/6、打包 usage 8/8、chat 70/70、Markdown 23/23、VAD 11/11、TTS→VAD→真 ASR、打包 loopback 5/5、全域 smoke 20/20、Vite build／electron:pack／`git diff --check` 通過。
+- 最終免安裝預覽：`dist/win-unpacked/VoiceInk.exe`；未 bump 版本、未 commit／tag／push／release。
+
+---
+
+# 2026-08-20 — Token Anxiety 全站視覺重構
+
+## 任務
+
+- [x] 1. 建立視覺、深淺主題與 RWD 的打包版紅燈 gate
+- [x] 2. 重建 Aurora/light tokens、App shell、品牌與共用 controls
+- [x] 3. 將聊天／額度／轉錄／即時／翻譯／設定映射成一致 glass surface
+- [x] 4. 額度卡片 FLIP 拖曳＋無按鈕鍵盤排序
+- [x] 5. 字幕小窗與 900／560px responsive 收斂
+- [x] 6. 打包版逐頁截圖、自我批判與精修
+- [x] 7. 安全審查、全回歸、文件同步與 final pack
+
+## Review
+
+- 六頁與置頂字幕窗已統一為 Token Anxiety Aurora glass；保留原資訊架構、frameless window controls 與深／淺主題。
+- 額度卡移除上下按鈕；mouse dragover 即時重排並以 110ms transform-only FLIP 推開其他卡，drop 才儲存。鍵盤以 Space／方向鍵／Enter／Esc 排序且不播放位移動畫，並有 aria-live。
+- 900／640px RWD 在 560px 實測無水平溢出；reduced motion 禁用 FLIP。未新增 dependency，視覺任務未改動 Main／Preload 信任邊界。
+- 驗證：排序 9/9、usage 24/24＋真實五家 6/6＋打包 9/9、chat 70/70、Markdown 23/23、VAD 11/11、真 ASR pipeline、字幕 loopback 6/6、全域 smoke 21/21、視覺 37/37、Vite build／electron:pack／`git diff --check`。最終預覽為 `dist/win-unpacked/VoiceInk.exe`。
+
+---
+
+# 2026-08-21 — 額度頁 2 欄版面與拖曳體驗對齊
+
+## 任務
+
+- [x] 1. 卡片網格改固定 2 欄（≤900px 收成 1 欄）
+- [x] 2. 拖曳改 pointer 直拖：卡片本體跟游標、全不透明、放開滑回槽位
+- [x] 3. 卡片標題只留大標籤 pill，移除 LOGO 方塊與方案副標
+- [x] 4. 小字統一 12px 並改用 secondary 色，額度列加底板
+- [x] 5. 更新打包版 CDP 斷言（2 欄／不透明／不再有 LOGO 與副標）並全回歸
+
+## Review
+
+- 半透明的根因是 **HTML5 DnD 的拖影必定半透明**，`.dragging { opacity: .18 }` 只是把來源槽位也一起淡掉；換成 pointer 直拖後，被拖的卡片就是本體，全程不透明並跟著游標，放開以 150ms FLIP 滑回。
+- 監聽掛 `window` 而非 `setPointerCapture`：預覽排序會 `appendChild` 搬動卡片，pointer capture 可能被隱式釋放；插入點用幾何比對而非 `elementFromPoint`，不必為了命中測試把卡片設成 `pointer-events: none`。
+- 版面固定 2 欄、`align-items: start` ＋ `min-height: 250px`：等高拉伸會讓只有一個視窗的卡片留下大片空白。
+- 標題改 accent 實心 pill、拿掉 LOGO 方塊與方案副標；卡內小字由 9.5～11px `--text-tertiary` 統一為 12px `--text-secondary`。
+- 驗證：打包 usage 9/9（新增 2 欄／opacity=1／cursor=grabbing／無 LOGO 副標斷言）、視覺 37/37、smoke 21/21、字幕 6/6、usage 24/24、真實五家 6/6、chat 70/70、Markdown 23/23、VAD 11/11、排序 9/9、Vite build 與 electron:pack 通過。

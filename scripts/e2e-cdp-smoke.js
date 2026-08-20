@@ -65,7 +65,9 @@ class Cdp {
       returnByValue: true
     })
     if (r.exceptionDetails) {
-      throw new Error(r.exceptionDetails.text || 'eval error')
+      // description 才有真正的錯誤與堆疊；text 多半只是 'Uncaught'
+      const d = r.exceptionDetails
+      throw new Error(d.exception?.description || d.exception?.value || d.text || 'eval error')
     }
     return r.result?.value
   }
@@ -129,6 +131,142 @@ async function main() {
     `)
     ok('store reject unknown key', /不允許/.test(String(badKey)), String(badKey))
 
+    const visualShell = await cdp.eval(`(() => {
+      const root = document.documentElement
+      const body = getComputedStyle(document.body)
+      const header = getComputedStyle(document.querySelector('.header'))
+      return {
+        logoBars: document.querySelectorAll('.brand-mark-bar').length,
+        font: body.fontFamily,
+        radius: getComputedStyle(root).getPropertyValue('--radius-card').trim(),
+        surface: getComputedStyle(root).getPropertyValue('--surface-glass').trim(),
+        headerBackdrop: header.backdropFilter || header.webkitBackdropFilter || ''
+      }
+    })()`)
+    ok(
+      'Token Anxiety visual shell',
+      visualShell.logoBars === 3 &&
+        /Segoe UI/.test(visualShell.font) &&
+        visualShell.radius === '12px' &&
+        !!visualShell.surface &&
+        /blur/.test(visualShell.headerBackdrop),
+      JSON.stringify(visualShell)
+    )
+
+    // ===== 額度儀錶板 =====
+    const usageUi = await cdp.eval(`(async () => {
+      const order = [...document.querySelectorAll('.header-nav .nav-tab')]
+        .map((item) => item.dataset.page)
+      const chatWasDefault = document.getElementById('page-chat')?.classList.contains('active') === true
+      document.querySelector('[data-page="usage"]')?.click()
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      const usageState = await window.electronAPI.usage.load()
+      return {
+        order,
+        chatWasDefault,
+        hasApi: typeof window.electronAPI.usage?.load === 'function',
+        active: document.getElementById('page-usage')?.classList.contains('active') === true,
+        hasSync: !!document.getElementById('usageSyncBtn'),
+        hasGrid: !!document.getElementById('usageGrid'),
+        hasSettings: !!document.getElementById('usageSettingsDialog'),
+        hasDiagnostics: !!document.getElementById('usageDiagnosticsDialog'),
+        accounts: usageState.data.accounts.length,
+        visible: usageState.data.settings.visibleProviders.length,
+        cards: document.querySelectorAll('#usageGrid .usage-card').length
+      }
+    })()`)
+    ok(
+      'six-tab order + usage page structure',
+      JSON.stringify(usageUi?.order) === JSON.stringify([
+        'chat', 'usage', 'transcribe', 'live', 'translate', 'settings'
+      ]) &&
+        usageUi.hasApi &&
+        usageUi.active &&
+        usageUi.hasSync &&
+        usageUi.hasGrid &&
+        usageUi.hasSettings &&
+        usageUi.hasDiagnostics &&
+        usageUi.accounts === 5 &&
+        usageUi.cards === usageUi.visible,
+      JSON.stringify(usageUi)
+    )
+
+    // ===== 聊天頁 =====
+    const chatDefault = usageUi.chatWasDefault
+    ok('chat is default page', chatDefault === true)
+
+    // 走 UI 建立新對話，再用 IPC 清掉，不留殘渣在使用者的 chats.json
+    const chatUi = await cdp.eval(`(async () => {
+      document.querySelector('[data-page="chat"]')?.click()
+      await new Promise(r => setTimeout(r, 400))
+      const before = (await window.electronAPI.chat.list()).length
+      document.getElementById('chatNewBtn')?.click()
+      await new Promise(r => setTimeout(r, 600))
+      const list = await window.electronAPI.chat.list()
+      const created = list.find(c => c.messageCount === 0)
+      if (created) await window.electronAPI.chat.delete(created.id)
+      return {
+        active: document.getElementById('page-chat')?.classList.contains('active'),
+        modelCount: document.getElementById('chatModelSelect')?.options.length || 0,
+        modelValue: document.getElementById('chatModelSelect')?.value || '',
+        grew: list.length > before,
+        hasInput: !!document.getElementById('chatInput'),
+        hasSend: document.getElementById('chatSendBtn')?.textContent === '送出',
+        sidebarRendered: !!document.querySelector('#chatList .chat-list-item')
+      }
+    })()`)
+    ok(
+      'chat page usable',
+      chatUi?.active &&
+        chatUi.modelCount >= 1 &&
+        !!chatUi.modelValue &&
+        chatUi.grew &&
+        chatUi.hasInput &&
+        chatUi.hasSend &&
+        chatUi.sidebarRendered,
+      JSON.stringify(chatUi)
+    )
+
+    // markdown.js 在真實 DOM 下的行為（打包版跑的是 src/ 原碼）
+    const md = await cdp.eval(`(async () => {
+      const m = await import('./scripts/markdown.js')
+      const host = document.createElement('div')
+      const sample = [
+        '# 標題',
+        '',
+        '<img src=x onerror=alert(1)> 與 [壞連結](javascript:alert(1))',
+        '',
+        '~~~js',
+        'const a = 1',
+        '~~~',
+        '',
+        '| a | b |',
+        '|---|---|',
+        '| 1 | 2 |'
+      ].join('\\n')
+      host.appendChild(m.renderMarkdown(sample))
+      return {
+        imgs: host.querySelectorAll('img').length,
+        links: host.querySelectorAll('a').length,
+        h1: host.querySelectorAll('h1').length,
+        codeBlocks: host.querySelectorAll('.md-code code').length,
+        copyBtns: host.querySelectorAll('.md-copy').length,
+        tables: host.querySelectorAll('table').length,
+        keepsRawText: host.textContent.includes('onerror')
+      }
+    })()`)
+    ok(
+      'markdown renderer (no XSS, blocks render)',
+      md?.imgs === 0 &&
+        md.links === 0 &&
+        md.h1 === 1 &&
+        md.codeBlocks === 1 &&
+        md.copyBtns === 1 &&
+        md.tables === 1 &&
+        md.keepsRawText === true,
+      JSON.stringify(md)
+    )
+
     // 切到 live 分頁
     await cdp.eval(`document.querySelector('[data-page="live"]')?.click()`)
     await sleep(500)
@@ -163,8 +301,10 @@ async function main() {
           hasAsrCloud: !!document.querySelector('#asrEngineSegment [data-value="cloud"]'),
           hasTtsRate: !!document.getElementById('ttsRateInput'),
           hasModelList: !!document.getElementById('modelList'),
-          textHasAsr: /語音轉文字/.test(text),
-          textHasTranslate: /翻譯設定/.test(text)
+          navCount: document.querySelectorAll('#settingsNav .settings-nav-item').length,
+          activeSections: document.querySelectorAll('#page-settings .settings-section.active').length,
+          hasFooterSave: !!document.getElementById('saveSettingsBtn'),
+          textHasModels: /模型/.test(text)
         }
       })()
     `)
@@ -176,8 +316,122 @@ async function main() {
         settingsUi?.noNone &&
         settingsUi?.hasAsrCloud &&
         settingsUi?.hasTtsRate &&
-        settingsUi?.hasModelList,
+        settingsUi?.hasModelList &&
+        settingsUi?.navCount === 6 &&
+        settingsUi?.activeSections === 1 &&
+        settingsUi?.hasFooterSave,
       JSON.stringify(settingsUi)
+    )
+
+    // 分類 rail：一次只顯示一區；字級階層 標題 > 欄位 label > 說明
+    const settingsNav = await cdp.eval(`(() => {
+      document.querySelector('#settingsNav [data-section="asr"]')?.click()
+      const active = document.querySelector('#page-settings .settings-section.active')
+      const title = document.querySelector('#set-asr .settings-section-title')
+      const label = document.querySelector('#set-asr .setting-group label')
+      const hint = document.querySelector('#set-asr .setting-hint')
+      const px = (el) => (el ? parseFloat(getComputedStyle(el).fontSize) : 0)
+      return {
+        activeId: active?.id || '',
+        activeCount: document.querySelectorAll('#page-settings .settings-section.active').length,
+        titlePx: px(title),
+        labelPx: px(label),
+        hintPx: px(hint),
+        threadsOptions: document.querySelectorAll('#asrThreadsSegment .seg-btn').length
+      }
+    })()`)
+    ok(
+      'settings category rail + type scale',
+      settingsNav?.activeId === 'set-asr' &&
+        settingsNav.activeCount === 1 &&
+        settingsNav.titlePx > settingsNav.labelPx &&
+        settingsNav.labelPx > settingsNav.hintPx &&
+        settingsNav.threadsOptions === 4,
+      JSON.stringify(settingsNav)
+    )
+
+    const chatSettings = await cdp.eval(`(() => {
+      document.querySelector('#settingsNav [data-section="chat"]')?.click()
+      const section = document.getElementById('set-chat')
+      return {
+        hasApiUrl: !!document.getElementById('chatApiUrlInput'),
+        hasApiKey: !!document.getElementById('chatApiKeyInput'),
+        // 系統提示已搬到聊天頁，設定頁不該再有這個欄位
+        noPromptField: !document.getElementById('chatSystemPromptInput'),
+        modelRows: document.querySelectorAll('#chatModelList .chat-model-row').length,
+        hasAddBtn: !!document.getElementById('chatAddModelBtn'),
+        titled: section?.classList.contains('active') === true,
+        separateFromTranslate:
+          document.getElementById('chatApiUrlInput') !== document.getElementById('apiUrlInput')
+      }
+    })()`)
+    ok(
+      'chat settings section',
+      chatSettings?.hasApiUrl &&
+        chatSettings.hasApiKey &&
+        chatSettings.noPromptField &&
+        chatSettings.modelRows >= 1 &&
+        chatSettings.hasAddBtn &&
+        chatSettings.titled &&
+        chatSettings.separateFromTranslate,
+      JSON.stringify(chatSettings)
+    )
+
+    // 聊天輸入區：auto-grow、thinking 開關、圖片附件、系統提示彈窗
+    const composer = await cdp.eval(`(async () => {
+      document.querySelector('[data-page="chat"]')?.click()
+      await new Promise((r) => setTimeout(r, 400))
+      const input = document.getElementById('chatInput')
+      const before = input.getBoundingClientRect().height
+      input.value = ['a', 'b', 'c', 'd', 'e', 'f'].join('\\n')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      await new Promise((r) => setTimeout(r, 60))
+      const after = input.getBoundingClientRect().height
+      input.value = ''
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      await new Promise((r) => setTimeout(r, 60))
+      const reset = input.getBoundingClientRect().height
+
+      const think = document.getElementById('chatThinkBtn')
+      const wasPressed = think.getAttribute('aria-pressed')
+      think.click()
+      await new Promise((r) => setTimeout(r, 250))
+      const toggled = think.getAttribute('aria-pressed')
+      const stored = await window.electronAPI.store.get('chatThinking', false)
+      await window.electronAPI.store.set('chatThinking', false)
+      think.setAttribute('aria-pressed', 'false')
+
+      const dialog = document.getElementById('chatPromptDialog')
+      document.getElementById('chatPromptManageBtn')?.click()
+      await new Promise((r) => setTimeout(r, 250))
+      const dialogOpen = dialog.open === true
+      document.getElementById('promptCancelBtn')?.click()
+      await new Promise((r) => setTimeout(r, 200))
+
+      return {
+        grew: after > before + 20,
+        reset: Math.abs(reset - before) < 4,
+        noResizeHandle: getComputedStyle(input).resize === 'none',
+        thinkToggled: wasPressed === 'false' && toggled === 'true' && stored === true,
+        hasAttach: !!document.getElementById('chatAttachBtn'),
+        hasFileInput: !!document.getElementById('chatFileInput'),
+        promptOptions: document.getElementById('chatPromptSelect')?.options.length || 0,
+        dialogOpen,
+        dialogClosed: dialog.open === false
+      }
+    })()`)
+    ok(
+      'chat composer (auto-grow / thinking / images / prompts)',
+      composer?.grew &&
+        composer.reset &&
+        composer.noResizeHandle &&
+        composer.thinkToggled &&
+        composer.hasAttach &&
+        composer.hasFileInput &&
+        composer.promptOptions >= 1 &&
+        composer.dialogOpen &&
+        composer.dialogClosed,
+      JSON.stringify(composer)
     )
 
     // 模型 status IPC

@@ -1,12 +1,14 @@
 /**
- * VoiceInk - 即時字幕功能（本地 Qwen3-ASR）
+ * VoiceInk - 即時字幕功能
  *
+ * - 音訊：AudioContext(16kHz) 直接取 PCM → VAD 在停頓處切句 → ASR
  * - ASR 與翻譯管線分離
  * - openBatch 累積 → seal → translatePump
  * - 開始時 engine.acquire 預熱模型；停止時 release 卸載
  * - 雙語／僅翻譯顯示模式
  */
 
+import { createVad } from './vad.js'
 import {
   showToast,
   getSettings,
@@ -30,7 +32,6 @@ let liveTranslatorHint
 // ===== 狀態 =====
 let isCapturing = false
 let mediaStream = null
-let mediaRecorder = null
 let settings = null
 let consecutiveFailures = 0
 let engineAcquired = false
@@ -41,10 +42,15 @@ let prewarmGen = 0
 /** 防止並行兩次 prewarm */
 let prewarmInFlight = false
 
-let levelAudioCtx = null
-let levelRaf = null
+/** @type {AudioContext | null} */
+let audioCtx = null
+/** @type {{ source: MediaStreamAudioSourceNode, processor: ScriptProcessorNode, mute: GainNode } | null} */
+let audioGraph = null
+/** @type {ReturnType<typeof createVad> | null} */
+let vad = null
 
-let pendingChunks = null
+/** @type {Float32Array[]} 已切好、等待 ASR 的語句 */
+let pendingUtterances = []
 let isProcessing = false
 let isStarting = false
 
@@ -69,10 +75,13 @@ let openBatch = null
 let translateQueue = []
 let isTranslating = false
 
-const CHUNK_DURATION = 2000
-const RMS_THRESHOLD = 0.01
-const SPEECH_RATIO_THRESHOLD = 0.05
-const SPEECH_SAMPLE_THRESHOLD = 0.01
+/** sherpa 要 16kHz mono；AudioContext 直接開在這個取樣率就不必自己重採樣 */
+const TARGET_SAMPLE_RATE = 16000
+/** ScriptProcessor 緩衝大小（必須是 2 的冪）：2048 @16kHz = 128ms */
+const FRAME_SIZE = 2048
+const MAX_PENDING_UTTERANCES = 2
+/** 送進 ASR 的最短語句（VAD 已擋過一次，這是防呆） */
+const MIN_UTTERANCE_SAMPLES = TARGET_SAMPLE_RATE / 4
 
 /**
  * 初始化即時字幕功能
@@ -186,6 +195,7 @@ async function startCapture() {
   try {
     settings = await getSettings()
     targetLanguage = liveLanguage.value
+    const needsTranslationBackend = targetLanguage !== 'auto'
 
     const status = await electronAPI.models.status()
     if (settings.asrEngine !== 'cloud' && !status.models[ASR_MODEL_KEY]?.downloaded) {
@@ -196,14 +206,14 @@ async function startCapture() {
       showToast('雲端語音轉文字需要 API Key，請到設定填寫', 'error')
       return
     }
-    if (settings.translator === 'local') {
+    if (needsTranslationBackend && settings.translator === 'local') {
       const llmKey = resolveTranslateModelKey(settings, status.models)
       if (!status.models[llmKey]?.downloaded) {
         showToast('本地翻譯模型尚未下載，請先到設定下載', 'error')
         return
       }
     }
-    if (settings.translator === 'cloud' && !settings.apiKey) {
+    if (needsTranslationBackend && settings.translator === 'cloud' && !settings.apiKey) {
       showToast('雲端翻譯需要 API Key，請到設定填寫', 'error')
       return
     }
@@ -232,7 +242,7 @@ async function startCapture() {
         : '載入模型…'
       startLiveBtn.disabled = true
       const needAsr = settings.asrEngine !== 'cloud'
-      const needLlm = settings.translator === 'local'
+      const needLlm = needsTranslationBackend && settings.translator === 'local'
       const warm = await electronAPI.engine.acquire('live', { asr: needAsr, llm: needLlm })
       if (!warm.ok) {
         throw new Error((warm.warnings && warm.warnings[0]) || '模型載入失敗')
@@ -245,13 +255,12 @@ async function startCapture() {
       resetTranslateState()
       setError(null)
       updateUI()
-      startLevelMeter(audioStream)
 
       await electronAPI.subtitle.show()
-      startRecording(audioStream)
+      await startPcmCapture(audioStream)
     } catch (error) {
       console.error('開始擷取失敗:', error)
-      stopLevelMeter()
+      await stopPcmCapture()
       // 只釋放本次擷取取得的引擎；保留背景 prewarm（取消權限不應拆掉預熱）
       if (engineAcquired) {
         await electronAPI.engine.release('live').catch(() => {})
@@ -284,67 +293,88 @@ function resetTranslateState() {
   history = []
 }
 
-function startRecording(stream) {
-  function startNewRecording() {
-    if (!isCapturing || !stream) return
-    // 來源已失效（track ended）時不要在 inactive stream 上 start()，否則拋例外變殭屍
-    if (!stream.active) {
-      if (isCapturing) stopCapture()
-      return
-    }
-
-    try {
-      mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' })
-    } catch {
-      try {
-        mediaRecorder = new MediaRecorder(stream)
-      } catch (e) {
-        console.error('建立 MediaRecorder 失敗:', e)
-        if (isCapturing) stopCapture()
-        return
-      }
-    }
-
-    const chunks = []
-    mediaRecorder.ondataavailable = (event) => {
-      if (event.data.size > 0) chunks.push(event.data)
-    }
-    mediaRecorder.onstop = () => {
-      if (chunks.length > 0 && isCapturing) enqueueChunks(chunks)
-      if (isCapturing) startNewRecording()
-    }
-    mediaRecorder.onerror = (event) => {
-      console.error('MediaRecorder 錯誤:', event.error || event)
-      if (isCapturing) stopCapture()
-    }
-
-    mediaRecorder.start()
-    setTimeout(() => {
-      if (mediaRecorder && mediaRecorder.state === 'recording') {
-        mediaRecorder.stop()
-      }
-    }, CHUNK_DURATION)
+/**
+ * 直接從 MediaStream 取 16kHz mono PCM，避免 MediaRecorder 的 opus 編碼／解碼、
+ * 固定 2 秒硬切，以及 stop→restart 之間的音訊缺口。
+ *
+ * ScriptProcessorNode 雖已 deprecated，但仍是 Electron 35 內建、唯一不需額外 worklet
+ * 檔案與 CSP 改動的同步 PCM 邊界；128ms/frame 的字幕場景沒有主執行緒負載問題。
+ * @param {MediaStream} stream
+ */
+async function startPcmCapture(stream) {
+  audioCtx = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE })
+  if (audioCtx.sampleRate !== TARGET_SAMPLE_RATE) {
+    const actualRate = audioCtx.sampleRate
+    await audioCtx.close()
+    audioCtx = null
+    throw new Error(`音訊取樣率初始化失敗（需要 ${TARGET_SAMPLE_RATE}Hz，實際 ${actualRate}Hz）`)
   }
 
-  startNewRecording()
+  const source = audioCtx.createMediaStreamSource(stream)
+  const processor = audioCtx.createScriptProcessor(FRAME_SIZE, 1, 1)
+  // ScriptProcessor 必須接到 destination 才會持續觸發；gain=0 確保系統音訊不回放造成重音。
+  const mute = audioCtx.createGain()
+  mute.gain.value = 0
+  source.connect(processor)
+  processor.connect(mute)
+  mute.connect(audioCtx.destination)
+
+  vad = createVad({ sampleRate: audioCtx.sampleRate })
+  processor.onaudioprocess = (event) => {
+    if (!isCapturing || !vad) return
+    // inputBuffer 由 Chromium 重用；VAD 會保留 frame，必須複製。
+    const frame = new Float32Array(event.inputBuffer.getChannelData(0))
+    const result = vad.push(frame)
+    levelFill.style.width = Math.min(100, result.level * 400) + '%'
+    if (result.utterance) enqueueUtterance(result.utterance)
+  }
+
+  audioGraph = { source, processor, mute }
+  if (audioCtx.state === 'suspended') await audioCtx.resume()
 }
 
-function enqueueChunks(chunks) {
-  pendingChunks = chunks
+/** 停止 PCM callback 並釋放唯一的 AudioContext。 */
+async function stopPcmCapture() {
+  if (audioGraph) {
+    audioGraph.processor.onaudioprocess = null
+    for (const node of [audioGraph.source, audioGraph.processor, audioGraph.mute]) {
+      try { node.disconnect() } catch { /* already disconnected */ }
+    }
+    audioGraph = null
+  }
+  if (vad) {
+    vad.reset()
+    vad = null
+  }
+  if (audioCtx) {
+    const ctx = audioCtx
+    audioCtx = null
+    try { await ctx.close() } catch (e) { console.warn('關閉 AudioContext 失敗:', e) }
+  }
+}
+
+/**
+ * ASR 正在跑時最多保留兩句，若再塞入則丟最舊的未處理句，避免字幕越積越慢。
+ * @param {Float32Array} samples
+ */
+function enqueueUtterance(samples) {
+  if (!(samples instanceof Float32Array) || samples.length < MIN_UTTERANCE_SAMPLES) return
+  applySampleGain(samples)
+  pendingUtterances.push(samples)
+  while (pendingUtterances.length > MAX_PENDING_UTTERANCES) pendingUtterances.shift()
   pumpQueue()
 }
 
 async function pumpQueue() {
-  if (isProcessing || !pendingChunks) return
+  if (isProcessing || pendingUtterances.length === 0) return
   isProcessing = true
-  const chunks = pendingChunks
-  pendingChunks = null
+  const samples = pendingUtterances.shift()
   try {
-    await processAudioChunkData(chunks)
+    await transcribeUtterance(samples)
     consecutiveFailures = 0
     setError(null)
   } catch (error) {
-    console.error('處理音訊片段失敗:', error)
+    console.error('處理語句失敗:', error)
     consecutiveFailures++
     setError(cleanIpcError(error))
     if (consecutiveFailures >= 3) {
@@ -358,37 +388,39 @@ async function pumpQueue() {
   pumpQueue()
 }
 
-async function processAudioChunkData(chunks) {
-  const webmBlob = new Blob(chunks, { type: 'audio/webm' })
-  if (webmBlob.size < 1000) return
+/**
+ * 低音量來源最多補 8×；VAD 在補增益前判斷，數位靜音不會被放大成語音。
+ * @param {Float32Array} samples
+ */
+function applySampleGain(samples) {
+  let peak = 0
+  for (let i = 0; i < samples.length; i++) peak = Math.max(peak, Math.abs(samples[i]))
+  if (peak >= 0.3 || peak === 0) return
+  const gain = Math.min(0.9 / peak, 8)
+  for (let i = 0; i < samples.length; i++) samples[i] *= gain
+}
 
-  const audioBuffer = await decodeAudio(webmBlob)
-  if (!audioBuffer) return
-
-  applyGain(audioBuffer)
-  const { rms, speechRatio } = analyzeAudio(audioBuffer)
-  if (rms < RMS_THRESHOLD || speechRatio < SPEECH_RATIO_THRESHOLD) return
-
-  const samples = await resampleTo16kMono(audioBuffer)
+/**
+ * @param {Float32Array} samples
+ */
+async function transcribeUtterance(samples) {
   const epoch = sessionEpoch
   const sourceText = (await electronAPI.localAsr.transcribe({
     samples,
-    sampleRate: 16000,
+    sampleRate: TARGET_SAMPLE_RATE,
     lang: targetLanguage,
     modelKey: ASR_MODEL_KEY
   }) || '').trim()
 
   // 停止／重開後才 resolve 的 stale ASR 結果不得再進管線（否則觸發翻譯並幽靈重載已卸載的 LLM）
-  if (!isCapturing || epoch !== sessionEpoch) return
-  if (!sourceText) return
+  if (!isCapturing || epoch !== sessionEpoch || !sourceText) return
 
   if (isRepetitionLoop(sourceText)) {
     console.log('[過濾] 重複循環輸出:', sourceText.slice(0, 30))
     return
   }
 
-  // 非語言性片段（純符號、♪音樂、雜訊、零寬/格式字元）會讓 0.8B 翻譯模型改走對話模式，
-  // 吐出「你好，我是即時字幕翻譯引擎…請提供原文…」persona 問候而非譯文——進管線前直接丟棄
+  // 非語言性片段會讓小翻譯模型改走對話模式，進翻譯管線前丟棄。
   if (!hasLinguisticContent(sourceText)) {
     console.log('[過濾] 無語言內容:', JSON.stringify(sourceText.slice(0, 20)))
     return
@@ -563,17 +595,8 @@ function needsTranslation(text, targetLang) {
 async function stopCapture({ closeWindow = true } = {}) {
   isCapturing = false
   resetTranslateState()
-  pendingChunks = null
-  stopLevelMeter()
-
-  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-    try {
-      mediaRecorder.stop()
-    } catch (e) {
-      console.error('停止錄製失敗:', e)
-    }
-  }
-  mediaRecorder = null
+  pendingUtterances = []
+  await stopPcmCapture()
 
   if (mediaStream) {
     mediaStream.getTracks().forEach(track => track.stop())
@@ -609,7 +632,9 @@ function updateUI() {
   statusText.textContent = isCapturing ? '擷取中' : '未啟動'
 
   if (isCapturing) {
-    liveEngine.textContent = '· 本地 Qwen3-ASR-0.6B'
+    liveEngine.textContent = settings?.asrEngine === 'cloud'
+      ? `· 雲端 ASR${settings.asrModelId ? `（${settings.asrModelId}）` : ''}`
+      : '· 本地 Qwen3-ASR-0.6B'
   } else {
     liveEngine.textContent = ''
     levelFill.style.width = '0%'
@@ -619,96 +644,4 @@ function updateUI() {
 function setError(message) {
   liveError.classList.toggle('hidden', !message)
   liveError.textContent = message || ''
-}
-
-function startLevelMeter(stream) {
-  levelAudioCtx = new AudioContext()
-  const source = levelAudioCtx.createMediaStreamSource(stream)
-  const analyser = levelAudioCtx.createAnalyser()
-  analyser.fftSize = 512
-  source.connect(analyser)
-  const data = new Uint8Array(analyser.frequencyBinCount)
-
-  const tick = () => {
-    if (!isCapturing) return
-    analyser.getByteTimeDomainData(data)
-    let sum = 0
-    for (let i = 0; i < data.length; i++) {
-      const v = (data[i] - 128) / 128
-      sum += v * v
-    }
-    const rms = Math.sqrt(sum / data.length)
-    levelFill.style.width = Math.min(100, rms * 400) + '%'
-    levelRaf = requestAnimationFrame(tick)
-  }
-  tick()
-}
-
-function stopLevelMeter() {
-  if (levelRaf) cancelAnimationFrame(levelRaf)
-  levelRaf = null
-  if (levelAudioCtx) {
-    levelAudioCtx.close()
-    levelAudioCtx = null
-  }
-}
-
-async function decodeAudio(webmBlob) {
-  const audioContext = new AudioContext()
-  try {
-    const arrayBuffer = await webmBlob.arrayBuffer()
-    return await audioContext.decodeAudioData(arrayBuffer)
-  } catch {
-    return null
-  } finally {
-    audioContext.close()
-  }
-}
-
-function applyGain(audioBuffer) {
-  let peak = 0
-  for (let ch = 0; ch < audioBuffer.numberOfChannels; ch++) {
-    const data = audioBuffer.getChannelData(ch)
-    for (let i = 0; i < data.length; i++) {
-      const abs = Math.abs(data[i])
-      if (abs > peak) peak = abs
-    }
-  }
-  if (peak >= 0.3 || peak === 0) return
-  const gain = Math.min(0.9 / peak, 8)
-  for (let ch = 0; ch < audioBuffer.numberOfChannels; ch++) {
-    const data = audioBuffer.getChannelData(ch)
-    for (let i = 0; i < data.length; i++) data[i] *= gain
-  }
-}
-
-function analyzeAudio(audioBuffer) {
-  const channelData = audioBuffer.getChannelData(0)
-  let sumSquares = 0
-  let speechSamples = 0
-
-  for (let i = 0; i < channelData.length; i++) {
-    const sample = Math.abs(channelData[i])
-    sumSquares += sample * sample
-    if (sample > SPEECH_SAMPLE_THRESHOLD) speechSamples++
-  }
-
-  return {
-    rms: Math.sqrt(sumSquares / channelData.length),
-    speechRatio: speechSamples / channelData.length
-  }
-}
-
-/**
- * 重採樣為 16kHz 單聲道 Float32Array
- */
-export async function resampleTo16kMono(audioBuffer) {
-  const targetLength = Math.ceil(audioBuffer.duration * 16000)
-  const offlineCtx = new OfflineAudioContext(1, targetLength, 16000)
-  const source = offlineCtx.createBufferSource()
-  source.buffer = audioBuffer
-  source.connect(offlineCtx.destination)
-  source.start()
-  const rendered = await offlineCtx.startRendering()
-  return new Float32Array(rendered.getChannelData(0))
 }

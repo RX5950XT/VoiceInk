@@ -1,67 +1,107 @@
-/* ===== 主題變數 ===== */
+/* ===== Token Anxiety 視覺主題 ===== */
 
-:root {
-  /* 深色主題（預設） */
-  --bg-primary: #0f0f0f;
-  --bg-secondary: #1a1a1a;
-  --bg-tertiary: #2d2d2d;
-  --bg-hover: #3d3d3d;
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
 
-  --text-primary: #ffffff;
-  --text-secondary: #c4c4c4;
-  --text-tertiary: #a3a3a3;
+  --app-bg: #111417;
+  --app-bg-deep: #0d1012;
+  --app-glow-cool: rgba(66, 114, 138, 0.22);
+  --app-glow-warm: rgba(188, 144, 68, 0.17);
+  --surface-glass: rgba(28, 33, 35, 0.76);
+  --surface-glass-strong: rgba(24, 29, 31, 0.93);
+  --surface-subtle: rgba(244, 241, 232, 0.055);
+  --surface-hover: rgba(244, 241, 232, 0.085);
+  --glass-border: rgba(244, 241, 232, 0.11);
+  --glass-border-strong: rgba(244, 241, 232, 0.2);
 
-  --accent-primary: #6366f1;
-  --accent-hover: #818cf8;
-  --accent-active: #4f46e5;
+  --text-primary: #f4f1e8;
+  --text-secondary: #c5c4bd;
+  --text-tertiary: #8e9492;
 
-  --border-color: #3d3d3d;
-  --border-light: #2d2d2d;
+  --accent-primary: #78a3b5;
+  --accent-hover: #96bdc9;
+  --accent-active: #5f899b;
+  --accent-soft: rgba(120, 163, 181, 0.17);
+  --accent-warm: #d4a75b;
 
-  --success: #22c55e;
-  --warning: #f59e0b;
-  --danger: #ef4444;
+  --success: #59c889;
+  --warning: #e0a83d;
+  --danger: #e86960;
 
-  --shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
-  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+  --bg-primary: rgba(13, 16, 18, 0.82);
+  --bg-secondary: var(--surface-glass);
+  --bg-tertiary: var(--surface-subtle);
+  --bg-hover: var(--surface-hover);
+  --border-color: var(--glass-border-strong);
+  --border-light: var(--glass-border);
 
-  --radius-sm: 6px;
+  --shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
+  --shadow-sm: 0 12px 36px rgba(0, 0, 0, 0.18);
+  --shadow-card: 0 24px 80px rgba(0, 0, 0, 0.24);
+
+  --radius-sm: 8px;
   --radius-md: 10px;
-  --radius-lg: 16px;
+  --radius-lg: 12px;
+  --radius-control: 10px;
+  --radius-card: 12px;
+  --radius-pill: 999px;
 
-  --transition: all 0.2s ease;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --motion-standard: cubic-bezier(0.22, 1, 0.36, 1);
+  --transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    opacity 160ms ease,
+    transform 160ms var(--ease-out);
 }
 
-/* 淺色主題 */
 [data-theme="light"] {
-  --bg-primary: #ffffff;
-  --bg-secondary: #f5f5f5;
-  --bg-tertiary: #e5e5e5;
-  --bg-hover: #d5d5d5;
+  color-scheme: light;
 
-  --text-primary: #1a1a1a;
-  --text-secondary: #404040;
-  --text-tertiary: #525252;
+  --app-bg: #e9eeec;
+  --app-bg-deep: #dde5e2;
+  --app-glow-cool: rgba(104, 160, 184, 0.23);
+  --app-glow-warm: rgba(218, 174, 93, 0.21);
+  --surface-glass: rgba(248, 249, 246, 0.76);
+  --surface-glass-strong: rgba(250, 250, 247, 0.94);
+  --surface-subtle: rgba(30, 37, 40, 0.055);
+  --surface-hover: rgba(30, 37, 40, 0.08);
+  --glass-border: rgba(30, 37, 40, 0.12);
+  --glass-border-strong: rgba(30, 37, 40, 0.21);
 
-  --accent-primary: #4f46e5;
-  --accent-hover: #6366f1;
-  --accent-active: #4338ca;
+  --text-primary: #1e2528;
+  --text-secondary: #4f5b5e;
+  --text-tertiary: #778184;
 
-  --border-color: #e5e5e5;
-  --border-light: #f0f0f0;
+  --accent-primary: #487b90;
+  --accent-hover: #5d91a6;
+  --accent-active: #35687c;
+  --accent-soft: rgba(72, 123, 144, 0.13);
+  --accent-warm: #a87424;
 
-  --shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.05);
+  --success: #238957;
+  --warning: #a66c0a;
+  --danger: #c94d46;
+
+  --bg-primary: rgba(238, 243, 240, 0.86);
+  --bg-secondary: var(--surface-glass);
+  --bg-tertiary: var(--surface-subtle);
+  --bg-hover: var(--surface-hover);
+  --border-color: var(--glass-border-strong);
+  --border-light: var(--glass-border);
+
+  --shadow: 0 24px 70px rgba(55, 67, 69, 0.17);
+  --shadow-sm: 0 10px 30px rgba(55, 67, 69, 0.11);
+  --shadow-card: 0 24px 70px rgba(55, 67, 69, 0.16);
 }
 
-/* 主題切換動畫 */
 body {
-  transition:
-    background-color 0.3s ease,
-    color 0.3s ease;
+  transition: color 180ms ease, background-color 180ms ease;
 }
 
-/* 主題切換按鈕圖示控制 */
 .icon-sun {
   display: none;
 }

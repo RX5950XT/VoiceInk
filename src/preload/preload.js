@@ -117,5 +117,43 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   llm: {
     loadInfo: () => ipcRenderer.invoke('llm:loadInfo')
+  },
+
+  // ===== 額度儀錶板 =====
+  // 所有憑證、URL、SQL 與 provider 選擇都固定在 main；此處不接受任意來源參數。
+  usage: {
+    load: () => ipcRenderer.invoke('usage:load'),
+    sync: () => ipcRenderer.invoke('usage:sync'),
+    saveSettings: (settings) => ipcRenderer.invoke('usage:saveSettings', settings),
+    getDiagnostics: () => ipcRenderer.invoke('usage:diagnostics')
+  },
+
+  // ===== 聊天（雲端串流）=====
+  chat: {
+    /** @returns {Promise<Array<{ id: string, title: string, updatedAt: number, messageCount: number }>>} */
+    list: () => ipcRenderer.invoke('chat:list'),
+    get: (id) => ipcRenderer.invoke('chat:get', id),
+    create: () => ipcRenderer.invoke('chat:create'),
+    delete: (id) => ipcRenderer.invoke('chat:delete', id),
+    rename: (id, title) => ipcRenderer.invoke('chat:rename', id, title),
+    /**
+     * model 與歷史都由 main 決定，這裡只給對話 id、文字與圖片 data URL
+     * @param {{ reqId: string, conversationId: string, text?: string, images?: string[], regenerate?: boolean }} req
+     * @returns {Promise<{ ok: boolean, content?: string, aborted?: boolean, error?: string }>}
+     */
+    send: (req) => ipcRenderer.invoke('chat:send', req),
+    abort: (reqId) => ipcRenderer.invoke('chat:abort', reqId),
+    /**
+     * 讀回附件圖片（main 驗證檔名，renderer 拿不到路徑）
+     * @param {string} name
+     * @returns {Promise<string>} data URL，失敗回空字串
+     */
+    image: (name) => ipcRenderer.invoke('chat:image', name),
+    /** @param {(payload: { reqId: string, text: string, kind: 'content'|'reasoning' }) => void} callback */
+    onDelta: (callback) => {
+      const handler = (_event, payload) => callback(payload)
+      ipcRenderer.on('chat:delta', handler)
+      return () => ipcRenderer.removeListener('chat:delta', handler)
+    }
   }
 })
