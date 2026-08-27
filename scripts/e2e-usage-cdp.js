@@ -5,7 +5,7 @@ const http = require('http')
 
 const PORT = 9241
 const EXE = path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
-const EXPECTED_ORDER = ['chat', 'usage', 'transcribe', 'live', 'translate', 'settings']
+const EXPECTED_ORDER = ['chat', 'usage', 'agy', 'transcribe', 'live', 'translate', 'settings']
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 function getJson(url) {
@@ -120,6 +120,8 @@ async function main() {
       15_000,
       '額度 preload 初始化'
     )
+    // 預設頁是聊天，額度頁的模組要進頁才 dynamic import
+    await cdp.eval(`document.querySelector('[data-page="usage"]').click(), 'ok'`)
     await waitFor(
       () => cdp.eval(`document.querySelectorAll('#usageGrid .usage-card').length >= 1`),
       15_000,
@@ -159,16 +161,25 @@ async function main() {
       grok.checked = false
       document.getElementById('usageSettingsSave').click()
       await new Promise((resolve) => setTimeout(resolve, 500))
+      const chips = () => document.querySelectorAll('#usageProviderSummary .usage-provider-chip').length
       const afterSave = document.querySelectorAll('#usageGrid .usage-card').length
+      const chipsAfterSave = chips()
       document.querySelector('[data-page="chat"]').click()
       document.querySelector('[data-page="usage"]').click()
       const afterSwitch = document.querySelectorAll('#usageGrid .usage-card').length
-      return { afterSave, afterSwitch, dialogClosed: !dialog.open }
+      const chipsAfterSwitch = chips()
+      return { afterSave, afterSwitch, chipsAfterSave, chipsAfterSwitch, dialogClosed: !dialog.open }
     })()`)
     if (visibility.afterSave !== 4 || visibility.afterSwitch !== 4 || !visibility.dialogClosed) {
       throw new Error(`顯示設定未持久：${JSON.stringify(visibility)}`)
     }
     pass('provider 顯示設定儲存並跨頁保留')
+
+    // 頂部橫條要跟卡片同一份 visibleAccounts()，關掉的 provider 不該還掛在上面
+    if (visibility.chipsAfterSave !== 4 || visibility.chipsAfterSwitch !== 4) {
+      throw new Error(`頂部橫條未跟隨顯示設定：${JSON.stringify(visibility)}`)
+    }
+    pass('頂部 provider 橫條只顯示勾選的項目')
 
     await cdp.eval(`(async () => {
       document.getElementById('usageSettingsBtn').click()
@@ -238,6 +249,9 @@ async function main() {
     const dragPreview = await cdp.eval(`(async () => {
       document.querySelector('[data-page="chat"]').click()
       document.querySelector('[data-page="usage"]').click()
+      // 進頁的 render() 是非同步的，會 replaceChildren 整個 grid；
+      // 不等它跑完就抓 card，拿到的是已經脫離文件的節點（getComputedStyle 全回空字串）
+      await new Promise((resolve) => setTimeout(resolve, 500))
       const cards = [...document.querySelectorAll('#usageGrid .usage-card')]
       const source = cards[0]
       const target = cards[2]
@@ -254,21 +268,33 @@ async function main() {
         clientX: x,
         clientY: y
       }))
+      const visualOrder = (nodes) => [...nodes].sort((a, b) => {
+        const ra = a.getBoundingClientRect()
+        const rb = b.getBoundingClientRect()
+        if (Math.abs(ra.top - rb.top) > 12) return ra.top - rb.top
+        return ra.left - rb.left
+      }).map((card) => card.dataset.provider)
       const origin = source.getBoundingClientRect()
       point('pointerdown', origin.left + 24, origin.top + 24)
       point('pointermove', origin.left + 44, origin.top + 30)
       const rect = target.getBoundingClientRect()
       point('pointermove', rect.left + rect.width * 0.75, rect.top + rect.height / 2)
       await new Promise((resolve) => requestAnimationFrame(resolve))
-      const preview = [...document.querySelectorAll('#usageGrid .usage-card')]
-        .map((card) => card.dataset.provider)
-      const animations = [...document.querySelectorAll('#usageGrid .usage-card')]
-        .reduce((count, card) => count + card.getAnimations().length, 0)
-      const dragStyle = getComputedStyle(source)
+      const liveCards = [...document.querySelectorAll('#usageGrid .usage-card')]
+      const preview = visualOrder(liveCards)
+      const domUnchanged = liveCards.map((card) => card.dataset.provider)
+      const shifted = liveCards.some((card) => getComputedStyle(card).transform !== 'none')
+      const overlay = document.querySelector('.usage-card-overlay')
+      const overlayStyle = overlay ? getComputedStyle(overlay) : null
+      const ghostStyle = getComputedStyle(source)
       const dragged = {
-        opacity: dragStyle.opacity,
-        cursor: dragStyle.cursor,
-        follows: dragStyle.transform !== 'none',
+        ghostOpacity: ghostStyle.opacity,
+        overlayExists: Boolean(overlay),
+        overlayOpacity: overlayStyle?.opacity || '',
+        overlayFollows: overlayStyle ? overlayStyle.transform !== 'none' : false,
+        overlayInGrid: Boolean(overlay?.closest('#usageGrid')),
+        overlayCursor: overlayStyle?.cursor || '',
+        shifted,
         head: source.querySelector('.usage-card-head').children.length,
         plan: source.querySelectorAll('.usage-plan-name, .usage-provider-mark').length
       }
@@ -276,20 +302,26 @@ async function main() {
       await new Promise((resolve) => requestAnimationFrame(resolve))
       const restored = [...document.querySelectorAll('#usageGrid .usage-card')]
         .map((card) => card.dataset.provider)
-      return { before, preview, restored, animations, columns, dragged }
+      const leftover = Boolean(document.querySelector('.usage-card-overlay'))
+      return { before, preview, domUnchanged, restored, leftover, columns, dragged }
     })()`)
     if (JSON.stringify(dragPreview.preview) === JSON.stringify(dragPreview.before) ||
-        dragPreview.animations < 1 ||
+        JSON.stringify(dragPreview.domUnchanged) !== JSON.stringify(dragPreview.before) ||
         dragPreview.columns !== 2 ||
-        dragPreview.dragged.opacity !== '1' ||
-        dragPreview.dragged.cursor !== 'grabbing' ||
-        !dragPreview.dragged.follows ||
+        dragPreview.leftover ||
+        !dragPreview.dragged.shifted ||
+        Number(dragPreview.dragged.ghostOpacity) > 0.3 ||
+        Number(dragPreview.dragged.overlayOpacity) < 0.9 ||
+        !dragPreview.dragged.overlayExists ||
+        !dragPreview.dragged.overlayFollows ||
+        dragPreview.dragged.overlayInGrid ||
+        dragPreview.dragged.overlayCursor !== 'grabbing' ||
         dragPreview.dragged.head !== 2 ||
         dragPreview.dragged.plan !== 0 ||
         JSON.stringify(dragPreview.restored) !== JSON.stringify(dragPreview.before)) {
-      throw new Error(`拖曳 FLIP preview／取消還原失敗：${JSON.stringify(dragPreview)}`)
+      throw new Error(`拖曳 overlay／鬼影預覽／取消還原失敗：${JSON.stringify(dragPreview)}`)
     }
-    pass('2 欄版面，拖曳中卡片不透明並平滑推開，取消後不寫入並還原')
+    pass('2 欄版面，跟手 overlay 不透明、格子裡半透明預覽，拖曳中不改 DOM，取消後還原')
 
     await cdp.eval(`window.electronAPI.usage.saveSettings(${JSON.stringify(originalSettings)})`)
     const reset = await cdp.eval(`(async () => {

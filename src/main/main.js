@@ -1,20 +1,51 @@
 const { app, BrowserWindow, ipcMain, session, desktopCapturer, screen, shell } = require('electron')
 const path = require('path')
+const fs = require('fs')
 const models = require('./models')
-const localAsr = require('./local-asr')
-const localLlm = require('./local-llm')
-const engine = require('./engine')
-const fileTranscribe = require('./file-transcribe')
-const edgeTts = require('./edge-tts')
-const cloudAsr = require('./cloud-asr')
 const chat = require('./chat')
 const chatStore = require('./chat-store')
-const chatImages = require('./chat-images')
-const usage = require('./usage')
+const { sanitizeTtsVoices, DEFAULT_TTS_VOICES, listVoices } = require('./tts-voices')
 const { registerUsageIpc } = require('./usage/ipc')
-const { detectGpuCapability, clearGpuCapabilityCache } = require('./gpu-capability')
-const cudaEnv = require('./cuda-env')
-const { sanitizeTtsVoices, DEFAULT_TTS_VOICES } = require('./tts-voices')
+const { registerAgyIpc } = require('./agy/ipc')
+
+const bootStartedAt = Date.now()
+function bootLog(step) {
+  console.log(`[boot] ${Date.now() - bootStartedAt}ms ${step}`)
+}
+
+/**
+ * 啟動只載聊天需要的模組。ASR／LLM／額度／AGY／CUDA 第一次用到才 require，
+ * 避免 400MB+ 的 unpacked native 與巨大 JS 圖擋住第一扇窗。
+ * @param {string} id
+ * @returns {() => object}
+ */
+function lazyLoad(id) {
+  let mod
+  return () => {
+    if (!mod) {
+      mod = require(id)
+      if (store && typeof mod.setStore === 'function') mod.setStore(store)
+    }
+    return mod
+  }
+}
+
+const loadLocalAsr = lazyLoad('./local-asr')
+const loadLocalLlm = lazyLoad('./local-llm')
+const loadEngine = lazyLoad('./engine')
+const loadFileTranscribe = lazyLoad('./file-transcribe')
+const loadEdgeTts = lazyLoad('./edge-tts')
+const loadCloudAsr = lazyLoad('./cloud-asr')
+const loadChatModels = lazyLoad('./chat-models')
+const loadChatImages = lazyLoad('./chat-images')
+const loadUsage = lazyLoad('./usage')
+const loadGpu = lazyLoad('./gpu-capability')
+const loadCudaEnv = lazyLoad('./cuda-env')
+
+let agyMod = null
+let backgroundStarted = false
+/** @type {Promise<object>|null} */
+let storeReady = null
 
 // 主視窗
 let mainWindow = null
@@ -48,9 +79,8 @@ const STORE_ALLOWLIST = new Set([
   'localTranslateModel',
   'llmGpu',
   'asrThreads',
-  'chatApiUrl',
-  'chatApiKey',
-  'chatModels',
+  'chatProviders',
+  'chatProviderId',
   'chatModelId',
   'chatPrompts',
   'chatPromptId',
@@ -63,9 +93,8 @@ const THEME_VALUES = new Set(['dark', 'light'])
 
 const TRANSLATE_TARGET_LANGS = new Set(['zh-TW', 'zh-CN', 'en', 'ja', 'ko'])
 const MAX_TRANSLATE_CHARS = 1500
-
-/** 聊天模型清單上限（設定 UI 可增刪，防有人塞爆 config.json） */
-const MAX_CHAT_MODELS = 30
+const DEFAULT_LLM_KEY = 'linguaforge08'
+const MAX_ASR_THREADS = 16
 
 /**
  * 本地 ASR 推論執行緒：0＝自動。
@@ -76,37 +105,110 @@ const MAX_CHAT_MODELS = 30
  */
 function sanitizeAsrThreads(raw) {
   const n = Number(raw)
-  if (!Number.isInteger(n) || n < 2 || n > localAsr.MAX_ASR_THREADS) return 0
+  if (!Number.isInteger(n) || n < 2 || n > MAX_ASR_THREADS) return 0
   return n
 }
 
 /**
- * 聊天模型清單正規化：去空白、去重、去空字串、限量
- * @param {unknown} raw
- * @returns {string[]}
+ * @param {unknown} val
+ * @returns {number}
  */
-function sanitizeChatModels(raw) {
-  const list = chat.sanitizeModels(raw)
-  return (list.length ? list : [chat.DEFAULT_CHAT_MODEL]).slice(0, MAX_CHAT_MODELS)
+function sanitizeTtsRate(val) {
+  const n = Number(val)
+  if (!Number.isFinite(n)) return 0
+  return Math.max(-50, Math.min(100, Math.round(n)))
 }
 
 /**
- * 聊天 API URL：必須 http/https，否則回預設（防 XSS 後改成外洩端點）
- * @param {unknown} raw
- * @returns {string}
+ * 只為第一扇窗底色讀 theme，不載 electron-store。
+ * @returns {'dark'|'light'}
  */
-function sanitizeChatApiUrl(raw) {
-  const url = typeof raw === 'string' ? raw.trim() : ''
-  return /^https?:\/\//i.test(url) ? url : chat.DEFAULT_CHAT_API_URL
+function peekTheme() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'config.json'), 'utf8'))
+    return raw?.theme === 'light' ? 'light' : 'dark'
+  } catch {
+    return 'dark'
+  }
+}
+
+/**
+ * 第一次用到 AGY 才載模組並開 SQLite。
+ * @returns {Promise<object>}
+ */
+async function loadAgy() {
+  await initStore()
+  if (!agyMod) {
+    agyMod = require('./agy')
+    agyMod.configure({ userDataPath: app.getPath('userData'), store })
+  }
+  return agyMod
+}
+
+/**
+ * 第一幀出來之後才自動接續反代，不跟開窗搶磁碟。
+ */
+function scheduleBackgroundServices() {
+  if (backgroundStarted) return
+  backgroundStarted = true
+  initStore()
+    .then(() => {
+      if (store.get('agyEnabled') !== true) return { ok: false, error: 'DISABLED' }
+      return loadAgy().then((service) => service.autoStart())
+    })
+    .then((result) => {
+      if (result && !result.ok && result.error !== 'DISABLED') {
+        console.warn('[agy] autoStart failed:', result.error)
+      }
+    })
+    .catch((err) => console.warn('[agy] autoStart error:', err?.code || err?.message))
+}
+
+/**
+ * 字幕視窗位置／大小。
+ * 這個值直接餵進 `new BrowserWindow()`，來源有兩個——renderer 的 `store:set`，
+ * 以及使用者可以手改的設定檔——所以寫入與讀取兩邊都要過這裡：
+ * 非有限數（NaN／字串／null）會讓 Electron 建出看不見或超大的視窗。
+ * x／y 保留 undefined 代表「交給系統置中」。
+ * @param {unknown} raw
+ * @returns {{ width: number, height: number, x: number|undefined, y: number|undefined }}
+ */
+function sanitizeSubtitleBounds(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {}
+  const clamp = (value, fallback, min, max) => {
+    const n = Number(value)
+    if (!Number.isFinite(n)) return fallback
+    return Math.min(max, Math.max(min, Math.round(n)))
+  }
+  const coord = (value) => {
+    const n = Number(value)
+    return Number.isFinite(n) ? Math.round(n) : undefined
+  }
+  return {
+    width: clamp(src.width, 800, 200, 8000),
+    height: clamp(src.height, 200, 80, 8000),
+    x: coord(src.x),
+    y: coord(src.y)
+  }
 }
 
 /**
  * 初始化 electron-store（ESM 模組需要動態 import）
  */
 async function initStore() {
-  const Store = (await import('electron-store')).default
-  store = new Store()
-  migrateChatSystemPrompt()
+  if (store) return store
+  if (!storeReady) {
+    storeReady = (async () => {
+      const Store = (await import('electron-store')).default
+      store = new Store()
+      migrateChatSystemPrompt()
+      migrateChatProviders()
+      chat.setStore(store)
+      bootLog('store ready')
+      return store
+    })()
+  }
+  return storeReady
 }
 
 /**
@@ -130,11 +232,38 @@ function migrateChatSystemPrompt() {
 }
 
 /**
+ * 一次性搬移：舊版單組 `chatApiUrl`／`chatApiKey`／`chatModels` → `chatProviders` 的第一筆。
+ * 寫入成功才刪舊 key，中途失敗不會兩邊都沒有。
+ */
+function migrateChatProviders() {
+  const legacyKeys = ['chatApiUrl', 'chatApiKey', 'chatModels']
+  const hasLegacy = legacyKeys.some((key) => store.has(key))
+  if (!hasLegacy) return
+
+  const existing = chat.sanitizeProviders(store.get('chatProviders', []))
+  if (!existing.length) {
+    const provider = chat.providerFromLegacy(
+      store.get('chatApiUrl', ''),
+      store.get('chatApiKey', ''),
+      store.get('chatModels', [])
+    )
+    if (provider) {
+      store.set('chatProviders', [provider])
+      store.set('chatProviderId', provider.id)
+      const currentModel = String(store.get('chatModelId', '') || '')
+      if (!provider.models.includes(currentModel)) store.set('chatModelId', provider.models[0] || '')
+      console.log('[chat] 已將舊的單組聊天設定搬移為供應商')
+    }
+  }
+  for (const key of legacyKeys) if (store.has(key)) store.delete(key)
+}
+
+/**
  * 依主題決定視窗底色（frameless 避免淺色主題閃黑）
  * @returns {string}
  */
 function mainBackgroundColor() {
-  const theme = store?.get('theme', 'dark')
+  const theme = store ? store.get('theme', 'dark') : peekTheme()
   return theme === 'light' ? '#f5f5f5' : '#1a1a1a'
 }
 
@@ -166,28 +295,33 @@ function createMainWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
+      spellcheck: false,
       preload: path.join(__dirname, '../preload/preload.js')
     },
     backgroundColor: mainBackgroundColor(),
     autoHideMenuBar: true,
-    show: false
+    show: true
   })
 
   // 隱藏 File/Edit/View… 系統選單列
   mainWindow.setMenu(null)
 
-  // 載入頁面
+  mainWindow.once('ready-to-show', () => {
+    bootLog('ready-to-show')
+    scheduleBackgroundServices()
+  })
+  mainWindow.webContents.once('did-finish-load', () => {
+    bootLog('did-finish-load')
+    scheduleBackgroundServices()
+  })
+
+  // 載入頁面（先掛事件，避免 loadFile 太快把 ready-to-show 漏掉）
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173')
     mainWindow.webContents.openDevTools()
   } else {
     mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'))
   }
-
-  // 準備好後顯示
-  mainWindow.once('ready-to-show', () => {
-    mainWindow.show()
-  })
 
   const sendMaximized = () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -250,12 +384,8 @@ function isBoundsOnScreen(bounds) {
  */
 function createSubtitleWindow() {
   // 取得儲存的位置
-  const bounds = store ? store.get('subtitleWindowBounds', {
-    width: 800,
-    height: 200,
-    x: undefined,
-    y: undefined
-  }) : { width: 800, height: 200, x: undefined, y: undefined }
+  // 設定檔可能是舊版寫的或被手改壞，讀取時同樣要過一次校驗
+  const bounds = sanitizeSubtitleBounds(store ? store.get('subtitleWindowBounds', null) : null)
 
   // 座標已不在任何螢幕內（拔掉外接螢幕）→ 回到置中，避免視窗開在看不見的地方
   if (!isBoundsOnScreen(bounds)) {
@@ -330,7 +460,7 @@ ipcMain.handle('store:get', async (event, key, defaultValue) => {
   if (!store) await initStore()
   const val = store.get(key, defaultValue)
   if (key === 'ttsVoices') return sanitizeTtsVoices(val)
-  if (key === 'ttsRate') return edgeTts.sanitizeTtsRate(val)
+  if (key === 'ttsRate') return sanitizeTtsRate(val)
   if (key === 'translator') {
     return TRANSLATOR_VALUES.has(val) ? val : (TRANSLATOR_VALUES.has(defaultValue) ? defaultValue : 'local')
   }
@@ -338,7 +468,7 @@ ipcMain.handle('store:get', async (event, key, defaultValue) => {
     return ASR_ENGINE_VALUES.has(val) ? val : (ASR_ENGINE_VALUES.has(defaultValue) ? defaultValue : 'local')
   }
   if (key === 'localTranslateModel') {
-    return models.isLlmKey(val) ? val : (models.isLlmKey(defaultValue) ? defaultValue : localLlm.DEFAULT_LLM_KEY)
+    return models.isLlmKey(val) ? val : (models.isLlmKey(defaultValue) ? defaultValue : DEFAULT_LLM_KEY)
   }
   if (key === 'llmGpu') {
     return val === true
@@ -346,11 +476,15 @@ ipcMain.handle('store:get', async (event, key, defaultValue) => {
   if (key === 'theme') {
     return THEME_VALUES.has(val) ? val : (THEME_VALUES.has(defaultValue) ? defaultValue : 'dark')
   }
-  if (key === 'chatApiUrl') return sanitizeChatApiUrl(val)
-  if (key === 'chatModels') return sanitizeChatModels(val)
+  if (key === 'chatProviders') return chat.sanitizeProviders(val)
+  if (key === 'chatProviderId') {
+    const list = chat.sanitizeProviders(store.get('chatProviders', []))
+    return list.some((p) => p.id === val) ? val : (list[0]?.id || '')
+  }
   if (key === 'chatModelId') {
-    const list = sanitizeChatModels(store.get('chatModels', []))
-    return list.includes(val) ? val : list[0]
+    // 只認「目前這個供應商」的清單——跨供應商沿用會拿 A 的模型名打 B 的端點
+    const models = chat.readProvider()?.models || []
+    return models.includes(val) ? val : (models[0] || '')
   }
   if (key === 'chatPrompts') return chat.sanitizePrompts(val)
   if (key === 'chatPromptId') {
@@ -359,7 +493,6 @@ ipcMain.handle('store:get', async (event, key, defaultValue) => {
   }
   if (key === 'chatThinking') return val === true
   if (key === 'asrThreads') return sanitizeAsrThreads(val)
-  if (key === 'chatApiKey') return typeof val === 'string' ? val : ''
   return val
 })
 
@@ -374,7 +507,7 @@ ipcMain.handle('store:set', async (event, key, value) => {
     return true
   }
   if (key === 'ttsRate') {
-    store.set(key, edgeTts.sanitizeTtsRate(value))
+    store.set(key, sanitizeTtsRate(value))
     return true
   }
   if (key === 'translator') {
@@ -388,13 +521,13 @@ ipcMain.handle('store:set', async (event, key, value) => {
     return true
   }
   if (key === 'localTranslateModel') {
-    store.set(key, models.isLlmKey(value) ? value : localLlm.DEFAULT_LLM_KEY)
+    store.set(key, models.isLlmKey(value) ? value : DEFAULT_LLM_KEY)
     return true
   }
   if (key === 'llmGpu') {
     // 硬體不符時強制 false
     if (value === true) {
-      const cap = await detectGpuCapability()
+      const cap = await loadGpu().detectGpuCapability()
       store.set(key, !!cap.ok)
     } else {
       store.set(key, false)
@@ -417,20 +550,29 @@ ipcMain.handle('store:set', async (event, key, value) => {
     store.set(key, typeof value === 'string' ? value.trim() : value)
     return true
   }
-  if (key === 'chatApiUrl') {
-    store.set(key, sanitizeChatApiUrl(value))
+  if (key === 'chatProviders') {
+    const list = chat.sanitizeProviders(value)
+    store.set(key, list)
+    // 供應商可能被刪掉或改名 → 選取與模型都要跟著收斂，否則聊天請求會被自己的驗證擋下
+    const providerId = String(store.get('chatProviderId', '') || '')
+    const active = list.find((p) => p.id === providerId) || list[0] || null
+    store.set('chatProviderId', active?.id || '')
+    const model = String(store.get('chatModelId', '') || '')
+    if (!active?.models.includes(model)) store.set('chatModelId', active?.models[0] || '')
     return true
   }
-  if (key === 'chatModels') {
-    const list = sanitizeChatModels(value)
-    store.set(key, list)
-    // 清單變動後目前選用的 model 可能已不存在 → 立刻收斂，避免聊天請求被拒
-    if (!list.includes(store.get('chatModelId', ''))) store.set('chatModelId', list[0])
+  if (key === 'chatProviderId') {
+    const list = chat.sanitizeProviders(store.get('chatProviders', []))
+    const active = list.find((p) => p.id === value) || list[0] || null
+    store.set(key, active?.id || '')
+    // 換供應商就換模型池，舊選擇不再有效
+    const model = String(store.get('chatModelId', '') || '')
+    if (!active?.models.includes(model)) store.set('chatModelId', active?.models[0] || '')
     return true
   }
   if (key === 'chatModelId') {
-    const list = sanitizeChatModels(store.get('chatModels', []))
-    store.set(key, list.includes(value) ? value : list[0])
+    const models = chat.readProvider()?.models || []
+    store.set(key, models.includes(value) ? value : (models[0] || ''))
     return true
   }
   if (key === 'chatPrompts') {
@@ -453,8 +595,8 @@ ipcMain.handle('store:set', async (event, key, value) => {
     store.set(key, sanitizeAsrThreads(value))
     return true
   }
-  if (key === 'chatApiKey') {
-    store.set(key, typeof value === 'string' ? value.trim() : '')
+  if (key === 'subtitleWindowBounds') {
+    store.set(key, sanitizeSubtitleBounds(value))
     return true
   }
   store.set(key, value)
@@ -488,12 +630,12 @@ ipcMain.handle('window:isMaximized', (event) => {
 
 // GPU 能力（設定頁）
 ipcMain.handle('system:gpuCapability', async () => {
-  return detectGpuCapability()
+  return loadGpu().detectGpuCapability()
 })
 
 ipcMain.handle('system:refreshGpuCapability', async () => {
-  clearGpuCapabilityCache()
-  return detectGpuCapability()
+  loadGpu().clearGpuCapabilityCache()
+  return loadGpu().detectGpuCapability()
 })
 
 /**
@@ -509,9 +651,9 @@ ipcMain.handle('system:installCudaEnv', async (event) => {
     }
   }
   try {
-    const result = await cudaEnv.installCudaEnv(send)
-    clearGpuCapabilityCache()
-    const cap = await detectGpuCapability()
+    const result = await loadCudaEnv().installCudaEnv(send)
+    loadGpu().clearGpuCapabilityCache()
+    const cap = await loadGpu().detectGpuCapability()
     return { ...result, capability: cap }
   } catch (e) {
     return { ok: false, message: e.message || String(e) }
@@ -519,10 +661,10 @@ ipcMain.handle('system:installCudaEnv', async (event) => {
 })
 
 ipcMain.handle('system:openCudaDownloadPage', async () => {
-  return cudaEnv.openCudaDownloadPage()
+  return loadCudaEnv().openCudaDownloadPage()
 })
 
-ipcMain.handle('llm:loadInfo', () => localLlm.getLoadInfo())
+ipcMain.handle('llm:loadInfo', () => loadLocalLlm().getLoadInfo())
 
 // 字幕視窗控制
 ipcMain.handle('subtitle:show', () => {
@@ -591,9 +733,9 @@ ipcMain.handle('localAsr:transcribe', async (event, req) => {
   if (!store) await initStore()
   const engine = store.get('asrEngine', 'local')
   if (engine === 'cloud') {
-    return cloudAsr.transcribeSamples(req || {}, store)
+    return loadCloudAsr().transcribeSamples(req || {}, store)
   }
-  return localAsr.transcribe(req)
+  return loadLocalAsr().transcribe(req)
 })
 
 /** 長檔案串流轉錄（ffmpeg 切段，支援 ≥2h / ≥100MB；雲端走 mp3 segment） */
@@ -606,12 +748,12 @@ ipcMain.handle('localAsr:transcribeFile', async (event, req) => {
     }
   }
   if (engine === 'cloud') {
-    return fileTranscribe.transcribeFileCloud({ ...(req || {}), store }, onProgress)
+    return loadFileTranscribe().transcribeFileCloud({ ...(req || {}), store }, onProgress)
   }
-  return fileTranscribe.transcribeFile(req || {}, onProgress)
+  return loadFileTranscribe().transcribeFile(req || {}, onProgress)
 })
 
-ipcMain.handle('localAsr:cancelFileTranscribe', () => fileTranscribe.cancel())
+ipcMain.handle('localAsr:cancelFileTranscribe', () => loadFileTranscribe().cancel())
 
 ipcMain.handle('translate', async (event, text, targetLang, opts) => {
   if (!store) await initStore()
@@ -625,21 +767,22 @@ ipcMain.handle('translate', async (event, text, targetLang, opts) => {
   if (!TRANSLATE_TARGET_LANGS.has(lang)) {
     throw new Error(`不支援的目標語言: ${lang}`)
   }
-  return localLlm.translate(store, trimmed, lang, opts || {})
+  return loadLocalLlm().translate(store, trimmed, lang, opts || {})
 })
 
 // ===== Edge TTS =====
-ipcMain.handle('tts:listVoices', () => edgeTts.listVoices())
+ipcMain.handle('tts:listVoices', () => listVoices())
 
 ipcMain.handle('tts:synthesize', async (event, req) => {
   if (!store) await initStore()
   const text = typeof req?.text === 'string' ? req.text : ''
   const lang = typeof req?.lang === 'string' ? req.lang : 'zh-TW'
   const safeLang = Object.prototype.hasOwnProperty.call(DEFAULT_TTS_VOICES, lang) ? lang : 'en'
-  const voice = edgeTts.resolveVoice(store, safeLang)
-  const rate = edgeTts.formatTtsRate(edgeTts.resolveTtsRate(store))
+  const tts = loadEdgeTts()
+  const voice = tts.resolveVoice(store, safeLang)
+  const rate = tts.formatTtsRate(tts.resolveTtsRate(store))
   try {
-    return await edgeTts.synthesize({
+    return await tts.synthesize({
       text,
       voice,
       rate,
@@ -654,20 +797,20 @@ ipcMain.handle('tts:synthesize', async (event, req) => {
 })
 
 ipcMain.handle('tts:cancel', () => {
-  edgeTts.cancelAll()
+  loadEdgeTts().cancelAll()
   return true
 })
 
 // 引擎生命週期：acquire / release / status
 ipcMain.handle('engine:acquire', async (event, owner, needs) => {
-  return engine.acquire(owner, needs || {})
+  return loadEngine().acquire(owner, needs || {})
 })
 
 ipcMain.handle('engine:release', async (event, owner) => {
-  return engine.release(owner)
+  return loadEngine().release(owner)
 })
 
-ipcMain.handle('engine:status', () => engine.status())
+ipcMain.handle('engine:status', () => loadEngine().status())
 
 // ===== 聊天 =====
 // 會話內容與 model 都由 main 擁有；renderer 只給 conversationId 與文字
@@ -676,41 +819,66 @@ ipcMain.handle('chat:get', (event, id) => chatStore.get(id))
 ipcMain.handle('chat:create', () => chatStore.create())
 ipcMain.handle('chat:delete', (event, id) => chatStore.remove(id))
 ipcMain.handle('chat:rename', (event, id, title) => chatStore.rename(id, title))
+ipcMain.handle('chat:reorder', (event, ids) => chatStore.reorder(ids))
+
+/**
+ * 掃描某個供應商的模型清單。
+ *
+ * renderer 只給 providerId，網址與金鑰一律由 main 從 store 取——
+ * 讓 renderer 指定 URL 等於把 App 變成「幫你打任意網址」的跳板。
+ */
+ipcMain.handle('chat:scanModels', async (event, providerId) => {
+  if (!store) await initStore()
+  const providers = chat.sanitizeProviders(store.get('chatProviders', []))
+  const provider = providers.find((p) => p.id === providerId)
+  if (!provider) return { ok: false, code: 'NO_PROVIDER', error: '找不到這個供應商' }
+  return loadChatModels().fetchModels({ apiUrl: provider.apiUrl, apiKey: provider.apiKey })
+})
 ipcMain.handle('chat:send', async (event, req) => {
-  if (!store) {
-    await initStore()
-    chat.setStore(store)
-    localAsr.setStore(store)
-  }
+  if (!store) await initStore()
   return chat.send(req || {}, event.sender)
 })
 ipcMain.handle('chat:abort', (event, reqId) => chat.abort(reqId))
 // 圖片實體存在 <userData>/chat-images/；renderer 只拿得到檔名，讀取由 main 驗證
-ipcMain.handle('chat:image', (event, name) => chatImages.toDataUrl(name))
+ipcMain.handle('chat:image', (event, name) => loadChatImages().toDataUrl(name))
 
 // ===== 額度儀錶板 =====
 // URL、憑證路徑、SQL 與 provider 清單固定在 main；renderer 只能觸發整體同步。
 registerUsageIpc({
   ipcMain,
-  service: usage,
+  service: {
+    load: (...args) => loadUsage().load(...args),
+    sync: (...args) => loadUsage().sync(...args),
+    saveSettings: (...args) => loadUsage().saveSettings(...args),
+    getDiagnostics: (...args) => loadUsage().getDiagnostics(...args),
+    publicError: (error) => loadUsage().publicError(error)
+  },
+  isMainSender: assertMainWindowSender
+})
+
+// ===== AGY 反向代理 =====
+// 憑證、上游 URL、project id 與 API key 全在 main；agy* 設定刻意不進 STORE_ALLOWLIST，
+// renderer 只能透過 agy:* 操作，沒有任何路徑能直接改掉金鑰。
+registerAgyIpc({
+  ipcMain,
+  service: {
+    status: async (...args) => (await loadAgy()).status(...args),
+    start: async (...args) => (await loadAgy()).start(...args),
+    stop: async (...args) => (await loadAgy()).stop(...args),
+    saveSettings: async (...args) => (await loadAgy()).saveSettings(...args),
+    regenerateApiKey: async (...args) => (await loadAgy()).regenerateApiKey(...args),
+    getLogs: async (...args) => (await loadAgy()).getLogs(...args),
+    getStats: async (...args) => (await loadAgy()).getStats(...args),
+    listModels: async (...args) => (await loadAgy()).listModels(...args),
+    clearLogs: async (...args) => (await loadAgy()).clearLogs(...args),
+    selfTest: async (...args) => (await loadAgy()).selfTest(...args)
+  },
   isMainSender: assertMainWindowSender
 })
 
 // 設定系統音訊擷取的媒體請求處理器
-app.whenReady().then(async () => {
-  // 讓 node-llama-cpp 能載到 cudart/cublas（安裝後 Machine PATH 有時未灌進本行程）
-  try {
-    const added = cudaEnv.prependCudaBinToPath()
-    if (added.length) console.log('[cuda-env] PATH +=', added.join('; '))
-  } catch (e) {
-    console.warn('[cuda-env] prepend PATH failed:', e.message || e)
-  }
-
-  await initStore()
-  localLlm.setStore(store)
-  chat.setStore(store)
-  localAsr.setStore(store)
-
+app.whenReady().then(() => {
+  bootLog('whenReady')
   session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
     desktopCapturer.getSources({ types: ['screen'] })
       .then((sources) => {
@@ -728,6 +896,8 @@ app.whenReady().then(async () => {
   }, { useSystemPicker: false })
 
   createMainWindow()
+  bootLog('window created')
+  initStore().catch((err) => console.error('[store] init failed:', err?.message || err))
 })
 
 // 關閉前同步卸載模型，再真正退出
@@ -739,7 +909,14 @@ app.on('before-quit', (e) => {
   }
   e.preventDefault()
   isQuitting = true
-  engine.unloadAll()
+  // 反代先關：留著監聽的 socket 會讓下次啟動撞到 EADDRINUSE
+  const stopAgy = agyMod ? agyMod.shutdown() : Promise.resolve()
+  stopAgy
+    .catch((err) => console.error('[agy] shutdown on quit failed:', err))
+    .then(() => {
+      if (!require.cache[require.resolve('./engine')]) return
+      return loadEngine().unloadAll()
+    })
     .catch((err) => console.error('[engine] unloadAll on quit failed:', err))
     .finally(() => {
       app.exit(0)

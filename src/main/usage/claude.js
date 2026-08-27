@@ -10,11 +10,28 @@ const {
   readJsonFile
 } = require('./shared')
 
-function applyClaudeUsage(raw, nowMs) {
+/** 真正的方案寫在本機憑證檔的 subscriptionType，usage API 不回這個欄位 */
+const PLAN_LABELS = Object.freeze({
+  free: 'Claude Free',
+  pro: 'Claude Pro',
+  max: 'Claude Max',
+  team: 'Claude Team',
+  enterprise: 'Claude Enterprise'
+})
+
+/**
+ * @param {object} raw usage API 回應
+ * @param {number} nowMs
+ * @param {string} [subscriptionType] `.credentials.json` 的 claudeAiOauth.subscriptionType
+ */
+function applyClaudeUsage(raw, nowMs, subscriptionType = '') {
   const account = createBaseAccount('claude-code', nowMs)
   account.status = 'available'
   account.accuracy = 'official'
-  account.planName = raw?.extra_usage?.is_enabled ? 'Claude Pro / Max' : 'Claude'
+  // extra_usage.is_enabled 只代表「有沒有開額外用量」，拿它猜方案會把 Pro 講成「Pro / Max」；
+  // 認得的 subscriptionType 一律優先，認不得才退回舊的粗略判斷。
+  account.planName = PLAN_LABELS[String(subscriptionType || '').trim().toLowerCase()] ||
+    (raw?.extra_usage?.is_enabled ? 'Claude Pro / Max' : 'Claude')
   account.notes = '已從 Anthropic OAuth API 讀取真實額度。'
 
   const definitions = [
@@ -68,7 +85,7 @@ async function syncClaude({ homeDir, nowMs = Date.now(), fetchImpl, log = () => 
       }
     })
     log(`claude: API OK windows=${Number(!!usage.five_hour) + Number(!!usage.seven_day)}`)
-    return applyClaudeUsage(usage, nowMs)
+    return applyClaudeUsage(usage, nowMs, credentials?.claudeAiOauth?.subscriptionType)
   } catch (error) {
     log(`claude: API failed ${error.status ? `HTTP ${error.status}` : error.code || 'unknown'}`)
     account.status = 'connected'

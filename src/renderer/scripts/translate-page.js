@@ -8,6 +8,7 @@ import {
   getSettings,
   electronAPI,
   cleanIpcError,
+  openSettingsPage,
   resolveTranslateModelKey
 } from './app.js'
 
@@ -94,10 +95,10 @@ export function initTranslatePage() {
     error: document.getElementById('translateError')
   }
 
-  el.openSettingsBtn?.addEventListener('click', () => {
-    document.querySelector('.nav-tab[data-page="settings"]')?.click()
-  })
+  el.openSettingsBtn?.addEventListener('click', () => openSettingsPage('translate'))
   el.swapBtn?.addEventListener('click', onSwap)
+  el.sourceLang?.addEventListener('change', onLanguageChange)
+  el.targetLang?.addEventListener('change', onLanguageChange)
   el.input?.addEventListener('input', onInputChange)
   el.copyInputBtn?.addEventListener('click', () => copyText(el.input.value, '已複製輸入'))
   el.copyOutputBtn?.addEventListener('click', () => copyText(el.output.value, '已複製譯文'))
@@ -170,6 +171,7 @@ export async function prewarmTranslatePage() {
  */
 export async function cooldownTranslatePage() {
   prewarmGen++
+  if (el) el._translateRequestId = 0
   stopSpeak()
   await electronAPI.tts?.cancel?.().catch(() => {})
   await releaseTranslateEngine()
@@ -246,7 +248,12 @@ async function refreshUiState() {
   }
   if (el.status) el.status.textContent = statusLabel
   if (el.runBtn) {
-    el.runBtn.disabled = !canTranslate || isTranslating
+    if (isTranslating) {
+      el.runBtn.disabled = false
+      el.runBtn.textContent = '停止'
+    } else {
+      el.runBtn.disabled = !canTranslate
+    }
   }
   updateSpeakOutputEnabled()
 }
@@ -273,12 +280,27 @@ function updateCharCount() {
 
 function onInputChange() {
   updateCharCount()
+  invalidateOutput('input')
+}
+
+/**
+ * 原文或語言改變後，舊結果不能繼續顯示成「完成」，朗讀也必須停止。
+ * @param {'input'|'language'} reason
+ */
+function invalidateOutput(reason) {
+  if (isTranslating && el) el._translateRequestId = 0
+  stopSpeak()
   if (hasFreshOutput || el.output?.value) {
     outputStale = true
     hasFreshOutput = false
-    setOutputState('stale')
+    setOutputState(reason === 'language' ? 'stale-language' : 'stale')
     updateSpeakOutputEnabled()
   }
+}
+
+/** 語言選擇改變後作廢舊譯文。 */
+function onLanguageChange() {
+  invalidateOutput('language')
 }
 
 function setOutputState(state, detail = '') {
@@ -287,12 +309,13 @@ function setOutputState(state, detail = '') {
   const map = {
     idle: '—',
     stale: '原文已變更，請重新翻譯',
+    'stale-language': '語言已變更，請重新翻譯',
     loading: '翻譯中…',
     done: '完成',
     error: '失敗'
   }
   el.outputState.textContent = (map[state] || '—') + (detail ? ` ${detail}` : '')
-  if (state === 'stale') el.output.classList.add('is-stale')
+  if (state === 'stale' || state === 'stale-language') el.output.classList.add('is-stale')
   if (state === 'loading') el.output.classList.add('is-loading')
 }
 
@@ -436,6 +459,7 @@ function onSwap() {
   el.sourceLang.value = tgt
   el.targetLang.value =
     src === 'auto' ? detectScriptLang(el.input?.value || '') : src
+  onLanguageChange()
 }
 
 async function copyText(text, okMsg) {

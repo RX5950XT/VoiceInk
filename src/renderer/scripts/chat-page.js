@@ -8,15 +8,21 @@
 
 import { showToast, electronAPI, cleanIpcError, openSettingsPage } from './app.js'
 import { renderMarkdown } from './markdown.js'
+import { pickCollision, mergeVisibleOrder } from './usage-reorder.js'
 
 const DEFAULT_CHAT_API_URL = 'https://openrouter.ai/api/v1'
 const DEFAULT_CHAT_MODEL = 'google/gemini-3-flash-preview'
+/** 與 main 的 chat.MAX_PROVIDERS 對齊；這裡只是提早擋下、真正的上限在 main */
+const MAX_PROVIDERS = 10
+const MAX_PROVIDER_MODELS = 30
 
 /** 串流重繪節流；每次重繪整則訊息 */
 const RENDER_THROTTLE_MS = 60
 /** 捲到底的判定容差 */
 const BOTTOM_SLACK_PX = 48
-/** 刪除鈕二次確認的回復時間 */
+/** 側欄拖曳的啟動門檻：小於這個距離仍當成點擊 */
+const DRAG_THRESHOLD_PX = 4
+/** 刪除鈕按下後等待二次確認的時間，逾時自動復原 */
 const DELETE_ARM_MS = 3000
 /** 輸入框自動長高的上限（超過就內部捲動） */
 const INPUT_MAX_RATIO = 0.4
@@ -38,8 +44,6 @@ let attachBtn = null
 let thinkBtn = null
 let sendBtn = null
 let newBtn = null
-let deleteBtn = null
-let titleInput = null
 let modelSelect = null
 let promptSelect = null
 let promptManageBtn = null
@@ -47,10 +51,40 @@ let bannerEl = null
 let bannerTextEl = null
 let errorEl = null
 // 設定頁
+let providerSelect = null
+let providerNameInput = null
+let addProviderBtn = null
+let deleteProviderBtn = null
+let providerHintEl = null
 let apiUrlInput = null
 let apiKeyInput = null
 let modelListEl = null
 let addModelBtn = null
+let scanModelsBtn = null
+
+/**
+ * 設定頁的供應商草稿。
+ *
+ * 表單一次只顯示一組供應商，但儲存是整批寫回，所以編輯中的內容得留在記憶體裡：
+ * 切換下拉時先把畫面上的欄位收回草稿，再把新選的那組畫上去。
+ * 直接每次讀寫 store 會讓「改到一半切走再切回來」的內容消失。
+ * @type {Array<{ id: string, name: string, apiUrl: string, apiKey: string, models: string[] }>}
+ */
+let providerDraft = []
+let draftId = ''
+
+// 掃描彈窗
+let scanDialog = null
+let scanDescEl = null
+let scanSearchInput = null
+let scanListEl = null
+let scanCountEl = null
+/** @type {string[]} */
+let scanResults = []
+/** @type {Set<string>} */
+let scanSelected = new Set()
+/** @type {Set<string>} */
+let scanExisting = new Set()
 // 提示管理彈窗
 let promptDialog = null
 let promptListEl = null
@@ -71,8 +105,10 @@ const imageCache = new Map()
 /** 提示管理彈窗的草稿 @type {Array<{ id: string, name: string, content: string }>} */
 let promptDraft = []
 let promptDraftId = ''
-let deleteArmed = false
-let deleteTimer = 0
+/** 處於「再按一次確認刪除」狀態的按鈕 @type {HTMLButtonElement | null} */
+let armedDeleteBtn = null
+/** 拖曳中的側欄狀態 @type {{ id: string, el: HTMLElement, startX: number, startY: number, active: boolean } | null} */
+let dragState = null
 let inited = false
 
 /**
@@ -91,18 +127,27 @@ export function initChatPage() {
   thinkBtn = document.getElementById('chatThinkBtn')
   sendBtn = document.getElementById('chatSendBtn')
   newBtn = document.getElementById('chatNewBtn')
-  deleteBtn = document.getElementById('chatDeleteBtn')
-  titleInput = document.getElementById('chatTitleInput')
   modelSelect = document.getElementById('chatModelSelect')
   promptSelect = document.getElementById('chatPromptSelect')
   promptManageBtn = document.getElementById('chatPromptManageBtn')
   bannerEl = document.getElementById('chatBanner')
   bannerTextEl = document.getElementById('chatBannerText')
   errorEl = document.getElementById('chatError')
+  providerSelect = document.getElementById('chatProviderSelect')
+  providerNameInput = document.getElementById('chatProviderNameInput')
+  addProviderBtn = document.getElementById('chatAddProviderBtn')
+  deleteProviderBtn = document.getElementById('chatDeleteProviderBtn')
+  providerHintEl = document.getElementById('chatProviderHint')
   apiUrlInput = document.getElementById('chatApiUrlInput')
   apiKeyInput = document.getElementById('chatApiKeyInput')
   modelListEl = document.getElementById('chatModelList')
   addModelBtn = document.getElementById('chatAddModelBtn')
+  scanModelsBtn = document.getElementById('chatScanModelsBtn')
+  scanDialog = document.getElementById('chatScanDialog')
+  scanDescEl = document.getElementById('chatScanDesc')
+  scanSearchInput = document.getElementById('chatScanSearch')
+  scanListEl = document.getElementById('chatScanList')
+  scanCountEl = document.getElementById('chatScanCount')
   promptDialog = document.getElementById('chatPromptDialog')
   promptListEl = document.getElementById('promptList')
   promptNameInput = document.getElementById('promptNameInput')
@@ -112,15 +157,23 @@ export function initChatPage() {
 
   sendBtn?.addEventListener('click', handleSend)
   newBtn?.addEventListener('click', handleNew)
-  deleteBtn?.addEventListener('click', handleDelete)
-  titleInput?.addEventListener('change', handleRename)
   modelSelect?.addEventListener('change', handleModelChange)
   promptSelect?.addEventListener('change', handlePromptChange)
   promptManageBtn?.addEventListener('click', openPromptDialog)
   searchInput?.addEventListener('input', onSearchInput)
   messagesEl.addEventListener('click', onMessagesClick)
-  addModelBtn?.addEventListener('click', () => appendModelRow(''))
-  document.getElementById('chatOpenSettingsBtn')?.addEventListener('click', openSettingsPage)
+  addModelBtn?.addEventListener('click', () => appendModelRow('', { focus: true }))
+  providerSelect?.addEventListener('change', handleProviderSwitch)
+  addProviderBtn?.addEventListener('click', handleAddProvider)
+  deleteProviderBtn?.addEventListener('click', handleDeleteProvider)
+  providerNameInput?.addEventListener('input', syncProviderName)
+  scanModelsBtn?.addEventListener('click', handleScanModels)
+  scanSearchInput?.addEventListener('input', renderScanList)
+  document.getElementById('chatScanAllBtn')?.addEventListener('click', () => toggleScanAll(true))
+  document.getElementById('chatScanNoneBtn')?.addEventListener('click', () => toggleScanAll(false))
+  document.getElementById('chatScanCancelBtn')?.addEventListener('click', () => scanDialog?.close())
+  document.getElementById('chatScanApplyBtn')?.addEventListener('click', applyScanSelection)
+  document.getElementById('chatOpenSettingsBtn')?.addEventListener('click', () => openSettingsPage('chat'))
   document.getElementById('toggleChatApiKeyVisibility')?.addEventListener('click', toggleKeyVisibility)
 
   initComposer()
@@ -168,6 +221,8 @@ function onSearchInput() {
 
 function renderList() {
   if (!listEl) return
+  // 重畫會把待確認的刪除鈕整顆換掉，計時器得先收乾淨
+  disarmDelete()
   listEl.replaceChildren()
   const visible = searchTerm
     ? conversations.filter((c) => c.title.toLowerCase().includes(searchTerm))
@@ -179,21 +234,261 @@ function renderList() {
     listEl.appendChild(empty)
     return
   }
-  for (const conv of visible) {
-    const item = document.createElement('button')
-    item.type = 'button'
-    item.className = conv.id === currentId ? 'chat-list-item active' : 'chat-list-item'
-    const title = document.createElement('span')
-    title.className = 'chat-list-title'
-    title.textContent = conv.title
-    const meta = document.createElement('span')
-    meta.className = 'chat-list-meta'
-    meta.textContent = `${conv.messageCount} 則`
-    item.appendChild(title)
-    item.appendChild(meta)
-    item.addEventListener('click', () => openConversation(conv.id))
-    listEl.appendChild(item)
+  for (const conv of visible) listEl.appendChild(buildListItem(conv))
+}
+
+/**
+ * 側欄的一列：開啟鈕 ＋ 改名／刪除，整列可拖曳排序
+ * @param {{ id: string, title: string, messageCount: number }} conv
+ * @returns {HTMLElement}
+ */
+function buildListItem(conv) {
+  const item = document.createElement('div')
+  item.className = conv.id === currentId ? 'chat-list-item active' : 'chat-list-item'
+  item.dataset.id = conv.id
+
+  const open = document.createElement('button')
+  open.type = 'button'
+  open.className = 'chat-list-open'
+  const title = document.createElement('span')
+  title.className = 'chat-list-title'
+  title.textContent = conv.title
+  const meta = document.createElement('span')
+  meta.className = 'chat-list-meta'
+  meta.textContent = `${conv.messageCount} 則`
+  open.append(title, meta)
+  open.addEventListener('click', () => openConversation(conv.id))
+
+  const actions = document.createElement('span')
+  actions.className = 'chat-list-actions'
+  const trash = listActionButton(ICON_TRASH, '刪除對話', () => armDelete(trash, conv))
+  actions.append(listActionButton(ICON_PENCIL, '重新命名', () => startRename(item, conv)), trash)
+
+  item.append(open, actions)
+  // 拖曳與 Alt+方向鍵排序；搜尋中不排序，否則存回去的順序會缺少被過濾掉的那些
+  item.addEventListener('pointerdown', onItemPointerDown)
+  item.addEventListener('keydown', onItemKeydown)
+  return item
+}
+
+/** 側欄圖示：跟 composer 的按鈕同一套線條風格，不用 emoji（Segoe 下的 🗑 會縮成一條細線） */
+const ICON_PENCIL = ['M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3Z', 'M14.5 6.5l3 3']
+const ICON_TRASH = ['M5 7h14', 'M10 5h4', 'M7 7l1 12h8l1-12', 'M10.5 10.5v6', 'M13.5 10.5v6']
+const ICON_CHECK = ['M5 12.5l4.5 4.5L19 7.5']
+
+const SVG_NS = 'http://www.w3.org/2000/svg'
+
+/**
+ * @param {HTMLElement} btn
+ * @param {string[]} paths SVG path 的 d
+ */
+function setIconPaths(btn, paths) {
+  const svg = document.createElementNS(SVG_NS, 'svg')
+  svg.setAttribute('viewBox', '0 0 24 24')
+  svg.setAttribute('aria-hidden', 'true')
+  for (const d of paths) {
+    const path = document.createElementNS(SVG_NS, 'path')
+    path.setAttribute('d', d)
+    svg.appendChild(path)
   }
+  btn.querySelector('svg')?.remove()
+  btn.appendChild(svg)
+}
+
+/**
+ * @param {string[]} paths SVG path 的 d
+ * @param {string} label
+ * @param {() => void} onClick
+ * @returns {HTMLButtonElement}
+ */
+function listActionButton(paths, label, onClick) {
+  const btn = document.createElement('button')
+  btn.type = 'button'
+  btn.className = 'chat-list-btn'
+  btn.title = label
+  btn.setAttribute('aria-label', label)
+  setIconPaths(btn, paths)
+  btn.addEventListener('click', (event) => {
+    event.stopPropagation()
+    onClick()
+  })
+  return btn
+}
+
+/**
+ * 就地改名：標題換成輸入框，Enter／失焦送出，Esc 取消。
+ * @param {HTMLElement} item
+ * @param {{ id: string, title: string }} conv
+ */
+function startRename(item, conv) {
+  const title = item.querySelector('.chat-list-title')
+  if (!title || item.querySelector('.chat-list-rename')) return
+  const input = document.createElement('input')
+  input.type = 'text'
+  input.className = 'chat-list-rename'
+  input.value = conv.title
+  input.maxLength = 60
+  input.setAttribute('aria-label', '對話標題')
+  let done = false
+  const finish = async (commit) => {
+    if (done) return
+    done = true
+    const next = input.value.trim()
+    if (commit && next && next !== conv.title) {
+      await electronAPI.chat.rename(conv.id, next)
+      await reloadList()
+    } else {
+      input.replaceWith(title)
+    }
+  }
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') { event.preventDefault(); void finish(true) }
+    else if (event.key === 'Escape') { event.preventDefault(); void finish(false) }
+  })
+  input.addEventListener('blur', () => void finish(true))
+  // 輸入框裡的拖曳／點擊不該被當成排序或切換對話
+  input.addEventListener('pointerdown', (event) => event.stopPropagation())
+  title.replaceWith(input)
+  input.focus()
+  input.select()
+}
+
+/**
+ * 刪除的二次確認：按鈕就地變成紅色的勾，再按一次才真的刪，逾時自動復原。
+ * 不用 `window.confirm`——原生彈窗會擋住整個 App，樣式也跟 Aurora 完全不搭。
+ * @param {HTMLButtonElement} btn
+ * @param {{ id: string, title: string }} conv
+ */
+function armDelete(btn, conv) {
+  if (btn.dataset.armed === '1') {
+    clearTimeout(Number(btn.dataset.timer))
+    void deleteConversation(conv)
+    return
+  }
+  disarmDelete()
+  btn.dataset.armed = '1'
+  btn.classList.add('is-armed')
+  btn.title = '再按一次確認刪除'
+  btn.setAttribute('aria-label', `再按一次確認刪除「${conv.title}」`)
+  setIconPaths(btn, ICON_CHECK)
+  btn.dataset.timer = String(setTimeout(disarmDelete, DELETE_ARM_MS))
+  armedDeleteBtn = btn
+}
+
+/** 復原目前處於「待確認」的刪除鈕（同時只會有一顆） */
+function disarmDelete() {
+  const btn = armedDeleteBtn
+  armedDeleteBtn = null
+  if (!btn) return
+  clearTimeout(Number(btn.dataset.timer))
+  delete btn.dataset.armed
+  delete btn.dataset.timer
+  btn.classList.remove('is-armed')
+  btn.title = '刪除對話'
+  btn.setAttribute('aria-label', '刪除對話')
+  setIconPaths(btn, ICON_TRASH)
+}
+
+/**
+ * @param {{ id: string, title: string }} conv
+ */
+async function deleteConversation(conv) {
+  disarmDelete()
+  if (streaming && conv.id === currentId) {
+    showToast('串流進行中，無法刪除這個對話', 'error')
+    return
+  }
+  await electronAPI.chat.delete(conv.id)
+  if (conv.id === currentId) {
+    currentId = ''
+    await refreshChatPage()
+  } else {
+    await reloadList()
+  }
+}
+
+// ===== 側欄排序 =====
+
+/** 目前 DOM 上的完整順序（被搜尋過濾掉的維持原相對位置，不會被拖曳順序洗掉） */
+function currentOrder() {
+  const shown = [...listEl.querySelectorAll('.chat-list-item')].map((el) => el.dataset.id)
+  if (!searchTerm) return shown
+  return mergeVisibleOrder(conversations.map((c) => c.id), shown)
+}
+
+async function persistOrder() {
+  const ids = currentOrder()
+  conversations = ids
+    .map((id) => conversations.find((c) => c.id === id))
+    .filter(Boolean)
+  await electronAPI.chat.reorder(ids)
+}
+
+/**
+ * @param {PointerEvent} event
+ */
+function onItemPointerDown(event) {
+  if (event.button !== 0 || event.target.closest('.chat-list-btn, .chat-list-rename')) return
+  const el = event.currentTarget
+  dragState = { id: el.dataset.id, el, startX: event.clientX, startY: event.clientY, active: false }
+  window.addEventListener('pointermove', onDragMove)
+  window.addEventListener('pointerup', onDragEnd)
+  window.addEventListener('pointercancel', onDragEnd)
+}
+
+/**
+ * @param {PointerEvent} event
+ */
+function onDragMove(event) {
+  if (!dragState) return
+  if (!dragState.active) {
+    const moved = Math.hypot(event.clientX - dragState.startX, event.clientY - dragState.startY)
+    if (moved < DRAG_THRESHOLD_PX) return
+    dragState.active = true
+    dragState.el.classList.add('is-dragging')
+    listEl.classList.add('is-reordering')
+  }
+  const items = [...listEl.querySelectorAll('.chat-list-item')]
+  const rects = items.map((el) => {
+    const r = el.getBoundingClientRect()
+    return { id: el.dataset.id, left: r.left, top: r.top, width: r.width, height: r.height }
+  })
+  const targetId = pickCollision({ x: event.clientX, y: event.clientY }, rects)
+  if (!targetId || targetId === dragState.id) return
+  const from = items.findIndex((el) => el.dataset.id === dragState.id)
+  const to = items.findIndex((el) => el.dataset.id === targetId)
+  if (from < 0 || to < 0) return
+  const target = items[to]
+  if (to > from) target.after(dragState.el)
+  else target.before(dragState.el)
+}
+
+function onDragEnd() {
+  window.removeEventListener('pointermove', onDragMove)
+  window.removeEventListener('pointerup', onDragEnd)
+  window.removeEventListener('pointercancel', onDragEnd)
+  const state = dragState
+  dragState = null
+  if (!state?.active) return
+  state.el.classList.remove('is-dragging')
+  listEl.classList.remove('is-reordering')
+  void persistOrder()
+}
+
+/**
+ * Alt+↑／↓ 搬動（鍵盤也要能排序）
+ * @param {KeyboardEvent} event
+ */
+function onItemKeydown(event) {
+  if (!event.altKey || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return
+  event.preventDefault()
+  const el = event.currentTarget
+  const sibling = event.key === 'ArrowUp' ? el.previousElementSibling : el.nextElementSibling
+  if (!sibling?.classList.contains('chat-list-item')) return
+  if (event.key === 'ArrowUp') sibling.before(el)
+  else sibling.after(el)
+  el.querySelector('.chat-list-open')?.focus()
+  void persistOrder()
 }
 
 /**
@@ -207,7 +502,6 @@ async function openConversation(id) {
     return
   }
   currentId = conv.id
-  if (titleInput) titleInput.value = conv.title
   renderMessages(conv.messages)
   renderList()
   hideError()
@@ -217,40 +511,9 @@ async function handleNew() {
   if (streaming) return
   const conv = await electronAPI.chat.create()
   currentId = conv.id
-  if (titleInput) titleInput.value = conv.title
   renderMessages([])
   await reloadList()
   inputEl?.focus()
-}
-
-async function handleRename() {
-  if (!currentId || !titleInput) return
-  await electronAPI.chat.rename(currentId, titleInput.value)
-  await reloadList()
-}
-
-async function handleDelete() {
-  if (!currentId || streaming || !deleteBtn) return
-  if (!deleteArmed) {
-    deleteArmed = true
-    deleteBtn.textContent = '確認刪除'
-    deleteBtn.classList.add('chat-delete-armed')
-    clearTimeout(deleteTimer)
-    deleteTimer = setTimeout(disarmDelete, DELETE_ARM_MS)
-    return
-  }
-  disarmDelete()
-  await electronAPI.chat.delete(currentId)
-  currentId = ''
-  await refreshChatPage()
-}
-
-function disarmDelete() {
-  clearTimeout(deleteTimer)
-  deleteArmed = false
-  if (!deleteBtn) return
-  deleteBtn.textContent = '刪除'
-  deleteBtn.classList.remove('chat-delete-armed')
 }
 
 // ===== 訊息渲染 =====
@@ -737,10 +1000,7 @@ async function finishStream(result) {
   // 以 main 的實際存檔為準重畫，避免樂觀更新與 chats.json 不同步
   if (currentId) {
     const conv = await electronAPI.chat.get(currentId)
-    if (conv) {
-      if (titleInput) titleInput.value = conv.title
-      renderMessages(conv.messages)
-    }
+    if (conv) renderMessages(conv.messages)
   }
   await reloadList()
   inputEl?.focus()
@@ -755,7 +1015,8 @@ function setSendingState(sending) {
     sendBtn.classList.toggle('btn-danger', sending)
   }
   if (newBtn) newBtn.disabled = sending
-  if (deleteBtn) deleteBtn.disabled = sending
+  // 側欄的改名／刪除鈕在串流中一併鎖住（切換對話本來就被 openConversation 擋掉）
+  listEl?.classList.toggle('is-busy', sending)
   if (modelSelect) modelSelect.disabled = sending
   if (promptSelect) promptSelect.disabled = sending
   if (attachBtn) attachBtn.disabled = sending
@@ -766,21 +1027,44 @@ function setSendingState(sending) {
 
 async function refreshModelSelect() {
   if (!modelSelect) return
-  const models = await electronAPI.store.get('chatModels', [DEFAULT_CHAT_MODEL])
-  const current = await electronAPI.store.get('chatModelId', models[0] || DEFAULT_CHAT_MODEL)
+  const [providers, activeProviderId, currentModel] = await Promise.all([
+    electronAPI.store.get('chatProviders', []),
+    electronAPI.store.get('chatProviderId', ''),
+    electronAPI.store.get('chatModelId', '')
+  ])
   modelSelect.replaceChildren()
-  for (const model of models) {
-    const option = document.createElement('option')
-    option.value = model
-    option.textContent = model
-    modelSelect.appendChild(option)
+
+  // option.value 用流水號、真正的資料放 dataset：
+  // 不同供應商可以有同名模型，拿模型名當 value 會選錯組。
+  let index = 0
+  for (const provider of providers) {
+    const models = Array.isArray(provider?.models) ? provider.models : []
+    if (!models.length) continue
+    const group = document.createElement('optgroup')
+    group.label = provider.name || '未命名供應商'
+    for (const model of models) {
+      const option = document.createElement('option')
+      option.value = String(index)
+      index += 1
+      option.dataset.providerId = provider.id
+      option.dataset.model = model
+      option.textContent = model
+      if (provider.id === activeProviderId && model === currentModel) option.selected = true
+      group.appendChild(option)
+    }
+    modelSelect.appendChild(group)
   }
-  modelSelect.value = current
+  modelSelect.disabled = index === 0
 }
 
 async function handleModelChange() {
-  if (!modelSelect) return
-  await electronAPI.store.set('chatModelId', modelSelect.value)
+  const option = modelSelect?.selectedOptions?.[0]
+  if (!option) return
+  // 順序不能反：main 會拿 chatProviderId 當基準驗證 chatModelId，
+  // 先寫 model 的話它會對著舊供應商的清單檢查，然後被收斂成別的模型。
+  await electronAPI.store.set('chatProviderId', option.dataset.providerId || '')
+  await electronAPI.store.set('chatModelId', option.dataset.model || '')
+  await refreshBanner()
 }
 
 async function refreshPromptSelect() {
@@ -909,10 +1193,18 @@ async function savePromptDraft() {
 
 async function refreshBanner() {
   if (!bannerEl) return
-  const apiKey = await electronAPI.store.get('chatApiKey', '')
-  const missing = !String(apiKey || '').trim()
-  bannerEl.classList.toggle('hidden', !missing)
-  if (missing && bannerTextEl) bannerTextEl.textContent = '尚未設定聊天 API Key'
+  const [providers, activeId] = await Promise.all([
+    electronAPI.store.get('chatProviders', []),
+    electronAPI.store.get('chatProviderId', '')
+  ])
+  const active = providers.find((p) => p.id === activeId) || providers[0] || null
+  let message = ''
+  if (!providers.length) message = '尚未設定聊天供應商，請到設定新增一組'
+  else if (!active?.apiUrl) message = `供應商「${active?.name || '?'}」的 API URL 不正確`
+  else if (!String(active.apiKey || '').trim()) message = `供應商「${active.name}」尚未填 API Key`
+  else if (!active.models?.length) message = `供應商「${active.name}」沒有任何模型`
+  bannerEl.classList.toggle('hidden', !message)
+  if (message && bannerTextEl) bannerTextEl.textContent = message
 }
 
 /**
@@ -941,7 +1233,11 @@ function toggleKeyVisibility() {
 /**
  * @param {string} value
  */
-function appendModelRow(value) {
+/**
+ * @param {string} value
+ * @param {{ focus?: boolean }} [options]
+ */
+function appendModelRow(value, options = {}) {
   if (!modelListEl) return
   const row = document.createElement('div')
   row.className = 'chat-model-row'
@@ -949,7 +1245,10 @@ function appendModelRow(value) {
   input.type = 'text'
   input.className = 'input'
   input.value = value
-  input.placeholder = DEFAULT_CHAT_MODEL
+  // placeholder 不可以是 DEFAULT_CHAT_MODEL：新增出來的空列會跟上一列文字一模一樣，
+  // 只差在灰色，看起來像重複項而不是「等你填」。
+  input.placeholder = '模型 ID'
+  input.setAttribute('aria-label', '模型 ID')
   const remove = document.createElement('button')
   remove.type = 'button'
   remove.className = 'btn-icon'
@@ -960,11 +1259,233 @@ function appendModelRow(value) {
   row.appendChild(input)
   row.appendChild(remove)
   modelListEl.appendChild(row)
+  if (options.focus) input.focus()
 }
 
+/**
+ * @returns {{ models: string[], dropped: number }} dropped 是空白與重複的總數
+ */
 function readModelRows() {
-  if (!modelListEl) return []
-  return [...modelListEl.querySelectorAll('input')].map((i) => i.value.trim()).filter(Boolean)
+  if (!modelListEl) return { models: [], dropped: 0 }
+  const raw = [...modelListEl.querySelectorAll('input')].map((i) => i.value.trim())
+  const models = [...new Set(raw.filter(Boolean))]
+  return { models, dropped: raw.length - models.length }
+}
+
+// ===== 供應商草稿 =====
+
+function newProviderId() {
+  return `p_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+}
+
+/** 把畫面上的欄位收回草稿。切換供應商與儲存前都要先做，否則編輯中的內容會掉。 */
+function captureProviderFields() {
+  const provider = providerDraft.find((p) => p.id === draftId)
+  if (!provider) return 0
+  provider.name = providerNameInput?.value.trim() || ''
+  provider.apiUrl = apiUrlInput?.value.trim() || ''
+  provider.apiKey = apiKeyInput?.value.trim() || ''
+  const { models, dropped } = readModelRows()
+  provider.models = models
+  return dropped
+}
+
+function renderProviderSelect() {
+  if (!providerSelect) return
+  providerSelect.replaceChildren()
+  for (const provider of providerDraft) {
+    const option = document.createElement('option')
+    option.value = provider.id
+    option.textContent = provider.name || '未命名供應商'
+    providerSelect.appendChild(option)
+  }
+  providerSelect.value = draftId
+  providerSelect.disabled = providerDraft.length === 0
+}
+
+function renderProviderFields() {
+  const provider = providerDraft.find((p) => p.id === draftId) || null
+  const has = Boolean(provider)
+  for (const el of [providerNameInput, apiUrlInput, apiKeyInput, addModelBtn, scanModelsBtn, deleteProviderBtn]) {
+    if (el) el.disabled = !has
+  }
+  if (providerNameInput) providerNameInput.value = provider?.name || ''
+  if (apiUrlInput) apiUrlInput.value = provider?.apiUrl || ''
+  if (apiKeyInput) apiKeyInput.value = provider?.apiKey || ''
+  modelListEl?.replaceChildren()
+  for (const model of provider?.models || []) appendModelRow(model)
+  if (providerHintEl) {
+    providerHintEl.textContent = has
+      ? '以下欄位屬於目前選取的供應商，按下方「儲存設定」才會寫入。'
+      : '尚未有任何供應商，按「＋ 新增」建立一組。'
+  }
+}
+
+function handleProviderSwitch() {
+  captureProviderFields()
+  draftId = providerSelect?.value || ''
+  renderProviderFields()
+}
+
+function handleAddProvider() {
+  captureProviderFields()
+  if (providerDraft.length >= MAX_PROVIDERS) {
+    showToast(`最多 ${MAX_PROVIDERS} 組供應商`, 'error')
+    return
+  }
+  const provider = {
+    id: newProviderId(),
+    name: '新供應商',
+    apiUrl: DEFAULT_CHAT_API_URL,
+    apiKey: '',
+    models: []
+  }
+  providerDraft.push(provider)
+  draftId = provider.id
+  renderProviderSelect()
+  renderProviderFields()
+  providerNameInput?.focus()
+  providerNameInput?.select()
+}
+
+function handleDeleteProvider() {
+  const provider = providerDraft.find((p) => p.id === draftId)
+  if (!provider) return
+  const label = provider.name || '未命名供應商'
+  if (!window.confirm(`刪除供應商「${label}」？它的 API Key 與模型清單會一併移除。`)) return
+  providerDraft = providerDraft.filter((p) => p.id !== draftId)
+  draftId = providerDraft[0]?.id || ''
+  renderProviderSelect()
+  renderProviderFields()
+}
+
+// ===== 模型掃描 =====
+
+async function handleScanModels() {
+  if (!draftId || !scanModelsBtn) return
+  captureProviderFields()
+  const provider = providerDraft.find((p) => p.id === draftId)
+  if (!provider?.apiUrl) {
+    showToast('請先填好這個供應商的 API URL', 'error')
+    return
+  }
+
+  // 掃描是由 main 拿著網址與金鑰出去打的，所以草稿得先落地。
+  // renderer 不能直接把網址交給 main——那等於開一個「幫你打任意網址」的代理。
+  await electronAPI.store.set('chatProviders', providerDraft)
+  await electronAPI.store.set('chatProviderId', draftId)
+
+  const label = scanModelsBtn.textContent
+  scanModelsBtn.disabled = true
+  scanModelsBtn.textContent = '掃描中…'
+  try {
+    const result = await electronAPI.chat.scanModels(draftId)
+    if (!result?.ok) {
+      showToast(result?.error || '掃描失敗', 'error')
+      return
+    }
+    openScanDialog(result.models, provider)
+  } catch (error) {
+    showToast(cleanIpcError(error), 'error')
+  } finally {
+    scanModelsBtn.disabled = false
+    scanModelsBtn.textContent = label
+  }
+}
+
+/**
+ * @param {string[]} models
+ * @param {{ name: string }} provider
+ */
+function openScanDialog(models, provider) {
+  scanResults = models
+  scanExisting = new Set(readModelRows().models)
+  // 預設一個都不勾：OpenRouter 一次回 300+，全勾等於幫使用者亂塞
+  scanSelected = new Set()
+  if (scanDescEl) {
+    scanDescEl.textContent =
+      `供應商「${provider.name || '未命名'}」回報 ${models.length} 個模型，勾選要加入清單的項目。`
+  }
+  if (scanSearchInput) scanSearchInput.value = ''
+  renderScanList()
+  scanDialog?.showModal()
+}
+
+function renderScanCount(visible = scanResults.length) {
+  if (!scanCountEl) return
+  scanCountEl.textContent = `已勾選 ${scanSelected.size} 個・顯示 ${visible} / ${scanResults.length}`
+}
+
+/** 全程 createElement + textContent，維持整頁零 innerHTML */
+function renderScanList() {
+  if (!scanListEl) return
+  const query = (scanSearchInput?.value || '').trim().toLowerCase()
+  const rows = query ? scanResults.filter((id) => id.toLowerCase().includes(query)) : scanResults
+
+  const items = rows.map((id) => {
+    const label = document.createElement('label')
+    label.className = 'chat-scan-item'
+    const box = document.createElement('input')
+    box.type = 'checkbox'
+    box.checked = scanSelected.has(id)
+    box.addEventListener('change', () => {
+      if (box.checked) scanSelected.add(id)
+      else scanSelected.delete(id)
+      // 只更新計數、不重畫清單：重畫會把捲動位置與搜尋焦點一起弄丟
+      renderScanCount(rows.length)
+    })
+    const text = document.createElement('span')
+    text.className = 'chat-scan-id'
+    text.textContent = id
+    label.append(box, text)
+    if (scanExisting.has(id)) {
+      const badge = document.createElement('span')
+      badge.className = 'chat-scan-badge'
+      badge.textContent = '已在清單'
+      label.appendChild(badge)
+    }
+    return label
+  })
+
+  scanListEl.replaceChildren(...items)
+  renderScanCount(rows.length)
+}
+
+/** 只作用在目前搜尋結果上，避免搜尋後按全選卻連沒看到的也一起勾 */
+function toggleScanAll(selected) {
+  const query = (scanSearchInput?.value || '').trim().toLowerCase()
+  const rows = query ? scanResults.filter((id) => id.toLowerCase().includes(query)) : scanResults
+  for (const id of rows) {
+    if (selected) scanSelected.add(id)
+    else scanSelected.delete(id)
+  }
+  renderScanList()
+}
+
+function applyScanSelection() {
+  const chosen = [...scanSelected]
+  if (!chosen.length) {
+    scanDialog?.close()
+    return
+  }
+  const merged = [...new Set([...readModelRows().models, ...chosen])]
+  const limited = merged.slice(0, MAX_PROVIDER_MODELS)
+  modelListEl?.replaceChildren()
+  for (const model of limited) appendModelRow(model)
+  scanDialog?.close()
+  const skipped = merged.length - limited.length
+  showToast(skipped > 0
+    ? `已加入模型（超過 ${MAX_PROVIDER_MODELS} 個上限，略過 ${skipped} 個）`
+    : `已加入 ${chosen.length} 個模型，記得按儲存設定`)
+}
+
+/** 名稱邊打邊反映到下拉，不用等儲存 */
+function syncProviderName() {
+  const provider = providerDraft.find((p) => p.id === draftId)
+  if (!provider) return
+  provider.name = providerNameInput?.value.trim() || ''
+  const option = [...(providerSelect?.options || [])].find((o) => o.value === draftId)
+  if (option) option.textContent = provider.name || '未命名供應商'
 }
 
 /**
@@ -973,29 +1494,53 @@ function readModelRows() {
 export async function loadChatSettings() {
   initChatPage()
   if (!apiUrlInput) return
-  const [apiUrl, apiKey, models] = await Promise.all([
-    electronAPI.store.get('chatApiUrl', DEFAULT_CHAT_API_URL),
-    electronAPI.store.get('chatApiKey', ''),
-    electronAPI.store.get('chatModels', [DEFAULT_CHAT_MODEL])
+  const [providers, activeId] = await Promise.all([
+    electronAPI.store.get('chatProviders', []),
+    electronAPI.store.get('chatProviderId', '')
   ])
-  apiUrlInput.value = apiUrl || DEFAULT_CHAT_API_URL
-  apiKeyInput.value = apiKey || ''
-  modelListEl?.replaceChildren()
-  const list = models.length ? models : [DEFAULT_CHAT_MODEL]
-  for (const model of list) appendModelRow(model)
+  // 深拷貝一份草稿：直接改 IPC 回來的物件不會有任何效果，反而容易誤以為已經存好了
+  providerDraft = (Array.isArray(providers) ? providers : []).map((p) => ({
+    id: p.id,
+    name: p.name || '',
+    apiUrl: p.apiUrl || '',
+    apiKey: p.apiKey || '',
+    models: Array.isArray(p.models) ? [...p.models] : []
+  }))
+  draftId = providerDraft.find((p) => p.id === activeId)?.id || providerDraft[0]?.id || ''
+  renderProviderSelect()
+  renderProviderFields()
+}
+
+/**
+ * 在任何設定落盤前先驗證聊天草稿，避免其他設定已寫入後才發現聊天欄位錯誤。
+ * @returns {{ ok: boolean, dropped: number }}
+ */
+export function validateChatSettings() {
+  if (!apiUrlInput) return { ok: true, dropped: 0 }
+  const dropped = captureProviderFields()
+
+  const bad = providerDraft.find((p) => p.apiUrl && !/^https?:\/\//i.test(p.apiUrl))
+  if (bad) {
+    showToast(`供應商「${bad.name || '未命名'}」的 API URL 要以 http:// 或 https:// 開頭`, 'error')
+    return { ok: false, dropped }
+  }
+  return { ok: true, dropped }
 }
 
 /**
  * 寫回聊天設定（chatModelId 由 main 在 chatModels 變更時自動收斂）
+ * @param {{ ok: boolean, dropped: number } | null} [validation]
  */
-export async function saveChatSettings() {
-  if (!apiUrlInput) return
-  const models = readModelRows()
-  await Promise.all([
-    electronAPI.store.set('chatApiUrl', apiUrlInput.value.trim() || DEFAULT_CHAT_API_URL),
-    electronAPI.store.set('chatApiKey', apiKeyInput.value.trim()),
-    electronAPI.store.set('chatModels', models.length ? models : [DEFAULT_CHAT_MODEL])
-  ])
+export async function saveChatSettings(validation = null) {
+  if (!apiUrlInput) return true
+  const checked = validation || validateChatSettings()
+  if (!checked.ok) return false
+
+  await electronAPI.store.set('chatProviders', providerDraft)
+  await electronAPI.store.set('chatProviderId', draftId)
+  // 空白與重複的模型列以前是靜默消失的，使用者只會看到自己打的東西不見
+  if (checked.dropped > 0) showToast(`已略過 ${checked.dropped} 個空白或重複的模型`)
   await refreshModelSelect()
   await refreshBanner()
+  return true
 }

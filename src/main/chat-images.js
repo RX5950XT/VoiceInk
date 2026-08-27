@@ -24,6 +24,9 @@ const EXT_MIME = { png: 'image/png', jpg: 'image/jpeg', webp: 'image/webp' }
 /** 檔名 allowlist：本模組自己產生的格式 */
 const NAME_RE = /^img_[0-9a-z]+_[0-9a-z]+\.(png|jpg|webp)$/
 
+/** 已寫進磁碟、還沒進 chats.json 的檔名。prune 必須跳過，否則並行刪對話會把新附件刪掉。 */
+const heldNames = new Set()
+
 function imagesDir() {
   return path.join(app.getPath('userData'), 'chat-images')
 }
@@ -90,6 +93,25 @@ async function toDataUrl(name) {
  * @param {Set<string>} keep 仍被引用的檔名
  * @returns {Promise<number>} 刪除數
  */
+/**
+ * 標記尚未寫進 chats.json 的新檔，prune 時視為仍被引用
+ * @param {string[]} names
+ */
+function hold(names) {
+  if (!Array.isArray(names)) return
+  for (const name of names) {
+    if (isValidName(name)) heldNames.add(name)
+  }
+}
+
+/**
+ * @param {string[]} names
+ */
+function release(names) {
+  if (!Array.isArray(names)) return
+  for (const name of names) heldNames.delete(name)
+}
+
 async function prune(keep) {
   let removed = 0
   const dir = imagesDir()
@@ -100,7 +122,7 @@ async function prune(keep) {
     return 0
   }
   for (const name of entries) {
-    if (keep.has(name)) continue
+    if (keep.has(name) || heldNames.has(name)) continue
     if (!isValidName(name)) continue
     try {
       await fs.unlink(path.join(dir, name))
@@ -116,6 +138,8 @@ module.exports = {
   saveMany,
   toDataUrl,
   prune,
+  hold,
+  release,
   isValidName,
   MAX_IMAGES_PER_MESSAGE,
   MAX_IMAGE_BYTES

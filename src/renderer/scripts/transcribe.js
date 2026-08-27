@@ -17,6 +17,7 @@ let transcribeOptions
 let outputLanguage
 let startTranscribeBtn
 let transcribeProgress
+let progressBar
 let progressFill
 let progressText
 let progressPercent
@@ -68,6 +69,7 @@ export function initTranscribe() {
   startTranscribeBtn = document.getElementById('startTranscribeBtn')
   transcribeProgress = document.getElementById('transcribeProgress')
   // 限定在進度面板內，避免日後其他 .progress-fill 搶到
+  progressBar = transcribeProgress.querySelector('.progress-bar')
   progressFill = transcribeProgress.querySelector('.progress-fill')
   progressText = transcribeProgress.querySelector('.progress-text')
   progressPercent = transcribeProgress.querySelector('.progress-percent')
@@ -170,6 +172,7 @@ function handleFileSelect(file) {
   const fileSize = fileInfo.querySelector('.file-size')
 
   fileName.textContent = file.name
+  fileName.title = file.name
   fileSize.textContent = formatFileSize(file.size)
 
   dropZone.classList.add('hidden')
@@ -442,6 +445,7 @@ async function translateLong(text, targetLang) {
 function updateProgress(percent, text) {
   const p = Math.max(0, Math.min(100, Math.round(percent)))
   if (progressFill) progressFill.style.width = p + '%'
+  if (progressBar) progressBar.setAttribute('aria-valuenow', String(p))
   if (progressText) progressText.textContent = text
   if (progressPercent) progressPercent.textContent = p + '%'
 }
@@ -460,6 +464,7 @@ function setupResultActions() {
 async function copyResult() {
   try {
     await navigator.clipboard.writeText(resultText.textContent)
+    showToast('已複製轉錄結果')
   } catch {
     showToast('複製失敗', 'error')
   }

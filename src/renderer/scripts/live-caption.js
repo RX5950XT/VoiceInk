@@ -192,6 +192,7 @@ async function startCapture() {
   // 重入防護：按鈕 disabled 遲至 getDisplayMedia 後才設，雙擊會起兩條錄音管線
   if (isCapturing || isStarting) return
   isStarting = true
+  updateUI()
   try {
     settings = await getSettings()
     targetLanguage = liveLanguage.value
@@ -280,7 +281,7 @@ async function startCapture() {
     }
   } finally {
     isStarting = false
-    startLiveBtn.disabled = false
+    updateUI()
   }
 }
 
@@ -627,9 +628,11 @@ async function stopCapture({ closeWindow = true } = {}) {
 
 function updateUI() {
   startLiveBtn.classList.toggle('hidden', isCapturing)
+  startLiveBtn.disabled = isStarting
   stopLiveBtn.classList.toggle('hidden', !isCapturing)
+  liveLanguage.disabled = isStarting || isCapturing
   liveStatus.classList.toggle('active', isCapturing)
-  statusText.textContent = isCapturing ? '擷取中' : '未啟動'
+  statusText.textContent = isCapturing ? '擷取中' : isStarting ? '準備中…' : '未啟動'
 
   if (isCapturing) {
     liveEngine.textContent = settings?.asrEngine === 'cloud'

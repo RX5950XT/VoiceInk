@@ -5,10 +5,11 @@
 
 ## 專案概況
 
-VoiceInk：Windows Electron AI 工作台（**聊天**＋**AI 訂閱額度**＋檔案轉錄＋即時字幕＋翻譯與 TTS）。Vanilla JS + Vite，無框架。
-已發行版本 **1.7.0**（Release `v1.7.0`：LinguaForge think 前綴修正、Q8／Q4 量化可選、譯文清理獨立模組）。
+VoiceInk：Windows Electron AI 工作台（**聊天**＋**AI 訂閱額度**＋**AGY 反向代理**＋檔案轉錄＋即時字幕＋翻譯與 TTS）。Vanilla JS + Vite，無框架。
+已發行版本 **1.8.0**（Release `v1.8.0`：聊天多供應商＋側欄整理、五家額度儀錶板、AGY 反向代理、即時字幕 PCM＋VAD、Aurora glass 視覺）。
 
-> **工作樹目前領先 v1.7.0**：已完成聊天／圖片／thinking、設定重整、即時字幕 PCM＋VAD、五家額度儀錶板；尚未 bump 版本／commit／發行。
+> v1.8.0 是這一輪的總結發行：聊天分頁（多供應商／圖片／thinking／側欄排序）、設定重整、
+> 即時字幕 PCM＋VAD、五家額度儀錶板、AGY 反向代理（雙協議＋日誌統計）都在裡面。
 > 要出貨時：bump `package.json` → commit → `git tag v1.8.0` → push → `electron:build` → `gh release create`。
 
 ## 架構
@@ -22,6 +23,8 @@ src/main/
   chat-images.js      圖片附件：存 <userData>/chat-images/，檔名 allowlist、孤兒回收
   usage/              五家額度 provider、bounded HTTPS／唯讀 SQLite／Credential Manager bridge、
                       獨立 usage store、6h soft cache、同步協調與受限 IPC
+  agy/                本機反向代理：node:http 閘道（127.0.0.1 + 強制金鑰）、OpenAI/Anthropic ⇄ Gemini
+                      雙向轉換、cloudcode-pa 上游（401 強制 refresh 重試）、node:sqlite 流量日誌與統計
   models.js           registry：qwen3asr、qwen35translate、linguaforge08(Q8)、linguaforge08q4(Q4)
   gpu-capability.js   NVIDIA VRAM 門檻（≥6GB）／cuda-env.js CUDA 偵測安裝
   local-asr.js        sherpa-onnx 本地 ASR（僅 CPU；asrThreads 可調執行緒）
@@ -39,23 +42,372 @@ src/renderer/scripts/
                       thinking 開關／訊息複製與重新生成）＋設定頁「聊天」區塊
   markdown.js         最小安全 Markdown → DocumentFragment（零 innerHTML）
   usage-page.js       額度卡片／倒數／手動同步／顯示設定／拖曳與鍵盤排序／去敏診斷
+  agy-page.js         反代服務控制／金鑰遮罩複製／統計（純 CSS 長條）／流量日誌表與篩選
 ```
 
 | 項目 | 說明 |
 |---|---|
-| 聊天 | 雲端 OpenAI 相容 `/chat/completions` + `stream:true`；`chatApiUrl`/`chatApiKey`/`chatModels`/`chatModelId`（與翻譯完全獨立） |
-| 聊天進階 | 系統提示多組 preset `chatPrompts`/`chatPromptId`；thinking `chatThinking` → `reasoning_effort`；圖片附件（訊息存檔名、實體在 `<userData>/chat-images/`） |
+| 聊天 | **多組供應商**：`chatProviders`（各帶 url／key／模型清單）＋`chatProviderId`＋`chatModelId`；雲端 OpenAI 相容 `/chat/completions` + `stream:true`（與翻譯完全獨立） |
+| 聊天進階 | 系統提示多組 preset `chatPrompts`/`chatPromptId`；thinking `chatThinking` → `reasoning_effort`；圖片附件（訊息存檔名、實體在 `<userData>/chat-images/`）；側欄就地改名／逐列刪除／拖曳排序（`chat:reorder`） |
 | 額度 | Claude Code／Codex／Antigravity／OpenCode／Grok；只在按「同步」時查詢；獨立 `<userData>/usage.json`、6h soft cache；Main-only 固定來源 |
+| AGY 反代 | OpenAI `/v1/chat/completions` + Anthropic `/v1/messages` → cloudcode-pa `v1internal:streamGenerateContent`；只綁 `127.0.0.1`＋強制金鑰；設定走 `agy:*`（不進 `STORE_ALLOWLIST`）；日誌 `<userData>/agy-logs.db` |
 | ASR | `asrEngine` = local（Qwen3-ASR-0.6B，**只有 CPU**，`asrThreads` 0=自動/2/4/8）/ cloud（`asrApiUrl`/`asrApiKey`/`asrModelId`） |
 | 翻譯 | `translator` = cloud / local；`localTranslateModel` = `linguaforge08`(Q8，預設) / `linguaforge08q4`(Q4) / `qwen35translate`；`llmGpu` |
 | 即時字幕 | 系統 loopback → AudioContext 16k mono PCM → 能量 VAD 依停頓切 0.5–6s 語句 → ASR；pending 上限 2 |
 | TTS | Edge TTS；`ttsVoices` + `ttsRate`（-50…100 → Edge rate %） |
 | 設定 UI | 導航最後一 tab；**左側分類 rail** 一次顯示一區：模型／翻譯／聊天／語音轉文字／外觀／語音朗讀 + 底部 sticky 儲存列 |
-| 導覽 | 聊天（預設頁）｜額度｜檔案轉錄｜即時字幕｜翻譯與 TTS｜設定 |
+| 導覽 | 聊天（預設頁）｜額度｜AGY反代｜檔案轉錄｜即時字幕｜翻譯與 TTS｜設定 |
 | 視窗 | 主窗 frameless（header 含 min/max/close）；字幕彈窗獨佔顯示模式 |
 | 視覺 | Token Anxiety Aurora glass；dark/light 共用 12px surface、blur、冷藍／暖金光暈；900／640px RWD |
 
 模型存放：`%APPDATA%/voiceink/models/<key>/`。
+
+## 最近變更（2026-08-25）— 再開一次啟動
+
+上一輪只延後 CUDA／AGY，主行程仍同步 require 全部模組、視窗等 store、asar.unpacked 有 447MB DLL（Defender 掃很久）。
+
+- `whenReady` 立刻建窗 `show: true`，theme 只 peek `config.json`，不 await electron-store。
+- ASR／LLM／引擎／額度／AGY／CUDA／TTS 第一次 IPC 才 require；AGY 僅在 `agyEnabled` 時才於第一幀後 autoStart。
+- 非聊天分頁改 dynamic import；即時字幕進頁才寫 hint。
+- `asar.smartUnpack: false`，否則 builder 會自動把 ffmpeg.exe／`.node` 整包解開。ffmpeg 拷到 `%APPDATA%/voiceink/native/ffmpeg.exe`；CUDA／Vulkan 拷到 `%APPDATA%/voiceink/native-modules/`（**禁止寫安裝目錄**）。
+- 量時間：`node scripts/probe-startup.js`。剛打包第一次 ~21s（Defender 掃新 asar）；第二次 **434ms**（whenReady 46ms）。unpacked 從 447MB → 66.5MB。
+
+## 最近變更（2026-08-27）— 聊天頁版面重整＋側欄排序
+
+- **上方工具列整排移除**：標題輸入框、系統提示、模型選單、刪除鈕原本擠在訊息串上方。
+  系統提示（含 ⚙ 管理鈕）與模型選單搬到輸入框那一排，刪除搬到側欄，標題輸入框由側欄
+  就地改名取代 → `.chat-main` 頂端只剩 banner。
+- **側欄每一列**：開啟鈕 ＋ 改名（✎）＋ 刪除（🗑），兩顆 icon 鈕平常 `opacity: 0`，
+  hover／active／focus-within 才浮出。刪除是**就地二次確認**：第一次按變成紅色的勾（`.is-armed`），
+  3 秒內再按一次才真的刪，逾時自動復原；`renderList` 重畫前先 `disarmDelete()` 收掉計時器。
+  刻意不用 `window.confirm`——原生彈窗會擋住整個 App，樣式也跟 Aurora 完全不搭。
+- **就地改名**：`.chat-list-title` 換成 `.chat-list-rename` 輸入框，Enter／失焦送出、Esc 取消；
+  輸入框自己吃掉 `pointerdown`，否則打字中的拖曳會被當成排序。
+- **拖曳排序**：pointer 直拖（4px 門檻），碰撞沿用 `usage-reorder.js` 的 `pickCollision`
+  （pointerWithin → closestCenter，直的橫的都能用），拖曳中直接 `before/after` 換位置，
+  放開才 `chat:reorder` 落盤一次。另有 Alt+↑／↓ 鍵盤排序。
+  搜尋狀態下用 `mergeVisibleOrder` 把沒顯示的那些塞回原相對位置，不會因為過濾就掉順序。
+- **main**：`chat-store.list()` 不再依 `updatedAt` 排序（陣列順序＝顯示順序）、`create()` 改 `unshift`、
+  新增 `reorder(ids)`（只接受既有 id，未列到的附在後面）；`writeAll` 超過上限時改成 `filter`
+  掉 `updatedAt` 最舊的，避免把手動順序洗掉。
+- **AGY 日誌不再被測試清空**：`e2e-agy-cdp.js` 跑在正式 profile 上，原本會呼叫 `clearLogs()`
+  把真實流量與統計整個刪掉。改成只驗按鈕存在；清空行為由 `e2e-agy.js`（自己開暫存 DB）覆蓋。
+- 驗證：`npx electron scripts/e2e-chat.js` 117（新增 [E2] 側欄手動排序 7 條）、
+  `node scripts/e2e-chat-cdp.js` 42（新增版面與側欄 10 條）、smoke 22、visual 43。
+
+## 最近變更（2026-08-27）— AGY 統計面板與客戶端提示
+
+- **客戶端提示**：服務控制區新增可摺疊的「客戶端怎麼填？」，把兩組 Base URL 分開列——
+  Claude Code／CC Switch 用 `anthropicBaseUrl`（根位址，附「不要加 `/v1`」的說明與原因），
+  OpenAI 相容工具用 `baseUrl`（帶 `/v1`）。頁面原本只顯示帶 `/v1` 的那一組，旁邊卻寫著
+  「Claude Code 用 ANTHROPIC_BASE_URL」，等於直接把人導向 404。
+- **統計時間範圍**：6 小時／24 小時／7 天／30 天／全部。範圍是 main 的白名單
+  （`logs.STAT_RANGES`），renderer 只送 key；summary／series／models 三者套同一個 cutoff。
+- **序列補零**（`fillSeries`）：SQL 只回「有資料的桶」，先前 3 筆請求會被攤成整條 24 小時軸，
+  看起來像整天都在跑。≤48h 用小時桶、其餘用天桶，最多 96 格。
+- **圖表 hover 顯示數量**：自訂 tooltip（次數／時間／tokens），取代原本的原生 `title`；
+  位置夾在圖表寬度內，`pointerleave` 收起。
+- **模型分佈改成上下堆疊**：左右並排時模型名全被擠成省略號；堆疊後用
+  `repeat(auto-fit, minmax(220px, 1fr))`，寬螢幕自然排成多欄。
+- **省空間**：統計卡 padding 14→10、數值 24→20px；長條圖 132→108px；圖表間距 18→12px。
+- 修掉 `.agy-model-row` 與「可用模型」面板撞名（統計那份改名 `.agy-dist-row`）——
+  後面那份把分佈列改成 flex row，進度條整條看不見。
+- 驗證：`e2e-agy.js` 90（含補零／天桶／未知 range 退回預設）、`e2e-agy-cdp.js` 33
+  （含兩組 Base URL、堆疊排版、範圍切換、hover 數值）、`e2e-visual-cdp.js` 43、smoke 22。
+
+## 最近變更（2026-08-27）— AGY 接 Claude Code（CC Switch）
+
+真實 Claude Code CLI 打 AGY 一律 `502 UPSTREAM_400`，只有一般聊天正常。原因不在鑑權也不在協議轉換，
+而是 `sanitizeSchema` 的白名單只擋「欄位名不對」，擋不住「欄位名對、型別不對」——
+Claude Code 一次送 195 個 MCP 工具，其中三支寫法不合 Gemini 的 Schema proto，整包請求就 400，所有工具一起陣亡：
+
+| 客戶端寫法 | 上游錯誤 | 修法 |
+|---|---|---|
+| `type: ['string','null']` | `Unknown name "type" ... Proto field is not repeating` | 取第一個非 null 型別＋`nullable: true` |
+| `{type:'boolean', enum:[true]}`（anyOf 判別欄位） | `Invalid value at ...value.enum[0]` | enum 只留「字串陣列＋`type:'string'`」，其餘剝掉 |
+| `anyOf: [X, {type:'null'}]` | 同上（null 變體變空殼 object） | null 那支換成 `nullable`；只剩一支就攤平 |
+
+- 單一修改點在 `agy/gemini.js` 的 `sanitizeSchema`（兩個協議共用）；回歸測試 `test-agy-mappers.js` 加三條（50 passed）。
+- 除錯手法可重用：用 20 行 mock server 錄下 Claude Code 真正送的 body（`/v1/messages?beta=true`，約 300KB／195 tools），
+  再把每個工具的 sanitize 結果拿去比對 Gemini Schema proto 的欄位規則（靜態掃描 390 個工具 → 0 問題），不必每次都打上游。
+- CC Switch 設定（`~/.cc-switch/cc-switch.db` 的 `providers` 表，`app_type='claude'`）：
+  `ANTHROPIC_BASE_URL` **不能帶 `/v1`**（Claude Code 自己會接 `/v1/messages`，帶了就 404）；
+  非 Claude 模型名要加 `[1m]` 後綴才不會被當成 200k 窗口（後綴由 CLI 自己剝掉，不會送到上游）。
+- 驗證：`claude -p` 實跑純文字與工具呼叫（Read）各一次，經 AGY → cloudcode-pa 全鏈路通過。
+
+## 最近變更（2026-08-25）— 額度拖曳閃爍 ＋ AGY 模型名稱排序
+
+- 額度卡拖曳：跟手 overlay + 格子鬼影；拖曳中只 `translate3d` 到靜態槽位（不 `appendChild`、不拿動畫中的 rect 做碰撞），放開才改 DOM。這才是 Token Anxiety／dnd-kit 的模型，先前 FLIP+重排 DOM 會卡頓閃爍。
+- AGY「可用模型」：Claude 池（含 GPT OSS）在前、Gemini 在後；世代由新到舊，Gemini 同代依思考強度 high → medium → tiered → low → extra-low → lite（`pro-agent` 無世代號排最後）。
+- 驗證：`test-usage-reorder.js` 10；`test-agy-mappers.js` 46。
+
+## 最近變更（2026-08-24）— 完整應用程式測試與安全依賴更新
+
+- Electron `35.7.5` 升到固定版 `43.4.1`；`electron-builder`／Vite 等相容範圍內依賴更新，`npm audit`（含 dev）為 0。
+- 修正 `probe-prompt-path.js` 預設把 Q4 檔名接到 Q8 資料夾的錯誤；修正 `e2e-cdp-smoke.js` 啟動期間分頁被初始化流程洗回聊天頁的 race（22/22）。
+- 核心回歸：AGY main 79、聊天 main 110、額度 29、mapper 44、error hygiene 32、Markdown 23、VAD 11、ASR threads 10、engine audit 15，全部通過。
+- 本機推論：Q8／Q4／Qwen3.5 的 CPU＋CUDA、六方向翻譯、長文／條列／污染、30 句 wrapper 品質門檻全部通過；即時 loopback → VAD → ASR → 字幕 6/6。
+- 打包版：visual 43、chat CDP 32、usage CDP 9、AGY CDP 26、smoke 22，全部通過；七頁在副螢幕 `DISPLAY10` 實際截圖，無水平 overflow／白黑屏。
+- 真實整合：五家額度 6/6；AGY 21 模型 sandbox／daily 皆 200，prod 429 為已知端點差異；budget-0 名單全對齊。
+- 正式 profile 測前快照、測後還原；`config/chats/usage` hash 一致，AGY DB 邏輯資料一致。桌面 QA 若使用者同時操作電腦，只能用 CDP／視窗 API 定位，不得移動滑鼠、發全域快捷鍵或搶焦點。
+
+已知測試限制：固定 `scripts/test-sample.wav` 在目前 ASR 回空字串，內容正確性由 Edge TTS 往返樣本驗證；大量反覆切換 LLM backend 時測試程序會出現 `MaxListenersExceededWarning`，未造成推論／卸載失敗，來源是刻意不 dispose 的 node-llama-cpp binding。
+
+## 最近變更（2026-08-21）— 第二輪掃描（額度中斷後接續）
+
+Claude session `349067c5` 在派出 6 個子代理後因 session limit 中斷。本輪重跑掃描並修真 bug。
+
+| 嚴重度 | 項目 | 處置 |
+|---|---|---|
+| 高 | Antigravity API 失敗（空窗、status=connected）仍 `mergeExpectedWindows` → 四條 100% | 只在 `windows.length > 0` 時 merge；空窗走 6h soft cache |
+| 高 | 長文翻譯中途切頁：分段迴圈續打 IPC、LLM 幽靈重載、「停止」被 disable | cooldown 作廢 `_translateRequestId`；翻譯中維持可點停止 |
+| 中 | 重新生成先砍舊助理再 fetch，失敗就丟回覆 | 記憶體剝尾端再打 API，有新內容才落盤 |
+| 中 | `chats.json` 無序列鎖；新圖尚未入 json 就被 prune | `withStore`；`chatImages.hold` |
+| 中 | 檔案轉錄 pause 形同虛設；Duration N/A 無硬上限 | 排隊段數≤2；`samplesDone`／片段數套 4h |
+| 中 | AGY 非 2xx 不消耗 body | `discardResponse` |
+| 中 | `fetchAvailableModels` 失敗整筆丢掉 summary | models 改 `required: false` |
+| 中 | AGY 切走後 5s 輪詢仍打 DB | `pageGen` ＋頁面仍 active 才 `startPolling` |
+| 中 | 聊天 API URL 不合法時成功 toast 蓋掉錯誤 | `saveChatSettings` 回 boolean |
+| UI | 深色主按鈕白字 2.73:1；淺色 tertiary／accent／語意色不足；窄屏 nav 無 aria-label | token 加深、深色鈕改深色字、nav／錯誤列／toast 補 aria |
+
+未修（明確不是這次範圍，或證據不足當產品取捨）：OpenCode 倒數用 UTC（測試鎖定；UI 未標時區）、Edge TTS 取消不關 WebSocket（library 限制）、雲端轉錄取消不 abort 當下 fetch、標題階層跳級、訊息動作鈕 <24px。
+
+驗證：`node scripts/test-usage.js` 29；`npx electron scripts/e2e-chat.js` 110；`npx electron scripts/e2e-agy.js` 79；`node scripts/test-agy-mappers.js` 44；`node scripts/test-error-hygiene.js` 32。
+
+## 最近變更（2026-08-21）— 掃描後續：錯誤訊息衛生與輸入校驗
+
+第一輪掃描列為「沒動、但值得知道的」七項，逐一評估後全部處理。
+
+| # | 位置 | 是不是 bug | 處置 |
+|---|---|---|---|
+| 1 | `cloud-asr.js` `classifyHttpError` | **是**（會外洩） | 4xx 分支原本把 200 字上游 body 併進使用者可見訊息。實測：mock 上游回夾帶 `Bearer sk-…` 的 body，UI 訊息原樣印出三個假 token。改成只留狀態碼＋可行動說明，並補 404 分支 |
+| 2 | `local-llm.js` 雲端翻譯 | **是**（會外洩） | `data.error.message` 直接透傳、無法解析時另加 120 字 preview。同上處理，`console.error` 只記狀態碼 |
+| 3 | `main.js` `subtitleWindowBounds` | **是**（校驗缺口） | allowlist 裡唯一沒 sanitize 卻直接進 `new BrowserWindow()` 的 key。新增 `sanitizeSubtitleBounds`，`store:set` 與 `createSubtitleWindow` 兩邊都走 |
+| 4 | `app.js` `renderModelItem` | 不是（但破例） | 值全來自寫死的 registry，不可利用；但這是 renderer 唯一一處 `innerHTML` 插值。改成 createElement + textContent |
+| 5 | `preload.js` 三個 `on*` | 不是 | 三個註冊點都在 DOMContentLoaded 只跑一次，沒有實際洩漏。仍補上 unsubscribe 讓八個 `on*` 一致 |
+| 6 | `agy/anthropic.js` `errorStream` | 防禦性 | 沒有實測失敗（TS SDK 遇 `event: error` 會先丟例外）。仍在錯誤格前補 `closeBlock`，追蹤區塊狀態的客戶端才不會停在半開 |
+| 7 | `usage/opencode.js` `queryLatestReset` | 不是（死碼） | 「小於 1e12 就當秒」的對沖永遠觸發不到（篩選條件用的就是毫秒）。實測本機 db 4084 列、max=1781098765082 確認是毫秒，移除對沖 |
+
+新測試 `scripts/test-error-hygiene.js`（32 checks，node 直跑）：修復前 8 紅、修復後全綠。
+`e2e-cdp-smoke.js` 加一條 `model list rendered without innerHTML`（21 → 22 checks）。
+
+## 最近變更（2026-08-21）— 全庫 bug 掃描修正三則
+
+### 1. Antigravity 額度：憑空的「100% 已用盡」被標成官方資料（嚴重）
+
+`syncAntigravity` 在回傳前先跑了一次 `mergeExpectedWindows(result.windows, null)`。
+補視窗這件事需要「上一次的快取」才做得對，而只有 `usage/index.js` 的 `mergeAccountState`
+拿得到 previous。先補一輪的後果是兩層都壞：
+
+- 上游沒回的視窗被寫成 `100/100`（UI 顯示「已用盡」），快取裡的真實值撿不回來
+- index 那層看到四個 id 都已存在 → `restoredAntigravity` 恆為 false
+  → accuracy 不會降級成 `estimated`，卡片仍寫「官方 API · 已讀取真實額度」
+
+實測：上游只回 Gemini 時，Claude 兩條顯示 100% 用盡且標官方；
+上游完全沒回額度時四條全是假的 100%。
+**修法**：`syncAntigravity` 只回上游真的給的視窗，補齊交給 `mergeAccountState`。
+
+### 2. 聊天：`inflight` 守衛是 TOCTOU，併發請求會一起放行
+
+`if (inflight) return` 是同步檢查，但 `inflight = {...}` 排在四個 `await` 之後
+（讀對話／存圖片／寫使用者訊息）。同一個 tick 送兩則時兩個都通過守衛：
+兩條上游串流、兩則使用者訊息連著寫進同一個對話，先開的那條被後者覆蓋掉——
+「停止」按鈕 abort 不到它，首 token／閒置計時器還會去改到別人的 `reason`。
+**修法**：守衛通過後立刻建 controller 並佔位，其餘全部包進 `try`，`finally` 統一清。
+
+### 3. AGY：`count_tokens` 把上游狀態碼原樣透傳
+
+其他端點都走 `statusFor`（只有 429 透傳、其餘收斂成 502），只有 `handleCountTokens`
+自己寫 `error.status >= 400 ? error.status : 502`。實測上游 401／403／500 分別原樣回
+401／403／500。Claude Code CLI 正是靠 count_tokens 估上下文，收到 401 會誤判成
+自己的 API key 壞了。**修法**：改走 `statusFor`，並補上 `retry-after`。
+
+### 驗證
+
+- `node scripts/test-usage.js` 25（新增「Antigravity 同步只回上游真的給的視窗」）
+- `npx electron scripts/e2e-chat.js` 108（新增「無 inflight 時同 tick 併發」5 條）
+- `npx electron scripts/e2e-agy.js` 79（新增 count_tokens 錯誤路徑 5 條）
+- 三條新測試都確認過「修復前紅、修復後綠」
+
+## 最近變更（2026-08-21）— 憑證過期判定與失敗訊息
+
+### 症狀
+
+「可用模型」按重新查詢跳出「反向代理操作失敗」。
+
+### 根因（兩層，都是自己造的）
+
+1. **還沒過期的 token 被自己作廢**。`tokenIsStale` 的 15 分鐘是「該去續期了」的提前量；
+   沒有 `ANTIGRAVITY_CLIENT_ID`／`SECRET` 時 refresh 必然回 null，
+   舊的 `loadToken` 把「refresh 拿不到」直接當成過期拋 `TOKEN_EXPIRED`——
+   實測當下憑證還有 7 分鐘壽命，等於每個 token 的最後 15 分鐘都用不了。
+   額度頁的 `syncAntigravity` 本來就會退回舊 token 繼續用，只有反代這條路徑硬失敗。
+2. **訊息什麼都沒說**。`agy:*` IPC 把所有錯誤收斂成「反向代理操作失敗」，
+   而狀態面板那份「憑證怎麼修」的指引只在**服務執行中**才渲染——
+   服務沒開時憑證壞掉，整頁一個字都不會提。
+
+### 修法
+
+- `credential.loadToken`：refresh 失敗後檢查真實 expiry，還沒到就照用；
+  `mustRefresh`（上游 401）是唯一例外，那種 token 本機 expiry 寫什麼都不算數
+- `CredentialError` 帶 `userMessage`，`agy/ipc.js` 只轉送有這個欄位的訊息（白名單，不是黑名單）
+- `index.js status()` 停止中仍回 `sources`（只是 fs 檢查）
+- `agy-page.loadModels` 失敗碼屬憑證類時，自己叫出 `#agyCredentialHelp` 並捲到可視範圍；
+  用 `credentialHint` 讓它撐過下一輪 `renderStatus`，憑證真的連上才清掉
+
+### 驗證
+
+- `npx electron scripts/e2e-agy.js` 75（新增「憑證過期判定」4 條、「IPC 錯誤訊息白名單」5 條、「服務停止中的狀態」2 條）
+- `node scripts/e2e-agy-cdp.js` 23（打包版在**真的壞掉的狀態下**跑：確認訊息說是憑證問題並同時顯示指引）
+- 修前／修後對照：`credential.status()` 由 `TOKEN_EXPIRED` 變 `connected: true`，型錄回 28 個模型（23 個對話可用）
+
+## 最近變更（2026-08-21）— 聊天多供應商 ＋ 模型清單即時化
+
+### 聊天：多組供應商
+
+設定從四個扁平 key 改成陣列，一次性搬移（舊 key 寫入成功才刪）：
+
+```js
+chatProviders: [{ id, name, apiUrl, apiKey, models: [...] }]
+chatProviderId  // 目前選的
+chatModelId     // 必須 ∈ 目前那組供應商的 models
+```
+
+信任邊界不變：renderer 仍只送 `{reqId, conversationId, text, images?}`。
+**模型驗證的基準是「目前這組供應商」**——只檢查「在不在任何清單裡」的話，
+切到 B 之後還能拿 A 的模型名打 B 的端點（e2e caseK 專門擋這件事）。
+
+`sanitizeProviders` 遇到不合法的 apiUrl **保留該筆、只清空 url**：
+這個函式也跑在存檔路徑上，整筆丟掉等於打錯一個字就刪掉 API Key 與整份模型清單。
+
+### 聊天：模型掃描
+
+`chat:scanModels(providerId)` → main 用 store 裡的網址金鑰打 `GET {apiUrl}/models`。
+逾時 15s、回應上限 2MB、模型數上限 500、錯誤只回 `{code, error}`。
+**收 providerId 而不是 URL**，否則等於開一個任意網址代理。
+副作用是掃描前會把草稿寫進 store（main 得讀得到），UI 提示已寫明。
+
+結果走彈窗搜尋勾選，不直接覆蓋既有清單（OpenRouter 一次回 300+）。
+
+### AGY：模型清單改成即時查詢
+
+上游端點 `v1internal:fetchAvailableModels`，body 送 `{}`。
+**回的 `models` 是以 model id 為 key 的物件，不是陣列**——用 `Array.isArray` 判斷會靜默拿到空清單。
+
+`agy/catalog.js` 負責解析／過濾／快取（10 分鐘）：
+
+- 對話可用性用 `maxTokens >= 100000 && maxOutputTokens > 0` 判斷，不用黑名單（黑名單會隨上游新增而過期）
+- 實測 28 個模型裡濾掉 5 個 IDE 內部用的（`tab_*`、`chat_*`、`*-flash-image`）
+- `deprecatedModelIds` 帶出接替者（`gemini-3.1-pro-high` → `gemini-pro-agent`）
+
+反代的 `/v1/models` 改用即時清單，**但撈不到時退回靜態表**：
+客戶端拿它填模型下拉，回空清單比回舊清單更糟。
+
+AGY 頁新增「可用模型」面板：進頁不自動查（那是一次真實往返），
+按鈕才查；顯示剩餘額度／context 上限／提供者，**模型 ID 本身就是複製鈕**。
+
+### 映射表重建（實測驗證過）
+
+`UPSTREAM_MODELS` 換成型錄的即時內容，映射目的地全部改指最新世代。
+**每個目的地都跑過 `scripts/probe-agy-upstream.js` 實測 200 才寫進表**，過程中抓到三個問題：
+
+| 問題 | 真相 |
+|---|---|
+| `gemini-3.6-flash-*` 回 400 `Request contains an invalid argument` | 不是壞掉，是**拒絕 `thinkingBudget: 0`**，只是錯誤訊息跟別人不同 |
+| `gemini-2.5-pro` 回 503 `No capacity available` | 型錄裡有但實際不可用 → 移出清單 |
+| `gpt-oss-120b-medium` 拒絕 budget 0 | 漏列 `REJECTS_ZERO_BUDGET` |
+
+`THINKING_ONLY_MODELS` 更名為 `REJECTS_ZERO_BUDGET`（`allowsThinkingOff` → `allowsZeroThinkingBudget`）：
+3.6-flash 照樣能關思考，它只是不接受把預算設成 0，原名會誤導。
+
+另一個修正：**映射表不可覆蓋真實存在的上游 id**。
+我一度把 `gemini-3-flash` 導向 3.7，但它上游真的有——使用者指名就該用它，
+表裡只放上游查無此名的。
+
+### UI 修復
+
+模型清單空列的 placeholder 原本是 `DEFAULT_CHAT_MODEL`，
+新增出來的列跟上一列文字一字不差、只差灰色，看起來像壞掉的重複項；
+存檔時又被 `filter(Boolean)` 靜默丟掉。改成中性字樣＋自動 focus＋略過時給提示＋同組去重。
+
+### 驗證
+
+- `npx electron scripts/e2e-chat.js` 103／`npx electron scripts/e2e-agy.js` 64／`node scripts/test-agy-mappers.js` 44
+- `node scripts/e2e-chat-cdp.js` 32（新增，打包版；全程只動草稿，測完還原真實設定）
+- `node scripts/e2e-agy-cdp.js` 26（含模型面板對真實上游：23 個對話可用 / 28 個全部）
+- smoke 21／visual 43／usage-cdp 9／usage 24／markdown 23／VAD 11／reorder 9
+- 搬移實測：造一個帶非空 API Key 的舊狀態啟動打包版，Key 一字不差、兩個模型都在、選中的第二個模型沒被重設、舊 key 清乾淨
+
+## 最近變更（2026-08-21）— AGY 反向代理頁
+
+移植 [Antigravity-Manager](https://github.com/lbjlaq/Antigravity-Manager)（Tauri/Rust）的三項功能：API 反向代理、流量日誌、統計。第三個 nav 分頁「AGY反代」。
+
+**範圍決策**（其餘刻意不做：多帳號輪換、Gemini 原生入口、圖片生成／音訊端點、thinking signature、cache_control、IP 白名單、限流）
+
+- 協議入口：OpenAI `/v1/chat/completions`＋Anthropic `/v1/messages`
+- 帳號：只用本機 Antigravity 憑證（單帳號，與額度頁共用 `usage/antigravity.js` 的憑證鏈）
+- 安全：只綁 `127.0.0.1`＋強制 `Authorization: Bearer` 或 `x-api-key`
+- 日誌：預設只記 metadata，除錯模式才記截斷 8KB 的 body
+- 模型：內建映射表（移植自 `model_mapping.rs`）＋未知透傳
+
+**模組**（`src/main/agy/`，每檔 ≤300 行）
+
+| 檔案 | 職責 |
+|---|---|
+| `index.js` | 服務門面：start／stop／**shutdown**／status／saveSettings／logs／stats |
+| `server.js` | node:http、路由、`timingSafeEqual` 鑑權、Host 檢查、32MB body 上限、SSE 寫出 |
+| `credential.js` | token／project 記憶體快取、in-flight 合併、401 強制 refresh |
+| `upstream.js` | cloudcode-pa 呼叫、SSE 行解析、401 重試一次、首 token 60s／閒置 120s 雙計時器 |
+| `gemini.js` | 兩協議共用：`response` 信封拆解、usage 新舊格式、parts 分類、JSON Schema 白名單 |
+| `openai.js` / `anthropic.js` | 各自的雙向轉換（含串流狀態機） |
+| `model-map.js` | 精確表 → 前綴規則 → 透傳；`..` 一律擋 |
+| `logs.js` | node:sqlite 寫入／聚合／保留天數清理，**所有操作都可失敗** |
+| `ipc.js` | `agy:*`，僅主視窗 |
+
+**實作過程修掉的三個真問題**
+
+1. **401 重試無效**：`invalidateToken()` 只清記憶體快取，下一輪看本機憑證檔 `expiry` 還沒到，就把同一個被上游拒絕的 token 再送一次 → 加 `mustRefresh` 旗標強制走 refresh。
+2. **上游狀態碼直接透傳**：上游回 401 會讓客戶端誤判自己的 API key 有問題 → 只有 429（含 `retry-after`）原樣回，其餘收斂成 502。
+3. **模型名 `..` 可透傳**：`/` 要放行（`google/gemini-3-flash`），但 `..` 沒有正當用途，先擋掉（AGY 的 Gemini 原生入口就是把 model 放進 URL 路徑）。
+
+**驗證**
+
+- `node scripts/test-agy-mappers.js` 42/42｜`npx electron scripts/e2e-agy.js` 42/42（mock cloudcode-pa）｜`node scripts/e2e-agy-cdp.js` 19/19（打包版）
+- 全回歸：視覺 43/43（含 agy × dark/light × 1440/900/560）、smoke 21/21、usage CDP 9/9、usage unit 24/24、chat 70/70、Markdown 23/23、VAD 11/11、reorder 9/9
+- **真實上游已驗證**（`npx electron scripts/probe-agy-upstream.js`）：OpenAI 串流／Anthropic 串流／countTokens 三條路都拿到真實回應，`response` 信封與 usage 舊格式解析正確。
+
+### 真實往返揪出的四個移植錯誤
+
+照著 AGY 原始碼移植但**沒照它的實測結論**，四處都是 mock 測不出來的：
+
+| 錯誤 | 症狀 | 修正 |
+|---|---|---|
+| 只打 prod 端點 | 429 RESOURCE_EXHAUSTED | 端點順序 sandbox → daily → prod，可重試狀態才往下換 |
+| 送 `x-goog-user-project` | 每個端點都 403 SERVICE_DISABLED | 不送這個 header，project 只放 body |
+| `thinkingBudget: 0` 一律送 | thinking-only 模型 400 Budget 0 is invalid | 只送給實測接受的模型（`THINKING_ONLY_MODELS`） |
+| 映射目標抄 AGY 的表 | `gemini-3-pro-preview`／`claude-sonnet-4-6-thinking` 回 404 | 全部改指實測 200 的模型；`DEFAULT_MODEL` → `gemini-3-flash` |
+
+模型可用性隨帳號方案而異（本機為 Google AI Pro）。**改映射表前先跑 `scripts/probe-agy-upstream.js`**，它會列出模型 × 端點矩陣，並比對 `THINKING_ONLY_MODELS` 與現實是否一致。
+
+### 憑證來源：CLI 或 IDE，誰在跑誰續期
+
+`gemini:antigravity` 這份 Credential Manager 憑證由 **Antigravity CLI（`agy.exe`）或 Antigravity IDE** 維護，
+VoiceInk **只讀不寫**（`grep cmdkey|CredWrite|Write-*Credential` 全無）。所以：
+
+- **只裝 CLI、沒裝 IDE 完全可用**——本機實測就是這個組合（`%LOCALAPPDATA%\\agy\\bin\\agy.exe` 存在、
+  `%LOCALAPPDATA%\\Programs\\Antigravity` 是解除安裝留下的**空目錄**）。
+- 顯示 `TOKEN_EXPIRED` 通常只代表 CLI／IDE 一陣子沒跑，不是壞了；跑一次 CLI 就會續期。
+- `credential.detectSources()` 據此判斷該給什麼指引，**只認執行檔不認資料夾**（空目錄會誤判）。
+  回傳只有 `{cli, ide}` 兩個布林值，不含路徑，可安全過 IPC。
+- 頁面在憑證不可用時顯示 `#agyCredentialHelp` 引導區塊（未安裝／未登入／token 過期三種文案）。
+
+**刻意不做瀏覽器 OAuth 登入**：Antigravity-Manager 的三種加帳號方式（OAuth 授權／貼 Refresh Token／
+從資料庫匯入）**全都需要 Google OAuth 的 client_id + client_secret**——連「貼 refresh token」也要，
+因為換 access token 時得帶 client 憑證。那組值是 Antigravity IDE 的 public desktop client，不是我們的，
+且 `GOCSPX-` 會被 GitHub secret scanning 攔。決議：只做偵測與引導，把使用者導回官方 CLI。
+
+要讓本機自行 refresh 仍可設 `ANTIGRAVITY_CLIENT_ID`／`ANTIGRAVITY_CLIENT_SECRET` 環境變數
+（額度頁既有機制），但平常不需要。
 
 ## 最近變更（2026-08-21）— 額度頁 2 欄與拖曳手感
 
@@ -254,6 +606,7 @@ App 從「語音工具」擴為「AI 工作台」。此階段先完成聊天；�
 
 | 日期 | 內容 |
 |---|---|
+| 2026-08-26 | AGY 憑證 `mustRefresh` 永久卡死修復；AGY「測試連線」（`agy:test`，loopback 真打一次上游）；額度頂部橫條跟隨顯示設定；四家訂閱方案（Claude `subscriptionType`／Codex id_token claim／Grok token `tier`／Antigravity tier）|
 | 2026-08-20 | 五家額度儀錶板：手動同步、Main-only providers、唯讀 SQLite／Credential Manager、快取／排序／診斷 |
 | 2026-08-20 | 即時字幕改 16k PCM 直取＋VAD 停頓切句；字幕窗增量安全 DOM／保留手動捲動 |
 | 2026-08-01 | LinguaForge v5e 模型路徑（舊 v3 作廢） |

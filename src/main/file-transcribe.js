@@ -43,6 +43,17 @@ function resolveFfmpegPath() {
   if (typeof bin !== 'string' || !bin) {
     throw new Error('ffmpeg-static 未正確安裝')
   }
+  // 打包後 ffmpeg 留在 asar（不進 asar.unpacked，少 80MB 給 Defender 掃）。
+  // spawn 不能執行 asar 內檔案，第一次轉錄拷到 userData。
+  if (/app\.asar(?!\.unpacked)/.test(bin)) {
+    const { app } = require('electron')
+    const dest = path.join(app.getPath('userData'), 'native', 'ffmpeg.exe')
+    if (!fs.existsSync(dest) || fs.statSync(dest).size === 0) {
+      fs.mkdirSync(path.dirname(dest), { recursive: true })
+      fs.copyFileSync(bin, dest)
+    }
+    return dest
+  }
   bin = bin.replace(/app\.asar(?!\.unpacked)/g, 'app.asar.unpacked')
   if (!fs.existsSync(bin)) {
     throw new Error(`找不到 ffmpeg 執行檔: ${bin}`)
@@ -243,6 +254,10 @@ async function transcribeFile(req, onProgress) {
     const runAsrOnSamples = async (samples) => {
       if (killed || gen !== jobGen || settled) return
       if (!samples || samples.length === 0) return
+      if (samplesDone >= MAX_DURATION_SEC * SAMPLE_RATE) {
+        fail(new Error(`音訊過長，上限 ${formatDuration(MAX_DURATION_SEC)}`))
+        return
+      }
 
       chunkIndex += 1
       const totalChunks =
@@ -283,11 +298,17 @@ async function transcribeFile(req, onProgress) {
         totalChunks: totalChunks ?? undefined,
         durationSec: durationSec ?? undefined
       })
+    }
 
-      // ASR 慢於解碼時 stdout 可能 pause，每段結束後恢復
-      if (child && child.stdout && !child.stdout.destroyed && child.stdout.isPaused()) {
-        child.stdout.resume()
-      }
+    /** 已排隊／正在 ASR 的段數。pause 看這個，不要把 pending 一次抽進無界 chain。 */
+    let inflightChunks = 0
+    const MAX_QUEUED_CHUNKS = 2
+
+    /** 解碼超過 ASR 時暫停 ffmpeg stdout */
+    const pauseStdout = () => {
+      try {
+        if (child?.stdout && !child.stdout.destroyed) child.stdout.pause()
+      } catch { /* ignore */ }
     }
 
     /**
@@ -295,23 +316,35 @@ async function transcribeFile(req, onProgress) {
      * @param {Float32Array} samples
      */
     const enqueueChunk = (samples) => {
-      chain = chain.then(() => runAsrOnSamples(samples))
+      inflightChunks += 1
+      if (inflightChunks >= MAX_QUEUED_CHUNKS) pauseStdout()
+      chain = chain.then(() => runAsrOnSamples(samples)).finally(() => {
+        inflightChunks = Math.max(0, inflightChunks - 1)
+        drainPending()
+      })
+    }
+
+    /** 從 pending 抽出完整段，佇列滿就 pause stdout */
+    const drainPending = () => {
+      if (killed || settled) return
+      while (pending.length >= CHUNK_BYTES && inflightChunks < MAX_QUEUED_CHUNKS) {
+        const slice = pending.subarray(0, CHUNK_BYTES)
+        pending = Buffer.from(pending.subarray(CHUNK_BYTES))
+        enqueueChunk(bufferToFloat32(slice))
+      }
+      if (pending.length >= CHUNK_BYTES || inflightChunks >= MAX_QUEUED_CHUNKS) {
+        pauseStdout()
+        return
+      }
+      if (child?.stdout && !child.stdout.destroyed && child.stdout.isPaused()) {
+        try { child.stdout.resume() } catch { /* ignore */ }
+      }
     }
 
     child.stdout.on('data', (buf) => {
       if (killed || settled) return
       pending = Buffer.concat([pending, buf])
-
-      // 待處理 PCM 堆積過多時暫停解碼，避免 RAM 暴衝（ASR 完成後 resume）
-      if (pending.length > CHUNK_BYTES * 3) {
-        try { child.stdout.pause() } catch { /* ignore */ }
-      }
-
-      while (pending.length >= CHUNK_BYTES) {
-        const slice = pending.subarray(0, CHUNK_BYTES)
-        pending = Buffer.from(pending.subarray(CHUNK_BYTES))
-        enqueueChunk(bufferToFloat32(slice))
-      }
+      drainPending()
     })
 
     child.on('close', (code, signal) => {
@@ -539,6 +572,9 @@ async function transcribeFileCloud(req, onProgress) {
       .sort()
     if (files.length === 0) {
       throw new Error('音訊切割後沒有可用片段')
+    }
+    if (files.length * CLOUD_CHUNK_SECONDS > MAX_DURATION_SEC + CLOUD_CHUNK_SECONDS) {
+      throw new Error(`音訊過長，上限 ${formatDuration(MAX_DURATION_SEC)}`)
     }
 
     const parts = []

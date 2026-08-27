@@ -12,7 +12,7 @@ const GGUF =
   process.argv[2] ||
   path.join(
     process.env.APPDATA || '',
-    'voiceink/models/linguaforge08/gguf-v5e/linguaforge-v5e-0.8b-Q4_K_M.gguf'
+    'voiceink/models/linguaforge08/gguf-v5e/linguaforge-v5e-0.8b-Q8_0.gguf'
   )
 
 const SYSTEM = 'You are a professional translator.'

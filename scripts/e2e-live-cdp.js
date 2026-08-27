@@ -115,14 +115,20 @@ async function main() {
     }, 30000, '主視窗')
     mainCdp = new Cdp(mainPage.webSocketDebuggerUrl)
     await mainCdp.connect()
-    // target 會早於 type=module 初始化完成出現；以 initLiveCaption 寫入提示文字作 readiness gate。
+    // 即時頁改成進分頁才載入腳本；先點進 live，再用 hint 當 readiness gate。
+    await waitFor(
+      () => mainCdp.eval(`document.readyState === 'complete' && !!document.querySelector('[data-page="live"]')`),
+      15000,
+      'renderer 初始化'
+    )
+    await mainCdp.eval(`document.querySelector('[data-page="live"]').click()`)
     await waitFor(
       () => mainCdp.eval(`(() => {
         const hint = document.getElementById('liveTranslatorHint')?.textContent || ''
-        return document.readyState === 'complete' && hint && !hint.includes('檢查中')
+        return hint && !hint.includes('檢查中')
       })()`),
       15000,
-      'renderer 初始化'
+      '即時字幕頁初始化'
     )
 
     await mainCdp.eval(`(() => {

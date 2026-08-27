@@ -7,7 +7,8 @@ const {
   createWindow,
   fetchJson,
   normalizeAccount,
-  readJsonFile
+  readJsonFile,
+  readJwtClaims
 } = require('./shared')
 
 function parseGrokSession(raw) {
@@ -15,10 +16,13 @@ function parseGrokSession(raw) {
   for (const entry of Object.values(raw)) {
     const key = typeof entry?.key === 'string' ? entry.key.trim() : ''
     if (!key) continue
+    // billing API 不回方案名稱，access token 的 tier claim 是 x.ai 唯一給的方案標示（數字）
+    const tier = readJwtClaims(key)?.tier
     return {
       accessToken: key,
       userId: typeof entry.user_id === 'string' ? entry.user_id.slice(0, 200) : '',
-      email: typeof entry.email === 'string' ? entry.email.slice(0, 320) : ''
+      email: typeof entry.email === 'string' ? entry.email.slice(0, 320) : '',
+      tier: Number.isInteger(tier) ? `Tier ${tier}` : ''
     }
   }
   return null
@@ -102,6 +106,8 @@ async function syncGrok({ homeDir, env = process.env, nowMs = Date.now(), fetchI
     const billing = await fetchJson(ENDPOINTS.grok, { fetchImpl, headers })
     const result = applyGrokBilling(billing, nowMs)
     result.accountName = account.accountName
+    // billing 有回 subscriptionTier 就用它；沒有才退回 token 裡的數字 tier
+    if (result.planName === 'Grok' && session.tier) result.planName = `Grok ${session.tier}`
     log(`grok: API OK windows=${result.windows.length}`)
     return normalizeAccount(result)
   } catch (error) {

@@ -31,10 +31,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     update: (payload) => ipcRenderer.invoke('subtitle:update', payload),
     setOpacity: (value) => ipcRenderer.invoke('subtitle:setOpacity', value),
     onTextUpdate: (callback) => {
-      ipcRenderer.on('subtitle:text', (event, text) => callback(text))
+      const handler = (event, text) => callback(text)
+      ipcRenderer.on('subtitle:text', handler)
+      return () => ipcRenderer.removeListener('subtitle:text', handler)
     },
     onClosed: (callback) => {
-      ipcRenderer.on('subtitle:closed', () => callback())
+      const handler = () => callback()
+      ipcRenderer.on('subtitle:closed', handler)
+      return () => ipcRenderer.removeListener('subtitle:closed', handler)
     }
   },
 
@@ -53,7 +57,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     delete: (key) => ipcRenderer.invoke('models:delete', key),
     openFolder: (key) => ipcRenderer.invoke('models:openFolder', key),
     onProgress: (callback) => {
-      ipcRenderer.on('models:progress', (event, progress) => callback(progress))
+      const handler = (event, progress) => callback(progress)
+      ipcRenderer.on('models:progress', handler)
+      return () => ipcRenderer.removeListener('models:progress', handler)
     }
   },
 
@@ -128,6 +134,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getDiagnostics: () => ipcRenderer.invoke('usage:diagnostics')
   },
 
+  // ===== AGY 反向代理 =====
+  // 憑證、上游 URL 與 project id 都留在 main；這裡只傳得到 port／開關這種無害設定。
+  agy: {
+    status: () => ipcRenderer.invoke('agy:status'),
+    start: () => ipcRenderer.invoke('agy:start'),
+    stop: () => ipcRenderer.invoke('agy:stop'),
+    /** @param {{ port: number, logBodies: boolean, retentionDays: number }} settings */
+    saveSettings: (settings) => ipcRenderer.invoke('agy:saveSettings', settings),
+    regenerateKey: () => ipcRenderer.invoke('agy:regenerateKey'),
+    /** @param {{ limit?: number, protocol?: string, onlyErrors?: boolean }} query */
+    logs: (query) => ipcRenderer.invoke('agy:logs', query),
+    /** @param {{ range?: '6h'|'24h'|'7d'|'30d'|'all' }} [query] 範圍在 main 驗證 */
+    stats: (query) => ipcRenderer.invoke('agy:stats', query),
+    models: (force) => ipcRenderer.invoke('agy:models', force === true),
+    clearLogs: () => ipcRenderer.invoke('agy:clearLogs'),
+    /** 端到端自我測試：自動挑模型，從本機閘道真的送一則訊息 */
+    test: () => ipcRenderer.invoke('agy:test')
+  },
+
   // ===== 聊天（雲端串流）=====
   chat: {
     /** @returns {Promise<Array<{ id: string, title: string, updatedAt: number, messageCount: number }>>} */
@@ -136,6 +161,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     create: () => ipcRenderer.invoke('chat:create'),
     delete: (id) => ipcRenderer.invoke('chat:delete', id),
     rename: (id, title) => ipcRenderer.invoke('chat:rename', id, title),
+    /** @param {string[]} ids 側欄拖曳後的完整順序；main 只接受既有 id */
+    reorder: (ids) => ipcRenderer.invoke('chat:reorder', ids),
+    scanModels: (providerId) => ipcRenderer.invoke('chat:scanModels', providerId),
     /**
      * model 與歷史都由 main 決定，這裡只給對話 id、文字與圖片 data URL
      * @param {{ reqId: string, conversationId: string, text?: string, images?: string[], regenerate?: boolean }} req

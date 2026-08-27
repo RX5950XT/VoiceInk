@@ -17,6 +17,7 @@ const { s2twp } = require('./opencc')
 const { stripThink, stripTranslationNoise, findRepetitionLoop } = require('./translate-clean')
 const { detectGpuCapability } = require('./gpu-capability')
 const { prependCudaBinToPath } = require('./cuda-env')
+const { ensureLlamaAddon } = require('./llama-addon')
 
 const LANGUAGE_NAMES = {
   'zh-TW': '繁體中文（台灣）',
@@ -210,12 +211,6 @@ async function disposeResources(res, warnings) {
 }
 
 /**
- * 取得 llama 實例；CUDA 失敗時自動回退 CPU
- * @param {boolean} wantGpu
- * @param {string[]} warnings
- * @returns {Promise<{ llama: object, usedGpu: boolean }>}
- */
-/**
  * 取得 llama 實例。
  * GPU 意圖：依序試 cuda → vulkan（本機 CUDA prebuilt 可能與驅動不相容）；皆失敗則 CPU。
  * @param {boolean} wantGpu
@@ -235,6 +230,7 @@ async function createLlama(wantGpu, warnings) {
   if (wantGpu) {
     for (const gpu of ['cuda', 'vulkan']) {
       try {
+        ensureLlamaAddon(gpu === 'cuda' ? 'win-x64-cuda' : 'win-x64-vulkan')
         const llama = await getLlama({ gpu, progressLogs: false })
         const backend = llama.gpu || gpu
         return { llama, usedGpu: true, backend: String(backend) }
@@ -827,16 +823,14 @@ async function translateCloud(text, targetLang, cfg, context = {}, options = {})
   try {
     data = rawBody ? JSON.parse(rawBody) : null
   } catch {
-    // API 偶爾回含控制字元／非 JSON 的 body
-    const preview = (rawBody || '').replace(/[\u0000-\u001F]+/g, ' ').slice(0, 120)
-    throw new Error(
-      res.ok
-        ? `翻譯 API 回傳無法解析的內容${preview ? `：${preview}` : ''}`
-        : `翻譯 API 錯誤: ${res.status}${preview ? ` ${preview}` : ''}`
-    )
+    // API 偶爾回含控制字元／非 JSON 的 body。
+    // 只留狀態碼：body 與 error.message 都是上游可控的字串，不進使用者可見訊息。
+    console.error(`[translate] 上游回應無法解析: HTTP ${res.status}`)
+    throw new Error(res.ok ? '翻譯 API 回傳無法解析的內容' : `翻譯 API 錯誤: ${res.status}`)
   }
   if (!res.ok) {
-    throw new Error(data?.error?.message || `翻譯 API 錯誤: ${res.status}`)
+    console.error(`[translate] API error: HTTP ${res.status}`)
+    throw new Error(`翻譯 API 錯誤: ${res.status}`)
   }
   return stripTranslationNoise(stripThink(data?.choices?.[0]?.message?.content || ''), text)
 }

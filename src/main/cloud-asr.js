@@ -85,15 +85,19 @@ function toWhisperLang(lang) {
 }
 
 /**
- * 分類雲端錯誤
+ * 分類雲端錯誤。
+ * 只看狀態碼，**不把上游 body 放進訊息**：這個字串會直接顯示在使用者介面上，
+ * 而 body 可能夾帶請求回音（含 Authorization）、代理插入的內容，
+ * 或自訂端點刻意寫來誘導使用者的文字。
  * @param {number} status
- * @param {string} bodyText
  * @returns {Error}
  */
-function classifyHttpError(status, bodyText) {
-  const snippet = String(bodyText || '').slice(0, 200)
+function classifyHttpError(status) {
   if (status === 401 || status === 403) {
     return new Error('雲端 ASR 認證失敗，請檢查 API Key')
+  }
+  if (status === 404) {
+    return new Error('找不到雲端 ASR 端點，請檢查 API URL')
   }
   if (status === 429) {
     return new Error('雲端 ASR 請求過於頻繁，請稍後再試')
@@ -101,7 +105,7 @@ function classifyHttpError(status, bodyText) {
   if (status >= 500) {
     return new Error(`雲端 ASR 服務異常（HTTP ${status}）`)
   }
-  return new Error(`雲端 ASR 失敗（HTTP ${status}）${snippet ? `：${snippet}` : ''}`)
+  return new Error(`雲端 ASR 失敗（HTTP ${status}），請檢查模型名稱與音訊格式`)
 }
 
 /**
@@ -157,7 +161,10 @@ async function transcribeAudio(opts) {
   }
 
   const raw = await res.text()
-  if (!res.ok) throw classifyHttpError(res.status, raw)
+  if (!res.ok) {
+    console.error(`[cloud-asr] API error: HTTP ${res.status}`)
+    throw classifyHttpError(res.status)
+  }
 
   let json
   try {
@@ -209,6 +216,7 @@ async function transcribeEncoded(req, store) {
 }
 
 module.exports = {
+  classifyHttpError,
   DEFAULT_ASR_API_URL,
   DEFAULT_ASR_MODEL,
   float32ToWav,

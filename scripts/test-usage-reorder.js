@@ -15,10 +15,10 @@ const source = fs.readFileSync(modulePath, 'utf8').replace(/^export /gm, '')
 const sandbox = {}
 vm.createContext(sandbox)
 vm.runInContext(
-  `${source}\n;globalThis.__exports = { moveProvider, mergeVisibleOrder, capturePositions, animateFlip };`,
+  `${source}\n;globalThis.__exports = { moveProvider, mergeVisibleOrder, capturePositions, animateFlip, pickCollision, slotShift };`,
   sandbox
 )
-const { moveProvider, mergeVisibleOrder, capturePositions, animateFlip } = sandbox.__exports
+const { moveProvider, mergeVisibleOrder, capturePositions, animateFlip, pickCollision, slotShift } = sandbox.__exports
 
 let passed = 0
 let failed = 0
@@ -34,10 +34,11 @@ function check(name, fn) {
   }
 }
 
-function fakeElement(provider, rect, calls) {
+function fakeElement(provider, rect, calls, animations = []) {
   return {
     dataset: { provider },
     getBoundingClientRect: () => ({ ...rect }),
+    getAnimations: () => animations,
     animate(frames, options) {
       const animation = { provider, frames, options }
       calls.push(animation)
@@ -125,6 +126,55 @@ check('reduced motion 不建立位移動畫', () => {
   const elements = [fakeElement('a', { left: 100, top: 0 }, calls)]
   assert.equal(animateFlip(elements, new Map([['a', { left: 0, top: 0 }]]), true).length, 0)
   assert.equal(calls.length, 0)
+})
+console.log('\n[C] collision (pointerWithin then closestCenter)')
+check('游標在卡片內就選那張', () => {
+  const items = [
+    { id: 'a', left: 0, top: 0, width: 100, height: 100 },
+    { id: 'b', left: 120, top: 0, width: 100, height: 100 }
+  ]
+  assert.equal(pickCollision({ x: 150, y: 40 }, items), 'b')
+})
+check('空隙裡選最近中心，不必進到卡片裡', () => {
+  const items = [
+    { id: 'a', left: 0, top: 0, width: 100, height: 80 },
+    { id: 'b', left: 0, top: 200, width: 100, height: 80 }
+  ]
+  assert.equal(pickCollision({ x: 50, y: 170 }, items), 'b')
+})
+check('空清單回 null', () => {
+  assert.equal(pickCollision({ x: 0, y: 0 }, []), null)
+})
+check('slotShift 只算位移、不改原座標', () => {
+  const home = { left: 10, top: 20 }
+  const slot = { left: 110, top: 60 }
+  assert.equal(JSON.stringify(slotShift(home, slot)), JSON.stringify({ dx: 100, dy: 40 }))
+  assert.equal(home.left, 10)
+})
+check('缺槽位時位移為 0', () => {
+  assert.equal(JSON.stringify(slotShift(null, { left: 1, top: 1 })), JSON.stringify({ dx: 0, dy: 0 }))
+})
+
+console.log('\n[D] FLIP interrupt')
+check('新 FLIP 量 last 前先取消進行中的動畫', () => {
+  const calls = []
+  let cancelled = false
+  const running = [{ cancel() { cancelled = true } }]
+  const element = {
+    dataset: { provider: 'a' },
+    getBoundingClientRect() {
+      return cancelled ? { left: 200, top: 0 } : { left: 150, top: 0 }
+    },
+    getAnimations: () => running,
+    animate(frames, options) {
+      calls.push({ frames, options })
+      return { frames, options }
+    }
+  }
+  animateFlip([element], new Map([['a', { left: 0, top: 0 }]]), false)
+  assert.equal(cancelled, true)
+  assert.equal(calls[0].frames[0].transform, 'translate3d(-200px, 0px, 0)')
+  assert.equal(calls[0].options.fill, 'none')
 })
 
 console.log(`\n${failed ? 'FAILED' : 'ALL PASS'}  ${passed} passed, ${failed} failed\n`)

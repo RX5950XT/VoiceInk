@@ -83,8 +83,10 @@ function queryLatestReset(db, sinceMs, widthMs) {
       and time_created >= ?`).get(sinceMs)
   const latest = Number(row?.latest)
   if (!Number.isFinite(latest)) return ''
-  const timestampMs = latest > 1_000_000_000_000 ? latest : latest * 1000
-  return new Date(timestampMs + widthMs).toISOString()
+  // time_created 是毫秒（實測本機 opencode.db）。這裡原本有一段「小於 1e12 就當秒」的
+  // 對沖，但篩選條件 `time_created >= sinceMs` 用的就是毫秒，落到這裡的值必然 > 1e12——
+  // 對沖永遠觸發不到，只是讓人以為單位不確定的事情已經處理好了。
+  return new Date(latest + widthMs).toISOString()
 }
 
 function applyOpenCodeWindows(account, db, settings, nowMs, log) {

@@ -2,30 +2,69 @@
  * VoiceInk - 主應用程式邏輯
  */
 
-import { initTranscribe } from './transcribe.js'
-import { initLiveCaption, prewarmEngine, cooldownEngine } from './live-caption.js'
-import {
-  initTranslatePage,
-  prewarmTranslatePage,
-  cooldownTranslatePage
-} from './translate-page.js'
 import {
   initChatPage,
   refreshChatPage,
   loadChatSettings,
+  validateChatSettings,
   saveChatSettings
 } from './chat-page.js'
-import {
-  initUsagePage,
-  refreshUsagePage,
-  cooldownUsagePage
-} from './usage-page.js'
 import {
   DEFAULT_API_URL,
   DEFAULT_MODEL,
   DEFAULT_ASR_API_URL,
   DEFAULT_ASR_MODEL
 } from './api.js'
+
+/** @type {typeof import('./live-caption.js') | null} */
+let liveCaption = null
+/** @type {typeof import('./translate-page.js') | null} */
+let translatePage = null
+/** @type {typeof import('./transcribe.js') | null} */
+let transcribePage = null
+/** @type {typeof import('./usage-page.js') | null} */
+let usagePage = null
+/** @type {typeof import('./agy-page.js') | null} */
+let agyPage = null
+
+/** @returns {Promise<typeof import('./live-caption.js')>} */
+async function loadLiveCaption() {
+  if (!liveCaption) {
+    liveCaption = await import('./live-caption.js')
+    liveCaption.initLiveCaption()
+  }
+  return liveCaption
+}
+
+/** @returns {Promise<typeof import('./translate-page.js')>} */
+async function loadTranslatePage() {
+  if (!translatePage) {
+    translatePage = await import('./translate-page.js')
+    translatePage.initTranslatePage()
+  }
+  return translatePage
+}
+
+/** @returns {Promise<typeof import('./transcribe.js')>} */
+async function loadTranscribePage() {
+  if (!transcribePage) {
+    transcribePage = await import('./transcribe.js')
+    transcribePage.initTranscribe()
+  }
+  return transcribePage
+}
+
+/** @returns {Promise<typeof import('./usage-page.js')>} */
+async function loadUsagePage() {
+  if (!usagePage) usagePage = await import('./usage-page.js')
+  return usagePage
+}
+
+/** @returns {Promise<typeof import('./agy-page.js')>} */
+async function loadAgyPage() {
+  if (!agyPage) agyPage = await import('./agy-page.js')
+  return agyPage
+}
 
 /** 預設 TTS 語音（與 main tts-voices.js 對齊） */
 export const DEFAULT_TTS_VOICES = {
@@ -103,6 +142,31 @@ export const electronAPI = window.electronAPI || {
     sync: async () => ({ ok: false, error: { code: 'ELECTRON_ONLY', message: '僅 Electron 環境可同步' } }),
     saveSettings: async (settings) => ({ ok: true, data: { ...(await electronAPI.usage.load()).data, settings } }),
     getDiagnostics: async () => ({ ok: true, data: [] })
+  },
+  agy: {
+    status: async () => ({ ok: true, data: {
+      running: false,
+      host: '127.0.0.1',
+      port: 8788,
+      uptimeMs: 0,
+      activeRequests: 0,
+      baseUrl: 'http://127.0.0.1:8788/v1',
+      apiKey: '',
+      logBodies: false,
+      retentionDays: 30,
+      credential: { connected: false, tier: '', code: 'ELECTRON_ONLY', message: '僅 Electron 環境可用' },
+      db: { ready: false, lastError: '' }
+    } }),
+    start: async () => ({ ok: false, error: { code: 'ELECTRON_ONLY', message: '僅 Electron 環境可用' } }),
+    stop: async () => ({ ok: false, error: { code: 'ELECTRON_ONLY', message: '僅 Electron 環境可用' } }),
+    saveSettings: async () => ({ ok: false, error: { code: 'ELECTRON_ONLY', message: '僅 Electron 環境可用' } }),
+    regenerateKey: async () => ({ ok: false, error: { code: 'ELECTRON_ONLY', message: '僅 Electron 環境可用' } }),
+    logs: async () => ({ ok: true, data: { logs: [], total: 0 } }),
+    stats: async () => ({ ok: true, data: {
+      summary: { requests: 0, success: 0, errors: 0, input: 0, output: 0, thought: 0, cached: 0 },
+      hourly: [], daily: [], models: []
+    } }),
+    clearLogs: async () => ({ ok: true, data: { ok: true } })
   },
   chat: {
     list: async () => [],
@@ -325,14 +389,10 @@ let latestModels = {}
 document.addEventListener('DOMContentLoaded', async () => {
   await initTheme()
   initWindowControls()
-  await initSettings()
+  bindSettingsControls()
   initNavigation()
-  initTranscribe()
-  initLiveCaption()
-  initTranslatePage()
-  await initUsagePage()
   initChatPage()
-  await refreshChatPage()
+  refreshChatPage()
 })
 
 // ===== 主題管理 =====
@@ -407,28 +467,54 @@ function initNavigation() {
  */
 export function switchPage(pageName) {
   navItems.forEach(item => {
-    item.classList.toggle('active', item.dataset.page === pageName)
+    const on = item.dataset.page === pageName
+    item.classList.toggle('active', on)
+    if (on) item.setAttribute('aria-current', 'page')
+    else item.removeAttribute('aria-current')
   })
   pages.forEach(page => {
     page.classList.toggle('active', page.id === `page-${pageName}`)
   })
   // 先啟動新頁 acquire，再 release 舊頁，避免中間 owner 歸零觸發 unload＋重付 warm
   if (pageName === 'chat') refreshChatPage()
-  if (pageName === 'usage') refreshUsagePage()
-  if (pageName === 'live') prewarmEngine()
-  if (pageName === 'translate') prewarmTranslatePage()
+  if (pageName === 'usage') loadUsagePage().then((m) => m.refreshUsagePage())
+  if (pageName === 'agy') loadAgyPage().then((m) => m.refreshAgyPage())
+  if (pageName === 'transcribe') loadTranscribePage()
+  if (pageName === 'live') loadLiveCaption().then((m) => m.prewarmEngine())
+  if (pageName === 'translate') loadTranslatePage().then((m) => m.prewarmTranslatePage())
   if (pageName === 'settings') {
     loadSettingsForm()
     refreshModels()
   }
-  if (pageName !== 'live') cooldownEngine()
-  if (pageName !== 'translate') cooldownTranslatePage()
-  if (pageName !== 'usage') cooldownUsagePage()
+  if (pageName !== 'live') liveCaption?.cooldownEngine()
+  if (pageName !== 'translate') translatePage?.cooldownTranslatePage()
+  if (pageName !== 'usage') usagePage?.cooldownUsagePage()
+  if (pageName !== 'agy') agyPage?.cooldownAgyPage()
 }
 
-/** 供翻譯頁「前往設定」等呼叫 */
-export function openSettingsPage() {
+/**
+ * 供聊天／翻譯頁的「前往設定」呼叫。
+ * @param {'models'|'translate'|'chat'|'asr'|'appearance'|'voice'} [section]
+ */
+export function openSettingsPage(section = 'models') {
   switchPage('settings')
+  activateSettingsSection(section)
+}
+
+/**
+ * 顯示指定設定分類。
+ * @param {string} target
+ */
+function activateSettingsSection(target) {
+  const nav = document.getElementById('settingsNav')
+  const item = nav?.querySelector(`.settings-nav-item[data-section="${target}"]`)
+  if (!nav || !item) return
+  const items = [...nav.querySelectorAll('.settings-nav-item')]
+  const sections = [...document.querySelectorAll('#page-settings .settings-section')]
+  items.forEach((candidate) => candidate.classList.toggle('active', candidate === item))
+  sections.forEach((section) => section.classList.toggle('active', section.dataset.section === target))
+  const scroll = document.getElementById('settingsScroll')
+  if (scroll) scroll.scrollTop = 0
 }
 
 /**
@@ -438,23 +524,20 @@ function initSettingsNav() {
   const nav = document.getElementById('settingsNav')
   if (!nav) return
   const items = [...nav.querySelectorAll('.settings-nav-item')]
-  const sections = [...document.querySelectorAll('#page-settings .settings-section')]
   items.forEach((item) => {
     item.addEventListener('click', () => {
-      const target = item.dataset.section
-      items.forEach((i) => i.classList.toggle('active', i === item))
-      sections.forEach((sec) => sec.classList.toggle('active', sec.dataset.section === target))
-      const scroll = document.getElementById('settingsScroll')
-      if (scroll) scroll.scrollTop = 0
+      activateSettingsSection(item.dataset.section)
     })
   })
 }
 
 // ===== 設定管理 =====
 
-async function initSettings() {
-  await loadSettingsForm()
-
+/**
+ * 啟動時只綁事件，不打 nvidia-smi／掃模型檔。
+ * 表單內容在進設定頁時才 loadSettingsForm + refreshModels。
+ */
+function bindSettingsControls() {
   if (toggleApiKeyVisibility) {
     toggleApiKeyVisibility.addEventListener('click', () => {
       const isPassword = apiKeyInput.type === 'password'
@@ -487,7 +570,6 @@ async function initSettings() {
   })
   modelsPathText?.addEventListener('click', () => electronAPI.models.openFolder())
   electronAPI.models.onProgress(onModelProgress)
-  await refreshModels()
 }
 
 /** @type {{ langs: string[], voicesByLang: Record<string, {id:string,label:string}[]>, defaults: Record<string,string> } | null} */
@@ -579,10 +661,16 @@ function initSegment(id, value, onChange) {
   segmentValues[id] = value
   const buttons = segment.querySelectorAll('.seg-btn')
   buttons.forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.value === value)
+    const on = btn.dataset.value === value
+    btn.classList.toggle('active', on)
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false')
     btn.addEventListener('click', () => {
       segmentValues[id] = btn.dataset.value
-      buttons.forEach(b => b.classList.toggle('active', b === btn))
+      buttons.forEach(b => {
+        const isOn = b === btn
+        b.classList.toggle('active', isOn)
+        b.setAttribute('aria-pressed', isOn ? 'true' : 'false')
+      })
       onChange?.(btn.dataset.value)
     })
   })
@@ -598,7 +686,9 @@ function setSegmentValue(id, value) {
   const segment = document.getElementById(id)
   if (!segment) return
   segment.querySelectorAll('.seg-btn').forEach((btn) => {
-    btn.classList.toggle('active', btn.dataset.value === value)
+    const on = btn.dataset.value === value
+    btn.classList.toggle('active', on)
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false')
   })
 }
 
@@ -803,6 +893,8 @@ async function saveSettings() {
     showToast('雲端語音轉文字需要 API Key', 'error')
     return
   }
+  const chatValidation = validateChatSettings()
+  if (!chatValidation.ok) return
   if (llmGpu) {
     if (!gpuCapability) await refreshGpuCapabilityUi()
     if (!gpuCapability?.ok) {
@@ -827,10 +919,9 @@ async function saveSettings() {
     electronAPI.store.set('ttsRate', ttsRate),
     electronAPI.store.set('localTranslateModel', localTranslateModel),
     electronAPI.store.set('llmGpu', llmGpu),
-    electronAPI.store.set('asrThreads', normalizeAsrThreads(segmentValues.asrThreadsSegment))
+    electronAPI.store.set('asrThreads', normalizeAsrThreads(segmentValues.asrThreadsSegment)),
+    saveChatSettings(chatValidation)
   ])
-
-  await saveChatSettings()
 
   document.dispatchEvent(new CustomEvent('settings-changed'))
   showToast('設定已儲存')
@@ -868,21 +959,41 @@ function renderModelItem(model) {
       ? '下載中…'
       : formatBytes(model.totalBytes)
 
-  item.innerHTML = `
-    <div class="model-row">
-      <div class="model-info">
-        <p class="model-name">${model.label}<span class="model-tag">${roleTag}</span></p>
-        <p class="model-size ${model.downloaded ? 'downloaded' : ''}">${stateText}</p>
-      </div>
-      <div class="model-actions"></div>
-    </div>
-    <div class="model-progress hidden"><div class="model-progress-fill"></div></div>
-  `
+  // createElement + textContent：renderer 其餘各頁都零 innerHTML，這裡不留唯一的例外
+  const name = document.createElement('p')
+  name.className = 'model-name'
+  name.textContent = model.label
+  const tag = document.createElement('span')
+  tag.className = 'model-tag'
+  tag.textContent = roleTag
+  name.appendChild(tag)
 
-  const actions = item.querySelector('.model-actions')
+  const size = document.createElement('p')
+  size.className = model.downloaded ? 'model-size downloaded' : 'model-size'
+  size.textContent = stateText
+
+  const info = document.createElement('div')
+  info.className = 'model-info'
+  info.append(name, size)
+
+  const actions = document.createElement('div')
+  actions.className = 'model-actions'
+
+  const row = document.createElement('div')
+  row.className = 'model-row'
+  row.append(info, actions)
+
+  const progressFill = document.createElement('div')
+  progressFill.className = 'model-progress-fill'
+  const progress = document.createElement('div')
+  progress.className = 'model-progress hidden'
+  progress.appendChild(progressFill)
+
+  item.append(row, progress)
+
   if (model.downloading) {
     actions.appendChild(actionBtn('取消', 'btn-secondary', () => electronAPI.models.cancel(model.key)))
-    item.querySelector('.model-progress').classList.remove('hidden')
+    progress.classList.remove('hidden')
   } else if (model.downloaded) {
     actions.appendChild(actionBtn('📂', 'btn-secondary', () => electronAPI.models.openFolder(model.key)))
     actions.appendChild(actionBtn('刪除', 'btn-secondary', async () => {

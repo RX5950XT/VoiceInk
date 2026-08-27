@@ -5,7 +5,7 @@ const path = require('path')
 
 const PORT = 9243
 const EXE = path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
-const PAGES = ['chat', 'usage', 'transcribe', 'live', 'translate', 'settings']
+const PAGES = ['chat', 'usage', 'agy', 'transcribe', 'live', 'translate', 'settings']
 const VIEWPORTS = [
   { width: 1440, height: 1000 },
   { width: 900, height: 900 },
@@ -14,6 +14,7 @@ const VIEWPORTS = [
 const SIGNATURES = {
   chat: ['.chat-sidebar', '.chat-main', '.chat-composer'],
   usage: ['.usage-card', '.usage-summary-strip'],
+  agy: ['.agy-control', '.agy-stats', '.agy-models', '.agy-logs'],
   transcribe: ['.drop-zone', '.options-panel', '.result-panel'],
   live: ['.live-status', '.live-content'],
   translate: ['.translate-pane', '.translate-banner'],
@@ -155,7 +156,7 @@ async function main() {
     cdp = new Cdp(target.webSocketDebuggerUrl)
     await cdp.connect()
     await waitFor(
-      () => cdp.eval(`document.readyState === 'complete' && document.querySelectorAll('.nav-tab').length === 6`),
+      () => cdp.eval(`document.readyState === 'complete' && document.querySelectorAll('.nav-tab').length === ${PAGES.length}`),
       15_000,
       'renderer 初始化'
     )

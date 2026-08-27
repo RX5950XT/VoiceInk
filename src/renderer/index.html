@@ -5,16 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https: http:; media-src 'self' blob:"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; connect-src 'self' https: http:; media-src 'self' blob:"
     />
     <link rel="icon" type="image/png" href="../../assets/icon.png" />
     <title>VoiceInk</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap"
-      rel="stylesheet"
-    />
     <link rel="stylesheet" href="./styles/themes.css" />
     <link rel="stylesheet" href="./styles/main.css" />
   </head>
@@ -31,27 +25,31 @@
           <span class="logo-text">VoiceInk</span>
         </div>
         <nav class="header-nav">
-          <button class="nav-tab active" data-page="chat" title="聊天">
+          <button class="nav-tab active" data-page="chat" title="聊天" aria-label="聊天" aria-current="page">
             <span class="nav-icon">💬</span>
             <span class="nav-text">聊天</span>
           </button>
-          <button class="nav-tab" data-page="usage" title="額度">
+          <button class="nav-tab" data-page="usage" title="額度" aria-label="額度">
             <span class="nav-icon">📊</span>
             <span class="nav-text">額度</span>
           </button>
-          <button class="nav-tab" data-page="transcribe" title="檔案轉錄">
+          <button class="nav-tab" data-page="agy" title="AGY反代" aria-label="AGY反代">
+            <span class="nav-icon">🔀</span>
+            <span class="nav-text">AGY反代</span>
+          </button>
+          <button class="nav-tab" data-page="transcribe" title="檔案轉錄" aria-label="檔案轉錄">
             <span class="nav-icon">📁</span>
             <span class="nav-text">檔案轉錄</span>
           </button>
-          <button class="nav-tab" data-page="live" title="即時字幕">
+          <button class="nav-tab" data-page="live" title="即時字幕" aria-label="即時字幕">
             <span class="nav-icon">🎙️</span>
             <span class="nav-text">即時字幕</span>
           </button>
-          <button class="nav-tab" data-page="translate" title="翻譯與 TTS">
+          <button class="nav-tab" data-page="translate" title="翻譯與 TTS" aria-label="翻譯與 TTS">
             <span class="nav-icon">🔤</span>
             <span class="nav-text">翻譯與 TTS</span>
           </button>
-          <button class="nav-tab" data-page="settings" title="設定">
+          <button class="nav-tab" data-page="settings" title="設定" aria-label="設定">
             <span class="nav-icon">⚙️</span>
             <span class="nav-text">設定</span>
           </button>
@@ -87,28 +85,6 @@
               </aside>
 
               <div class="chat-main">
-                <div class="chat-toolbar">
-                  <input
-                    type="text"
-                    id="chatTitleInput"
-                    class="input chat-title-input"
-                    placeholder="新對話"
-                    aria-label="對話標題"
-                  />
-                  <div class="chat-toolbar-group">
-                    <select id="chatPromptSelect" class="select chat-prompt-select" aria-label="系統提示"></select>
-                    <button
-                      type="button"
-                      id="chatPromptManageBtn"
-                      class="btn-icon"
-                      title="管理系統提示"
-                      aria-label="管理系統提示"
-                    >⚙</button>
-                  </div>
-                  <select id="chatModelSelect" class="select chat-model-select" aria-label="聊天模型"></select>
-                  <button type="button" id="chatDeleteBtn" class="btn btn-secondary btn-sm">刪除</button>
-                </div>
-
                 <div id="chatBanner" class="translate-banner hidden" role="status">
                   <span id="chatBannerText">尚未設定聊天 API</span>
                   <button type="button" id="chatOpenSettingsBtn" class="btn btn-secondary btn-sm">
@@ -151,6 +127,17 @@
                       </svg>
                       <span>思考</span>
                     </button>
+                    <div class="chat-toolbar-group">
+                      <select id="chatPromptSelect" class="select chat-prompt-select" aria-label="系統提示"></select>
+                      <button
+                        type="button"
+                        id="chatPromptManageBtn"
+                        class="btn-icon"
+                        title="管理系統提示"
+                        aria-label="管理系統提示"
+                      >⚙</button>
+                    </div>
+                    <select id="chatModelSelect" class="select chat-model-select" aria-label="聊天模型"></select>
                     <span class="composer-spacer"></span>
                     <span class="composer-hint" id="chatComposerHint">Enter 送出 · Shift+Enter 換行</span>
                     <button type="button" id="chatSendBtn" class="btn btn-primary chat-send-btn">送出</button>
@@ -163,7 +150,7 @@
                     hidden
                   />
                 </div>
-                <p id="chatError" class="live-error hidden"></p>
+                <p id="chatError" class="live-error hidden" role="alert"></p>
               </div>
             </div>
           </section>
@@ -255,6 +242,203 @@
             </dialog>
           </section>
 
+          <!-- AGY 反向代理頁面 -->
+          <section id="page-agy" class="page">
+            <div class="agy-shell">
+              <header class="agy-header">
+                <div class="agy-heading">
+                  <p class="agy-eyebrow">本機 API 閘道</p>
+                  <h1>AGY 反向代理</h1>
+                  <p class="page-desc">把 Antigravity 額度轉成 OpenAI／Anthropic 相容 API，只監聽 127.0.0.1 且必須帶金鑰。</p>
+                </div>
+                <div class="agy-actions" role="group" aria-label="服務操作">
+                  <button type="button" id="agyRefreshBtn" class="btn btn-secondary btn-sm">重新整理</button>
+                  <button type="button" id="agyTestBtn" class="btn btn-secondary btn-sm">測試連線</button>
+                  <button type="button" id="agyToggleBtn" class="btn btn-primary btn-sm">啟動服務</button>
+                </div>
+              </header>
+
+              <p id="agyError" class="live-error hidden" role="alert"></p>
+
+              <section class="agy-panel agy-control" aria-labelledby="agyControlTitle">
+                <div class="agy-panel-head">
+                  <h2 id="agyControlTitle" class="agy-panel-title">服務控制</h2>
+                  <p id="agyStatusLine" class="agy-status" role="status" aria-live="polite">
+                    <span id="agyStatusDot" class="agy-dot" aria-hidden="true"></span>
+                    <span id="agyStatusText">已停止</span>
+                  </p>
+                </div>
+
+                <dl class="agy-endpoint">
+                  <div class="agy-endpoint-row">
+                    <dt>Base URL</dt>
+                    <dd>
+                      <code id="agyBaseUrl" class="agy-code">尚未啟動</code>
+                      <button type="button" class="btn btn-secondary btn-sm" data-agy-copy="baseUrl">複製</button>
+                    </dd>
+                  </div>
+                  <div class="agy-endpoint-row">
+                    <dt>API Key</dt>
+                    <dd>
+                      <code id="agyApiKey" class="agy-code agy-secret">尚未產生</code>
+                      <button type="button" id="agyKeyToggleBtn" class="btn btn-secondary btn-sm" aria-pressed="false">顯示</button>
+                      <button type="button" class="btn btn-secondary btn-sm" data-agy-copy="apiKey">複製</button>
+                      <button type="button" id="agyRegenerateBtn" class="btn btn-secondary btn-sm">重新產生</button>
+                    </dd>
+                  </div>
+                  <div class="agy-endpoint-row">
+                    <dt>憑證</dt>
+                    <dd><span id="agyCredential" class="agy-credential">服務停止中</span></dd>
+                  </div>
+                </dl>
+
+                <div id="agyCredentialHelp" class="agy-cred-help" role="status" hidden>
+                  <p id="agyCredentialHelpTitle" class="agy-cred-help-title"></p>
+                  <ol id="agyCredentialHelpSteps" class="agy-cred-help-steps"></ol>
+                </div>
+
+                <p id="agyTestResult" class="agy-test-result" role="status" aria-live="polite" hidden></p>
+
+                <details class="agy-clients">
+                  <summary class="agy-clients-summary">客戶端怎麼填？（Claude Code／CC Switch、OpenAI 相容工具）</summary>
+                  <div class="agy-clients-body">
+                    <div class="agy-client">
+                      <p class="agy-client-tag">Claude Code · CC Switch</p>
+                      <div class="agy-client-row">
+                        <code class="agy-code-inline">ANTHROPIC_BASE_URL</code>
+                        <code id="agyAnthropicUrl" class="agy-code">尚未啟動</code>
+                        <button type="button" class="btn btn-secondary btn-sm" data-agy-copy="anthropicBaseUrl">複製</button>
+                      </div>
+                      <div class="agy-client-row">
+                        <code class="agy-code-inline">ANTHROPIC_AUTH_TOKEN</code>
+                        <span class="agy-client-note">填上面那組 API Key</span>
+                        <button type="button" class="btn btn-secondary btn-sm" data-agy-copy="apiKey">複製</button>
+                      </div>
+                      <p class="agy-client-warn">
+                        結尾<strong>不要</strong>加 <code class="agy-code-inline">/v1</code>：Claude Code 會自己接
+                        <code class="agy-code-inline">/v1/messages</code>，加了會變成
+                        <code class="agy-code-inline">/v1/v1/messages</code> 而 404。
+                      </p>
+                    </div>
+                    <div class="agy-client">
+                      <p class="agy-client-tag">OpenAI 相容工具</p>
+                      <div class="agy-client-row">
+                        <code class="agy-code-inline">Base URL</code>
+                        <code id="agyOpenaiUrl" class="agy-code">尚未啟動</code>
+                        <button type="button" class="btn btn-secondary btn-sm" data-agy-copy="baseUrl">複製</button>
+                      </div>
+                      <p class="agy-client-note">這一組<strong>要</strong>帶 <code class="agy-code-inline">/v1</code>，客戶端自己接 <code class="agy-code-inline">/chat/completions</code>。</p>
+                    </div>
+                  </div>
+                </details>
+
+                <div class="agy-settings">
+                  <label class="agy-setting">
+                    <span>監聽埠</span>
+                    <input id="agyPortInput" class="input" type="number" min="1024" max="65535" step="1" inputmode="numeric" />
+                  </label>
+                  <label class="agy-setting">
+                    <span>日誌保留天數</span>
+                    <input id="agyRetentionInput" class="input" type="number" min="1" max="365" step="1" inputmode="numeric" />
+                  </label>
+                  <label class="agy-setting agy-setting-check">
+                    <input id="agyLogBodiesInput" type="checkbox" />
+                    <span>除錯模式：記錄請求／回應內容（各截 8KB）</span>
+                  </label>
+                  <div class="agy-setting-actions">
+                    <button type="button" id="agyClearLogsBtn" class="btn btn-secondary btn-sm">清空日誌</button>
+                    <button type="button" id="agySaveSettingsBtn" class="btn btn-primary btn-sm">儲存設定</button>
+                  </div>
+                </div>
+              </section>
+
+              <section class="agy-panel agy-stats" aria-labelledby="agyStatsTitle">
+                <div class="agy-panel-head">
+                  <h2 id="agyStatsTitle" class="agy-panel-title">統計</h2>
+                  <div id="agyRangeGroup" class="agy-range" role="group" aria-label="統計時間範圍">
+                    <button type="button" class="agy-range-btn" data-agy-range="6h" aria-pressed="false">6 小時</button>
+                    <button type="button" class="agy-range-btn is-active" data-agy-range="24h" aria-pressed="true">24 小時</button>
+                    <button type="button" class="agy-range-btn" data-agy-range="7d" aria-pressed="false">7 天</button>
+                    <button type="button" class="agy-range-btn" data-agy-range="30d" aria-pressed="false">30 天</button>
+                    <button type="button" class="agy-range-btn" data-agy-range="all" aria-pressed="false">全部</button>
+                  </div>
+                </div>
+                <div id="agyStatCards" class="agy-stat-cards"></div>
+                <div class="agy-charts">
+                  <figure class="agy-chart">
+                    <figcaption class="agy-chart-head">
+                      <span>請求量</span>
+                      <span id="agyTrendMeta" class="agy-chart-meta"></span>
+                    </figcaption>
+                    <div class="agy-bars-wrap">
+                      <div id="agyHourlyChart" class="agy-bars" role="img" aria-label="請求量長條圖"></div>
+                      <div id="agyChartTip" class="agy-tip" hidden></div>
+                    </div>
+                  </figure>
+                  <figure class="agy-chart">
+                    <figcaption class="agy-chart-head">
+                      <span>模型分佈</span>
+                      <span id="agyModelMeta" class="agy-chart-meta"></span>
+                    </figcaption>
+                    <div id="agyModelChart" class="agy-model-list" role="img" aria-label="各模型請求量分佈"></div>
+                  </figure>
+                </div>
+              </section>
+
+              <section class="agy-panel agy-models" aria-labelledby="agyModelsTitle">
+                <div class="agy-panel-head">
+                  <h2 id="agyModelsTitle" class="agy-panel-title">可用模型</h2>
+                  <p class="agy-panel-desc">直接向上游查詢的即時清單，非寫死的表。點模型 ID 即可複製。</p>
+                </div>
+                <div class="agy-models-bar">
+                  <button type="button" id="agyModelsRefreshBtn" class="btn btn-secondary btn-sm">
+                    重新查詢
+                  </button>
+                  <label class="agy-models-toggle">
+                    <input type="checkbox" id="agyModelsShowAll" />
+                    <span>顯示全部（含 IDE 內部模型）</span>
+                  </label>
+                  <span id="agyModelsMeta" class="agy-models-meta" role="status"></span>
+                </div>
+                <div id="agyModelsList" class="agy-models-list"></div>
+              </section>
+
+              <section class="agy-panel agy-logs" aria-labelledby="agyLogsTitle">
+                <div class="agy-panel-head">
+                  <h2 id="agyLogsTitle" class="agy-panel-title">流量日誌</h2>
+                  <div class="agy-log-filters" role="group" aria-label="日誌篩選">
+                    <select id="agyProtocolFilter" class="select" aria-label="協議篩選">
+                      <option value="">全部協議</option>
+                      <option value="openai">OpenAI</option>
+                      <option value="anthropic">Anthropic</option>
+                    </select>
+                    <label class="agy-filter-check">
+                      <input id="agyErrorsOnly" type="checkbox" />
+                      <span>只看錯誤</span>
+                    </label>
+                  </div>
+                </div>
+                <div class="agy-table-wrap">
+                  <table class="agy-table">
+                    <caption class="visually-hidden">反向代理流量日誌，依時間由新到舊排列</caption>
+                    <thead>
+                      <tr>
+                        <th scope="col">時間</th>
+                        <th scope="col">協議</th>
+                        <th scope="col">模型</th>
+                        <th scope="col">狀態</th>
+                        <th scope="col">耗時</th>
+                        <th scope="col">Tokens</th>
+                      </tr>
+                    </thead>
+                    <tbody id="agyLogRows"></tbody>
+                  </table>
+                </div>
+                <p id="agyLogEmpty" class="agy-empty">尚無流量記錄。啟動服務並讓客戶端送出第一個請求後就會出現。</p>
+              </section>
+            </div>
+          </section>
+
           <!-- 檔案轉錄頁面 -->
           <section id="page-transcribe" class="page">
             <div class="page-header">
@@ -288,7 +472,7 @@
                   <p class="file-name">filename.mp3</p>
                   <p class="file-size">2.5 MB</p>
                 </div>
-                <button id="clearFileBtn" class="btn-icon" title="移除檔案">
+                <button id="clearFileBtn" class="btn-icon" type="button" title="移除檔案" aria-label="移除檔案">
                   ❌
                 </button>
               </div>
@@ -315,11 +499,18 @@
             <!-- 進度顯示 -->
             <div id="transcribeProgress" class="progress-panel hidden">
               <div class="progress-spinner" aria-hidden="true"></div>
-              <div class="progress-bar">
+              <div
+                class="progress-bar"
+                role="progressbar"
+                aria-label="轉錄進度"
+                aria-valuemin="0"
+                aria-valuemax="100"
+                aria-valuenow="0"
+              >
                 <div class="progress-fill" style="width: 0%"></div>
               </div>
-              <p class="progress-text">正在轉錄中...</p>
-              <p class="progress-percent">0%</p>
+              <p class="progress-text" role="status" aria-live="polite">正在轉錄中...</p>
+              <p class="progress-percent" aria-hidden="true">0%</p>
             </div>
 
             <!-- 結果區域 -->
@@ -390,7 +581,7 @@
                   <div id="levelFill" class="level-fill"></div>
                 </div>
               </div>
-              <p id="liveError" class="live-error hidden"></p>
+              <p id="liveError" class="live-error hidden" role="alert"></p>
             </div>
           </section>
 
@@ -418,7 +609,7 @@
                   <option value="ko">한국어</option>
                 </select>
               </div>
-              <button type="button" id="translateSwapBtn" class="btn btn-secondary translate-swap-btn" title="交換來源與目標語言">⇄</button>
+              <button type="button" id="translateSwapBtn" class="btn btn-secondary translate-swap-btn" title="交換來源與目標語言" aria-label="交換來源與目標語言">⇄</button>
               <div class="option-group">
                 <label for="translateTargetLang">目標語言</label>
                 <select id="translateTargetLang" class="select">
@@ -475,7 +666,7 @@
               <p class="setting-hint translate-hint">點擊翻譯，或 Ctrl+Enter；長文自動分段翻譯，可中途停止。朗讀需連上網路（Edge TTS）。</p>
             </div>
             <p id="translateStatus" class="translate-status">翻譯：檢查中…</p>
-            <p id="translateError" class="live-error hidden"></p>
+            <p id="translateError" class="live-error hidden" role="alert"></p>
           </section>
 
           <!-- 設定 -->
@@ -622,10 +813,23 @@
                       <h2 class="settings-section-title">聊天</h2>
                       <p class="settings-section-desc">
                         聊天分頁專用，與翻譯的雲端設定各自獨立（翻譯可用便宜模型、聊天用強模型）。
-                        系統提示改在聊天頁的工具列切換與管理。
+                        可設多組供應商、各自帶獨立的模型清單。系統提示改在聊天頁的工具列切換與管理。
                       </p>
                     </header>
                     <div class="settings-card">
+                      <div class="setting-group">
+                        <label for="chatProviderSelect">供應商</label>
+                        <div class="chat-provider-bar">
+                          <select id="chatProviderSelect" class="input"></select>
+                          <button type="button" id="chatAddProviderBtn" class="btn btn-secondary btn-sm">＋ 新增</button>
+                          <button type="button" id="chatDeleteProviderBtn" class="btn btn-secondary btn-sm">刪除</button>
+                        </div>
+                        <p id="chatProviderHint" class="setting-hint">以下欄位屬於目前選取的供應商。</p>
+                      </div>
+                      <div class="setting-group">
+                        <label for="chatProviderNameInput">名稱</label>
+                        <input type="text" id="chatProviderNameInput" class="input" placeholder="例如 OpenRouter" maxlength="40" />
+                      </div>
                       <div class="setting-group">
                         <label for="chatApiUrlInput">API URL</label>
                         <input
@@ -646,12 +850,17 @@
                       <div class="setting-group">
                         <label>模型清單</label>
                         <div id="chatModelList" class="chat-model-list"></div>
-                        <button type="button" id="chatAddModelBtn" class="btn btn-secondary btn-sm">
-                          ＋ 新增模型
-                        </button>
+                        <div class="chat-model-actions">
+                          <button type="button" id="chatAddModelBtn" class="btn btn-secondary btn-sm">
+                            ＋ 新增模型
+                          </button>
+                          <button type="button" id="chatScanModelsBtn" class="btn btn-secondary btn-sm">
+                            掃描模型
+                          </button>
+                        </div>
                         <p class="setting-hint">
-                          聊天頁可即時切換清單中的模型。
-                          <a href="https://openrouter.ai/models" target="_blank" rel="noopener">OpenRouter 模型</a>
+                          聊天頁可即時切換清單中的模型。「掃描模型」會<strong>先儲存供應商設定</strong>，
+                          再向該供應商的 <code class="agy-code-inline">/models</code> 端點取得可用清單。
                         </p>
                       </div>
                     </div>
@@ -852,8 +1061,34 @@
         </div>
       </dialog>
 
+      <dialog id="chatScanDialog" class="app-dialog" aria-label="掃描到的模型">
+        <div class="dialog-head">
+          <h2 class="dialog-title">掃描到的模型</h2>
+          <p id="chatScanDesc" class="dialog-desc"></p>
+        </div>
+        <div class="chat-scan-body">
+          <div class="chat-scan-toolbar">
+            <input
+              type="search"
+              id="chatScanSearch"
+              class="input"
+              placeholder="搜尋模型 ID…"
+              aria-label="搜尋模型"
+            />
+            <button type="button" id="chatScanAllBtn" class="btn btn-secondary btn-sm">全選</button>
+            <button type="button" id="chatScanNoneBtn" class="btn btn-secondary btn-sm">全不選</button>
+          </div>
+          <p id="chatScanCount" class="setting-hint" role="status"></p>
+          <div id="chatScanList" class="chat-scan-list"></div>
+        </div>
+        <div class="dialog-actions">
+          <button type="button" id="chatScanCancelBtn" class="btn btn-secondary btn-sm">取消</button>
+          <button type="button" id="chatScanApplyBtn" class="btn btn-primary btn-sm">加入清單</button>
+        </div>
+      </dialog>
+
       <!-- Toast 訊息 -->
-      <div id="toast" class="toast hidden">
+      <div id="toast" class="toast hidden" role="status" aria-live="polite" aria-atomic="true">
         <span class="toast-message"></span>
       </div>
     </div>

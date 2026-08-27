@@ -158,8 +158,13 @@ async function main() {
       const order = [...document.querySelectorAll('.header-nav .nav-tab')]
         .map((item) => item.dataset.page)
       const chatWasDefault = document.getElementById('page-chat')?.classList.contains('active') === true
-      document.querySelector('[data-page="usage"]')?.click()
-      await new Promise((resolve) => setTimeout(resolve, 500))
+      const usageTab = document.querySelector('[data-page="usage"]')
+      usageTab?.click()
+      for (let attempt = 0; attempt < 15; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 200))
+        if (document.querySelectorAll('#usageGrid .usage-card').length) break
+        usageTab?.click()
+      }
       const usageState = await window.electronAPI.usage.load()
       return {
         order,
@@ -176,9 +181,9 @@ async function main() {
       }
     })()`)
     ok(
-      'six-tab order + usage page structure',
+      'seven-tab order + usage page structure',
       JSON.stringify(usageUi?.order) === JSON.stringify([
-        'chat', 'usage', 'transcribe', 'live', 'translate', 'settings'
+        'chat', 'usage', 'agy', 'transcribe', 'live', 'translate', 'settings'
       ]) &&
         usageUi.hasApi &&
         usageUi.active &&
@@ -321,6 +326,46 @@ async function main() {
         settingsUi?.activeSections === 1 &&
         settingsUi?.hasFooterSave,
       JSON.stringify(settingsUi)
+    )
+
+    // 模型清單是 renderer 唯一改寫成 createElement 的地方（原本是 innerHTML 插值），
+    // 結構壞掉會讓下載按鈕與進度條整排失效——CSS 與 onModelProgress 都靠這些 class 定位
+    const modelItems = await cdp.eval(`(() => {
+      const items = [...document.querySelectorAll('#modelList .model-item')]
+      if (!items.length) return { count: 0 }
+      const first = items[0]
+      const name = first.querySelector('.model-name')
+      return {
+        count: items.length,
+        withKey: items.filter((el) => !!el.dataset.key).length,
+        withRow: items.filter((el) => !!el.querySelector('.model-row')).length,
+        withName: items.filter((el) => (el.querySelector('.model-name')?.textContent || '').trim().length > 0).length,
+        withTag: items.filter((el) => ['ASR', '翻譯'].includes(el.querySelector('.model-tag')?.textContent || '')).length,
+        withSize: items.filter((el) => (el.querySelector('.model-size')?.textContent || '').trim().length > 0).length,
+        withButton: items.filter((el) => !!el.querySelector('.model-actions .btn')).length,
+        withProgress: items.filter((el) => !!el.querySelector('.model-progress .model-progress-fill')).length,
+        // 沒在下載的項目，進度條必須是收起來的
+        hiddenProgress: items.filter((el) => el.querySelector('.model-progress')?.classList.contains('hidden')).length,
+        // 名稱節點只放文字：label 前面必須是 text node，不能是被解析出來的元素
+        nameFirstIsText: name?.firstChild?.nodeType === Node.TEXT_NODE,
+        // tag 是 name 的子節點（原本 innerHTML 模板的結構）
+        tagInsideName: !!name?.querySelector('.model-tag')
+      }
+    })()`)
+    ok(
+      'model list rendered without innerHTML',
+      modelItems?.count > 0 &&
+        modelItems.withKey === modelItems.count &&
+        modelItems.withRow === modelItems.count &&
+        modelItems.withName === modelItems.count &&
+        modelItems.withTag === modelItems.count &&
+        modelItems.withSize === modelItems.count &&
+        modelItems.withButton === modelItems.count &&
+        modelItems.withProgress === modelItems.count &&
+        modelItems.hiddenProgress === modelItems.count &&
+        modelItems.nameFirstIsText === true &&
+        modelItems.tagInsideName === true,
+      JSON.stringify(modelItems)
     )
 
     // 分類 rail：一次只顯示一區；字級階層 標題 > 欄位 label > 說明

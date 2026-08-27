@@ -1,8 +1,8 @@
 import { electronAPI, showToast } from './app.js'
 import {
-  animateFlip,
-  capturePositions,
   mergeVisibleOrder,
+  pickCollision,
+  slotShift,
   moveProvider as reorderProvider
 } from './usage-reorder.js'
 
@@ -39,7 +39,7 @@ let sortSession = null
 let pointerGrab = null
 let syncing = false
 
-const DRAG_THRESHOLD = 4
+const DRAG_THRESHOLD = 1
 
 const byId = (id) => document.getElementById(id)
 
@@ -142,6 +142,23 @@ function createQuotaRow(window) {
   return row
 }
 
+/**
+ * 訂閱方案文字。同步後 main 會把真實方案寫進 planName
+ * （`Claude Pro / Max`、`ChatGPT Plus`、`Antigravity Google AI Pro`、`Grok SuperGrok`…）；
+ * 沒同步過時它等於 provider 名稱，那就沒有資訊量、不顯示。
+ * OpenCode 沒有訂閱方案概念（planName 是「本機估算（Go 上限）」，footer 的可信度已經講過了）。
+ * @param {{ provider: string, planName: string, status: string }} account
+ * @param {string} label
+ * @returns {string}
+ */
+function planLabel(account, label) {
+  if (account.provider === 'opencode-go' || account.status === 'disconnected') return ''
+  const plan = String(account.planName || '').trim()
+  if (!plan || plan === label) return ''
+  // 卡片標題已經寫著 provider 名字，`Antigravity Google AI Pro` 只留後半段
+  return plan.startsWith(`${label} `) ? plan.slice(label.length + 1) : plan
+}
+
 function createCard(account) {
   const meta = PROVIDER_META.get(account.provider) || { label: account.provider, accent: '#818cf8' }
   const status = deriveStatus(account)
@@ -170,6 +187,9 @@ function createCard(account) {
     createElement('span', '', `可信度 · ${ACCURACY_LABELS[account.accuracy] || '未知'}`),
     createElement('span', '', account.status === 'disconnected' ? '來源未偵測' : '來源已偵測')
   )
+  const plan = planLabel(account, meta.label)
+  // 放 footer 不放標題下方：標題 pill 底下刻意不掛副標（見 CLAUDE.md 視覺約定）
+  if (plan) footer.appendChild(createElement('span', 'usage-card-plan', `方案 · ${plan}`))
   if (account.notes && account.windows.length) {
     footer.appendChild(createElement('p', 'usage-card-note', account.notes))
   }
@@ -195,25 +215,47 @@ function announceSort(provider, order, prefix = '') {
   byId('usageSortStatus').textContent = `${prefix}${label}，${position}`
 }
 
-function settleDraggedCard(card) {
-  const from = card.getBoundingClientRect()
-  card.style.transform = ''
-  const to = card.getBoundingClientRect()
-  const dx = from.left - to.left
-  const dy = from.top - to.top
-  if (!dx && !dy) return
-  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
-  card.animate([
-    { transform: `translate3d(${dx}px, ${dy}px, 0)` },
-    { transform: 'translate3d(0, 0, 0)' }
-  ], { duration: 150, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' })
+/**
+ * 跟手的 overlay（Token Anxiety 的 DragOverlay）。
+ * 進 DOM 前就寫好 transform，避免先出現在 (0,0)。
+ * @param {HTMLElement} card
+ * @param {{ offsetX: number, offsetY: number }} grab
+ * @param {{ clientX: number, clientY: number }} event
+ * @returns {HTMLElement}
+ */
+function mountOverlay(card, grab, event) {
+  const rect = card.getBoundingClientRect()
+  const overlay = card.cloneNode(true)
+  overlay.classList.add('usage-card-overlay')
+  overlay.classList.remove('is-ghost', 'keyboard-sorting')
+  overlay.removeAttribute('tabindex')
+  overlay.setAttribute('aria-hidden', 'true')
+  overlay.setAttribute('aria-grabbed', 'false')
+  overlay.style.width = `${Math.round(rect.width)}px`
+  overlay.style.height = `${Math.round(rect.height)}px`
+  overlay.style.left = '0px'
+  overlay.style.top = '0px'
+  placeOverlay(overlay, grab, event)
+  document.body.appendChild(overlay)
+  return overlay
+}
+
+/**
+ * @param {HTMLElement} overlay
+ * @param {{ offsetX: number, offsetY: number }} grab
+ * @param {{ clientX: number, clientY: number }} event
+ */
+function placeOverlay(overlay, grab, event) {
+  overlay.style.transform = `translate3d(${Math.round(event.clientX - grab.offsetX)}px, ${Math.round(event.clientY - grab.offsetY)}px, 0)`
 }
 
 function finishSortSession() {
-  if (sortSession?.mode === 'drag') settleDraggedCard(sortSession.card)
+  sortSession?.overlay?.remove()
   byId('usageGrid')?.classList.remove('is-sorting')
-  document.querySelectorAll('.usage-card').forEach((card) => {
-    card.classList.remove('dragging', 'keyboard-sorting')
+  document.querySelectorAll('#usageGrid .usage-card').forEach((card) => {
+    card.classList.remove('is-ghost', 'keyboard-sorting')
+    card.style.transition = ''
+    card.style.transform = ''
     card.setAttribute('aria-grabbed', 'false')
   })
   sortSession = null
@@ -227,37 +269,86 @@ function startSort(mode, card) {
     mode,
     provider,
     card,
+    overlay: null,
+    homes: null,
+    slots: null,
     originalOrder,
     previewOrder: originalOrder,
     committing: false
   }
   byId('usageGrid').classList.add('is-sorting')
-  card.classList.add(mode === 'drag' ? 'dragging' : 'keyboard-sorting')
+  if (mode === 'keyboard') card.classList.add('keyboard-sorting')
   card.setAttribute('aria-grabbed', 'true')
   announceSort(provider, originalOrder, '已抓取')
   return true
 }
 
-function applyPreviewOrder(order, animate = true) {
+/**
+ * 拖曳開始時把格子槽位記住。碰撞只打這份靜態座標，
+ * 才不會跟正在滑的 transform 互相追打。
+ */
+function captureDragSlots() {
+  const homes = new Map()
+  const slots = []
+  for (const card of cardElements()) {
+    const rect = card.getBoundingClientRect()
+    const home = {
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height
+    }
+    homes.set(card.dataset.provider, home)
+    slots.push(home)
+  }
+  sortSession.homes = homes
+  sortSession.slots = slots
+}
+
+function syncDomOrder(order) {
   const grid = byId('usageGrid')
-  const cards = cardElements()
-  const before = animate ? capturePositions(cards) : null
-  const cardByProvider = new Map(cards.map((card) => [card.dataset.provider, card]))
+  const cardByProvider = new Map(cardElements().map((card) => [card.dataset.provider, card]))
   for (const provider of order) {
     const card = cardByProvider.get(provider)
     if (card) grid.appendChild(card)
   }
-  if (!animate) return
-  const siblings = cardElements().filter((card) => card.dataset.provider !== sortSession?.provider)
+}
+
+function clearSlotTransforms() {
+  for (const card of cardElements()) {
+    card.style.transition = 'none'
+    card.style.transform = ''
+  }
+}
+
+/**
+ * 拖曳中只改 transform。鬼影立刻跳到落點（預覽），其他卡 110ms 推開。
+ * @param {string[]} visibleOrder
+ * @param {boolean} animate
+ */
+function applySlotTransforms(visibleOrder, animate) {
+  if (!sortSession?.homes || !sortSession.slots) return
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  animateFlip(siblings, before, reduced)
+  const motion = animate && !reduced
+    ? 'transform 110ms cubic-bezier(0.22, 1, 0.36, 1)'
+    : 'none'
+  for (const card of cardElements()) {
+    const home = sortSession.homes.get(card.dataset.provider)
+    const index = visibleOrder.indexOf(card.dataset.provider)
+    if (!home || index < 0) continue
+    const { dx, dy } = slotShift(home, sortSession.slots[index])
+    const ghost = card.classList.contains('is-ghost')
+    card.style.transition = ghost ? 'none' : motion
+    card.style.transform = `translate3d(${dx}px, ${dy}px, 0)`
+  }
 }
 
 function previewVisibleOrder(nextVisible, animate) {
   if (!sortSession) return
   const next = mergeVisibleOrder(sortSession.previewOrder, nextVisible)
   sortSession.previewOrder = next
-  applyPreviewOrder(next, animate)
+  if (sortSession.mode === 'drag') applySlotTransforms(nextVisible, animate)
+  else syncDomOrder(next)
   announceSort(sortSession.provider, next)
 }
 
@@ -270,10 +361,11 @@ function moveKeyboardSort(delta) {
   previewVisibleOrder(reorderProvider(visible, sortSession.provider, to), false)
 }
 
-function restoreSortSession(animate) {
+function restoreSortSession() {
   if (!sortSession || sortSession.committing) return
   const { provider, originalOrder } = sortSession
-  applyPreviewOrder(originalOrder, animate)
+  if (sortSession.mode === 'drag') clearSlotTransforms()
+  syncDomOrder(originalOrder)
   announceSort(provider, originalOrder, '已取消')
   finishSortSession()
 }
@@ -283,6 +375,8 @@ async function commitSort() {
   const session = sortSession
   const previous = state
   session.committing = true
+  clearSlotTransforms()
+  syncDomOrder(session.previewOrder)
   try {
     const settings = { ...state.settings, providerOrder: session.previewOrder }
     state = unwrap(await electronAPI.usage.saveSettings(settings))
@@ -292,7 +386,7 @@ async function commitSort() {
   } catch (error) {
     state = previous
     session.committing = false
-    applyPreviewOrder(session.originalOrder, session.mode === 'drag')
+    syncDomOrder(session.originalOrder)
     setError(error.message || '額度順序儲存失敗')
     announceSort(session.provider, session.originalOrder, '儲存失敗，已還原')
   } finally {
@@ -300,43 +394,28 @@ async function commitSort() {
   }
 }
 
-function pointerIsAfter(event, target) {
-  const rect = target.getBoundingClientRect()
-  const verticalDistance = Math.abs(event.clientY - (rect.top + rect.height / 2))
-  if (verticalDistance > rect.height * 0.25) {
-    return event.clientY > rect.top + rect.height / 2
-  }
-  return event.clientX > rect.left + rect.width / 2
-}
-
-function previewDrag(card, event) {
+function previewDragToSlot(index) {
   if (!sortSession || sortSession.mode !== 'drag') return
-  const visible = visibleOrder(sortSession.previewOrder)
-  const sourceIndex = visible.indexOf(sortSession.provider)
-  const targetIndex = visible.indexOf(card.dataset.provider)
-  if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return
-  let insertion = targetIndex + (pointerIsAfter(event, card) ? 1 : 0)
-  if (sourceIndex < insertion) insertion--
-  const next = reorderProvider(visible, sortSession.provider, insertion)
-  if (next.every((provider, index) => provider === visible[index])) return
-  previewVisibleOrder(next, true)
+  const visible = visibleOrder(sortSession.originalOrder)
+  if (index < 0 || index >= visible.length) return
+  const nextVisible = reorderProvider(visible, sortSession.provider, index)
+  const next = mergeVisibleOrder(sortSession.originalOrder, nextVisible)
+  if (next.every((provider, i) => provider === sortSession.previewOrder[i])) return
+  sortSession.previewOrder = next
+  applySlotTransforms(nextVisible, true)
+  announceSort(sortSession.provider, next)
 }
 
-function cardUnderPointer(event) {
-  return cardElements().find((card) => {
-    if (card === sortSession?.card) return false
-    const rect = card.getBoundingClientRect()
-    return event.clientX >= rect.left && event.clientX <= rect.right &&
-      event.clientY >= rect.top && event.clientY <= rect.bottom
-  })
-}
-
-function followPointer(card, grab, event) {
-  card.style.transform = 'none'
-  const base = card.getBoundingClientRect()
-  const x = Math.round(event.clientX - grab.offsetX - base.left)
-  const y = Math.round(event.clientY - grab.offsetY - base.top)
-  card.style.transform = `translate3d(${x}px, ${y}px, 0)`
+function collisionFromPointer(event) {
+  const items = (sortSession?.slots || []).map((slot, index) => ({
+    id: String(index),
+    left: slot.left,
+    top: slot.top,
+    width: slot.width,
+    height: slot.height
+  }))
+  const hit = pickCollision({ x: event.clientX, y: event.clientY }, items)
+  return hit == null ? null : Number(hit)
 }
 
 function endPointerDrag() {
@@ -351,6 +430,7 @@ function endPointerDrag() {
 function onPointerMove(event) {
   const grab = pointerGrab
   if (!grab || event.pointerId !== grab.pointerId) return
+  grab.lastEvent = event
   if (grab.active && !sortSession) {
     endPointerDrag()
     return
@@ -362,15 +442,18 @@ function onPointerMove(event) {
       endPointerDrag()
       return
     }
+    grab.card.classList.add('is-ghost')
     const rect = grab.card.getBoundingClientRect()
-    grab.offsetX = grab.startX - rect.left
-    grab.offsetY = grab.startY - rect.top
+    grab.offsetX = event.clientX - rect.left
+    grab.offsetY = event.clientY - rect.top
     grab.active = true
+    captureDragSlots()
+    sortSession.overlay = mountOverlay(grab.card, grab, event)
   }
   event.preventDefault()
-  const target = cardUnderPointer(event)
-  if (target) previewDrag(target, event)
-  followPointer(grab.card, grab, event)
+  if (sortSession?.overlay) placeOverlay(sortSession.overlay, grab, event)
+  const index = collisionFromPointer(event)
+  if (index != null) previewDragToSlot(index)
 }
 
 function onPointerUp() {
@@ -446,7 +529,8 @@ function visibleAccounts() {
 function renderSummary() {
   const host = byId('usageProviderSummary')
   const fragment = document.createDocumentFragment()
-  for (const account of state.accounts) {
+  // 跟卡片同一份來源：顯示設定關掉的就不該出現在頂部橫條，順序也要一致
+  for (const account of visibleAccounts()) {
     const meta = PROVIDER_META.get(account.provider)
     const chip = createElement('span', `usage-provider-chip ${deriveStatus(account)}`)
     chip.append(
@@ -649,8 +733,12 @@ export async function initUsagePage() {
 }
 
 export function refreshUsagePage() {
-  render()
-  startCountdown()
+  void (async () => {
+    await initUsagePage()
+    if (!byId('page-usage')?.classList.contains('active')) return
+    render()
+    startCountdown()
+  })()
 }
 
 export function cooldownUsagePage() {

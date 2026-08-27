@@ -241,6 +241,74 @@ test('Grok 支援 wrapped 與 flat billing 並送出 CLI header', async () => {
   }
 })
 
+test('訂閱方案取自本機憑證：Claude subscriptionType／Codex id_token／Grok tier', async () => {
+  const { syncClaude } = require('../src/main/usage/claude')
+  const { syncCodex } = require('../src/main/usage/codex')
+  const { syncGrok } = require('../src/main/usage/grok')
+  const jwt = (claims) => [
+    Buffer.from(JSON.stringify({ alg: 'none' })).toString('base64url'),
+    Buffer.from(JSON.stringify(claims)).toString('base64url'),
+    'sig'
+  ].join('.')
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-usage-plan-'))
+  const nowMs = Date.parse('2026-08-20T12:00:00Z')
+  try {
+    // Claude：方案在 .credentials.json，usage API 不回。
+    // 靠 extra_usage.is_enabled 猜的話 Pro 會被寫成「Pro / Max」。
+    fs.mkdirSync(path.join(homeDir, '.claude'))
+    fs.writeFileSync(
+      path.join(homeDir, '.claude', '.credentials.json'),
+      JSON.stringify({ claudeAiOauth: { accessToken: 'tok', subscriptionType: 'max' } })
+    )
+    const claude = await syncClaude({
+      homeDir,
+      nowMs,
+      fetchImpl: async () => new Response(JSON.stringify({
+        five_hour: { utilization: 10, resets_at: '2026-08-20T15:00:00Z' },
+        extra_usage: { is_enabled: true }
+      }), { status: 200 }),
+      log: () => {}
+    })
+    assert.equal(claude.planName, 'Claude Max')
+
+    // Codex：新版 auth.json 沒有頂層 plan_type，方案在 id_token 的自訂 claim
+    fs.mkdirSync(path.join(homeDir, '.codex'))
+    fs.writeFileSync(path.join(homeDir, '.codex', 'auth.json'), JSON.stringify({
+      tokens: {
+        access_token: 'tok',
+        id_token: jwt({ 'https://api.openai.com/auth': { chatgpt_plan_type: 'plus' } })
+      }
+    }))
+    const codex = await syncCodex({
+      homeDir,
+      nowMs,
+      fetchImpl: async () => new Response(JSON.stringify({
+        rate_limit: { primary_window: { used_percent: 5, reset_at: 1787241600 } }
+      }), { status: 200 }),
+      log: () => {}
+    })
+    assert.equal(codex.planName, 'ChatGPT Plus')
+
+    // Grok：billing 沒回 subscriptionTier 時退回 access token 的 tier claim
+    fs.mkdirSync(path.join(homeDir, '.grok'))
+    fs.writeFileSync(path.join(homeDir, '.grok', 'auth.json'), JSON.stringify({
+      valid: { key: jwt({ tier: 1 }), user_id: 'user-1' }
+    }))
+    const grok = await syncGrok({
+      homeDir,
+      env: {},
+      nowMs,
+      fetchImpl: async () => new Response(JSON.stringify({
+        config: { creditUsagePercent: 44, currentPeriod: { end: '2026-08-27T00:00:00Z' } }
+      }), { status: 200 }),
+      log: () => {}
+    })
+    assert.equal(grok.planName, 'Grok Tier 1')
+  } finally {
+    fs.rmSync(homeDir, { recursive: true, force: true })
+  }
+})
+
 test('缺少本機憑證時三個雲端 provider 都回 disconnected', async () => {
   const { syncClaude } = require('../src/main/usage/claude')
   const { syncCodex } = require('../src/main/usage/codex')
@@ -559,6 +627,60 @@ test('Antigravity 未連線時不合成假額度視窗', () => {
   assert.deepEqual(merged.windows, [])
 })
 
+test('Antigravity API 失敗且無快取時不合成 100% 假額度', () => {
+  const { createBaseAccount } = loadShared().shared
+  const { mergeAccountState } = require('../src/main/usage')
+  const nowMs = Date.parse('2026-08-20T12:00:00Z')
+  const current = createBaseAccount('antigravity', nowMs)
+  current.status = 'connected'
+  current.accuracy = 'estimated'
+  current.windows = []
+  current.notes = 'Antigravity 額度 API 暫時無法使用（HTTP 502）。'
+
+  const merged = mergeAccountState(current, null, nowMs)
+  assert.deepEqual(merged.windows, [])
+  assert.ok(
+    merged.windows.every((window) => window.used !== 100),
+    '空窗不得被補成 100/100'
+  )
+})
+
+test('Antigravity API 失敗時用 6h soft cache 而非 100% 補窗', () => {
+  const { createBaseAccount, createWindow } = loadShared().shared
+  const { mergeAccountState } = require('../src/main/usage')
+  const nowMs = Date.parse('2026-08-20T12:00:00Z')
+  const previous = createBaseAccount('antigravity', nowMs - 1_000)
+  previous.windows = [
+    createWindow('antigravity-gemini-5h', 'Gemini', 'rolling-5h', 17, 100, '2026-08-21T00:00:00Z')
+  ]
+  const current = createBaseAccount('antigravity', nowMs)
+  current.status = 'connected'
+  current.windows = []
+  current.notes = 'Antigravity 額度 API 暫時無法使用。'
+
+  const merged = mergeAccountState(current, previous, nowMs)
+  assert.equal(merged.windows.length, 1)
+  assert.equal(merged.windows[0].used, 17)
+  assert.equal(merged.accuracy, 'estimated')
+  assert.match(merged.notes, /上次/)
+})
+
+test('Antigravity API 失敗且快取過期時保持空窗', () => {
+  const { createBaseAccount, createWindow } = loadShared().shared
+  const { mergeAccountState } = require('../src/main/usage')
+  const nowMs = Date.parse('2026-08-20T12:00:00Z')
+  const previous = createBaseAccount('antigravity', nowMs - 7 * 60 * 60 * 1000)
+  previous.windows = [
+    createWindow('antigravity-gemini-5h', 'Gemini', 'rolling-5h', 17, 100, '')
+  ]
+  const current = createBaseAccount('antigravity', nowMs)
+  current.status = 'connected'
+  current.windows = []
+
+  const merged = mergeAccountState(current, previous, nowMs)
+  assert.deepEqual(merged.windows, [])
+})
+
 test('打包版 Antigravity credential script 解析到 asar.unpacked', () => {
   const { resolveCredentialScriptPath } = require('../src/main/usage/antigravity')
   const packedDir = path.join('C:', 'app', 'resources', 'app.asar', 'src', 'main', 'usage')
@@ -595,6 +717,85 @@ test('Antigravity cache 逐一補齊 API 遺漏的固定 slot', () => {
     ['antigravity-gemini-weekly', 50]
   ])
   assert.equal(merged.accuracy, 'estimated')
+})
+
+test('Antigravity 同步只回上游真的給的視窗（不預先補成 100% 用盡）', async () => {
+  // 這條擋的是「syncAntigravity 先自己 mergeExpectedWindows(…, null)」那個回歸：
+  // 先補一輪之後，index.js 的 mergeAccountState 會看到四個 id 都在，
+  // 既撿不回快取的真實值，也偵測不到有視窗是補出來的 → 憑空的 100% 被標成官方 API。
+  const { syncAntigravity } = require('../src/main/usage/antigravity')
+  const { mergeAccountState } = require('../src/main/usage')
+  const { createBaseAccount, createWindow } = loadShared().shared
+  const nowMs = Date.parse('2026-08-20T12:00:00Z')
+
+  const json = (body) => new Response(JSON.stringify(body), { status: 200 })
+  const fetchImpl = async (url) => {
+    if (url.endsWith(':loadCodeAssist')) return json({ cloudaicompanionProject: 'projects/p', paidTier: { name: 'Pro' } })
+    if (url.endsWith(':retrieveUserQuotaSummary')) {
+      // 上游只回 Gemini，Claude 那兩條沒給
+      return json({ groups: [{ displayName: 'Gemini', buckets: [
+        { bucketId: 'gemini-5h', window: '5h', remainingFraction: 0.83, resetTime: '2026-08-21T00:00:00Z' },
+        { bucketId: 'gemini-weekly', window: 'weekly', remainingFraction: 0.91, resetTime: '2026-08-27T00:00:00Z' }
+      ] }] })
+    }
+    if (url.endsWith(':fetchAvailableModels')) return json({ models: {} })
+    throw new Error(`unexpected URL ${url}`)
+  }
+
+  const account = await syncAntigravity({
+    nowMs,
+    fetchImpl,
+    readCredential: async () => JSON.stringify({
+      token: { access_token: 'a', refresh_token: 'r', expiry: '2099-01-01T00:00:00Z' }
+    })
+  })
+  assert.deepEqual(
+    account.windows.map((window) => window.id),
+    ['antigravity-gemini-5h', 'antigravity-gemini-weekly'],
+    '上游沒回的視窗不該在這一層被補出來'
+  )
+
+  // 接上 index.js 那一層：快取的 Claude 真實值要被撿回來，可信度要降級
+  const previous = createBaseAccount('antigravity', nowMs - 1_000)
+  previous.windows = [
+    createWindow('antigravity-claude-5h', 'Claude', 'rolling-5h', 12, 100, ''),
+    createWindow('antigravity-claude-weekly', 'Claude', 'weekly', 30, 100, '')
+  ]
+  const merged = mergeAccountState(account, previous, nowMs)
+  assert.deepEqual(merged.windows.map((window) => [window.id, window.used]), [
+    ['antigravity-claude-5h', 12],
+    ['antigravity-claude-weekly', 30],
+    ['antigravity-gemini-5h', 17],
+    ['antigravity-gemini-weekly', 9]
+  ])
+  assert.equal(merged.accuracy, 'estimated', '有視窗是補的就不能自稱官方 API')
+  assert.match(merged.notes, /部分 Antigravity 額度未回傳/)
+})
+
+test('Antigravity quota summary 成功時 models 失敗仍回視窗', async () => {
+  const { syncAntigravity } = require('../src/main/usage/antigravity')
+  const nowMs = Date.parse('2026-08-20T12:00:00Z')
+  const json = (body, status = 200) => new Response(JSON.stringify(body), { status })
+  const fetchImpl = async (url) => {
+    if (url.endsWith(':loadCodeAssist')) return json({ cloudaicompanionProject: 'projects/p' })
+    if (url.endsWith(':retrieveUserQuotaSummary')) {
+      return json({ groups: [{ displayName: 'Gemini', buckets: [
+        { bucketId: 'gemini-5h', window: '5h', remainingFraction: 0.4, resetTime: '2026-08-21T00:00:00Z' }
+      ] }] })
+    }
+    if (url.endsWith(':fetchAvailableModels')) return json({ error: 'unavailable' }, 503)
+    throw new Error(`unexpected URL ${url}`)
+  }
+  const account = await syncAntigravity({
+    nowMs,
+    fetchImpl,
+    readCredential: async () => JSON.stringify({
+      token: { access_token: 'a', refresh_token: 'r', expiry: '2099-01-01T00:00:00Z' }
+    })
+  })
+  assert.equal(account.windows.length, 1)
+  assert.equal(account.windows[0].id, 'antigravity-gemini-5h')
+  assert.equal(account.status, 'available')
 })
 
 test('並行同步共用同一個 in-flight 工作', async () => {

@@ -43,7 +43,14 @@ function mergeAccountState(currentRaw, previousRaw, nowMs = Date.now()) {
   try { previous = previousRaw ? normalizeAccount(previousRaw) : null } catch { /* invalid cache */ }
 
   let restoredAntigravity = false
-  if (current.provider === 'antigravity' && current.status !== 'disconnected') {
+  // 只在上游真的回了至少一個視窗時才補齊缺槽。空陣列代表 API 失敗或沒給額度，
+  // 這時 mergeExpectedWindows 會用 100/100 填滿四條，看起來像「官方已用盡」。
+  // 空窗交給下面的 6h soft cache；沒快取就維持空，跟其他家同一套降級。
+  if (
+    current.provider === 'antigravity' &&
+    current.status !== 'disconnected' &&
+    current.windows.length > 0
+  ) {
     const present = new Set(current.windows.map((window) => window.id))
     const merged = mergeExpectedWindows(current.windows, previous)
     restoredAntigravity = merged.some((window) => !present.has(window.id))

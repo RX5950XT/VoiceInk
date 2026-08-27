@@ -272,7 +272,7 @@ async function syncQuota(token, fetchImpl, log) {
     'retrieveUserQuotaSummary', token, project, fetchImpl, log, false
   )
   const models = await fetchAcrossBases(
-    'fetchAvailableModels', token, project, fetchImpl, log, true
+    'fetchAvailableModels', token, project, fetchImpl, log, false
   )
   return { summary, models, tier }
 }
@@ -321,9 +321,12 @@ async function syncAntigravity({
       refreshed = true
       quota = await syncQuota(fresh, fetchImpl, log)
     }
-    const result = applyAntigravityQuota({ ...quota, nowMs })
-    result.windows = mergeExpectedWindows(result.windows, null)
-    return normalizeAccount(result)
+    // 這裡**不要**先 mergeExpectedWindows：補視窗是 usage/index.js 的工作，
+    // 只有它拿得到上一次的快取。在這裡先用 previous=null 補一輪，等於把上游沒回的
+    // 那幾條寫成「100/100 已用盡」，index.js 再看到時每個 id 都已存在——
+    // 既撿不回快取裡的真實值，也偵測不到「這是補的」而把 accuracy 降成 estimated，
+    // 結果是憑空的 100% 用盡被標成「官方 API」。只回上游真的給了的視窗。
+    return normalizeAccount(applyAntigravityQuota({ ...quota, nowMs }))
   } catch (error) {
     log(`antigravity: quota failed ${error.status ? `HTTP ${error.status}` : error.code || 'unknown'}`)
     account.status = 'connected'
@@ -331,7 +334,7 @@ async function syncAntigravity({
     account.notes = error.status
       ? `Antigravity 額度 API 暫時無法使用（HTTP ${error.status}）。`
       : tokenIsStale(credential.expiry, nowMs) && !refreshed
-        ? 'Antigravity token 已過期，且未提供 OAuth refresh 環境變數。'
+        ? 'Antigravity token 已過期，請在 Antigravity CLI 或 IDE 重新登入一次。'
         : 'Antigravity 額度 API 暫時無法使用。'
     return normalizeAccount(account)
   }
@@ -339,12 +342,16 @@ async function syncAntigravity({
 
 module.exports = {
   applyAntigravityQuota,
+  antigravityHeaders,
+  fetchLoadCodeAssist,
   mergeExpectedWindows,
   parseCredential,
   parseModelsFallback,
   parseQuotaSummary,
   readAntigravityCredential,
+  refreshAccessToken,
   resolveCredentialScriptPath,
   syncAntigravity,
-  tokenIsStale
+  tokenIsStale,
+  USER_AGENT
 }

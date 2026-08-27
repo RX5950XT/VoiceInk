@@ -22,12 +22,18 @@ const MAX_CONTEXT_CHARS = 24000
 const FIRST_TOKEN_TIMEOUT_MS = 60000
 /** 閒置逾時：串流中斷但連線沒關 */
 const IDLE_TIMEOUT_MS = 120000
+/** 單行尚未切完的 SSE buffer 上限，防止失控上游把 main 撐爆 */
+const MAX_SSE_BUFFER = 512 * 1024
 /** 只把最近幾則訊息的圖片送進 API：長對話每次重傳全部圖片會爆 token 與頻寬 */
 const IMAGE_CONTEXT_MESSAGES = 6
 /** thinking 開啟時帶的強度（OpenAI／OpenRouter／xAI 等相容欄位） */
 const REASONING_EFFORT = 'medium'
 
 /** 系統提示 preset 上限 */
+const MAX_PROVIDERS = 10
+const MAX_PROVIDER_NAME = 40
+const MAX_PROVIDER_URL = 500
+const MAX_PROVIDER_MODELS = 30
 const MAX_PROMPTS = 20
 const MAX_PROMPT_NAME = 40
 const MAX_PROMPT_CONTENT = 4000
@@ -46,21 +52,94 @@ function setStore(value) {
 }
 
 /**
- * 從設定 store 取聊天設定（store:set 已校驗過，這裡是縱深防禦）
- * @returns {{ apiUrl: string, apiKey: string, modelId: string, systemPrompt: string, thinking: boolean }}
+ * 取目前選中的供應商。`chatProviderId` 失效時退回第一筆，一筆都沒有就是 null。
+ * @returns {{ id: string, name: string, apiUrl: string, apiKey: string, models: string[] } | null}
+ */
+function readProvider() {
+  const providers = sanitizeProviders(store?.get('chatProviders', []))
+  if (!providers.length) return null
+  const wanted = String(store?.get('chatProviderId', '') || '').trim()
+  return providers.find((p) => p.id === wanted) || providers[0]
+}
+
+/**
+ * 從設定 store 取聊天設定（store:set 已校驗過，這裡是縱深防禦）。
+ *
+ * model 一定要對「目前這個供應商」的清單驗證，不能只看在不在任何清單裡——
+ * 否則切換供應商後會拿 A 的模型名打 B 的端點。
+ * @returns {{ apiUrl: string, apiKey: string, providerId: string, providerName: string,
+ *            modelId: string, systemPrompt: string, thinking: boolean }}
  */
 function readConfig() {
-  const rawUrl = String(store?.get('chatApiUrl', DEFAULT_CHAT_API_URL) || '').trim()
-  const apiUrl = /^https?:\/\//i.test(rawUrl) ? rawUrl : DEFAULT_CHAT_API_URL
-  const models = sanitizeModels(store?.get('chatModels', [DEFAULT_CHAT_MODEL]))
-  const wanted = String(store?.get('chatModelId', '') || '').trim()
+  const provider = readProvider()
+  const wantedModel = String(store?.get('chatModelId', '') || '').trim()
   return {
-    apiUrl,
-    apiKey: String(store?.get('chatApiKey', '') || '').trim(),
-    modelId: models.includes(wanted) ? wanted : '',
+    apiUrl: provider?.apiUrl || '',
+    apiKey: provider?.apiKey || '',
+    providerId: provider?.id || '',
+    providerName: provider?.name || '',
+    modelId: provider?.models.includes(wantedModel) ? wantedModel : '',
     systemPrompt: readSystemPrompt(),
     thinking: store?.get('chatThinking', false) === true
   }
+}
+
+/**
+ * 供應商清單正規化。形狀沿用 sanitizePrompts：id 走字元 allowlist、去重、限量。
+ *
+ * apiUrl 不合法時**保留這筆但清空 url**，不整筆丟掉：
+ * 這個函式同時跑在 store:set 的存檔路徑上，直接丟掉等於使用者打錯一個字
+ * 就把整組供應商（含 API Key 與整份模型清單）刪了。留著空 url，
+ * readConfig 會判定成未設定並回可讀的錯誤，資料還在。
+ * @param {unknown} raw
+ * @returns {Array<{ id: string, name: string, apiUrl: string, apiKey: string, models: string[] }>}
+ */
+function sanitizeProviders(raw) {
+  if (!Array.isArray(raw)) return []
+  const seen = new Set()
+  const out = []
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const id = typeof item.id === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(item.id) ? item.id : ''
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    const rawUrl = typeof item.apiUrl === 'string' ? item.apiUrl.trim().slice(0, MAX_PROVIDER_URL) : ''
+    const name = typeof item.name === 'string'
+      ? item.name.trim().replace(/\s+/g, ' ').slice(0, MAX_PROVIDER_NAME)
+      : ''
+    out.push({
+      id,
+      name: name || '未命名供應商',
+      apiUrl: /^https?:\/\//i.test(rawUrl) ? rawUrl : '',
+      apiKey: typeof item.apiKey === 'string' ? item.apiKey.trim() : '',
+      models: sanitizeModels(item.models).slice(0, MAX_PROVIDER_MODELS)
+    })
+    if (out.length >= MAX_PROVIDERS) break
+  }
+  return out
+}
+
+/**
+ * 舊版的單組設定 → 一筆名為「預設」的供應商。
+ * 呼叫端負責在寫入成功後才刪舊 key。
+ * @param {unknown} apiUrl
+ * @param {unknown} apiKey
+ * @param {unknown} models
+ * @returns {{ id: string, name: string, apiUrl: string, apiKey: string, models: string[] } | null}
+ */
+function providerFromLegacy(apiUrl, apiKey, models) {
+  const url = typeof apiUrl === 'string' ? apiUrl.trim() : ''
+  const key = typeof apiKey === 'string' ? apiKey.trim() : ''
+  const list = sanitizeModels(models)
+  if (!url && !key && !list.length) return null
+  const [provider] = sanitizeProviders([{
+    id: 'p_legacy',
+    name: '預設',
+    apiUrl: /^https?:\/\//i.test(url) ? url : DEFAULT_CHAT_API_URL,
+    apiKey: key,
+    models: list.length ? list : [DEFAULT_CHAT_MODEL]
+  }])
+  return provider || null
 }
 
 /**
@@ -180,6 +259,10 @@ async function readSseStream(res, onDelta, onActivity) {
     if (done) break
     onActivity()
     buffer += decoder.decode(value, { stream: true })
+    if (buffer.length > MAX_SSE_BUFFER) {
+      await reader.cancel().catch(() => {})
+      return content.slice(0, MAX_INPUT_CHARS)
+    }
     const lines = buffer.split('\n')
     buffer = lines.pop() ?? ''
     for (const line of lines) {
@@ -192,6 +275,10 @@ async function readSseStream(res, onDelta, onActivity) {
       if (delta.content) {
         content += delta.content
         onDelta(delta.content, 'content')
+        if (content.length >= MAX_INPUT_CHARS) {
+          await reader.cancel().catch(() => {})
+          return content.slice(0, MAX_INPUT_CHARS)
+        }
       }
     }
   }
@@ -240,30 +327,51 @@ async function send(req, sender) {
   }
   if (inflight) return { ok: false, error: '仍在回應中，請先停止' }
 
-  const cfg = readConfig()
-  if (!cfg.apiKey) return { ok: false, error: '尚未設定聊天 API Key' }
-  if (!cfg.modelId) return { ok: false, error: '目前的聊天模型不在模型清單內，請到設定重新選擇' }
-
-  // 先確認對話存在再落圖片檔，否則失敗會留下沒人引用的圖
-  if (!(await chatStore.get(req?.conversationId))) return { ok: false, error: '找不到這個對話' }
-
-  let conversation
-  if (regenerate) {
-    conversation = await chatStore.dropTrailingAssistant(req.conversationId)
-    if (!conversation?.messages.length) return { ok: false, error: '沒有可重新生成的訊息' }
-  } else {
-    const images = await chatImages.saveMany(rawImages)
-    conversation = await chatStore.appendMessage(req.conversationId, 'user', text, { images })
-    if (!conversation) return { ok: false, error: '找不到這個對話' }
-  }
-
+  // 佔位一定要跟守衛在同一個同步區塊裡。中間只要有一個 await（讀對話、存圖片、
+  // 寫使用者訊息都是），第二個請求就會在指派前先通過守衛：兩條串流同時開，
+  // 兩則使用者訊息連在一起寫進同一個對話，先開的那條被後者覆蓋掉——
+  // 「停止」按鈕再也找不到它，逾時計時器也會去改到別人的 reason。
   const controller = new AbortController()
   inflight = { reqId, controller, reason: '' }
-  const timers = createTimers(controller)
+  /** @type {{ clear: () => void, touch: () => void } | null} */
+  let timers = null
+  /** @type {{ id: string, messages: Array<object> } | null} */
+  let conversation = null
   // 中斷／逾時時已收到的部分要存檔，所以累加器必須活在 try 之外
   let partial = ''
   let reasoning = ''
+  /** @type {string[]} */
+  let heldImages = []
+  let replaceTrailing = false
   try {
+    const cfg = readConfig()
+    if (!cfg.apiUrl) return { ok: false, error: '尚未設定聊天供應商，請到設定新增一組' }
+    if (!cfg.apiKey) return { ok: false, error: `供應商「${cfg.providerName}」尚未填 API Key` }
+    if (!cfg.modelId) return { ok: false, error: '目前的聊天模型不在模型清單內，請到設定重新選擇' }
+
+    // 先確認對話存在再落圖片檔，否則失敗會留下沒人引用的圖
+    const existing = await chatStore.get(req?.conversationId)
+    if (!existing) return { ok: false, error: '找不到這個對話' }
+
+    if (regenerate) {
+      // 舊助理先不要落盤刪掉：上游失敗／尚未吐字就停止時必須能還原
+      const msgs = existing.messages.slice()
+      let dropped = false
+      while (msgs.length && msgs[msgs.length - 1].role === 'assistant') {
+        msgs.pop()
+        dropped = true
+      }
+      if (!dropped) return { ok: false, error: '沒有可重新生成的訊息' }
+      replaceTrailing = true
+      conversation = { ...existing, messages: msgs }
+    } else {
+      heldImages = await chatImages.saveMany(rawImages)
+      chatImages.hold(heldImages)
+      conversation = await chatStore.appendMessage(req.conversationId, 'user', text, { images: heldImages })
+      if (!conversation) return { ok: false, error: '找不到這個對話' }
+    }
+
+    timers = createTimers(controller)
     const body = {
       model: cfg.modelId,
       stream: true,
@@ -289,20 +397,30 @@ async function send(req, sender) {
     const content = await readSseStream(
       res,
       (piece, kind) => {
-        if (kind === 'reasoning') reasoning += piece
-        else partial += piece
+        if (kind === 'reasoning') {
+          if (reasoning.length >= chatStore.MAX_CONTENT) return
+          reasoning += piece
+        } else {
+          if (partial.length >= MAX_INPUT_CHARS) return
+          partial += piece
+        }
         emitDelta(sender, reqId, piece, kind)
       },
       () => timers.touch()
     )
     if (content || reasoning) {
+      if (replaceTrailing) await chatStore.dropTrailingAssistant(conversation.id)
       await chatStore.appendMessage(conversation.id, 'assistant', content, { reasoning })
     }
     return { ok: true, content }
   } catch (e) {
-    return await handleStreamError(e, conversation.id, partial, reasoning)
+    if ((partial || reasoning) && replaceTrailing && conversation?.id) {
+      await chatStore.dropTrailingAssistant(conversation.id)
+    }
+    return await handleStreamError(e, conversation?.id || '', partial, reasoning)
   } finally {
-    timers.clear()
+    if (heldImages.length) chatImages.release(heldImages)
+    timers?.clear()
     inflight = null
   }
 }
@@ -385,10 +503,15 @@ module.exports = {
   buildMessages,
   sanitizeModels,
   sanitizePrompts,
+  sanitizeProviders,
+  providerFromLegacy,
+  readProvider,
   DEFAULT_CHAT_API_URL,
   DEFAULT_CHAT_MODEL,
   MAX_INPUT_CHARS,
   MAX_CONTEXT_CHARS,
   MAX_PROMPTS,
-  MAX_PROMPT_CONTENT
+  MAX_PROMPT_CONTENT,
+  MAX_PROVIDERS,
+  MAX_PROVIDER_MODELS
 }

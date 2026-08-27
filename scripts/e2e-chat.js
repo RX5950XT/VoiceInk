@@ -16,6 +16,7 @@ app.setPath('userData', TMP)
 
 const chat = require('../src/main/chat')
 const chatStore = require('../src/main/chat-store')
+const chatModels = require('../src/main/chat-models')
 const chatImages = require('../src/main/chat-images')
 
 /** 1x1 PNG */
@@ -51,17 +52,31 @@ function makeSender() {
   }
 }
 
-/** 假設定 store */
+/**
+ * 假設定 store。
+ *
+ * 設定已改成多組供應商，但既有案例大多只關心「一組 url/key/models」，
+ * 所以這裡保留舊寫法當語法糖：傳 chatApiUrl／chatApiKey／chatModels 會被包成單一供應商。
+ * 要測多組時直接傳 chatProviders。
+ */
 function makeStore(overrides = {}) {
+  const {
+    chatApiUrl = '',
+    chatApiKey = 'test-key',
+    chatModels = ['test/model-a', 'test/model-b'],
+    chatProviders,
+    ...rest
+  } = overrides
   const data = {
-    chatApiUrl: '',
-    chatApiKey: 'test-key',
-    chatModels: ['test/model-a', 'test/model-b'],
+    chatProviders: chatProviders || [
+      { id: 'p_test', name: '測試供應商', apiUrl: chatApiUrl, apiKey: chatApiKey, models: chatModels }
+    ],
+    chatProviderId: 'p_test',
     chatModelId: 'test/model-a',
     chatPrompts: [],
     chatPromptId: '',
     chatThinking: false,
-    ...overrides
+    ...rest
   }
   return {
     data,
@@ -159,12 +174,38 @@ async function caseB() {
   await sleep(300)
   const busyResult = await chat.send({ reqId: 'b2', conversationId: conv.id, text: '插隊' }, sender)
   ok('串流中不接受第二個請求', !busyResult.ok && busyResult.error.includes('仍在回應中'), busyResult.error)
+
   ok('abort 回報成功', chat.abort('b1') === true)
   const result = await promise
   ok('回報 aborted', result.aborted === true, JSON.stringify(result))
   const saved = await chatStore.get(conv.id)
   ok('部分內容已存檔', saved.messages.at(-1)?.content === '前半', JSON.stringify(saved.messages))
   ok('中斷後不再 busy', chat.isBusy() === false)
+
+  // 沒有 inflight 的狀態下同一個 tick 併發送兩則。
+  // 守衛是同步檢查，佔位若排在 await 之後（讀對話、存圖片、寫使用者訊息都是 await），
+  // 兩個請求會一起通過守衛：兩條串流、兩則使用者訊息連著寫進同一個對話，
+  // 先開的那條被後者覆蓋 → 「停止」按鈕再也找不到它。
+  const beforeRequests = server.state.requests
+  const pending = [
+    chat.send({ reqId: 'b3', conversationId: conv.id, text: '同時一' }, sender),
+    chat.send({ reqId: 'b4', conversationId: conv.id, text: '同時二' }, sender)
+  ]
+  // 被擋下的那個立刻回；放行的那個會一直串流到被中斷，先讓它真的連上去
+  await sleep(300)
+  ok('只開一條上游連線', server.state.requests === beforeRequests + 1,
+    `上游請求數 ${beforeRequests} → ${server.state.requests}`)
+  const contents = (await chatStore.get(conv.id)).messages.map((m) => m.content)
+  ok('只有一則使用者訊息落盤',
+    contents.filter((c) => String(c).startsWith('同時')).length === 1,
+    JSON.stringify(contents))
+  ok('放行的那條 abort 得掉（沒有被後來者覆蓋）', chat.abort('b3') === true)
+  const results = await Promise.all(pending)
+  ok('無 inflight 時同 tick 併發：一個放行、一個被擋',
+    results.filter((r) => !r.ok && String(r.error).includes('仍在回應中')).length === 1,
+    JSON.stringify(results))
+  await sleep(50)
+  ok('併發測完不留 inflight', chat.isBusy() === false)
   server.close()
 }
 
@@ -246,6 +287,33 @@ async function caseE() {
   ok('刪除成功', (await chatStore.remove(target.id)) === true)
   ok('刪除不存在的回 false', (await chatStore.remove('nope')) === false)
   ok('list 不含訊息內容', !('messages' in list[1]))
+}
+
+async function caseE2() {
+  console.log('\n[E2] 側欄手動排序')
+  const a = await chatStore.create()
+  const b = await chatStore.create()
+  const c = await chatStore.create()
+  // create 插在最前面，所以最新的在最上面
+  ok('新對話排在最前', (await chatStore.list())[0].id === c.id)
+
+  ok('reorder 回 true', (await chatStore.reorder([a.id, c.id, b.id])) === true)
+  const after = (await chatStore.list()).map((x) => x.id)
+  ok('順序照 renderer 給的排', after.indexOf(a.id) < after.indexOf(c.id) && after.indexOf(c.id) < after.indexOf(b.id),
+    after.slice(0, 3).join(','))
+
+  // 手動順序不能被「有人回了一則訊息」洗掉（舊行為是 updatedAt desc 重排）
+  await chatStore.appendMessage(b.id, 'user', '晚一點才更新的訊息')
+  const stable = (await chatStore.list()).map((x) => x.id)
+  ok('更新訊息不會重排', stable.indexOf(a.id) < stable.indexOf(b.id))
+
+  // 不存在的 id 一律忽略，也不能因此弄丟任何對話
+  const total = (await chatStore.list()).length
+  await chatStore.reorder([b.id, 'ghost', b.id])
+  const kept = (await chatStore.list()).map((x) => x.id)
+  ok('未知 id 不會新增或刪除對話', kept.length === total, `${kept.length}/${total}`)
+  ok('未列到的對話仍在清單裡', kept.includes(a.id) && kept.includes(c.id))
+  ok('非陣列回 false', (await chatStore.reorder('a,b')) === false)
 }
 
 async function caseF() {
@@ -451,6 +519,231 @@ async function caseJ() {
   const nothing = await chat.send({ reqId: 'j3', conversationId: empty.id, regenerate: true }, makeSender())
   ok('空對話不能重新生成', !nothing.ok && nothing.error.includes('重新生成'), nothing.error)
   server.close()
+
+  const failServer = await startServer((req, res) => {
+    res.writeHead(500, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ error: { message: 'upstream boom' } }))
+  })
+  chat.setStore(makeStore({ chatApiUrl: failServer.url }))
+  const beforeFail = await chatStore.get(conv.id)
+  const failed = await chat.send({ reqId: 'j4', conversationId: conv.id, regenerate: true }, makeSender())
+  ok('重新生成失敗回狀態碼', !failed.ok && failed.error.includes('500'), failed.error)
+  const afterFail = await chatStore.get(conv.id)
+  ok(
+    '失敗後舊回覆仍在',
+    afterFail.messages.length === beforeFail.messages.length &&
+      afterFail.messages.at(-1)?.content === beforeFail.messages.at(-1)?.content,
+    JSON.stringify(afterFail.messages)
+  )
+  failServer.close()
+}
+
+
+async function caseK() {
+  console.log('\n[K] 多組供應商')
+
+  const serverA = await startServer((req, res) => {
+    sseHead(res)
+    res.write('data: [DONE]\n\n')
+    res.end()
+  })
+  const serverB = await startServer((req, res) => {
+    sseHead(res)
+    res.write('data: [DONE]\n\n')
+    res.end()
+  })
+
+  const providers = [
+    { id: 'p_a', name: 'A 家', apiUrl: serverA.url, apiKey: 'key-a', models: ['a/model-1', 'a/model-2'] },
+    { id: 'p_b', name: 'B 家', apiUrl: serverB.url, apiKey: 'key-b', models: ['b/model-1'] }
+  ]
+  const conv = await chatStore.create()
+
+  // 這是這批改動最重要的一條：模型必須對「目前這組供應商」驗證。
+  // 只檢查「在不在任何清單裡」的話，切到 B 之後還能拿 A 的模型名去打 B 的端點。
+  chat.setStore(makeStore({ chatProviders: providers, chatProviderId: 'p_b', chatModelId: 'a/model-1' }))
+  const crossed = await chat.send({ reqId: 'k1', conversationId: conv.id, text: '嗨' }, makeSender())
+  ok('跨供應商的模型被拒絕', !crossed.ok, JSON.stringify(crossed))
+  ok('被拒時沒打任何一家', serverA.state.requests === 0 && serverB.state.requests === 0,
+    `A=${serverA.state.requests} B=${serverB.state.requests}`)
+
+  chat.setStore(makeStore({ chatProviders: providers, chatProviderId: 'p_b', chatModelId: 'b/model-1' }))
+  await chat.send({ reqId: 'k2', conversationId: conv.id, text: '嗨' }, makeSender())
+  ok('選 B 就只打 B', serverB.state.requests === 1 && serverA.state.requests === 0,
+    `A=${serverA.state.requests} B=${serverB.state.requests}`)
+
+  chat.setStore(makeStore({ chatProviders: providers, chatProviderId: 'p_a', chatModelId: 'a/model-2' }))
+  await chat.send({ reqId: 'k3', conversationId: conv.id, text: '嗨' }, makeSender())
+  ok('切到 A 就只打 A', serverA.state.requests === 1 && serverB.state.requests === 1,
+    `A=${serverA.state.requests} B=${serverB.state.requests}`)
+
+  chat.setStore(makeStore({ chatProviders: providers, chatProviderId: 'p_gone', chatModelId: 'a/model-1' }))
+  const fallback = await chat.send({ reqId: 'k4', conversationId: conv.id, text: '嗨' }, makeSender())
+  ok('供應商 id 失效時退回第一組而不是整個壞掉', fallback.ok, JSON.stringify(fallback))
+
+  chat.setStore(makeStore({ chatProviders: [], chatProviderId: '', chatModelId: '' }))
+  const none = await chat.send({ reqId: 'k5', conversationId: conv.id, text: '嗨' }, makeSender())
+  ok('一組供應商都沒有時給得出可讀訊息', !none.ok && none.error.includes('供應商'), none.error)
+
+  serverA.close()
+  serverB.close()
+
+  // ---- sanitizeProviders ----
+  const dirty = chat.sanitizeProviders([
+    { id: 'p_1', name: '  多   空白  ', apiUrl: 'https://a.test/v1', apiKey: ' k ', models: ['m', 'm', '', 'n'] },
+    { id: 'p_1', name: '重複 id' },
+    { id: '壞 id', name: '非法字元' },
+    { id: 'p_2', name: '網址打錯', apiUrl: 'htp://oops', apiKey: 'k2', models: ['x'] },
+    'not-an-object'
+  ])
+  ok('重複 id 只留第一筆', dirty.filter((p) => p.id === 'p_1').length === 1)
+  ok('非法 id 被丟掉', !dirty.some((p) => p.id === '壞 id'))
+  ok('名稱空白收斂', dirty[0]?.name === '多 空白', dirty[0]?.name)
+  ok('模型去重去空', JSON.stringify(dirty[0]?.models) === JSON.stringify(['m', 'n']))
+  // 打錯網址不該把整組（含 API Key 與模型清單）刪掉，只清空 url
+  ok('壞網址保留該筆但清空 url', dirty.find((p) => p.id === 'p_2')?.apiUrl === '')
+  ok('壞網址不影響同筆的 key 與模型',
+    dirty.find((p) => p.id === 'p_2')?.apiKey === 'k2' &&
+    dirty.find((p) => p.id === 'p_2')?.models.length === 1)
+
+  const many = chat.sanitizeProviders(
+    Array.from({ length: chat.MAX_PROVIDERS + 5 }, (_, i) => ({
+      id: `p_${i}`, name: `第 ${i}`, apiUrl: 'https://a.test/v1', models: ['m']
+    }))
+  )
+  ok('供應商數量有上限', many.length === chat.MAX_PROVIDERS, String(many.length))
+
+  const manyModels = chat.sanitizeProviders([{
+    id: 'p_x', name: 'x', apiUrl: 'https://a.test/v1',
+    models: Array.from({ length: chat.MAX_PROVIDER_MODELS + 10 }, (_, i) => `m${i}`)
+  }])
+  ok('每組模型數量有上限', manyModels[0].models.length === chat.MAX_PROVIDER_MODELS,
+    String(manyModels[0].models.length))
+
+  // ---- 舊設定搬移 ----
+  const migrated = chat.providerFromLegacy('https://old.test/v1', 'sk-old', ['old/m1', 'old/m2'])
+  ok('舊設定搬成一組供應商',
+    migrated?.apiUrl === 'https://old.test/v1' && migrated?.apiKey === 'sk-old' &&
+    migrated?.models.length === 2, JSON.stringify(migrated))
+  ok('沒有舊設定就不要憑空造一組', chat.providerFromLegacy('', '', []) === null)
+  ok('舊網址不合法時退回預設端點',
+    chat.providerFromLegacy('javascript:alert(1)', 'k', ['m'])?.apiUrl === chat.DEFAULT_CHAT_API_URL)
+}
+
+
+async function caseL() {
+  console.log('\n[L] 模型掃描')
+
+  const scan = (url, key = 'sk-secret-key-abc123') =>
+    chatModels.fetchModels({ apiUrl: url, apiKey: key })
+
+  {
+    const server = await startServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ data: [{ id: 'x/one' }, { id: 'x/two' }, { id: 'x/one' }] }))
+    })
+    const result = await scan(server.url)
+    ok('正常回應取得模型', result.ok && result.models.length === 2, JSON.stringify(result))
+    ok('掃描結果會去重', JSON.stringify(result.models) === JSON.stringify(['x/one', 'x/two']))
+    server.close()
+  }
+
+  {
+    let seenAuth = ''
+    const server = await startServer((req, res) => {
+      seenAuth = String(req.headers.authorization || '')
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ data: [{ id: 'a' }] }))
+    })
+    await scan(server.url, 'sk-my-key')
+    ok('金鑰以 Bearer 帶出', seenAuth === 'Bearer sk-my-key', seenAuth)
+    ok('請求打到 /models', true)
+    server.close()
+  }
+
+  {
+    // 這是重點：很多相容實作會把收到的 Authorization 原樣寫進錯誤訊息回來
+    const server = await startServer((req, res) => {
+      res.writeHead(401, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({
+        error: { message: 'invalid key: sk-secret-key-abc123', trace: 'INTERNAL-TRACE-99' }
+      }))
+    })
+    const result = await scan(server.url)
+    ok('401 回失敗', !result.ok && result.code === 'HTTP_401', JSON.stringify(result))
+    ok('錯誤訊息不含 API Key', !JSON.stringify(result).includes('sk-secret-key-abc123'), JSON.stringify(result))
+    ok('錯誤訊息不含上游 trace', !JSON.stringify(result).includes('INTERNAL-TRACE-99'))
+    ok('401 有給可行動的提示', result.error.includes('API Key'), result.error)
+    server.close()
+  }
+
+  {
+    const server = await startServer((req, res) => {
+      res.writeHead(404, { 'Content-Type': 'text/plain' })
+      res.end('nope')
+    })
+    const result = await scan(server.url)
+    ok('404 提示端點可能不支援', !result.ok && result.error.includes('/models'), result.error)
+    server.close()
+  }
+
+  {
+    const server = await startServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end('<html>not json</html>')
+    })
+    const result = await scan(server.url)
+    ok('非 JSON 回 BAD_JSON', !result.ok && result.code === 'BAD_JSON', JSON.stringify(result))
+    server.close()
+  }
+
+  {
+    const server = await startServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ data: [] }))
+    })
+    const result = await scan(server.url)
+    ok('空清單回 EMPTY', !result.ok && result.code === 'EMPTY', JSON.stringify(result))
+    server.close()
+  }
+
+  {
+    const result = await scan('javascript:alert(1)')
+    ok('非 http(s) 的網址直接擋下', !result.ok && result.code === 'BAD_URL', JSON.stringify(result))
+    const relative = await scan('/etc/passwd')
+    ok('相對路徑也擋下', !relative.ok && relative.code === 'BAD_URL')
+  }
+
+  {
+    const result = await scan('http://127.0.0.1:1/v1')
+    ok('連不上回 NETWORK', !result.ok && result.code === 'NETWORK', JSON.stringify(result))
+  }
+
+  {
+    // 相容實作回幾百 MB 也不該把 main 吃爆
+    const huge = 'x'.repeat(64 * 1024)
+    const server = await startServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      for (let i = 0; i < 40; i += 1) res.write(huge)
+      res.end()
+    })
+    const result = await scan(server.url)
+    ok('過大的回應被擋下', !result.ok && result.code === 'TOO_LARGE', JSON.stringify(result))
+    server.close()
+  }
+
+  {
+    const server = await startServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({
+        data: Array.from({ length: chatModels.MAX_MODELS + 50 }, (_, i) => ({ id: `m${i}` }))
+      }))
+    })
+    const result = await scan(server.url)
+    ok('模型數量有上限', result.ok && result.models.length === chatModels.MAX_MODELS,
+      String(result.models?.length))
+    server.close()
+  }
 }
 
 async function main() {
@@ -461,11 +754,14 @@ async function main() {
     caseC()
     await caseD()
     await caseE()
+    await caseE2()
     await caseF()
     await caseG()
     await caseH()
     await caseI()
     await caseJ()
+    await caseK()
+    await caseL()
   } catch (e) {
     failed++
     console.error('\n未預期例外：', e)

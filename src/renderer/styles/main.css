@@ -37,7 +37,7 @@
 }
 
 body {
-  font-family: "Segoe UI", "Noto Sans TC", sans-serif;
+  font-family: "Segoe UI", "Microsoft JhengHei", "Noto Sans TC", sans-serif;
   background:
     radial-gradient(circle at 8% 0%, var(--app-glow-cool), transparent 34rem),
     radial-gradient(circle at 92% 0%, var(--app-glow-warm), transparent 30rem),
@@ -527,11 +527,15 @@ body.is-maximized .win-btn#winMax {
 
 .file-meta {
   flex: 1;
+  min-width: 0;
 }
 
 .file-name {
+  overflow: hidden;
   font-weight: 500;
   margin-bottom: 4px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .file-size {
@@ -902,18 +906,22 @@ body.is-maximized .win-btn#winMax {
 .btn-primary {
   border-color: color-mix(in srgb, var(--accent-primary) 58%, var(--glass-border));
   background: linear-gradient(135deg, var(--accent-active), var(--accent-primary));
+  color: var(--app-bg-deep);
+}
+
+[data-theme="light"] .btn-primary {
   color: #fff;
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .btn-primary:hover {
+  .btn-primary:hover:not(:disabled) {
     border-color: var(--accent-hover);
     filter: brightness(1.07);
     transform: translateY(-1px);
   }
 }
 
-.btn:active:hover {
+.btn:active:hover:not(:disabled) {
   transform: scale(0.97);
 }
 
@@ -923,7 +931,7 @@ body.is-maximized .win-btn#winMax {
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .btn-secondary:hover {
+  .btn-secondary:hover:not(:disabled) {
     border-color: var(--glass-border-strong);
     background: var(--surface-hover);
   }
@@ -931,10 +939,14 @@ body.is-maximized .win-btn#winMax {
 
 .btn-danger {
   background-color: var(--danger);
-  color: white;
+  color: var(--app-bg-deep);
 }
 
-.btn-danger:hover {
+[data-theme="light"] .btn-danger {
+  color: #fff;
+}
+
+.btn-danger:hover:not(:disabled) {
   opacity: 0.9;
 }
 
@@ -953,7 +965,7 @@ body.is-maximized .win-btn#winMax {
   transition: var(--transition);
 }
 
-.btn-icon:hover {
+.btn-icon:hover:not(:disabled) {
   color: var(--text-primary);
 }
 
@@ -971,7 +983,7 @@ body.is-maximized .win-btn#winMax {
   transition: var(--transition);
 }
 
-.icon-btn:hover {
+.icon-btn:hover:not(:disabled) {
   background-color: var(--bg-hover);
 }
 
@@ -1010,6 +1022,16 @@ body.is-maximized .win-btn#winMax {
 .select:focus {
   outline: none;
   border-color: var(--accent-primary);
+}
+
+.btn:disabled,
+.btn-icon:disabled,
+.icon-btn:disabled,
+.input:disabled,
+.select:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
 }
 
 /* ===== Toast ===== */
@@ -1329,18 +1351,15 @@ body.is-maximized .win-btn#winMax {
 }
 
 .chat-list-item {
+  position: relative;
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 2px;
   width: 100%;
-  padding: 9px 11px;
-  border: none;
   border-radius: var(--radius-sm);
-  background-color: transparent;
   color: var(--text-secondary);
-  text-align: left;
-  cursor: pointer;
   transition: var(--transition);
+  touch-action: none;
 }
 
 .chat-list-item:hover {
@@ -1350,6 +1369,33 @@ body.is-maximized .win-btn#winMax {
 .chat-list-item.active {
   background-color: var(--bg-tertiary);
   color: var(--text-primary);
+}
+
+/* 拖曳中：整列跟著游標的槽位走，不做 overlay（單欄清單不需要） */
+.chat-list-item.is-dragging {
+  background-color: var(--bg-tertiary);
+  box-shadow: var(--shadow-sm);
+  opacity: 0.9;
+}
+
+.chat-list.is-reordering {
+  cursor: grabbing;
+}
+
+.chat-list-open {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  padding: 9px 4px 9px 11px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background-color: transparent;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
 .chat-list-title {
@@ -1364,6 +1410,81 @@ body.is-maximized .win-btn#winMax {
   color: var(--text-tertiary);
 }
 
+/* 改名輸入框就地取代標題，寬度跟著那一列 */
+.chat-list-rename {
+  width: 100%;
+  min-width: 0;
+  padding: 1px 4px;
+  border: 1px solid var(--accent-primary);
+  border-radius: 4px;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.chat-list-actions {
+  display: flex;
+  gap: 1px;
+  flex-shrink: 0;
+  padding-right: 6px;
+  opacity: 0;
+  transition: var(--transition);
+}
+
+.chat-list-item:hover .chat-list-actions,
+.chat-list-item.active .chat-list-actions,
+.chat-list-item:focus-within .chat-list-actions,
+.chat-list-item:has(.chat-list-btn.is-armed) .chat-list-actions {
+  opacity: 1;
+}
+
+/* 待確認刪除：就地變紅勾，不開原生 confirm */
+.chat-list-btn.is-armed {
+  background-color: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: var(--danger);
+}
+
+.chat-list-btn.is-armed:hover {
+  background-color: color-mix(in srgb, var(--danger) 26%, transparent);
+  color: var(--danger);
+}
+
+.chat-list-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background-color: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.chat-list-btn svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chat-list-btn:hover {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.chat-list.is-busy .chat-list-btn {
+  pointer-events: none;
+  opacity: 0.4;
+}
+
 .chat-main {
   flex: 1;
   min-width: 0;
@@ -1372,28 +1493,6 @@ body.is-maximized .win-btn#winMax {
   flex-direction: column;
   gap: 12px;
   padding: 16px 20px 18px;
-}
-
-.chat-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-shrink: 0;
-}
-
-.chat-title-input {
-  flex: 1;
-  min-width: 0;
-  font-weight: 500;
-}
-
-.chat-model-select {
-  max-width: 280px;
-}
-
-.chat-delete-armed {
-  color: var(--danger);
-  border-color: var(--danger);
 }
 
 .chat-messages {
@@ -1421,20 +1520,28 @@ body.is-maximized .win-btn#winMax {
   font-size: 13px;
 }
 
+/* 系統提示與模型選單住在輸入框那一排（上方已無工具列） */
 .chat-toolbar-group {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
+  min-width: 0;
+}
+
+.chat-prompt-select,
+.chat-model-select {
+  height: 32px;
+  min-width: 0;
+  padding: 0 8px;
+  font-size: 12px;
 }
 
 .chat-prompt-select {
-  min-width: 128px;
-  max-width: 190px;
+  flex: 0 1 150px;
 }
 
 .chat-model-select {
-  min-width: 150px;
-  max-width: 240px;
+  flex: 0 1 200px;
 }
 
 /* ---- 訊息 ---- */
@@ -1513,6 +1620,17 @@ body.is-maximized .win-btn#winMax {
 .chat-msg-action:hover {
   background-color: var(--bg-tertiary);
   color: var(--text-primary);
+}
+
+@media (hover: none), (pointer: coarse) {
+  .chat-msg-actions {
+    opacity: 1;
+  }
+
+  .chat-msg-action {
+    min-height: 44px;
+    padding: 10px 12px;
+  }
 }
 
 /* 思考過程（reasoning_content / reasoning） */
@@ -1633,6 +1751,7 @@ body.is-maximized .win-btn#winMax {
 
 .chat-composer-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
 }
@@ -1698,6 +1817,31 @@ body.is-maximized .win-btn#winMax {
 }
 
 /* 設定頁的模型清單 */
+/* 供應商列：下拉吃滿剩餘寬度，兩顆按鈕維持原寬 */
+.chat-provider-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.chat-provider-bar .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-model-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.chat-model-actions .btn[disabled],
+.chat-provider-bar .btn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .chat-model-list {
   display: flex;
   flex-direction: column;
@@ -1714,6 +1858,105 @@ body.is-maximized .win-btn#winMax {
 .chat-model-row .input {
   flex: 1;
   min-width: 0;
+}
+
+.chat-model-row .btn-icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  align-self: stretch;
+  padding: 0;
+  border: 1px solid var(--glass-border);
+  background: var(--surface-subtle);
+  font-size: 18px;
+}
+
+.chat-model-row .btn-icon:hover {
+  background: var(--surface-hover);
+}
+
+/* ===== 模型掃描彈窗 ===== */
+
+.chat-scan-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  padding: 4px 24px 0;
+}
+
+.chat-scan-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.chat-scan-toolbar .input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 固定高度 + 自捲：OpenRouter 一次回 300+ 個，讓彈窗自己長高會頂出畫面 */
+.chat-scan-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: min(46vh, 380px);
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background-color: var(--bg-secondary);
+}
+
+.chat-scan-item {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 7px 9px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.chat-scan-item:hover {
+  background-color: var(--bg-tertiary);
+}
+
+.chat-scan-item input[type='checkbox'] {
+  flex: none;
+  margin: 0;
+  cursor: pointer;
+}
+
+.chat-scan-id {
+  flex: 1;
+  min-width: 0;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.chat-scan-badge {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background-color: color-mix(in srgb, var(--success) 18%, transparent);
+  color: var(--success);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .chat-scan-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .chat-scan-toolbar .input {
+    flex-basis: 100%;
+  }
 }
 
 /* ===== 對話框（系統提示管理）===== */
@@ -1981,13 +2224,23 @@ body.is-maximized .win-btn#winMax {
   transition: border-color 0.18s ease, transform 0.18s ease, box-shadow 0.14s ease;
 }
 
-.usage-card:hover:not(.dragging) {
+.usage-card:hover:not(.is-ghost):not(.usage-card-overlay) {
   border-color: var(--provider-accent);
   transform: translateY(-2px);
 }
 
-.usage-card.dragging {
-  z-index: 5;
+.usage-card.is-ghost {
+  opacity: 0.18;
+  cursor: grabbing;
+}
+
+.usage-card.usage-card-overlay {
+  position: fixed;
+  z-index: 80;
+  margin: 0;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0.98;
   cursor: grabbing;
   box-shadow: 0 34px 110px rgba(0, 0, 0, 0.34);
   transition: none;
@@ -1999,7 +2252,7 @@ body.is-maximized .win-btn#winMax {
   outline-offset: 3px;
 }
 
-.usage-grid.is-sorting .usage-card:not(.dragging) {
+.usage-grid.is-sorting .usage-card:not(.usage-card-overlay) {
   will-change: transform;
 }
 
@@ -2166,6 +2419,13 @@ body.is-maximized .win-btn#winMax {
   font-size: 12px;
 }
 
+/* 訂閱方案：自成一行，維持卡內小字 12px／secondary 的規則 */
+.usage-card-plan {
+  flex: 1 1 100%;
+  margin-top: 6px;
+  font-weight: 600;
+}
+
 .usage-card-note {
   flex: 1 1 100%;
   margin-top: 6px;
@@ -2269,7 +2529,7 @@ body.is-maximized .win-btn#winMax {
   color: var(--text-secondary);
   background-color: var(--bg-secondary);
   font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
-  font-size: 10.5px;
+  font-size: 12px;
   line-height: 1.65;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -2312,7 +2572,8 @@ body.is-maximized .win-btn#winMax {
 .seg-btn:focus-visible,
 .composer-btn:focus-visible,
 .settings-nav-item:focus-visible,
-.chat-list-item:focus-visible,
+.chat-list-open:focus-visible,
+.chat-list-btn:focus-visible,
 .prompt-list-item:focus-visible,
 .chat-msg-action:focus-visible,
 .usage-card:focus-visible,
@@ -2486,6 +2747,7 @@ h6.md-h { font-size: 14px; }
 .chat-composer,
 .usage-card,
 .usage-pulse,
+.agy-panel,
 .drop-zone,
 .file-info,
 .options-panel,
@@ -2576,8 +2838,8 @@ h6.md-h { font-size: 14px; }
 @media (hover: hover) and (pointer: fine) {
   .chat-msg-action:hover,
   .composer-btn:hover:not(:disabled),
-  .icon-btn:hover,
-  .btn-icon:hover {
+  .icon-btn:hover:not(:disabled),
+  .btn-icon:hover:not(:disabled) {
     border-color: var(--glass-border);
     background: var(--surface-hover);
     color: var(--text-primary);
@@ -2603,11 +2865,37 @@ h6.md-h { font-size: 14px; }
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .usage-card:hover {
+  .usage-card:hover:not(.is-ghost):not(.keyboard-sorting):not(.usage-card-overlay) {
     border-color: color-mix(in srgb, var(--provider-accent) 62%, var(--glass-border));
     box-shadow: 0 26px 72px rgba(0, 0, 0, 0.26);
     transform: translateY(-2px);
   }
+}
+
+/* 拖曳中只讓格子裡的卡推開；hover 不得覆寫 slot transform */
+.usage-grid.is-sorting .usage-card {
+  transition: transform 110ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.usage-grid.is-sorting .usage-card.is-ghost,
+.usage-grid.is-sorting .usage-card:hover {
+  box-shadow: var(--shadow-card);
+}
+
+.usage-grid.is-sorting .usage-card.is-ghost {
+  transition: none;
+}
+
+.usage-card.is-ghost {
+  opacity: 0.18;
+}
+
+.usage-card.usage-card-overlay {
+  position: fixed;
+  z-index: 80;
+  pointer-events: none;
+  opacity: 0.98;
+  transition: none;
 }
 
 .usage-provider-mark {
@@ -2751,8 +3039,7 @@ h6.md-h { font-size: 14px; }
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.1);
 }
 
-.model-item,
-.chat-model-row {
+.model-item {
   border-color: var(--glass-border);
   background: var(--surface-subtle);
 }
@@ -2853,22 +3140,14 @@ h6.md-h { font-size: 14px; }
     padding: 12px;
   }
 
-  .chat-toolbar {
-    flex-wrap: wrap;
-  }
-
-  .chat-title-input {
-    flex: 1 1 100%;
-  }
-
   .chat-toolbar-group {
-    flex: 1 1 180px;
+    flex: 1 1 150px;
     min-width: 0;
   }
 
   .chat-prompt-select,
   .chat-model-select {
-    flex: 1 1 130px;
+    flex: 1 1 120px;
     width: auto;
     min-width: 0;
     max-width: 100%;
@@ -2971,5 +3250,949 @@ h6.md-h { font-size: 14px; }
 
   .dialog-actions .btn {
     width: 100%;
+  }
+}
+
+/* ===== AGY 反向代理頁 =====
+   放在檔案最後：前面的 Token Anxiety surface mapping 是同特異性選擇器，
+   寫在它之前會被覆蓋掉 border 與 radius（額度卡踩過這個坑）。 */
+
+.agy-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 4px 0 32px;
+}
+
+.agy-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.agy-heading h1 {
+  margin: 2px 0 6px;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.agy-eyebrow {
+  margin: 0;
+  color: var(--accent-primary);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.agy-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* border／radius／glass 由上面的共用 surface mapping 提供，這裡只補內距 */
+.agy-panel {
+  padding: 18px;
+}
+
+.agy-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.agy-panel-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.agy-panel-desc {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* --- 服務控制 --- */
+
+.agy-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 6px 12px;
+  border-radius: var(--radius-pill);
+  background-color: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.agy-dot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background-color: var(--text-tertiary);
+}
+
+.agy-dot.is-running {
+  background-color: var(--success);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 24%, transparent);
+}
+
+.agy-dot.is-stopped {
+  background-color: var(--text-tertiary);
+}
+
+.agy-endpoint {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+}
+
+.agy-endpoint-row {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+}
+
+.agy-endpoint-row dt {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.agy-endpoint-row dd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  flex-wrap: wrap;
+}
+
+.agy-code {
+  flex: 1 1 260px;
+  min-width: 0;
+  padding: 8px 12px;
+  overflow: hidden;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agy-code.agy-secret {
+  letter-spacing: 0.12em;
+}
+
+.agy-code-inline {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background-color: var(--bg-tertiary);
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+}
+
+.agy-credential {
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+.agy-credential.is-ok {
+  color: var(--success);
+  font-weight: 600;
+}
+
+.agy-credential.is-bad {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+/* 憑證引導：只在 Antigravity CLI／IDE 沒登入或 token 過期時出現。
+   用 danger 的低彩度底色而不是實心警示——這是「下一步做什麼」，不是錯誤。 */
+.agy-cred-help {
+  margin: 14px 0 0;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--danger) 28%, transparent);
+  border-radius: 10px;
+  background-color: color-mix(in srgb, var(--danger) 7%, transparent);
+}
+
+.agy-cred-help[hidden] {
+  display: none;
+}
+
+.agy-cred-help-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.agy-cred-help-steps {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.9;
+}
+
+.agy-cred-help-steps li::marker {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.agy-cred-help-steps a {
+  color: var(--accent-primary);
+  word-break: break-all;
+}
+
+/* 連線測試結果：跟憑證引導同一種低彩度底色，成功換 success、失敗換 danger */
+.agy-test-result {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.7;
+  word-break: break-word;
+}
+
+.agy-test-result[hidden] {
+  display: none;
+}
+
+.agy-test-result.is-ok {
+  border-color: color-mix(in srgb, var(--success) 32%, transparent);
+  background-color: color-mix(in srgb, var(--success) 8%, transparent);
+  color: var(--text-primary);
+}
+
+.agy-test-result.is-bad {
+  border-color: color-mix(in srgb, var(--danger) 32%, transparent);
+  background-color: color-mix(in srgb, var(--danger) 8%, transparent);
+  color: var(--text-primary);
+}
+
+.agy-clients {
+  margin-top: 14px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background-color: var(--bg-tertiary);
+}
+
+.agy-clients-summary {
+  padding: 9px 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  list-style: none;
+}
+
+.agy-clients-summary::-webkit-details-marker {
+  display: none;
+}
+
+.agy-clients-summary::before {
+  display: inline-block;
+  margin-right: 6px;
+  content: '\25B8';
+  transition: transform 0.15s var(--ease-out);
+}
+
+.agy-clients[open] .agy-clients-summary::before {
+  transform: rotate(90deg);
+}
+
+.agy-clients-summary:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
+.agy-clients-body {
+  display: grid;
+  gap: 12px;
+  padding: 0 12px 12px;
+}
+
+.agy-client {
+  display: grid;
+  gap: 6px;
+}
+
+.agy-client-tag {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.agy-client-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.agy-client-row .agy-code {
+  min-width: 0;
+  flex: 1 1 200px;
+}
+
+.agy-client-note,
+.agy-client-warn {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.agy-client-warn {
+  color: color-mix(in srgb, var(--warning) 78%, var(--text-primary));
+}
+
+.agy-settings {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 18px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-light);
+}
+
+.agy-setting {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.agy-setting .input {
+  width: 100%;
+}
+
+.agy-setting-check {
+  grid-column: 1 / -1;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.agy-setting-actions {
+  display: flex;
+  grid-column: 1 / -1;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+/* --- 統計 --- */
+
+.agy-stat-cards {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+/* 時間範圍：分段按鈕，跟面板標題同一行 */
+.agy-range {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-pill);
+  background-color: var(--bg-tertiary);
+}
+
+.agy-range-btn {
+  padding: 5px 11px;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  transition: background-color 0.15s var(--ease-out), color 0.15s var(--ease-out);
+  white-space: nowrap;
+}
+
+.agy-range-btn:hover {
+  color: var(--text-primary);
+}
+
+.agy-range-btn.is-active {
+  background-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
+  color: var(--text-primary);
+}
+
+.agy-range-btn:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 1px;
+}
+
+.agy-stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background-color: var(--bg-tertiary);
+}
+
+.agy-stat-label {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.agy-stat-value {
+  color: var(--text-primary);
+  font-size: 20px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+}
+
+.agy-stat-hint {
+  min-height: 15px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+/* 兩張圖上下堆疊：左右擺會把模型名擠成一堆省略號，堆疊後兩張都拿到整個寬度 */
+.agy-charts {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
+.agy-chart {
+  min-width: 0;
+  margin: 0;
+}
+
+.agy-chart-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.agy-chart-meta {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.agy-bars-wrap {
+  position: relative;
+}
+
+.agy-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 108px;
+  padding: 8px 8px 0;
+  border-radius: var(--radius-sm);
+  background-color: var(--bg-tertiary);
+}
+
+/* 數值提示：跟著長條走，夾在圖表寬度內 */
+.agy-tip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  display: grid;
+  gap: 1px;
+  padding: 6px 9px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background-color: var(--surface-glass-strong);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: var(--shadow-sm);
+  pointer-events: none;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  z-index: 2;
+}
+
+.agy-tip[hidden] {
+  display: none;
+}
+
+.agy-tip-main {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.agy-tip-sub {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.agy-bar-col {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  min-width: 0;
+  height: 100%;
+}
+
+.agy-bar-fill {
+  width: 100%;
+  max-width: 22px;
+  border-radius: 3px 3px 0 0;
+  background: linear-gradient(180deg, var(--accent-primary), color-mix(in srgb, var(--accent-primary) 55%, transparent));
+  transition: height 0.2s var(--ease-out);
+}
+
+.agy-bar-col.is-empty .agy-bar-fill {
+  background: color-mix(in srgb, var(--text-tertiary) 28%, transparent);
+}
+
+.agy-bar-col:hover .agy-bar-fill {
+  background: var(--accent-primary);
+}
+
+.agy-bar-label {
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.agy-model-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px 16px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background-color: var(--bg-tertiary);
+}
+
+/* 統計的模型分佈列。名字不能叫 .agy-model-row——「可用模型」面板已經佔用了那個
+   類名，後面那份會整個蓋掉這裡（實際發生過：進度條被壓成一列看不見） */
+.agy-dist-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.agy-model-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.agy-model-name {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agy-model-count {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.agy-model-track {
+  height: 6px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background-color: color-mix(in srgb, var(--text-tertiary) 22%, transparent);
+}
+
+.agy-model-fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background-color: var(--accent-warm);
+}
+
+/* --- 流量日誌 --- */
+
+.agy-log-filters {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.agy-filter-check,
+.agy-setting-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* 表格自己捲，不要讓整個 body 產生水平捲軸 */
+.agy-table-wrap {
+  overflow-x: auto;
+  border-radius: var(--radius-sm);
+  background-color: var(--bg-tertiary);
+}
+
+.agy-table {
+  width: 100%;
+  min-width: 640px;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.agy-table th {
+  position: sticky;
+  top: 0;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-light);
+  background-color: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.agy-table td {
+  padding: 9px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-light) 55%, transparent);
+  color: var(--text-primary);
+  vertical-align: middle;
+}
+
+.agy-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.agy-table tbody tr.is-error td {
+  background-color: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+
+.agy-cell-time,
+.agy-cell-num {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.agy-cell-num {
+  text-align: right;
+}
+
+.agy-cell-model {
+  max-width: 320px;
+  white-space: nowrap;
+}
+
+.agy-model-src,
+.agy-model-dst {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  vertical-align: middle;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agy-model-src {
+  color: var(--text-secondary);
+}
+
+.agy-model-dst {
+  color: var(--text-primary);
+}
+
+.agy-model-arrow {
+  margin: 0 6px;
+  color: var(--text-tertiary);
+}
+
+.agy-cell-status {
+  white-space: nowrap;
+}
+
+/* 狀態不能只靠顏色分辨，所以狀態碼本身就寫在 badge 裡 */
+.agy-badge {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  font-size: 11.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.agy-badge.is-ok {
+  background-color: color-mix(in srgb, var(--success) 18%, transparent);
+  color: var(--success);
+}
+
+.agy-badge.is-error {
+  background-color: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: var(--danger);
+}
+
+.agy-error-code {
+  display: inline-block;
+  max-width: 160px;
+  margin-left: 8px;
+  overflow: hidden;
+  vertical-align: middle;
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+}
+
+.agy-empty,
+.agy-empty-inline {
+  margin: 14px 0 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.7;
+  text-align: center;
+}
+
+.agy-empty-inline {
+  width: 100%;
+  margin: 0;
+  align-self: center;
+  font-size: 12px;
+}
+
+@media (max-width: 900px) {
+  .agy-stat-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .agy-settings {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .agy-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .agy-actions {
+    width: 100%;
+  }
+
+  .agy-actions .btn {
+    flex: 1 1 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .agy-endpoint-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .agy-stat-cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .agy-panel {
+    padding: 14px;
+  }
+
+  .agy-bars {
+    height: 92px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agy-bar-fill,
+  .agy-range-btn,
+  .agy-clients-summary::before {
+    transition: none;
+  }
+}
+
+/* ===== AGY 可用模型面板 ===== */
+
+.agy-models-bar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.agy-models-toggle {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.agy-models-toggle input {
+  margin: 0;
+  cursor: pointer;
+}
+
+.agy-models-meta {
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.agy-models-empty {
+  margin: 0;
+  padding: 18px 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: center;
+}
+
+.agy-models-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.agy-model-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background-color: var(--bg-secondary);
+}
+
+.agy-model-row.is-internal {
+  opacity: 0.6;
+}
+
+/* 整個 ID 就是複製鈕：一鍵複製的目標要夠大，不要縮成一個小圖示 */
+.agy-model-id {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 4px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--text-primary);
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.agy-model-id:hover {
+  background-color: var(--bg-tertiary);
+}
+
+.agy-model-tags {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.agy-model-tag {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background-color: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.agy-model-tag.is-quota {
+  color: var(--success);
+  background-color: color-mix(in srgb, var(--success) 14%, transparent);
+}
+
+.agy-model-tag.is-quota.is-low {
+  color: var(--danger);
+  background-color: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+
+.agy-model-tag.is-deprecated {
+  color: var(--danger);
+  background-color: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+@media (max-width: 900px) {
+  .agy-models-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .agy-models-meta {
+    margin-left: 0;
+    flex-basis: 100%;
+  }
+
+  .agy-model-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .agy-model-tags {
+    justify-content: flex-start;
   }
 }

@@ -7,8 +7,12 @@ const {
   createWindow,
   fetchJson,
   normalizeAccount,
-  readJsonFile
+  readJsonFile,
+  readJwtClaims
 } = require('./shared')
+
+/** 新版 auth.json 沒有頂層 plan_type，方案藏在 id_token 的這個自訂 claim 裡 */
+const CHATGPT_AUTH_CLAIM = 'https://api.openai.com/auth'
 
 function titleCase(value) {
   return String(value || '')
@@ -18,12 +22,25 @@ function titleCase(value) {
     .join(' ')
 }
 
+/**
+ * ChatGPT 方案代碼（plus／pro／team…）。頂層欄位優先，沒有才拆 id_token。
+ * @param {object} auth
+ * @returns {string}
+ */
+function planTypeFrom(auth) {
+  const direct = typeof auth?.plan_type === 'string' ? auth.plan_type.trim() : ''
+  if (direct) return direct
+  const claim = readJwtClaims(auth?.tokens?.id_token)?.[CHATGPT_AUTH_CLAIM]
+  const nested = typeof claim?.chatgpt_plan_type === 'string' ? claim.chatgpt_plan_type.trim() : ''
+  return nested.slice(0, 60)
+}
+
 function applyCodexUsage(raw, auth, nowMs) {
   const account = createBaseAccount('codex', nowMs)
   account.status = 'available'
   account.accuracy = 'official'
   account.notes = '已從 ChatGPT API 讀取真實額度。'
-  const plan = titleCase(auth?.plan_type)
+  const plan = titleCase(planTypeFrom(auth))
   if (plan) account.planName = `ChatGPT ${plan}`
 
   const windows = [

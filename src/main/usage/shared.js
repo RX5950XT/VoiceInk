@@ -109,6 +109,26 @@ function normalizeAccount(raw) {
   }
 }
 
+/**
+ * 讀本機登入檔裡 JWT 的 payload（方案名稱這類標籤只有那裡有）。
+ *
+ * 刻意不驗簽：來源是使用者自己機器上的憑證檔，不是網路輸入，而且驗簽要拿供應商公鑰，
+ * 對「取一個字串當標籤」沒有意義。但長度與型別照擋，壞資料一律回 null。
+ * @param {unknown} token
+ * @returns {object | null}
+ */
+function readJwtClaims(token) {
+  if (typeof token !== 'string' || token.length > 8192) return null
+  const parts = token.split('.')
+  if (parts.length !== 3) return null
+  try {
+    const claims = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'))
+    return claims && typeof claims === 'object' && !Array.isArray(claims) ? claims : null
+  } catch {
+    return null
+  }
+}
+
 async function readJsonFile(filePath, maxBytes = FILE_MAX_BYTES) {
   let stat
   try {
@@ -249,6 +269,7 @@ module.exports = {
   createWindow,
   normalizeAccount,
   readJsonFile,
+  readJwtClaims,
   fetchJson,
   publicError
 }
