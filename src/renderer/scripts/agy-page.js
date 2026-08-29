@@ -16,6 +16,7 @@ const RANGE_LABELS = { '6h': '近 6 小時', '24h': '近 24 小時', '7d': '近 
 let initialized = false
 let pollTimer = null
 let pageGen = 0
+let statusGen = 0
 let busy = false
 let keyVisible = false
 let status = null
@@ -430,11 +431,18 @@ function renderLogs(payload) {
 
 // ===== 資料更新 =====
 
+async function refreshStatus() {
+  const gen = ++statusGen
+  const nextStatus = await callAgy('status')
+  if (!nextStatus || gen !== statusGen) return false
+  status = nextStatus
+  renderStatus()
+  return true
+}
+
 async function refreshAll() {
   showError('')
-  status = await callAgy('status')
-  if (!status) return
-  renderStatus()
+  if (!await refreshStatus()) return
   renderSettingsInputs()
   await refreshData()
 }
@@ -453,12 +461,11 @@ async function refreshData() {
 function startPolling() {
   stopPolling()
   pollTimer = setInterval(() => {
-    if (busy) return
+    // 視窗縮到系統匣時 document.hidden 為 true。狀態查詢會開 PowerShell 讀
+    // Credential Manager，常駐背景後不擋的話就是 5 秒一次、開著整天。
+    if (busy || document.hidden) return
     void (async () => {
-      const nextStatus = await callAgy('status')
-      if (!nextStatus) return
-      status = nextStatus
-      renderStatus()
+      if (!await refreshStatus()) return
       showError('')
       await refreshData()
     })()
@@ -841,6 +848,7 @@ export function refreshAgyPage() {
 /** 離開頁面就停止輪詢，別讓背景一直查 DB */
 export function cooldownAgyPage() {
   pageGen += 1
+  statusGen += 1
   stopPolling()
   keyVisible = false
 }

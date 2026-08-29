@@ -30,10 +30,10 @@ const LANGUAGE_NAMES = {
 /** 舊程式／e2e 相容別名（通用模型） */
 const TRANSLATE_MODEL_KEY = 'qwen35translate'
 const FALLBACK_LLM_KEY = 'qwen35translate'
-const DEFAULT_LLM_KEY = 'linguaforge08'
-const LINGUAFORGE_KEY = 'linguaforge08'
-/** 同一顆 LinguaForge 的兩個量化（Q8 預設／Q4 省空間）共用整套 SFT 格式與 DECODE */
-const LINGUAFORGE_KEYS = Object.freeze(['linguaforge08', 'linguaforge08q4'])
+const DEFAULT_LLM_KEY = 'linguaforge08q4'
+const LINGUAFORGE_KEY = 'linguaforge08q4'
+/** LinguaForge 的量化版本（目前只出貨 Q4_K_M）共用整套 SFT 格式與 DECODE */
+const LINGUAFORGE_KEYS = Object.freeze(['linguaforge08q4'])
 
 /**
  * @param {unknown} key
@@ -784,7 +784,8 @@ async function translateLocal(text, targetLang, context = {}, options = {}) {
 }
 
 async function translateCloud(text, targetLang, cfg, context = {}, options = {}) {
-  if (!cfg.apiKey) throw new Error('尚未設定 API Key')
+  if (!cfg.apiUrl || !cfg.apiKey) throw new Error('尚未設定雲端供應商，請到設定 → 雲端模型新增一組')
+  if (!cfg.modelId) throw new Error('尚未選擇雲端翻譯模型，請在翻譯頁上方選一顆')
   // 雲端無 modelKey（非 LinguaForge 訓練格式）→ 傳 null 走通用指令
   const messages = [{ role: 'system', content: buildSystemPrompt(null, targetLang, options.mode) }]
   const pair = buildContextPair(context)
@@ -869,14 +870,12 @@ async function translate(store, text, targetLang, opts = {}) {
     if (translator === 'local') {
       result = await translateLocal(text, targetLang, context, options)
     } else if (translator === 'cloud') {
+      // 端點與金鑰跟聊天共用同一份供應商清單（設定→雲端模型），
+      // 用哪一顆在翻譯頁上方選
       result = await translateCloud(
         text,
         targetLang,
-        {
-          apiUrl: store.get('apiUrl', 'https://openrouter.ai/api/v1'),
-          apiKey: store.get('apiKey', ''),
-          modelId: store.get('modelId', 'google/gemini-3-flash-preview')
-        },
+        require('./chat').readTranslateConfig(),
         context,
         options
       )

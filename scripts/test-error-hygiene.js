@@ -109,6 +109,28 @@ async function testCloudAsr() {
     `arity=${cloudAsr.classifyHttpError.length}`)
 }
 
+/**
+ * 雲端翻譯用的假 store：一組供應商 ＋ 指定它為翻譯來源
+ * @param {string} url
+ * @param {string} key
+ */
+function cloudStore(url, key) {
+  const data = {
+    translator: 'cloud',
+    chatProviders: [{
+      id: 'p_test',
+      name: '測試',
+      apiUrl: url,
+      apiKey: key,
+      models: ['google/gemini-3-flash-preview'],
+      imageModels: []
+    }],
+    translateProviderId: 'p_test',
+    translateModelId: 'google/gemini-3-flash-preview'
+  }
+  return { get: (k, fallback) => (k in data ? data[k] : fallback) }
+}
+
 async function testCloudTranslate() {
   console.log('\n[local-llm] 雲端翻譯的上游錯誤不得進使用者訊息')
   const localLlm = require(path.join(ROOT, 'src/main/local-llm.js'))
@@ -118,14 +140,9 @@ async function testCloudTranslate() {
     res.writeHead(402, { 'Content-Type': 'application/json' })
     res.end(LEAKY_BODY)
   })
-  const store = {
-    get: (key, fallback) => ({
-      translator: 'cloud',
-      apiUrl: bad.url,
-      apiKey: 'sk-local-user-key',
-      modelId: 'google/gemini-3-flash-preview'
-    }[key] ?? fallback)
-  }
+  // 雲端翻譯的端點與金鑰跟聊天共用同一份供應商清單（chat.readTranslateConfig）
+  const store = cloudStore(bad.url, 'sk-local-user-key')
+  require(path.join(ROOT, 'src/main/chat.js')).setStore(store)
   let message = ''
   try {
     await localLlm.translate(store, '今天天氣很好。', 'en')
@@ -142,7 +159,8 @@ async function testCloudTranslate() {
     res.writeHead(400, { 'Content-Type': 'text/plain' })
     res.end(`<html>proxy debug: ${SECRETS[0]}  ${SECRETS[1]}</html>`)
   })
-  const store2 = { get: (key, fallback) => ({ ...{ translator: 'cloud', apiUrl: garbage.url, apiKey: 'k', modelId: 'm' } }[key] ?? fallback) }
+  const store2 = cloudStore(garbage.url, 'k')
+  require(path.join(ROOT, 'src/main/chat.js')).setStore(store2)
   let message2 = ''
   try {
     await localLlm.translate(store2, '今天天氣很好。', 'en')

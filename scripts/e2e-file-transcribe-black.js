@@ -14,6 +14,11 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms))
 }
 
+function stopChildTree(child) {
+  if (!child?.pid) return
+  try { spawn('taskkill', ['/F', '/T', '/PID', String(child.pid)], { stdio: 'ignore' }) } catch {}
+}
+
 function getJson(url) {
   return new Promise((resolve, reject) => {
     http.get(url, (res) => {
@@ -110,7 +115,7 @@ async function snapshot(cdp, label) {
       bodyText: getComputedStyle(document.body).color,
       bodyChildren: document.body.children.length,
       appHtmlLen: (document.getElementById('app')?.innerHTML || '').length,
-      pageActive: document.getElementById('page-transcribe')?.classList.contains('active'),
+      pageActive: document.getElementById('page-stt')?.classList.contains('active'),
       dropZone: g('dropZone'),
       fileInfo: g('fileInfo'),
       options: g('transcribeOptions'),
@@ -133,10 +138,6 @@ async function main() {
     process.exit(1)
   }
   console.log('sample', SAMPLE, fs.statSync(SAMPLE).size)
-
-  // kill leftover
-  try { spawn('taskkill', ['/F', '/IM', 'VoiceInk.exe'], { stdio: 'ignore' }) } catch {}
-  await sleep(800)
 
   const child = spawn(EXE, [`--remote-debugging-port=${PORT}`], {
     stdio: 'pipe',
@@ -199,7 +200,7 @@ async function main() {
         console.log('exceptions', cdp.exceptions)
         console.log('logs', cdp.logs.slice(-20))
         console.log('mainLog tail', mainLog.slice(-2000))
-        process.exit(2)
+        throw new Error('snapshot failed during transcription')
       }
 
       if (cdp.exceptions.length) {
@@ -212,7 +213,7 @@ async function main() {
       // detect "black screen": app emptied or page gone
       if (!state.appHtmlLen || state.appHtmlLen < 100) {
         console.error('BLACK SCREEN: app HTML collapsed')
-        process.exit(3)
+        throw new Error('BLACK SCREEN: app HTML collapsed')
       }
       if (state.progress && !state.progress.hidden) {
         sawProgressVisible = true
@@ -235,7 +236,7 @@ async function main() {
     console.log('sawProgressVisible', sawProgressVisible, 'finished', finished)
     if (!sawProgressVisible) {
       console.error('FAIL: progress panel never visible (black-screen symptom)')
-      process.exit(4)
+      throw new Error('progress panel never visible')
     }
 
     console.log('\n=== final console errors ===')
@@ -247,10 +248,9 @@ async function main() {
   } catch (e) {
     console.error('FAIL', e)
     console.log('mainLog', mainLog.slice(-3000))
-    process.exit(1)
+    process.exitCode = 1
   } finally {
-    try { child.kill() } catch {}
-    try { spawn('taskkill', ['/F', '/IM', 'VoiceInk.exe'], { stdio: 'ignore' }) } catch {}
+    stopChildTree(child)
   }
 }
 

@@ -21,7 +21,7 @@ const GGUF =
   process.argv[2] ||
   path.join(
     process.env.APPDATA || '',
-    'voiceink/models/linguaforge08/gguf-v5e/linguaforge-v5e-0.8b-Q8_0.gguf'
+    'voiceink/models/linguaforge08q4/gguf-v5e/linguaforge-v5e-0.8b-Q4_K_M.gguf'
   )
 
 /** 出貨 DECODE：zh-TW 禁 rep-penalty；en/ja 1.1（與 bench-quant-quality.js 相同） */

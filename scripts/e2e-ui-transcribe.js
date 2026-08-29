@@ -113,9 +113,17 @@ async function main() {
     await cdp.send('DOM.enable')
     await cdp.send('Page.enable')
 
-    // 切到檔案轉錄
-    await cdp.eval(`document.querySelector('[data-page="transcribe"]')?.click()`)
-    await sleep(300)
+    // 切到語音轉文字頁的「檔案轉錄」子分頁。
+    // stt-page 與 transcribe 都是 dynamic import，要等 transcribe.js 真的綁好
+    // （模型選單填出來就代表那一串 then 跑完了），否則 setFileInputFiles 的 change 沒人接。
+    await cdp.eval(`document.querySelector('[data-page="stt"]')?.click(), 'ok'`)
+    for (let i = 0; i < 40; i++) {
+      await sleep(250)
+      const ready = await cdp.eval(`!!document.getElementById('sttAsrModel')?.options.length`)
+      if (ready) break
+    }
+    await cdp.eval(`document.querySelector('#sttSubtabs [data-subtab="file"]')?.click(), 'ok'`)
+    await sleep(400)
 
     // 設檔案
     const { root } = await cdp.send('DOM.getDocument', { depth: 1 })
@@ -134,6 +142,13 @@ async function main() {
     })`)
     console.log('pre', pre)
 
+    // 這支從背景程序 spawn，Windows 通常不給前景權 → 視窗被遮住、rAF 完全不觸發。
+    // 那正是 waitForPaint 卡死的條件，順手把它記下來，之後看 log 就知道有沒有測到這條路徑。
+    const vis = await cdp.eval(`({ hidden: document.hidden, state: document.visibilityState })`)
+    const raf = await cdp.eval(
+      `new Promise((r) => { const t = setTimeout(() => r('no-raf'), 3000); requestAnimationFrame(() => { clearTimeout(t); r('raf-ok') }) })`
+    )
+    console.log('visibility', vis, 'raf', raf)
     await cdp.eval(`document.getElementById('startTranscribeBtn')?.click()`)
 
     let last = null

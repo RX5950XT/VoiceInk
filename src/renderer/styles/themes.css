@@ -4,6 +4,14 @@
 [data-theme="dark"] {
   color-scheme: dark;
 
+  /* 字體代幣 */
+  --font-sans: "Segoe UI", "Microsoft JhengHei", "Noto Sans TC", sans-serif;
+  --font-mono: "Cascadia Code", "Cascadia Mono", Consolas, ui-monospace, monospace;
+
+  /* 焦點外框代幣 */
+  --focus-ring-color: var(--accent-primary);
+  --focus-ring-offset: 2px;
+
   --app-bg: #111417;
   --app-bg-deep: #0d1012;
   --app-glow-cool: rgba(66, 114, 138, 0.22);
@@ -12,6 +20,10 @@
   --surface-glass-strong: rgba(24, 29, 31, 0.93);
   --surface-subtle: rgba(244, 241, 232, 0.055);
   --surface-hover: rgba(244, 241, 232, 0.085);
+  /* 原生下拉彈窗畫在頁面之外，吃不到 backdrop-filter：只能給不透明色 */
+  --surface-solid: #1c2123;
+  --select-option-selected: #78a3b5;
+  --select-option-selected-text: #0d1012;
   --glass-border: rgba(244, 241, 232, 0.11);
   --glass-border-strong: rgba(244, 241, 232, 0.2);
 
@@ -35,6 +47,11 @@
   --bg-hover: var(--surface-hover);
   --border-color: var(--glass-border-strong);
   --border-light: var(--glass-border);
+
+  /* 終端機畫布：xterm 需要不透明底色（半透明會把捲動殘影疊在一起） */
+  --term-bg: #0f1315;
+  --term-fg: #e8e5dc;
+  --term-selection: rgba(120, 163, 181, 0.35);
 
   --shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
   --shadow-sm: 0 12px 36px rgba(0, 0, 0, 0.18);
@@ -61,6 +78,14 @@
 [data-theme="light"] {
   color-scheme: light;
 
+  /* 字體代幣 */
+  --font-sans: "Segoe UI", "Microsoft JhengHei", "Noto Sans TC", sans-serif;
+  --font-mono: "Cascadia Code", "Cascadia Mono", Consolas, ui-monospace, monospace;
+
+  /* 焦點外框代幣 */
+  --focus-ring-color: var(--accent-primary);
+  --focus-ring-offset: 2px;
+
   --app-bg: #e9eeec;
   --app-bg-deep: #dde5e2;
   --app-glow-cool: rgba(104, 160, 184, 0.23);
@@ -69,12 +94,15 @@
   --surface-glass-strong: rgba(250, 250, 247, 0.94);
   --surface-subtle: rgba(30, 37, 40, 0.055);
   --surface-hover: rgba(30, 37, 40, 0.08);
+  --surface-solid: #f8f9f6;
+  --select-option-selected: #3d6a7d;
+  --select-option-selected-text: #ffffff;
   --glass-border: rgba(30, 37, 40, 0.12);
   --glass-border-strong: rgba(30, 37, 40, 0.21);
 
   --text-primary: #1e2528;
   --text-secondary: #4f5b5e;
-  --text-tertiary: #5c6668;
+  --text-tertiary: #596568;
 
   --accent-primary: #3d6a7d;
   --accent-hover: #4d7e92;
@@ -93,9 +121,23 @@
   --border-color: var(--glass-border-strong);
   --border-light: var(--glass-border);
 
+  --term-bg: #fbfbf8;
+  --term-fg: #23292c;
+  --term-selection: rgba(61, 106, 125, 0.25);
+
   --shadow: 0 24px 70px rgba(55, 67, 69, 0.17);
   --shadow-sm: 0 10px 30px rgba(55, 67, 69, 0.11);
   --shadow-card: 0 24px 70px rgba(55, 67, 69, 0.16);
+}
+
+/* 原生下拉選項底色與對比保證（OS 彈窗渲染） */
+option {
+  background-color: var(--surface-solid);
+  color: var(--text-primary);
+}
+
+option:disabled {
+  color: var(--text-tertiary);
 }
 
 body {

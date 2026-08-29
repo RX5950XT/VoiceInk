@@ -15,6 +15,11 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms))
 }
 
+function stopChildTree(child) {
+  if (!child?.pid) return
+  try { spawn('taskkill', ['/F', '/T', '/PID', String(child.pid)], { stdio: 'ignore' }) } catch {}
+}
+
 function getJson(url) {
   return new Promise((resolve, reject) => {
     http.get(url, (res) => {
@@ -183,7 +188,7 @@ async function main() {
     ok(
       'seven-tab order + usage page structure',
       JSON.stringify(usageUi?.order) === JSON.stringify([
-        'chat', 'usage', 'agy', 'transcribe', 'live', 'translate', 'settings'
+        'chat', 'terminal', 'usage', 'agy', 'stt', 'translate', 'settings'
       ]) &&
         usageUi.hasApi &&
         usageUi.active &&
@@ -272,19 +277,44 @@ async function main() {
       JSON.stringify(md)
     )
 
-    // 切到 live 分頁
-    await cdp.eval(`document.querySelector('[data-page="live"]')?.click()`)
+    // 切到語音轉文字分頁（檔案轉錄與即時字幕已合併成子分頁）
+    await cdp.eval(`document.querySelector('[data-page="stt"]')?.click()`)
     await sleep(500)
-    const liveActive = await cdp.eval(
-      `document.getElementById('page-live')?.classList.contains('active')`
+    const sttPage = await cdp.eval(`(() => {
+      const page = document.getElementById('page-stt')
+      return {
+        active: page?.classList.contains('active') === true,
+        subtabs: document.querySelectorAll('#sttSubtabs .subtab').length,
+        activePanels: document.querySelectorAll('#page-stt .subtab-panel.active').length,
+        defaultPanel: document.querySelector('#page-stt .subtab-panel.active')?.id || '',
+        hasAsrSelect: !!document.getElementById('sttAsrModel'),
+        hasLlmSelect: !!document.getElementById('sttTranslateModel'),
+        noOldPages: !document.getElementById('page-transcribe') && !document.getElementById('page-live')
+      }
+    })()`)
+    ok(
+      'stt page merges file + live into subtabs',
+      sttPage?.active && sttPage.subtabs === 2 && sttPage.activePanels === 1 &&
+        sttPage.defaultPanel === 'stt-file' && sttPage.hasAsrSelect && sttPage.hasLlmSelect &&
+        sttPage.noOldPages,
+      JSON.stringify(sttPage)
     )
-    ok('switch to live page', liveActive === true)
 
-    // 即時頁無舊的 display mode segmented（已搬到字幕窗）
-    const noSeg = await cdp.eval(
-      `!document.querySelector('#page-live .segmented, #captionDisplayMode, #displayModeSegment')`
+    // 切到即時字幕子分頁：只有它是 active
+    const liveSub = await cdp.eval(`(() => {
+      document.querySelector('#sttSubtabs [data-subtab="live"]')?.click()
+      return {
+        panel: document.querySelector('#page-stt .subtab-panel.active')?.id || '',
+        count: document.querySelectorAll('#page-stt .subtab-panel.active').length,
+        // 顯示模式 segmented 已搬到字幕窗，這頁不該再有
+        noSeg: !document.querySelector('#stt-live .segmented, #captionDisplayMode, #displayModeSegment')
+      }
+    })()`)
+    ok(
+      'live subtab switches and has no display-mode segment',
+      liveSub?.panel === 'stt-live' && liveSub.count === 1 && liveSub.noSeg === true,
+      JSON.stringify(liveSub)
     )
-    ok('live page no display-mode segment', noSeg === true)
 
     // 設定為第四分頁（非彈窗）
     await cdp.eval(`document.querySelector('[data-page="settings"]')?.click()`)
@@ -300,13 +330,18 @@ async function main() {
         const text = page?.innerText || ''
         return {
           noModal: !document.getElementById('settingsPanel'),
-          hasTranslatorCloud: !!document.querySelector('#translatorSegment [data-value="cloud"]'),
-          hasTranslatorLocal: !!document.querySelector('#translatorSegment [data-value="local"]'),
-          noNone: !document.querySelector('#translatorSegment [data-value="none"]'),
-          hasAsrCloud: !!document.querySelector('#asrEngineSegment [data-value="cloud"]'),
+          // 後端選擇已搬到各功能頁的模型選單，設定頁不該再有這兩個 segmented
+          noTranslatorSeg: !document.getElementById('translatorSegment'),
+          noAsrEngineSeg: !document.getElementById('asrEngineSegment'),
+          // 翻譯的雲端端點已併進聊天供應商，不該再有第二份 URL／Key 欄位
+          noSeparateTranslate: !document.getElementById('apiUrlInput'),
+          hasCloudAsr: !!document.getElementById('asrApiUrlInput'),
+          hasCloudChat: !!document.getElementById('chatApiUrlInput'),
           hasTtsRate: !!document.getElementById('ttsRateInput'),
+          hasTtsPreview: document.querySelectorAll('.tts-preview-btn').length === 5,
           hasModelList: !!document.getElementById('modelList'),
-          navCount: document.querySelectorAll('#settingsNav .settings-nav-item').length,
+          navSections: [...document.querySelectorAll('#settingsNav .settings-nav-item')]
+            .map((b) => b.dataset.section),
           activeSections: document.querySelectorAll('#page-settings .settings-section.active').length,
           hasFooterSave: !!document.getElementById('saveSettingsBtn'),
           textHasModels: /模型/.test(text)
@@ -316,13 +351,16 @@ async function main() {
     ok(
       'settings page structure',
       settingsUi?.noModal &&
-        settingsUi?.hasTranslatorCloud &&
-        settingsUi?.hasTranslatorLocal &&
-        settingsUi?.noNone &&
-        settingsUi?.hasAsrCloud &&
+        settingsUi?.noTranslatorSeg &&
+        settingsUi?.noAsrEngineSeg &&
+        settingsUi?.noSeparateTranslate &&
+        settingsUi?.hasCloudAsr &&
+        settingsUi?.hasCloudChat &&
         settingsUi?.hasTtsRate &&
+        settingsUi?.hasTtsPreview &&
         settingsUi?.hasModelList &&
-        settingsUi?.navCount === 6 &&
+        JSON.stringify(settingsUi?.navSections) ===
+          JSON.stringify(['local', 'cloud', 'voice', 'basic']) &&
         settingsUi?.activeSections === 1 &&
         settingsUi?.hasFooterSave,
       JSON.stringify(settingsUi)
@@ -340,7 +378,9 @@ async function main() {
         withKey: items.filter((el) => !!el.dataset.key).length,
         withRow: items.filter((el) => !!el.querySelector('.model-row')).length,
         withName: items.filter((el) => (el.querySelector('.model-name')?.textContent || '').trim().length > 0).length,
-        withTag: items.filter((el) => ['ASR', '翻譯'].includes(el.querySelector('.model-tag')?.textContent || '')).length,
+        // 類別改由分組標題呈現，每列不再重複掛一顆同義的 tag
+        groups: [...document.querySelectorAll('#modelList .model-group-title')].map((el) => el.textContent),
+        noPerRowTag: !document.querySelector('#modelList .model-tag'),
         withSize: items.filter((el) => (el.querySelector('.model-size')?.textContent || '').trim().length > 0).length,
         withButton: items.filter((el) => !!el.querySelector('.model-actions .btn')).length,
         withProgress: items.filter((el) => !!el.querySelector('.model-progress .model-progress-fill')).length,
@@ -348,8 +388,7 @@ async function main() {
         hiddenProgress: items.filter((el) => el.querySelector('.model-progress')?.classList.contains('hidden')).length,
         // 名稱節點只放文字：label 前面必須是 text node，不能是被解析出來的元素
         nameFirstIsText: name?.firstChild?.nodeType === Node.TEXT_NODE,
-        // tag 是 name 的子節點（原本 innerHTML 模板的結構）
-        tagInsideName: !!name?.querySelector('.model-tag')
+        nameHasText: (name?.textContent || '').trim().length > 0
       }
     })()`)
     ok(
@@ -358,23 +397,24 @@ async function main() {
         modelItems.withKey === modelItems.count &&
         modelItems.withRow === modelItems.count &&
         modelItems.withName === modelItems.count &&
-        modelItems.withTag === modelItems.count &&
+        modelItems.noPerRowTag === true &&
+        JSON.stringify(modelItems.groups) === JSON.stringify(['語音辨識', '翻譯', '執行環境']) &&
         modelItems.withSize === modelItems.count &&
         modelItems.withButton === modelItems.count &&
         modelItems.withProgress === modelItems.count &&
         modelItems.hiddenProgress === modelItems.count &&
         modelItems.nameFirstIsText === true &&
-        modelItems.tagInsideName === true,
+        modelItems.nameHasText === true,
       JSON.stringify(modelItems)
     )
 
     // 分類 rail：一次只顯示一區；字級階層 標題 > 欄位 label > 說明
     const settingsNav = await cdp.eval(`(() => {
-      document.querySelector('#settingsNav [data-section="asr"]')?.click()
+      document.querySelector('#settingsNav [data-section="local"]')?.click()
       const active = document.querySelector('#page-settings .settings-section.active')
-      const title = document.querySelector('#set-asr .settings-section-title')
-      const label = document.querySelector('#set-asr .setting-group label')
-      const hint = document.querySelector('#set-asr .setting-hint')
+      const title = document.querySelector('#set-local .settings-section-title')
+      const label = document.querySelector('#set-local .setting-group label')
+      const hint = document.querySelector('#set-local .setting-hint')
       const px = (el) => (el ? parseFloat(getComputedStyle(el).fontSize) : 0)
       return {
         activeId: active?.id || '',
@@ -382,22 +422,23 @@ async function main() {
         titlePx: px(title),
         labelPx: px(label),
         hintPx: px(hint),
+        // 執行緒選項已移除：0.6B 走 CPU、1.7B 走 GPU，選了模型就決定了推論方式
         threadsOptions: document.querySelectorAll('#asrThreadsSegment .seg-btn').length
       }
     })()`)
     ok(
       'settings category rail + type scale',
-      settingsNav?.activeId === 'set-asr' &&
+      settingsNav?.activeId === 'set-local' &&
         settingsNav.activeCount === 1 &&
         settingsNav.titlePx > settingsNav.labelPx &&
         settingsNav.labelPx > settingsNav.hintPx &&
-        settingsNav.threadsOptions === 4,
+        settingsNav.threadsOptions === 0,
       JSON.stringify(settingsNav)
     )
 
     const chatSettings = await cdp.eval(`(() => {
-      document.querySelector('#settingsNav [data-section="chat"]')?.click()
-      const section = document.getElementById('set-chat')
+      document.querySelector('#settingsNav [data-section="cloud"]')?.click()
+      const section = document.getElementById('set-cloud')
       return {
         hasApiUrl: !!document.getElementById('chatApiUrlInput'),
         hasApiKey: !!document.getElementById('chatApiKeyInput'),
@@ -486,24 +527,32 @@ async function main() {
     })()`)
     ok('models.status', Array.isArray(status?.keys) && status.keys.includes('qwen3asr'), JSON.stringify(status))
 
-    // LinguaForge 可選：模型清單／翻譯模型選項都要出現
+    // 模型選單改在使用現場：翻譯頁上方的下拉要列出三顆本地翻譯模型＋一個雲端選項
     const lingua = await cdp.eval(`(async () => {
-      const seg = document.getElementById('localTranslateModelSegment')
+      document.querySelector('[data-page="translate"]')?.click()
+      await new Promise(r => setTimeout(r, 600))
+      const sel = document.getElementById('translatePageModel')
+      const values = [...(sel?.options || [])].map(o => o.value)
       return {
         statusKeys: Object.keys((await window.electronAPI.models.status()).models || {}),
-        settingsText: /LinguaForge/i.test(document.getElementById('page-settings')?.innerText || ''),
-        segBtn: !!seg?.querySelector('[data-value="linguaforge08"]'),
-        // 整組不再被 hidden 遮蔽（本地翻譯區塊本身在 translator=cloud 時才隱藏）
-        groupShown: !seg?.closest('.setting-group')?.classList.contains('hidden'),
-        translator: await window.electronAPI.store.get('translator', 'local')
+        values,
+        labels: [...(sel?.options || [])].map(o => o.textContent),
+        // Q8 已下架，選單與 registry 都不該再看到它
+        noQ8: !values.includes('local:linguaforge08')
       }
     })()`)
     ok(
-      'linguaforge selectable',
-      lingua?.statusKeys?.includes('linguaforge08') &&
-        lingua?.settingsText === true &&
-        lingua?.segBtn === true &&
-        lingua?.groupShown === true,
+      'translate model picker lists local + cloud',
+      lingua?.statusKeys?.includes('linguaforge08q4') &&
+        !lingua?.statusKeys?.includes('linguaforge08') &&
+        JSON.stringify(lingua?.values.slice(0, 3)) === JSON.stringify([
+          'local:linguaforge08q4', 'local:qwen35translate', 'local:qwen354b'
+        ]) &&
+        // 雲端選項逐一列出供應商的模型（沒有供應商時退回一個「尚未設定」項）
+        lingua?.values.slice(3).every((v) => v.startsWith('cloud')) &&
+        lingua?.values.length > 3 &&
+        lingua?.labels?.some((l) => /LinguaForge/i.test(l)) &&
+        lingua?.noQ8 === true,
       JSON.stringify(lingua)
     )
 
@@ -578,11 +627,7 @@ async function main() {
   } catch (e) {
     ok('suite', false, e.message || String(e))
   } finally {
-    try { child.kill() } catch {}
-    // Windows 強制
-    try {
-      spawn('taskkill', ['/F', '/IM', 'VoiceInk.exe'], { stdio: 'ignore' })
-    } catch {}
+    stopChildTree(child)
   }
 
   const failed = results.filter((r) => !r.pass)

@@ -1,12 +1,25 @@
-const { app, BrowserWindow, ipcMain, session, desktopCapturer, screen, shell } = require('electron')
+const {
+  app, BrowserWindow, ipcMain, session, desktopCapturer, screen, shell, dialog,
+  Menu, Tray, nativeImage
+} = require('electron')
 const path = require('path')
 const fs = require('fs')
 const models = require('./models')
 const chat = require('./chat')
 const chatStore = require('./chat-store')
-const { sanitizeTtsVoices, DEFAULT_TTS_VOICES, listVoices } = require('./tts-voices')
+const { sanitizeTtsVoices, DEFAULT_TTS_VOICES, VOICES_BY_LANG, listVoices } = require('./tts-voices')
+
+/** 設定頁試聽用的範例句（main 的固定表，renderer 不送文字） */
+const TTS_PREVIEW_TEXT = Object.freeze({
+  'zh-TW': '你好，這是語音試聽，聽起來還可以嗎？',
+  'zh-CN': '你好，这是语音试听，听起来还可以吗？',
+  en: 'Hi there, this is a voice preview. How does it sound?',
+  ja: 'こんにちは。これは音声のプレビューです。',
+  ko: '안녕하세요. 이것은 음성 미리 듣기입니다.'
+})
 const { registerUsageIpc } = require('./usage/ipc')
 const { registerAgyIpc } = require('./agy/ipc')
+const { registerTerminalIpc } = require('./terminal/ipc')
 
 const bootStartedAt = Date.now()
 function bootLog(step) {
@@ -30,7 +43,8 @@ function lazyLoad(id) {
   }
 }
 
-const loadLocalAsr = lazyLoad('./local-asr')
+/** 本地 ASR 門面：依 `asrModelKey` 分流 sherpa（CPU）／llama-server（GPU） */
+const loadLocalAsr = lazyLoad('./asr-select')
 const loadLocalLlm = lazyLoad('./local-llm')
 const loadEngine = lazyLoad('./engine')
 const loadFileTranscribe = lazyLoad('./file-transcribe')
@@ -43,6 +57,7 @@ const loadGpu = lazyLoad('./gpu-capability')
 const loadCudaEnv = lazyLoad('./cuda-env')
 
 let agyMod = null
+let terminalMod = null
 let backgroundStarted = false
 /** @type {Promise<object>|null} */
 let storeReady = null
@@ -51,6 +66,8 @@ let storeReady = null
 let mainWindow = null
 // 字幕視窗
 let subtitleWindow = null
+// 系統匣圖示（第一次縮到背景才建立）
+let tray = null
 // 設定儲存實例（延遲初始化）
 let store = null
 /** 正在執行 before-quit 卸載 */
@@ -59,29 +76,46 @@ let isQuitting = false
 // 開發模式判斷
 const isDev = !app.isPackaged
 
+// 開機自啟動時帶的旗標：靜靜地縮在系統匣，不要跳一扇窗出來
+const HIDDEN_FLAG = '--hidden'
+const startHidden = process.argv.includes(HIDDEN_FLAG)
+
+/**
+ * 只准跑一份。
+ *
+ * 常駐背景之後這不是「保險」而是必要條件：視窗藏起來時再點一次捷徑，
+ * 第二份會用同一個埠 autoStart 反代（EADDRINUSE），還會跟第一份搶
+ * chats.json／usage.json／agy-logs.db。第二份改成把既有視窗叫出來就好。
+ */
+const hasInstanceLock = app.requestSingleInstanceLock()
+// 用 app.quit() 而不是 app.exit()：exit 是立刻砍掉自己，會來不及讓「我來過了」這個
+// 通知送達第一份，症狀是藏在系統匣時再點捷徑有時叫不出視窗（實測時好時壞）。
+if (!hasInstanceLock) app.quit()
+app.on('second-instance', () => showMainWindow())
+
 /** electron-store 允許的 key（防任意讀寫／XSS 後改 apiUrl 外洩 key） */
 const STORE_ALLOWLIST = new Set([
   'translator',
   'captionDisplayMode',
-  'apiUrl',
-  'apiKey',
-  'modelId',
   'asrEngine',
   'asrApiUrl',
   'asrApiKey',
   'asrModelId',
   'theme',
+  'closeToTray',
   'subtitleFontScale',
   'subtitleOpacity',
   'subtitleWindowBounds',
   'ttsVoices',
   'ttsRate',
   'localTranslateModel',
+  'asrModelKey',
   'llmGpu',
-  'asrThreads',
   'chatProviders',
   'chatProviderId',
   'chatModelId',
+  'translateProviderId',
+  'translateModelId',
   'chatPrompts',
   'chatPromptId',
   'chatThinking'
@@ -93,21 +127,10 @@ const THEME_VALUES = new Set(['dark', 'light'])
 
 const TRANSLATE_TARGET_LANGS = new Set(['zh-TW', 'zh-CN', 'en', 'ja', 'ko'])
 const MAX_TRANSLATE_CHARS = 1500
-const DEFAULT_LLM_KEY = 'linguaforge08'
-const MAX_ASR_THREADS = 16
-
-/**
- * 本地 ASR 推論執行緒：0＝自動。
- * 沒有 GPU 選項——npm 的 sherpa-onnx-win-x64 是 CPU-only 編譯，
- * provider 傳 cuda/directml 只會靜默 fallback（見 local-asr.resolveThreads 註解）。
- * @param {unknown} raw
- * @returns {number}
- */
-function sanitizeAsrThreads(raw) {
-  const n = Number(raw)
-  if (!Number.isInteger(n) || n < 2 || n > MAX_ASR_THREADS) return 0
-  return n
-}
+const DEFAULT_LLM_KEY = 'linguaforge08q4'
+const DEFAULT_ASR_MODEL_KEY = 'qwen3asr'
+/** 已下架的模型 key → 接替者（讀到舊值就當成新值，不必寫回） */
+const RETIRED_MODEL_KEYS = Object.freeze({ linguaforge08: 'linguaforge08q4' })
 
 /**
  * @param {unknown} val
@@ -143,6 +166,20 @@ async function loadAgy() {
     agyMod.configure({ userDataPath: app.getPath('userData'), store })
   }
   return agyMod
+}
+
+/**
+ * 第一次用到終端機才載模組（node-pty 是原生模組，不該擋啟動）。
+ * @returns {object}
+ */
+function loadTerminal() {
+  if (!terminalMod) {
+    terminalMod = require('./terminal/pty')
+    terminalMod.setEmitter((channel, payload) => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload)
+    })
+  }
+  return terminalMod
 }
 
 /**
@@ -204,6 +241,10 @@ async function initStore() {
       migrateChatSystemPrompt()
       migrateChatProviders()
       chat.setStore(store)
+      migrateTranslateProvider()
+      // 語音辨識執行緒的選項已移除（一律「自動」）：舊值留著會讓 sherpa 永遠鎖在
+      // 使用者當年隨手選的數字，而且畫面上再也沒有地方看得到
+      if (store.has('asrThreads')) store.delete('asrThreads')
       bootLog('store ready')
       return store
     })()
@@ -259,6 +300,65 @@ function migrateChatProviders() {
 }
 
 /**
+ * 一次性搬移：舊版獨立的雲端翻譯設定（`apiUrl`／`apiKey`／`modelId`）
+ * → `chatProviders` 裡的一組。翻譯與聊天都是 OpenAI 相容的 chat completions，
+ * 沒有理由讓同一組網址與金鑰在設定頁出現兩次。
+ *
+ * 網址與金鑰都一樣的供應商已經存在就直接沿用，不重複建一組。
+ */
+function migrateTranslateProvider() {
+  const legacyKeys = ['apiUrl', 'apiKey', 'modelId']
+  if (!legacyKeys.some((key) => store.has(key))) return
+
+  const apiUrl = String(store.get('apiUrl', '') || '').trim()
+  const apiKey = String(store.get('apiKey', '') || '').trim()
+  const modelId = String(store.get('modelId', '') || '').trim()
+
+  if (apiKey && /^https?:\/\//i.test(apiUrl)) {
+    const providers = chat.sanitizeProviders(store.get('chatProviders', []))
+    let target = providers.find((p) => p.apiUrl === apiUrl && p.apiKey === apiKey)
+    if (!target) {
+      target = { id: 'p_legacy_tr', name: '翻譯', apiUrl, apiKey, models: [], imageModels: [] }
+      providers.push(target)
+    }
+    if (modelId && !target.models.includes(modelId)) target.models.push(modelId)
+    const list = chat.sanitizeProviders(providers)
+    store.set('chatProviders', list)
+    const saved = list.find((p) => p.id === target.id) || list[0]
+    if (saved) {
+      store.set('translateProviderId', saved.id)
+      store.set('translateModelId', saved.models.includes(modelId) ? modelId : (saved.models[0] || ''))
+    }
+    console.log('[translate] 已將舊的雲端翻譯設定併入聊天供應商清單')
+  }
+  for (const key of legacyKeys) if (store.has(key)) store.delete(key)
+}
+
+/**
+ * 目前翻譯供應商的模型清單（`translateProviderId` 失效時退回第一組）
+ * @returns {string[]}
+ */
+function translateProviderModels() {
+  const list = chat.sanitizeProviders(store.get('chatProviders', []))
+  const wanted = String(store.get('translateProviderId', '') || '')
+  return (list.find((p) => p.id === wanted) || list[0])?.models || []
+}
+
+/**
+ * 供應商清單變動後把「選了哪一組／哪一顆」收斂回合法值
+ * @param {Array<{ id: string, models: string[] }>} list
+ * @param {string} providerKey
+ * @param {string} modelKey
+ */
+function reconcileProviderSelection(list, providerKey, modelKey) {
+  const wanted = String(store.get(providerKey, '') || '')
+  const active = list.find((p) => p.id === wanted) || list[0] || null
+  store.set(providerKey, active?.id || '')
+  const model = String(store.get(modelKey, '') || '')
+  if (!active?.models.includes(model)) store.set(modelKey, active?.models[0] || '')
+}
+
+/**
  * 依主題決定視窗底色（frameless 避免淺色主題閃黑）
  * @returns {string}
  */
@@ -274,6 +374,40 @@ function mainBackgroundColor() {
 function assertMainWindowSender(event) {
   if (!mainWindow || mainWindow.isDestroyed()) return false
   return event.sender === mainWindow.webContents
+}
+
+/** 關視窗要不要留在背景（反代不中斷）。預設開，隨時可在設定關掉。 */
+function closeToTrayEnabled() {
+  return store ? store.get('closeToTray', true) === true : true
+}
+
+/** 把主視窗叫回前景；被關掉過就重建 */
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createMainWindow()
+    return
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+}
+
+/**
+ * 系統匣圖示。第一次縮到背景才建立——沒有常駐需求時不該多一顆圖示。
+ * 視窗藏起來後，這是唯一能叫回來或真的結束的入口，所以兩個項目都必須有。
+ */
+function ensureTray() {
+  if (tray) return
+  const icon = nativeImage.createFromPath(path.join(__dirname, '../../assets/icon.ico'))
+  tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon)
+  tray.setToolTip('VoiceInk（背景執行中）')
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: '顯示 VoiceInk', click: showMainWindow },
+    { type: 'separator' },
+    { label: '結束 VoiceInk', click: () => app.quit() }
+  ]))
+  tray.on('click', showMainWindow)
+  tray.on('double-click', showMainWindow)
 }
 
 /**
@@ -300,8 +434,9 @@ function createMainWindow() {
     },
     backgroundColor: mainBackgroundColor(),
     autoHideMenuBar: true,
-    show: true
+    show: !startHidden
   })
+  if (startHidden) ensureTray()
 
   // 隱藏 File/Edit/View… 系統選單列
   mainWindow.setMenu(null)
@@ -332,6 +467,16 @@ function createMainWindow() {
   mainWindow.on('unmaximize', sendMaximized)
 
   attachWindowSecurity(mainWindow)
+
+  // 關視窗 ≠ 結束：藏起來讓 AGY 反代繼續服務，真正的結束走系統匣選單。
+  // isQuitting 這條一定要留——before-quit 會走到 app.exit()，但 app.quit() 途中
+  // 若還攔著關窗，就變成永遠關不掉。
+  mainWindow.on('close', (event) => {
+    if (isQuitting || !closeToTrayEnabled()) return
+    event.preventDefault()
+    ensureTray()
+    mainWindow.hide()
+  })
 
   mainWindow.on('closed', () => {
     mainWindow = null
@@ -468,7 +613,13 @@ ipcMain.handle('store:get', async (event, key, defaultValue) => {
     return ASR_ENGINE_VALUES.has(val) ? val : (ASR_ENGINE_VALUES.has(defaultValue) ? defaultValue : 'local')
   }
   if (key === 'localTranslateModel') {
-    return models.isLlmKey(val) ? val : (models.isLlmKey(defaultValue) ? defaultValue : DEFAULT_LLM_KEY)
+    const migrated = RETIRED_MODEL_KEYS[val] || val
+    return models.isLlmKey(migrated)
+      ? migrated
+      : (models.isLlmKey(defaultValue) ? defaultValue : DEFAULT_LLM_KEY)
+  }
+  if (key === 'asrModelKey') {
+    return models.isAsrKey(val) ? val : DEFAULT_ASR_MODEL_KEY
   }
   if (key === 'llmGpu') {
     return val === true
@@ -486,13 +637,22 @@ ipcMain.handle('store:get', async (event, key, defaultValue) => {
     const models = chat.readProvider()?.models || []
     return models.includes(val) ? val : (models[0] || '')
   }
+  if (key === 'translateProviderId') {
+    const list = chat.sanitizeProviders(store.get('chatProviders', []))
+    return list.some((p) => p.id === val) ? val : (list[0]?.id || '')
+  }
+  if (key === 'translateModelId') {
+    const models = translateProviderModels()
+    return models.includes(val) ? val : (models[0] || '')
+  }
   if (key === 'chatPrompts') return chat.sanitizePrompts(val)
   if (key === 'chatPromptId') {
     const list = chat.sanitizePrompts(store.get('chatPrompts', []))
     return list.some((p) => p.id === val) ? val : ''
   }
   if (key === 'chatThinking') return val === true
-  if (key === 'asrThreads') return sanitizeAsrThreads(val)
+  // closeToTray 預設開：使用者要的就是「關掉視窗反代不斷」，沒設定過時不該退回關閉
+  if (key === 'closeToTray') return val !== false
   return val
 })
 
@@ -521,7 +681,12 @@ ipcMain.handle('store:set', async (event, key, value) => {
     return true
   }
   if (key === 'localTranslateModel') {
-    store.set(key, models.isLlmKey(value) ? value : DEFAULT_LLM_KEY)
+    const migrated = RETIRED_MODEL_KEYS[value] || value
+    store.set(key, models.isLlmKey(migrated) ? migrated : DEFAULT_LLM_KEY)
+    return true
+  }
+  if (key === 'asrModelKey') {
+    store.set(key, models.isAsrKey(value) ? value : DEFAULT_ASR_MODEL_KEY)
     return true
   }
   if (key === 'llmGpu') {
@@ -542,36 +707,40 @@ ipcMain.handle('store:set', async (event, key, value) => {
     }
     return true
   }
-  if (key === 'asrApiUrl' || key === 'apiUrl') {
+  if (key === 'asrApiUrl') {
     store.set(key, typeof value === 'string' ? value.trim() : value)
     return true
   }
-  if (key === 'asrModelId' || key === 'modelId') {
+  if (key === 'asrModelId') {
     store.set(key, typeof value === 'string' ? value.trim() : value)
     return true
   }
   if (key === 'chatProviders') {
     const list = chat.sanitizeProviders(value)
     store.set(key, list)
-    // 供應商可能被刪掉或改名 → 選取與模型都要跟著收斂，否則聊天請求會被自己的驗證擋下
-    const providerId = String(store.get('chatProviderId', '') || '')
-    const active = list.find((p) => p.id === providerId) || list[0] || null
-    store.set('chatProviderId', active?.id || '')
-    const model = String(store.get('chatModelId', '') || '')
-    if (!active?.models.includes(model)) store.set('chatModelId', active?.models[0] || '')
+    // 供應商可能被刪掉或改名 → 選取與模型都要跟著收斂，否則聊天請求會被自己的驗證擋下。
+    // 翻譯用的是同一份清單，所以兩組選擇都要收
+    reconcileProviderSelection(list, 'chatProviderId', 'chatModelId')
+    reconcileProviderSelection(list, 'translateProviderId', 'translateModelId')
     return true
   }
-  if (key === 'chatProviderId') {
+  if (key === 'chatProviderId' || key === 'translateProviderId') {
     const list = chat.sanitizeProviders(store.get('chatProviders', []))
     const active = list.find((p) => p.id === value) || list[0] || null
     store.set(key, active?.id || '')
     // 換供應商就換模型池，舊選擇不再有效
-    const model = String(store.get('chatModelId', '') || '')
-    if (!active?.models.includes(model)) store.set('chatModelId', active?.models[0] || '')
+    const modelKey = key === 'chatProviderId' ? 'chatModelId' : 'translateModelId'
+    const model = String(store.get(modelKey, '') || '')
+    if (!active?.models.includes(model)) store.set(modelKey, active?.models[0] || '')
     return true
   }
   if (key === 'chatModelId') {
     const models = chat.readProvider()?.models || []
+    store.set(key, models.includes(value) ? value : (models[0] || ''))
+    return true
+  }
+  if (key === 'translateModelId') {
+    const models = translateProviderModels()
     store.set(key, models.includes(value) ? value : (models[0] || ''))
     return true
   }
@@ -591,8 +760,8 @@ ipcMain.handle('store:set', async (event, key, value) => {
     store.set(key, value === true)
     return true
   }
-  if (key === 'asrThreads') {
-    store.set(key, sanitizeAsrThreads(value))
+  if (key === 'closeToTray') {
+    store.set(key, value === true)
     return true
   }
   if (key === 'subtitleWindowBounds') {
@@ -626,6 +795,25 @@ ipcMain.handle('window:close', (event) => {
 ipcMain.handle('window:isMaximized', (event) => {
   if (!assertMainWindowSender(event)) return false
   return mainWindow.isMaximized()
+})
+
+// ===== 開機自啟動 =====
+// 真相在 OS（HKCU\...\Run），不進 electron-store：使用者可能在工作管理員的
+// 「開機」分頁直接停用，存一份自己的布林值只會跟系統對不上、UI 說謊。
+// 開發模式不註冊：那會把 node_modules 裡的 electron.exe 排進使用者的開機清單。
+const LOGIN_ITEM_OPTIONS = { args: [HIDDEN_FLAG] }
+
+ipcMain.handle('system:getStartup', (event) => {
+  if (!assertMainWindowSender(event)) return { openAtLogin: false, supported: false }
+  if (isDev) return { openAtLogin: false, supported: false }
+  return { openAtLogin: app.getLoginItemSettings(LOGIN_ITEM_OPTIONS).openAtLogin === true, supported: true }
+})
+
+ipcMain.handle('system:setStartup', (event, enabled) => {
+  if (!assertMainWindowSender(event)) return { openAtLogin: false, supported: false }
+  if (isDev) return { openAtLogin: false, supported: false }
+  app.setLoginItemSettings({ ...LOGIN_ITEM_OPTIONS, openAtLogin: enabled === true })
+  return { openAtLogin: app.getLoginItemSettings(LOGIN_ITEM_OPTIONS).openAtLogin === true, supported: true }
 })
 
 // GPU 能力（設定頁）
@@ -796,6 +984,29 @@ ipcMain.handle('tts:synthesize', async (event, req) => {
   }
 })
 
+/**
+ * 設定頁的語音試聽：唸固定的一句範例，用「使用者當下選到但還沒儲存」的語音。
+ * `voice` 是新增的參數，但它一樣是 main 的固定表白名單（`tts-voices.js`），
+ * 不是自由字串；語速仍讀 store（滑桿未儲存時前端會一併送 rate）。
+ */
+ipcMain.handle('tts:preview', async (event, req) => {
+  if (!store) await initStore()
+  const lang = typeof req?.lang === 'string' ? req.lang : 'zh-TW'
+  const safeLang = Object.prototype.hasOwnProperty.call(DEFAULT_TTS_VOICES, lang) ? lang : 'en'
+  const candidate = typeof req?.voice === 'string' ? req.voice : ''
+  const allowed = VOICES_BY_LANG[safeLang].some((v) => v.id === candidate)
+  const voice = allowed ? candidate : DEFAULT_TTS_VOICES[safeLang]
+  const tts = loadEdgeTts()
+  const rate = tts.formatTtsRate(sanitizeTtsRate(req?.rate))
+  try {
+    return await tts.synthesize({ text: TTS_PREVIEW_TEXT[safeLang], voice, rate })
+  } catch (err) {
+    const e = new Error(err?.message || String(err))
+    e.code = err?.code || 'REJECTED'
+    throw e
+  }
+})
+
 ipcMain.handle('tts:cancel', () => {
   loadEdgeTts().cancelAll()
   return true
@@ -876,8 +1087,31 @@ registerAgyIpc({
   isMainSender: assertMainWindowSender
 })
 
+// ===== 終端機 =====
+// shell 執行檔、啟動指令與工作目錄的驗證全在 main；renderer 只送 key 與由系統對話框選出的路徑。
+registerTerminalIpc({
+  ipcMain,
+  service: {
+    catalog: (...args) => loadTerminal().catalog(...args),
+    listSessions: (...args) => loadTerminal().listSessions(...args),
+    createSession: (...args) => loadTerminal().createSession(...args),
+    renameSession: (...args) => loadTerminal().renameSession(...args),
+    deleteSession: (...args) => loadTerminal().deleteSession(...args),
+    reorderSessions: (...args) => loadTerminal().reorderSessions(...args),
+    openSession: (...args) => loadTerminal().openSession(...args),
+    writeSession: (...args) => loadTerminal().writeSession(...args),
+    resizeSession: (...args) => loadTerminal().resizeSession(...args),
+    killSession: (...args) => loadTerminal().killSession(...args)
+  },
+  isMainSender: assertMainWindowSender,
+  dialog,
+  getWindow: () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null)
+})
+
 // 設定系統音訊擷取的媒體請求處理器
 app.whenReady().then(() => {
+  // 沒搶到鎖的那份只負責把訊號送出去就結束，不可以建窗、更不可以 autoStart 反代（撞埠）
+  if (!hasInstanceLock) return
   bootLog('whenReady')
   session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
     desktopCapturer.getSources({ types: ['screen'] })
@@ -909,13 +1143,17 @@ app.on('before-quit', (e) => {
   }
   e.preventDefault()
   isQuitting = true
+  // 終端機先收：每個工作階段都是一顆真的 conhost，不砍就會留在工作管理員裡
+  if (terminalMod) terminalMod.killAll()
   // 反代先關：留著監聽的 socket 會讓下次啟動撞到 EADDRINUSE
   const stopAgy = agyMod ? agyMod.shutdown() : Promise.resolve()
   stopAgy
     .catch((err) => console.error('[agy] shutdown on quit failed:', err))
     .then(() => {
-      if (!require.cache[require.resolve('./engine')]) return
-      return loadEngine().unloadAll()
+      if (require.cache[require.resolve('./engine')]) return loadEngine().unloadAll()
+      // engine 沒被載過但 ASR 被直接叫過：llama-server sidecar 是獨立程序，不收會變孤兒
+      if (require.cache[require.resolve('./asr-select')]) return loadLocalAsr().unload()
+      return undefined
     })
     .catch((err) => console.error('[engine] unloadAll on quit failed:', err))
     .finally(() => {

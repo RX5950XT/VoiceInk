@@ -12,7 +12,8 @@ const path = require('path')
 const os = require('os')
 const { spawn } = require('child_process')
 const { randomBytes } = require('crypto')
-const localAsr = require('./local-asr')
+/** 依使用者選的模型分流到 sherpa（CPU）或 llama-server（GPU）；模型不由 renderer 指定 */
+const localAsr = require('./asr-select')
 const cloudAsr = require('./cloud-asr')
 
 /** 原始檔案上限（≥100MB 需求；留 200MB 餘裕） */
@@ -127,14 +128,13 @@ function validateFilePath(filePath) {
 
 /**
  * 串流解碼並逐段 ASR
- * @param {{ filePath: string, lang: string, modelKey?: string }} req
+ * @param {{ filePath: string, lang: string }} req
  * @param {(p: { percent: number, text: string, chunk?: number, totalChunks?: number, durationSec?: number }) => void} [onProgress]
  * @returns {Promise<{ text: string, durationSec: number|null, chunks: number }>}
  */
 async function transcribeFile(req, onProgress) {
   const filePath = req?.filePath
   const lang = req?.lang || 'zh-TW'
-  const modelKey = req?.modelKey || localAsr.ASR_MODEL_KEY
 
   const { size } = validateFilePath(filePath)
   const resolved = path.resolve(filePath)
@@ -270,8 +270,7 @@ async function transcribeFile(req, onProgress) {
         text = await localAsr.transcribe({
           samples,
           sampleRate: SAMPLE_RATE,
-          lang,
-          modelKey
+          lang
         })
       } catch (e) {
         fail(e)

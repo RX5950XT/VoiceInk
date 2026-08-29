@@ -29,4 +29,19 @@ function s2twp(text) {
   return shaped === text ? text : toTwp(text)
 }
 
-module.exports = { s2twp }
+/**
+ * 目標語為繁中時，僅對「像中文、非日韓」的來源做 s2twp。
+ * 不可只看 lang==='zh-TW'：日文漢字會被 opencc 弄髒（国→國 等）。
+ * 兩支本地 ASR（sherpa／llama-server）都要用同一份判斷，所以放在這裡共用。
+ * @param {string} text
+ * @param {string} lang
+ * @returns {boolean}
+ */
+function shouldS2twpSource(text, lang) {
+  if (lang !== 'zh-TW' || !text) return false
+  if (/[ぁ-ヿ가-힯]/.test(text)) return false
+  const cjkCount = (text.match(/[一-鿿]/g) || []).length
+  return cjkCount / Math.max(1, text.length) >= 0.3
+}
+
+module.exports = { s2twp, shouldS2twpSource }

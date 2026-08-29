@@ -76,8 +76,8 @@ async function main() {
   const extra = process.argv.filter((a) => a.endsWith('.gguf') && fs.existsSync(a))
   const models = require('../src/main/models')
   const q4Path = path.join(
-    models.modelDir('linguaforge08'),
-    models.ggufRelativePath('linguaforge08')
+    models.modelDir('linguaforge08q4'),
+    models.ggufRelativePath('linguaforge08q4')
   )
   if (!fs.existsSync(q4Path)) {
     console.error('找不到 Q4 模型：' + q4Path)

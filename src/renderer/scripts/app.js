@@ -9,12 +9,8 @@ import {
   validateChatSettings,
   saveChatSettings
 } from './chat-page.js'
-import {
-  DEFAULT_API_URL,
-  DEFAULT_MODEL,
-  DEFAULT_ASR_API_URL,
-  DEFAULT_ASR_MODEL
-} from './api.js'
+import { DEFAULT_ASR_API_URL, DEFAULT_ASR_MODEL } from './api.js'
+import { initCustomSelects, syncCustomSelects } from './custom-select.js'
 
 /** @type {typeof import('./live-caption.js') | null} */
 let liveCaption = null
@@ -26,6 +22,10 @@ let transcribePage = null
 let usagePage = null
 /** @type {typeof import('./agy-page.js') | null} */
 let agyPage = null
+/** @type {typeof import('./terminal-page.js') | null} */
+let terminalPage = null
+/** @type {typeof import('./stt-page.js') | null} */
+let sttPage = null
 
 /** @returns {Promise<typeof import('./live-caption.js')>} */
 async function loadLiveCaption() {
@@ -64,6 +64,33 @@ async function loadUsagePage() {
 async function loadAgyPage() {
   if (!agyPage) agyPage = await import('./agy-page.js')
   return agyPage
+}
+
+/** @returns {Promise<typeof import('./terminal-page.js')>} */
+async function loadTerminalPage() {
+  if (!terminalPage) terminalPage = await import('./terminal-page.js')
+  return terminalPage
+}
+
+/** @returns {Promise<typeof import('./stt-page.js')>} */
+async function loadSttPage() {
+  if (!sttPage) sttPage = await import('./stt-page.js')
+  return sttPage
+}
+
+/**
+ * 進「語音轉文字」頁：兩個子分頁的模組都要在（切子分頁不該再等一次 import），
+ * 但引擎只給目前這個子分頁用——即時字幕 prewarm 很貴，停在檔案轉錄時不該先付。
+ * @param {'file'|'live'} subtab
+ */
+async function activateSttSubtab(subtab) {
+  await loadTranscribePage()
+  if (subtab === 'live') {
+    const live = await loadLiveCaption()
+    live.prewarmEngine()
+  } else {
+    liveCaption?.cooldownEngine()
+  }
 }
 
 /** 預設 TTS 語音（與 main tts-voices.js 對齊） */
@@ -232,9 +259,10 @@ const SETTING_DEFAULTS = {
   translator: 'local',
   /** 即時字幕：bilingual 雙語｜translation 僅翻譯 */
   captionDisplayMode: 'bilingual',
-  apiUrl: DEFAULT_API_URL,
-  apiKey: '',
-  modelId: DEFAULT_MODEL,
+  /** 雲端翻譯＝聊天供應商清單裡的一組（設定→雲端模型），模型在翻譯頁上方選 */
+  chatProviders: [],
+  translateProviderId: '',
+  translateModelId: '',
   /** @type {'local'|'cloud'} */
   asrEngine: 'local',
   asrApiUrl: DEFAULT_ASR_API_URL,
@@ -243,19 +271,22 @@ const SETTING_DEFAULTS = {
   ttsVoices: { ...DEFAULT_TTS_VOICES },
   /** 語速百分比偏移 -50…100 */
   ttsRate: 0,
-  /** @type {'linguaforge08'|'linguaforge08q4'|'qwen35translate'} */
-  localTranslateModel: 'linguaforge08',
-  /** 本地 LLM 是否使用 CUDA（需 NVIDIA ≥6GB） */
-  llmGpu: false,
-  /** 本地 ASR 推論執行緒；0＝自動（sherpa 官方 Windows 套件無 GPU 版，只有 CPU） */
-  asrThreads: 0
+  /** @type {'linguaforge08q4'|'qwen35translate'|'qwen354b'} */
+  localTranslateModel: 'linguaforge08q4',
+  /** 本地 ASR 模型：qwen3asr（sherpa，CPU）/ qwen3asrgpu（llama-server，GPU） */
+  asrModelKey: 'qwen3asr',
+  /** 本地 LLM 是否使用 CUDA（需 NVIDIA ≥6GB）。全域：任何一頁用到本地翻譯都吃這個設定 */
+  llmGpu: false
 }
 
-/** 固定本地 ASR 模型 key */
+/** 預設本地 ASR 模型 key（實際用哪顆由 main 讀 `asrModelKey` 決定） */
 export const ASR_MODEL_KEY = 'qwen3asr'
 
+/** 本地 ASR 模型 key 白名單（順序：推薦在前） */
+export const ASR_MODEL_KEYS = ['qwen3asr', 'qwen3asrgpu']
+
 /** 本地翻譯模型 key 白名單（順序：推薦在前） */
-export const LLM_MODEL_KEYS = ['linguaforge08', 'linguaforge08q4', 'qwen35translate']
+export const LLM_MODEL_KEYS = ['linguaforge08q4', 'qwen35translate', 'qwen354b']
 
 /** @deprecated 請用 resolveTranslateModelKey(settings, modelsStatus)；保留常數供舊 e2e */
 export const TRANSLATE_MODEL_KEY = 'qwen35translate'
@@ -290,12 +321,20 @@ function normalizeTtsRate(v) {
 
 /**
  * @param {unknown} v
- * @returns {'linguaforge08'|'linguaforge08q4'|'qwen35translate'}
+ * @returns {'linguaforge08q4'|'qwen35translate'|'qwen354b'}
  */
 export function normalizeLocalTranslateModel(v) {
   return LLM_KEY_SET.has(/** @type {string} */ (v))
-    ? /** @type {'linguaforge08'|'linguaforge08q4'|'qwen35translate'} */ (v)
-    : 'linguaforge08'
+    ? /** @type {'linguaforge08q4'|'qwen35translate'|'qwen354b'} */ (v)
+    : 'linguaforge08q4'
+}
+
+/**
+ * @param {unknown} v
+ * @returns {'qwen3asr'|'qwen3asrgpu'}
+ */
+export function normalizeAsrModelKey(v) {
+  return v === 'qwen3asrgpu' ? 'qwen3asrgpu' : 'qwen3asr'
 }
 
 /**
@@ -335,26 +374,19 @@ export async function getSettings() {
     ttsRate: normalizeTtsRate(raw.ttsRate),
     ttsVoices: raw.ttsVoices || { ...DEFAULT_TTS_VOICES },
     localTranslateModel: normalizeLocalTranslateModel(raw.localTranslateModel),
+    asrModelKey: normalizeAsrModelKey(raw.asrModelKey),
     llmGpu: raw.llmGpu === true,
-    asrThreads: normalizeAsrThreads(raw.asrThreads)
+    chatProviders: Array.isArray(raw.chatProviders) ? raw.chatProviders : []
   }
 }
 
 // ===== DOM 元素 =====
 const navItems = document.querySelectorAll('.nav-tab')
 const pages = document.querySelectorAll('.page')
-const apiUrlInput = document.getElementById('apiUrlInput')
-const apiKeyInput = document.getElementById('apiKeyInput')
-const modelIdInput = document.getElementById('modelIdInput')
 const asrApiUrlInput = document.getElementById('asrApiUrlInput')
 const asrApiKeyInput = document.getElementById('asrApiKeyInput')
 const asrModelIdInput = document.getElementById('asrModelIdInput')
-const toggleApiKeyVisibility = document.getElementById('toggleApiKeyVisibility')
 const toggleAsrApiKeyVisibility = document.getElementById('toggleAsrApiKeyVisibility')
-const cloudApiSection = document.getElementById('cloudApiSection')
-const localLlmSection = document.getElementById('localLlmSection')
-const cloudAsrSection = document.getElementById('cloudAsrSection')
-const localAsrSection = document.getElementById('localAsrSection')
 const modelList = document.getElementById('modelList')
 const modelsPathText = document.getElementById('modelsPathText')
 const ttsRateInput = document.getElementById('ttsRateInput')
@@ -373,11 +405,8 @@ const toast = document.getElementById('toast')
 let gpuCapability = null
 let cudaInstallInProgress = false
 
-// 分段選擇器目前的值
+// 分段選擇器目前的值（翻譯／辨識後端與模型已移到各功能頁的選單，這裡只剩推論設定）
 const segmentValues = {
-  translatorSegment: 'local',
-  asrEngineSegment: 'local',
-  localTranslateModelSegment: 'linguaforge08',
   llmGpuSegment: 'cpu',
   themeSegment: 'dark'
 }
@@ -387,12 +416,17 @@ let latestModels = {}
 
 // ===== 初始化 =====
 document.addEventListener('DOMContentLoaded', async () => {
+  initCustomSelects()
   await initTheme()
   initWindowControls()
   bindSettingsControls()
   initNavigation()
   initChatPage()
   refreshChatPage()
+  // 子分頁切換要跟著換引擎擁有者：停在檔案轉錄時不該預熱即時字幕
+  document.addEventListener('stt-subtab-changed', (e) => {
+    activateSttSubtab(/** @type {CustomEvent} */ (e).detail?.subtab)
+  })
 })
 
 // ===== 主題管理 =====
@@ -420,6 +454,44 @@ async function onThemeSegmentChange(value) {
   const t = value === 'light' ? 'light' : 'dark'
   applyTheme(t)
   await electronAPI.store.set('theme', t)
+}
+
+// ===== 視窗與啟動（跟主題一樣即時套用，不用按儲存）=====
+
+/** 只綁一次，之後每次進設定頁只重讀值 */
+let startupBound = false
+
+async function loadStartupSettings() {
+  const trayInput = document.getElementById('closeToTrayInput')
+  const loginInput = document.getElementById('startAtLoginInput')
+  const hint = document.getElementById('startupHint')
+  if (!trayInput || !loginInput) return
+
+  trayInput.checked = (await electronAPI.store.get('closeToTray', true)) !== false
+
+  // 開機自啟動的真相在 OS，不是 store：使用者可能在工作管理員直接停用
+  const startup = await electronAPI.system?.getStartup?.().catch(() => null)
+  loginInput.checked = startup?.openAtLogin === true
+  loginInput.disabled = startup?.supported !== true
+  if (hint) {
+    hint.classList.toggle('hidden', startup?.supported === true)
+    hint.textContent = startup?.supported === true ? '' : '開發模式下不註冊開機自啟動（只有打包版才會寫入）。'
+  }
+
+  if (startupBound) return
+  startupBound = true
+
+  trayInput.addEventListener('change', async () => {
+    await electronAPI.store.set('closeToTray', trayInput.checked)
+    showToast(trayInput.checked ? '關閉視窗後會留在系統匣' : '關閉視窗會結束 VoiceInk')
+  })
+
+  loginInput.addEventListener('change', async () => {
+    const result = await electronAPI.system?.setStartup?.(loginInput.checked).catch(() => null)
+    // 寫入失敗（權限／政策）就把勾勾轉回實際狀態，不要讓 UI 說謊
+    loginInput.checked = result?.openAtLogin === true
+    showToast(loginInput.checked ? '已設定開機自動啟動' : '已取消開機自動啟動')
+  })
 }
 
 // ===== 視窗控制（frameless）=====
@@ -477,16 +549,21 @@ export function switchPage(pageName) {
   })
   // 先啟動新頁 acquire，再 release 舊頁，避免中間 owner 歸零觸發 unload＋重付 warm
   if (pageName === 'chat') refreshChatPage()
+  if (pageName === 'terminal') loadTerminalPage().then((m) => m.refreshTerminalPage())
   if (pageName === 'usage') loadUsagePage().then((m) => m.refreshUsagePage())
   if (pageName === 'agy') loadAgyPage().then((m) => m.refreshAgyPage())
-  if (pageName === 'transcribe') loadTranscribePage()
-  if (pageName === 'live') loadLiveCaption().then((m) => m.prewarmEngine())
+  if (pageName === 'stt') {
+    loadSttPage().then((m) => {
+      m.refreshSttPage()
+      activateSttSubtab(m.currentSubtab())
+    })
+  }
   if (pageName === 'translate') loadTranslatePage().then((m) => m.prewarmTranslatePage())
   if (pageName === 'settings') {
     loadSettingsForm()
     refreshModels()
   }
-  if (pageName !== 'live') liveCaption?.cooldownEngine()
+  if (pageName !== 'stt') liveCaption?.cooldownEngine()
   if (pageName !== 'translate') translatePage?.cooldownTranslatePage()
   if (pageName !== 'usage') usagePage?.cooldownUsagePage()
   if (pageName !== 'agy') agyPage?.cooldownAgyPage()
@@ -494,9 +571,9 @@ export function switchPage(pageName) {
 
 /**
  * 供聊天／翻譯頁的「前往設定」呼叫。
- * @param {'models'|'translate'|'chat'|'asr'|'appearance'|'voice'} [section]
+ * @param {'local'|'cloud'|'voice'|'basic'} [section]
  */
-export function openSettingsPage(section = 'models') {
+export function openSettingsPage(section = 'local') {
   switchPage('settings')
   activateSettingsSection(section)
 }
@@ -538,13 +615,6 @@ function initSettingsNav() {
  * 表單內容在進設定頁時才 loadSettingsForm + refreshModels。
  */
 function bindSettingsControls() {
-  if (toggleApiKeyVisibility) {
-    toggleApiKeyVisibility.addEventListener('click', () => {
-      const isPassword = apiKeyInput.type === 'password'
-      apiKeyInput.type = isPassword ? 'text' : 'password'
-      toggleApiKeyVisibility.textContent = isPassword ? '🙈' : '👁️'
-    })
-  }
   if (toggleAsrApiKeyVisibility) {
     toggleAsrApiKeyVisibility.addEventListener('click', () => {
       const isPassword = asrApiKeyInput.type === 'password'
@@ -560,6 +630,10 @@ function bindSettingsControls() {
   }
 
   document.getElementById('saveSettingsBtn')?.addEventListener('click', saveSettings)
+
+  document.querySelectorAll('.tts-preview-btn').forEach((btn) => {
+    btn.addEventListener('click', () => previewVoice(/** @type {HTMLButtonElement} */ (btn)))
+  })
 
   installCudaEnvBtn?.addEventListener('click', () => onInstallCudaEnv())
   refreshGpuEnvBtn?.addEventListener('click', () => refreshGpuCapabilityUi(true))
@@ -630,6 +704,63 @@ function readTtsVoicesFromForm() {
   return out
 }
 
+// ===== 語音試聽 =====
+
+/** 同時只播一段：再按一次（或按別顆）就把上一段收掉 */
+/** @type {{ audio: HTMLAudioElement, url: string, btn: HTMLButtonElement } | null} */
+let previewPlaying = null
+
+function stopPreview() {
+  if (!previewPlaying) return
+  const { audio, url, btn } = previewPlaying
+  previewPlaying = null
+  audio.pause()
+  URL.revokeObjectURL(url)
+  btn.textContent = '▶ 試聽'
+  btn.setAttribute('aria-pressed', 'false')
+}
+
+/**
+ * 用「現在選到但還沒儲存」的語音與語速唸一句範例。
+ * 文字由 main 決定（固定表），這裡只送 lang／voice／rate。
+ * @param {HTMLButtonElement} btn
+ */
+async function previewVoice(btn) {
+  const lang = btn.dataset.ttsPreview
+  const wasThisOne = previewPlaying?.btn === btn
+  stopPreview()
+  if (wasThisOne) return
+  if (typeof electronAPI.tts?.preview !== 'function') {
+    showToast('目前環境不支援語音試聽', 'error')
+    return
+  }
+
+  const select = document.querySelector(`select[data-tts-lang="${lang}"]`)
+  const voice = select?.value || ''
+  const rate = normalizeTtsRate(ttsRateInput ? Number(ttsRateInput.value) : 0)
+
+  btn.disabled = true
+  btn.textContent = '載入中…'
+  try {
+    await electronAPI.tts.cancel?.()
+    const res = await electronAPI.tts.preview(lang, voice, rate)
+    const url = URL.createObjectURL(new Blob([res.data], { type: res.mime || 'audio/mpeg' }))
+    const audio = new Audio(url)
+    previewPlaying = { audio, url, btn }
+    btn.textContent = '⏹ 停止'
+    btn.setAttribute('aria-pressed', 'true')
+    audio.addEventListener('ended', stopPreview)
+    audio.addEventListener('error', stopPreview)
+    await audio.play()
+  } catch (e) {
+    stopPreview()
+    showToast(`試聽失敗：${cleanIpcError(e)}`, 'error')
+  } finally {
+    btn.disabled = false
+    if (previewPlaying?.btn !== btn) btn.textContent = '▶ 試聽'
+  }
+}
+
 /**
  * @param {number} rate
  */
@@ -645,16 +776,6 @@ function updateTtsRateLabel(rate) {
  * @param {string} value
  * @param {(v: string) => void} [onChange]
  */
-/**
- * 本地 ASR 執行緒：只收 2…16 的整數，其餘一律「自動」（0）
- * @param {unknown} value
- * @returns {number}
- */
-function normalizeAsrThreads(value) {
-  const n = Number(value)
-  return Number.isInteger(n) && n >= 2 && n <= 16 ? n : 0
-}
-
 function initSegment(id, value, onChange) {
   const segment = document.getElementById(id)
   if (!segment) return
@@ -690,24 +811,6 @@ function setSegmentValue(id, value) {
     btn.classList.toggle('active', on)
     btn.setAttribute('aria-pressed', on ? 'true' : 'false')
   })
-}
-
-/**
- * @param {string} translator
- */
-function updateTranslatorPanels(translator) {
-  const isCloud = translator === 'cloud'
-  cloudApiSection?.classList.toggle('hidden', !isCloud)
-  localLlmSection?.classList.toggle('hidden', isCloud)
-}
-
-/**
- * @param {string} asrEngine
- */
-function updateAsrPanels(asrEngine) {
-  const isCloud = asrEngine === 'cloud'
-  cloudAsrSection?.classList.toggle('hidden', !isCloud)
-  localAsrSection?.classList.toggle('hidden', isCloud)
 }
 
 /**
@@ -834,9 +937,6 @@ let segmentsInited = false
 async function loadSettingsForm() {
   const settings = await getSettings()
 
-  if (apiUrlInput) apiUrlInput.value = settings.apiUrl || DEFAULT_API_URL
-  if (apiKeyInput) apiKeyInput.value = settings.apiKey || ''
-  if (modelIdInput) modelIdInput.value = settings.modelId || DEFAULT_MODEL
   if (asrApiUrlInput) asrApiUrlInput.value = settings.asrApiUrl || DEFAULT_ASR_API_URL
   if (asrApiKeyInput) asrApiKeyInput.value = settings.asrApiKey || ''
   if (asrModelIdInput) asrModelIdInput.value = settings.asrModelId || DEFAULT_ASR_MODEL
@@ -845,24 +945,14 @@ async function loadSettingsForm() {
   const theme = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark'
 
   if (!segmentsInited) {
-    initSegment('translatorSegment', settings.translator, updateTranslatorPanels)
-    initSegment('asrEngineSegment', settings.asrEngine, updateAsrPanels)
-    initSegment('localTranslateModelSegment', settings.localTranslateModel)
     initSegment('llmGpuSegment', llmGpuSeg)
-    initSegment('asrThreadsSegment', String(settings.asrThreads))
     initSegment('themeSegment', theme, onThemeSegmentChange)
     initSettingsNav()
     segmentsInited = true
   } else {
-    setSegmentValue('translatorSegment', settings.translator)
-    setSegmentValue('asrEngineSegment', settings.asrEngine)
-    setSegmentValue('localTranslateModelSegment', settings.localTranslateModel)
     setSegmentValue('llmGpuSegment', llmGpuSeg)
-    setSegmentValue('asrThreadsSegment', String(settings.asrThreads))
     setSegmentValue('themeSegment', theme)
   }
-  updateTranslatorPanels(settings.translator)
-  updateAsrPanels(settings.asrEngine)
   await refreshGpuCapabilityUi()
 
   if (ttsRateInput) {
@@ -874,23 +964,19 @@ async function loadSettingsForm() {
     await populateTtsVoiceSelects()
   }
   applyTtsVoicesToForm(settings.ttsVoices || DEFAULT_TTS_VOICES)
+  syncCustomSelects()
+  await loadStartupSettings()
   await loadChatSettings()
 }
 
 async function saveSettings() {
-  const translator = normalizeTranslator(segmentValues.translatorSegment)
-  const asrEngine = normalizeAsrEngine(segmentValues.asrEngineSegment)
-  const localTranslateModel = normalizeLocalTranslateModel(segmentValues.localTranslateModelSegment)
   let llmGpu = segmentValues.llmGpuSegment === 'gpu'
-  const apiKey = (apiKeyInput?.value || '').trim()
   const asrApiKey = (asrApiKeyInput?.value || '').trim()
 
-  if (translator === 'cloud' && !apiKey) {
-    showToast('雲端翻譯需要 API Key', 'error')
-    return
-  }
-  if (asrEngine === 'cloud' && !asrApiKey) {
-    showToast('雲端語音轉文字需要 API Key', 'error')
+  // 後端選擇已移到各功能頁的模型選單，這裡只在「目前真的選了雲端」時擋空金鑰
+  const current = await getSettings()
+  if (current.asrEngine === 'cloud' && !asrApiKey) {
+    showToast('目前語音轉文字選的是雲端，需要 API Key', 'error')
     return
   }
   const chatValidation = validateChatSettings()
@@ -907,19 +993,12 @@ async function saveSettings() {
   const ttsRate = normalizeTtsRate(ttsRateInput ? Number(ttsRateInput.value) : 0)
 
   await Promise.all([
-    electronAPI.store.set('translator', translator),
-    electronAPI.store.set('apiUrl', (apiUrlInput?.value || '').trim() || DEFAULT_API_URL),
-    electronAPI.store.set('apiKey', apiKey),
-    electronAPI.store.set('modelId', (modelIdInput?.value || '').trim() || DEFAULT_MODEL),
-    electronAPI.store.set('asrEngine', asrEngine),
     electronAPI.store.set('asrApiUrl', (asrApiUrlInput?.value || '').trim() || DEFAULT_ASR_API_URL),
     electronAPI.store.set('asrApiKey', asrApiKey),
     electronAPI.store.set('asrModelId', (asrModelIdInput?.value || '').trim() || DEFAULT_ASR_MODEL),
     electronAPI.store.set('ttsVoices', readTtsVoicesFromForm()),
     electronAPI.store.set('ttsRate', ttsRate),
-    electronAPI.store.set('localTranslateModel', localTranslateModel),
     electronAPI.store.set('llmGpu', llmGpu),
-    electronAPI.store.set('asrThreads', normalizeAsrThreads(segmentValues.asrThreadsSegment)),
     saveChatSettings(chatValidation)
   ])
 
@@ -941,32 +1020,52 @@ async function refreshModels() {
   modelsPathText.textContent = status.root
   modelsPathText.title = status.root
 
-  modelList.innerHTML = ''
-  for (const model of Object.values(latestModels)) {
-    modelList.appendChild(renderModelItem(model))
+  // 分類列出：語音辨識／翻譯／執行環境混在一起時，看不出哪顆是誰的，
+  // 尤其 llama.cpp 執行環境夾在模型中間會像是「又一顆模型」
+  modelList.replaceChildren()
+  const known = new Set(MODEL_GROUPS.map(([kind]) => kind))
+  for (const [kind, title] of MODEL_GROUPS) {
+    // 最後一組收容未知 kind：registry 加了新類別卻忘了補這張表時，
+    // 那顆模型不該從安裝清單裡憑空消失
+    const group = Object.values(latestModels).filter((m) => (
+      kind === 'runtime' ? (m.kind === kind || !known.has(m.kind)) : m.kind === kind
+    ))
+    if (!group.length) continue
+    const heading = document.createElement('p')
+    heading.className = 'model-group-title'
+    heading.textContent = title
+    modelList.appendChild(heading)
+    for (const model of group) modelList.appendChild(renderModelItem(model))
   }
 }
+
+/** registry 的 kind → 顯示分組（順序即顯示順序） */
+const MODEL_GROUPS = [
+  ['asr', '語音辨識'],
+  ['llm', '翻譯'],
+  ['runtime', '執行環境']
+]
 
 function renderModelItem(model) {
   const item = document.createElement('div')
   item.className = 'model-item'
   item.dataset.key = model.key
 
-  const roleTag = model.kind === 'asr' ? 'ASR' : '翻譯'
+  const needsRuntime = model.requires && !latestModels[model.requires]?.downloaded
   const stateText = model.downloaded
-    ? `${formatBytes(model.totalBytes)} · 已下載`
+    ? needsRuntime
+      ? `${formatBytes(model.totalBytes)} · 已下載，還缺「${latestModels[model.requires]?.label || model.requires}」`
+      : `${formatBytes(model.totalBytes)} · 已下載`
     : model.downloading
       ? '下載中…'
-      : formatBytes(model.totalBytes)
+      : needsRuntime
+        ? `${formatBytes(model.totalBytes)} · 需搭配「${latestModels[model.requires]?.label || model.requires}」`
+        : formatBytes(model.totalBytes)
 
   // createElement + textContent：renderer 其餘各頁都零 innerHTML，這裡不留唯一的例外
   const name = document.createElement('p')
   name.className = 'model-name'
   name.textContent = model.label
-  const tag = document.createElement('span')
-  tag.className = 'model-tag'
-  tag.textContent = roleTag
-  name.appendChild(tag)
 
   const size = document.createElement('p')
   size.className = model.downloaded ? 'model-size downloaded' : 'model-size'

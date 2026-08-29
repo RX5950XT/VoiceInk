@@ -11,7 +11,7 @@ const { modelDir, isDownloaded } = require('./models')
 /** 固定 ASR 模型 key */
 const ASR_MODEL_KEY = 'qwen3asr'
 
-const { s2twp } = require('./opencc')
+const { s2twp, shouldS2twpSource } = require('./opencc')
 
 /** 單段音訊上限：略大於檔案 28s×16k，阻擋 IPC DoS */
 const MAX_SAMPLES = 30 * 16000
@@ -340,19 +340,6 @@ function normalizeSamples(samples) {
     return Float32Array.from(samples.data)
   }
   throw new Error('samples 必須是 Float32Array')
-}
-
-/**
- * 目標語為繁中時，僅對「像中文、非日韓」的來源做 s2twp。
- * 不可只看 lang===zh-TW：日文漢字會被 opencc 弄髒（国→國 等）。
- * @param {string} text
- * @param {string} lang
- */
-function shouldS2twpSource(text, lang) {
-  if (lang !== 'zh-TW' || !text) return false
-  if (/[ぁ-ヿ가-힯]/.test(text)) return false
-  const cjkCount = (text.match(/[一-鿿]/g) || []).length
-  return cjkCount / Math.max(1, text.length) >= 0.3
 }
 
 /**

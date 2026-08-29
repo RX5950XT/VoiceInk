@@ -746,6 +746,138 @@ async function caseL() {
   }
 }
 
+async function caseM() {
+  console.log('\n[M] 生圖模型')
+
+  const imageProvider = (url) => [{
+    id: 'p_img',
+    name: '生圖供應商',
+    apiUrl: url,
+    apiKey: 'k',
+    models: ['x/text-model', 'x/image-model'],
+    imageModels: ['x/image-model']
+  }]
+
+  // 1) 選到生圖模型 → 帶 modalities，回來的圖存成檔名
+  {
+    const server = await startServer((req, res) => {
+      sseHead(res)
+      res.write(sseChunk('好的，畫好了'))
+      res.write(`data: ${JSON.stringify({
+        choices: [{ delta: { images: [{ type: 'image_url', image_url: { url: TINY_PNG } }] } }]
+      })}\n\n`)
+      res.write('data: [DONE]\n\n')
+      res.end()
+    })
+    chat.setStore(makeStore({
+      chatProviders: imageProvider(server.url),
+      chatProviderId: 'p_img',
+      chatModelId: 'x/image-model'
+    }))
+    const conv = await chatStore.create()
+    const result = await chat.send(
+      { reqId: 'm1', conversationId: conv.id, text: '畫一隻貓' },
+      makeSender()
+    )
+    ok('生圖請求成功', result.ok, JSON.stringify(result))
+    ok('請求帶 modalities',
+      JSON.stringify(server.state.lastBody?.modalities) === JSON.stringify(['image', 'text']),
+      JSON.stringify(server.state.lastBody?.modalities))
+    const saved = await chatStore.get(conv.id)
+    const assistant = saved.messages.at(-1)
+    ok('助理訊息存下圖片檔名',
+      assistant.role === 'assistant' && /^img_/.test(assistant.images?.[0] || ''),
+      JSON.stringify(assistant.images))
+    ok('圖片實體落在 userData',
+      fs.existsSync(path.join(TMP, 'chat-images', assistant.images[0])))
+    ok('文字與圖片同時保留', assistant.content === '好的，畫好了', assistant.content)
+
+    // 生成的圖不回送上游：assistant 訊息塞 image_url 陣列會被嚴格端點 400
+    await chat.send({ reqId: 'm2', conversationId: conv.id, text: '再一張' }, makeSender())
+    const history = server.state.lastBody?.messages || []
+    ok('助理的圖不回送上游',
+      history.every((m) => m.role !== 'assistant' || typeof m.content === 'string'),
+      JSON.stringify(history.map((m) => [m.role, typeof m.content])))
+
+    await chatStore.remove(conv.id)
+    server.close()
+  }
+
+  // 2) 沒標生圖的模型不得帶 modalities（舊端點看到不認得的參數會 400）
+  {
+    const server = await startServer((req, res) => {
+      sseHead(res)
+      res.write(sseChunk('純文字'))
+      res.write('data: [DONE]\n\n')
+      res.end()
+    })
+    chat.setStore(makeStore({
+      chatProviders: imageProvider(server.url),
+      chatProviderId: 'p_img',
+      chatModelId: 'x/text-model'
+    }))
+    const conv = await chatStore.create()
+    await chat.send({ reqId: 'm3', conversationId: conv.id, text: '哈囉' }, makeSender())
+    ok('非生圖模型完全不帶 modalities',
+      !('modalities' in (server.state.lastBody || {})),
+      JSON.stringify(Object.keys(server.state.lastBody || {})))
+    await chatStore.remove(conv.id)
+    server.close()
+  }
+
+  // 3) 標記只在模型清單內有效，且 http URL 不收（不讓 main 去下載上游指定的網址）
+  {
+    const [p] = chat.sanitizeProviders([{
+      id: 'p1', name: 'x', apiUrl: 'https://a.example/v1', apiKey: 'k',
+      models: ['keep'], imageModels: ['keep', 'gone']
+    }])
+    ok('imageModels 收斂成 models 的子集',
+      JSON.stringify(p.imageModels) === JSON.stringify(['keep']), JSON.stringify(p.imageModels))
+    const parsed = chat.extractDelta(JSON.stringify({
+      choices: [{ delta: { images: [
+        { image_url: { url: 'https://evil.example/x.png' } },
+        { image_url: { url: TINY_PNG } }
+      ] } }]
+    }))
+    ok('只收 data URI 的圖',
+      parsed.images.length === 1 && parsed.images[0] === TINY_PNG,
+      JSON.stringify(parsed.images))
+  }
+}
+
+async function caseN() {
+  console.log('\n[N] 雲端翻譯與聊天共用供應商')
+  const providers = [
+    { id: 'p_a', name: 'A', apiUrl: 'https://a.example/v1', apiKey: 'ka', models: ['a/one', 'a/two'] },
+    { id: 'p_b', name: 'B', apiUrl: 'https://b.example/v1', apiKey: 'kb', models: ['b/one'] }
+  ]
+  chat.setStore(makeStore({
+    chatProviders: providers,
+    chatProviderId: 'p_a',
+    chatModelId: 'a/one',
+    translateProviderId: 'p_b',
+    translateModelId: 'b/one'
+  }))
+  const cfg = chat.readTranslateConfig()
+  ok('翻譯可以指到跟聊天不同的供應商',
+    cfg.apiUrl === 'https://b.example/v1' && cfg.apiKey === 'kb' && cfg.modelId === 'b/one',
+    JSON.stringify(cfg))
+
+  chat.setStore(makeStore({
+    chatProviders: providers,
+    translateProviderId: 'p_b',
+    translateModelId: 'a/two'
+  }))
+  ok('模型不在該供應商清單內 → 收斂成它的第一顆',
+    chat.readTranslateConfig().modelId === 'b/one',
+    chat.readTranslateConfig().modelId)
+
+  chat.setStore(makeStore({ chatProviders: [], chatProviderId: '', chatModelId: '' }))
+  const empty = chat.readTranslateConfig()
+  ok('沒有供應商時回空設定（由呼叫端給可行動的錯誤）',
+    !empty.apiUrl && !empty.apiKey && !empty.modelId, JSON.stringify(empty))
+}
+
 async function main() {
   await app.whenReady()
   try {
@@ -762,6 +894,8 @@ async function main() {
     await caseJ()
     await caseK()
     await caseL()
+    await caseM()
+    await caseN()
   } catch (e) {
     failed++
     console.error('\n未預期例外：', e)

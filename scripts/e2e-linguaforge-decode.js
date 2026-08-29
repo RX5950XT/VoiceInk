@@ -52,13 +52,13 @@ async function main() {
     fail('DECODE table', e)
   }
 
-  if (!models.isDownloaded('linguaforge08')) {
+  if (!models.isDownloaded('linguaforge08q4')) {
     console.error('linguaforge08 not downloaded — skip runtime checks')
     process.exit(failed ? 1 : 0)
   }
 
   const store = {
-    data: { translator: 'local', localTranslateModel: 'linguaforge08', llmGpu: false },
+    data: { translator: 'local', localTranslateModel: 'linguaforge08q4', llmGpu: false },
     get(k, d) {
       return k in this.data ? this.data[k] : d
     }

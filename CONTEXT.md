@@ -5,12 +5,18 @@
 
 ## 專案概況
 
-VoiceInk：Windows Electron AI 工作台（**聊天**＋**AI 訂閱額度**＋**AGY 反向代理**＋檔案轉錄＋即時字幕＋翻譯與 TTS）。Vanilla JS + Vite，無框架。
-已發行版本 **1.8.0**（Release `v1.8.0`：聊天多供應商＋側欄整理、五家額度儀錶板、AGY 反向代理、即時字幕 PCM＋VAD、Aurora glass 視覺）。
+VoiceInk：Windows Electron AI 工作台（**聊天**＋**終端機**＋**AI 訂閱額度**＋**AGY 反向代理**＋**語音轉文字**＋翻譯與 TTS）。Vanilla JS + Vite，無框架。
+已發行版本 **1.9.0**（Release `v1.9.0`：終端機多工作階段、GPU 語音辨識、AGY 反代與聊天模型管理更新、自訂下拉與 Aurora glass 視覺精修）。
 
-> v1.8.0 是這一輪的總結發行：聊天分頁（多供應商／圖片／thinking／側欄排序）、設定重整、
-> 即時字幕 PCM＋VAD、五家額度儀錶板、AGY 反向代理（雙協議＋日誌統計）都在裡面。
-> 要出貨時：bump `package.json` → commit → `git tag v1.8.0` → push → `electron:build` → `gh release create`。
+> v1.9.0 是這一輪的總結發行：在 v1.8.0 的聊天、字幕、額度與 AGY 基礎上，加入終端機多工作階段、GPU ASR，並完成模型選單與設定頁排版修整。
+> 要出貨時：確認版本與既有 tag 不重複 → bump `package.json` → commit → `git tag vX.Y.Z` → push → `electron:build` → `gh release create`。
+
+## 最近變更（2026-08-30）— v1.9.0 發行整理
+
+- **聊天與模型 UI**：共用自訂 ARIA listbox，修正 `optgroup` 模型清單點擊例外；清單寬度依內容調整且保持單行，模型 ID／生圖標記／移除按鈕同高對齊。
+- **語音與終端機**：本地 ASR 依模型分流 CPU／Vulkan GPU；終端機支援多工作階段、狀態與背景執行。
+- **AGY 與穩定性**：補上狀態競態、憑證續期、流量轉換與受限 IPC 的回歸保護。
+- **驗證**：`npm run build`、`npm run electron:pack`、`node scripts/e2e-visual-cdp.js`（54/54）通過；本次 release 會再產生 NSIS 安裝檔並上傳。
 
 ## 架構
 
@@ -21,13 +27,18 @@ src/main/
                       系統提示 preset、reasoning 分流、圖片多模態、重新生成
   chat-store.js       會話持久化（獨立 electron-store 實例 → <userData>/chats.json）；訊息可帶 images/reasoning
   chat-images.js      圖片附件：存 <userData>/chat-images/，檔名 allowlist、孤兒回收
+  terminal/           側欄多開的 ConPTY 工作階段：pty.js 生命週期與 scrollback、status.js 忙碌判定
+                      （OSC 133 標記 ＋ 靜默雙軌，純函式）、store.js metadata、ipc.js 白名單
   usage/              五家額度 provider、bounded HTTPS／唯讀 SQLite／Credential Manager bridge、
                       獨立 usage store、6h soft cache、同步協調與受限 IPC
   agy/                本機反向代理：node:http 閘道（127.0.0.1 + 強制金鑰）、OpenAI/Anthropic ⇄ Gemini
                       雙向轉換、cloudcode-pa 上游（401 強制 refresh 重試）、node:sqlite 流量日誌與統計
-  models.js           registry：qwen3asr、qwen35translate、linguaforge08(Q8)、linguaforge08q4(Q4)
+  models.js           registry：qwen3asr(CPU)／qwen3asrgpu(GPU)／llamaruntime(執行環境)／
+                      linguaforge08q4／qwen35translate／qwen354b；archive 型別走 Expand-Archive
   gpu-capability.js   NVIDIA VRAM 門檻（≥6GB）／cuda-env.js CUDA 偵測安裝
-  local-asr.js        sherpa-onnx 本地 ASR（僅 CPU；asrThreads 可調執行緒）
+  asr-select.js       本地 ASR 門面：依 asrModelKey 分流；engine／file-transcribe／IPC 都只認它
+  local-asr.js        sherpa-onnx 本地 ASR（僅 CPU；執行緒自動）
+  llama-asr.js        llama-server sidecar（Vulkan GPU）；spawn／health 輪詢／multipart 轉錄／收程序
   cloud-asr.js        OpenAI 相容 /audio/transcriptions
   local-llm.js        翻譯 cloud/local；多 GGUF + CPU/GPU；LINGUAFORGE_DECODE 查表
   translate-clean.js  譯文清理（純文字、無 electron 依賴，可 node 直測）
@@ -36,31 +47,390 @@ src/main/
   engine.js           owner live|file|translate；雲端 ASR 時 needs.asr=false
 src/renderer/scripts/
   app.js  translate-page.js  transcribe.js
+  stt-page.js          語音轉文字頁：子分頁切換 ＋ 上方模型選單
+  model-picker.js      模型選單共用邏輯（選項組裝／寫回 store／未安裝提示）
+  custom-select.js     共用 ARIA listbox 視覺層（保留原生 select 作為資料與事件來源）
   live-caption.js      16k PCM 擷取 → VAD 語句 → ASR／翻譯佇列
   vad.js               純資料能量 VAD（pre-roll／遲滯／語句長度界，可 node 直測）
   chat-page.js        聊天頁 UI（側欄搜尋／提示 preset 彈窗／auto-grow 輸入框／圖片附件／
                       thinking 開關／訊息複製與重新生成）＋設定頁「聊天」區塊
   markdown.js         最小安全 Markdown → DocumentFragment（零 innerHTML）
   usage-page.js       額度卡片／倒數／手動同步／顯示設定／拖曳與鍵盤排序／去敏診斷
+  terminal-page.js    終端機頁（側欄多開／狀態徽章／未讀點／xterm 每階段一個實例）
   agy-page.js         反代服務控制／金鑰遮罩複製／統計（純 CSS 長條）／流量日誌表與篩選
 ```
 
 | 項目 | 說明 |
 |---|---|
-| 聊天 | **多組供應商**：`chatProviders`（各帶 url／key／模型清單）＋`chatProviderId`＋`chatModelId`；雲端 OpenAI 相容 `/chat/completions` + `stream:true`（與翻譯完全獨立） |
-| 聊天進階 | 系統提示多組 preset `chatPrompts`/`chatPromptId`；thinking `chatThinking` → `reasoning_effort`；圖片附件（訊息存檔名、實體在 `<userData>/chat-images/`）；側欄就地改名／逐列刪除／拖曳排序（`chat:reorder`） |
+| 聊天 | **多組供應商**：`chatProviders`（各帶 url／key／模型清單／`imageModels`）＋`chatProviderId`＋`chatModelId`；雲端 OpenAI 相容 `/chat/completions` + `stream:true`；**雲端翻譯共用同一份清單**（`translateProviderId`＋`translateModelId`） |
+| 聊天進階 | 系統提示多組 preset `chatPrompts`/`chatPromptId`；thinking `chatThinking` → `reasoning_effort`；圖片附件（訊息存檔名、實體在 `<userData>/chat-images/`）；**生圖模型**（清單勾「生圖」→ 請求帶 `modalities`，回傳的 data URI 存 `chat-images/`）；側欄就地改名／逐列刪除／拖曳排序（`chat:reorder`） |
+| 終端機 | `@lydell/node-pty`（ConPTY）＋ xterm.js；側欄多開、狀態「運行中／已完成／已結束」＋未讀點；shell（pwsh/powershell/cmd）與啟動指令（shell/claude/codex）是 main 固定表，cwd 走系統對話框；metadata 存 `<userData>/terminals.json`，走 `terminal:*` IPC |
 | 額度 | Claude Code／Codex／Antigravity／OpenCode／Grok；只在按「同步」時查詢；獨立 `<userData>/usage.json`、6h soft cache；Main-only 固定來源 |
 | AGY 反代 | OpenAI `/v1/chat/completions` + Anthropic `/v1/messages` → cloudcode-pa `v1internal:streamGenerateContent`；只綁 `127.0.0.1`＋強制金鑰；設定走 `agy:*`（不進 `STORE_ALLOWLIST`）；日誌 `<userData>/agy-logs.db` |
-| ASR | `asrEngine` = local（Qwen3-ASR-0.6B，**只有 CPU**，`asrThreads` 0=自動/2/4/8）/ cloud（`asrApiUrl`/`asrApiKey`/`asrModelId`） |
-| 翻譯 | `translator` = cloud / local；`localTranslateModel` = `linguaforge08`(Q8，預設) / `linguaforge08q4`(Q4) / `qwen35translate`；`llmGpu` |
+| ASR | `asrEngine` = local / cloud；local 再由 `asrModelKey` 選 `qwen3asr`（0.6B INT8，sherpa，**只有 CPU**，執行緒自動）或 `qwen3asrgpu`（1.7B Q8_0，llama-server sidecar，Vulkan GPU）。**沒有 CPU/GPU 開關**：選模型＝選推論方式 |
+| 翻譯 | `translator` = cloud（走聊天供應商，`translateProviderId`＋`translateModelId`）／ local（`localTranslateModel` = `linguaforge08q4`(預設) / `qwen35translate`(0.8B) / `qwen354b`(4B，建議 GPU)）；`llmGpu` 是全域推論開關 |
 | 即時字幕 | 系統 loopback → AudioContext 16k mono PCM → 能量 VAD 依停頓切 0.5–6s 語句 → ASR；pending 上限 2 |
-| TTS | Edge TTS；`ttsVoices` + `ttsRate`（-50…100 → Edge rate %） |
-| 設定 UI | 導航最後一 tab；**左側分類 rail** 一次顯示一區：模型／翻譯／聊天／語音轉文字／外觀／語音朗讀 + 底部 sticky 儲存列 |
-| 導覽 | 聊天（預設頁）｜額度｜AGY反代｜檔案轉錄｜即時字幕｜翻譯與 TTS｜設定 |
+| TTS | Edge TTS；`ttsVoices` + `ttsRate`（-50…100 → Edge rate %）；設定頁每個語音有試聽鈕（`tts:preview`） |
+| 設定 UI | 導航最後一 tab；**左側分類 rail** 一次顯示一區：本地模型（依語音辨識／翻譯／執行環境分組）／雲端模型（供應商共用＋語音轉文字）／語音朗讀／基本 + 底部 sticky 儲存列。只管安裝與推論設定，**選模型在功能頁標題旁的 `.model-chip`** |
+| 導覽 | 聊天（預設頁）｜終端機｜額度｜AGY反代｜語音轉文字（子分頁：檔案轉錄／即時字幕）｜翻譯與 TTS｜設定 |
 | 視窗 | 主窗 frameless（header 含 min/max/close）；字幕彈窗獨佔顯示模式 |
 | 視覺 | Token Anxiety Aurora glass；dark/light 共用 12px surface、blur、冷藍／暖金光暈；900／640px RWD |
 
 模型存放：`%APPDATA%/voiceink/models/<key>/`。
+
+## 最近變更（2026-08-29）— 自訂下拉、思考狀態與生圖列排版
+
+- **自訂下拉**：新增 `renderer/scripts/custom-select.js`。原始 `<select>` 保留作為資料來源與 `change` 事件目標，畫面改用共用 ARIA listbox；模型、語言、供應商、TTS、終端機與篩選下拉都使用同一套圓角、陰影、選取／hover 色。清單用 fixed portal 定位，彈窗內選單會留在 dialog top layer，避免被裁切。
+- **互動**：支援滑鼠、Enter／Space、上下／Home／End、Esc、外部點擊收合；選取會回寫原生 `<select>` 並照常派發 `change`。少數程式只改 `.value` 的流程由 `syncCustomSelects()` 補同步。
+- **模型與窄版**：`optgroup` 以 `querySelectorAll('option')` 讀取，避免聊天模型清單點擊時因不存在的 `options` 例外而打不開；清單寬度取觸發鈕與內容寬度較大者（仍受視窗邊界限制），選項不再逐字直排。
+- **模型列**：設定頁模型列固定為模型 ID／生圖標記／移除三欄，三個控制項同頂線、同為 40px。
+- **生圖標記**：`.setting-group label` 會把 label 預設成 block；`.chat-model-flag` 必須用同等特異度恢復 inline flex，並清掉欄位下間距，勾選框與文字才會同一中心線。
+- **驗證**：`npm run build`、`npm run electron:pack`、`node scripts/e2e-visual-cdp.js` **54 項**（含聊天模型點擊、窄版清單、模型列對齊、模型 chip、彈窗 top-layer、鍵盤與 `change` 回歸）通過。`dist/win-unpacked/VoiceInk.exe` 為最新免安裝預覽。
+
+## 前一輪變更（2026-08-29）— 下拉控制項、思考狀態與生圖列排版
+
+- **下拉控制項**：共用 `<select>` 收合態改成一致的 40px／10px 圓角／自繪箭頭；模型 chip 改成同一套控制面板形狀，hover、focus 與兩主題選取色統一。原生 `<option>` 仍保留不透明底色與 4.5:1 以上對比，供資料層與後備呈現使用。
+- **思考按鈕**：`aria-pressed=true` 改用實心 accent、外圈與粗字，並補高特異度 hover 規則，滑過去不會把開啟狀態洗掉。
+- **生圖模型列**：改成固定三欄 grid（模型 ID／生圖開關／移除），三個控制項同高；勾選後整個「生圖」標記同步亮起，設定頁供應商列的下拉與按鈕也對齊。
+- **驗證**：本輪原先的 CSS-only 版本通過 `npm run build`、`npm run electron:pack`、視覺 49 項；之後因原生展開彈窗仍無法控制，改為上方的自訂 listbox。
+
+## 最近變更（2026-08-29）— 背景終端機輸出、AGY 狀態競態與安全 CDP 收尾
+
+- **AGY**：`agy-page.js` 的 `refreshStatus()` 以遞增 generation 忽略過期回應，手動刷新、輪詢與服務切換不會再由慢回應寫回舊 Base URL。
+- **終端機**：初始 snapshot 與後續 PTY 事件走同一條序列佇列；視窗背景時改用 xterm 的同步 write buffer，避免首段提示字元等不到非同步 callback 而被後續輸出超車。
+- **CDP**：終端機與視覺測試各用暫存 userData，只以自己的 PID 清理；視覺測試的 CDP HTTP 與 WebSocket 都有失敗出口，SQLite 暫存檔清理有限重試。背景終端機回歸會最小化自己的測試 App，確認 `document.hidden` 下首段輸出不觸發非同步 `write`。
+- **驗證**：`npm run build`、`npm run electron:pack`；CDP：terminal 30、AGY 33、visual 48、smoke 22、chat 44、usage 10、STT 19、tray 12；核心：terminal 50、AGY mapper 50、error hygiene 32，均通過。
+
+## 最近變更（2026-08-28）— 聊天生圖、雲端供應商共用、選單瘦身
+
+### 需求（使用者原話整理）
+
+1. 聊天要支援生成圖片的模型。
+2. 雲端模型那邊，翻譯跟聊天整合在一起（都是 LLM，選單不用拆成兩個）。
+3. 本地模型的選單分類一下（現在連執行環境都混在裡面）。
+4. ASR 不用特別設定 CPU/GPU（0.6B 就是 CPU、1.7B 就是 GPU），所以執行緒那個選項也拿掉，一律「自動」。
+5. 「翻譯與 TTS」與「語音轉文字」的模型選單改成標題旁的小按鈕，不要單獨佔一整排。
+6. 問題：圖片模型要不要在設定的雲端模型裡單獨開一個欄位？→ **不用**，見下。
+
+### 做法
+
+- **生圖**（`chat.js`）：供應商多一個 `imageModels`（`models` 的子集，設定頁每一列一個「生圖」勾）。
+  選到被勾的模型時請求帶 `modalities:['image','text']`，SSE 的 `delta.images[].image_url.url`
+  收下來後走既有的 `chatImages.saveMany`，訊息只記檔名——**不另開「圖片模型」欄位**，
+  因為它跟文字模型是同一個端點、同一組金鑰，差別只有請求要不要帶那個欄位。
+  聊天頁的模型選單會在生圖模型前面加 🖼。
+- **雲端翻譯併入聊天供應商**：`local-llm.translateCloud` 改讀 `chat.readTranslateConfig()`；
+  舊的 `apiUrl`／`apiKey`／`modelId` 由 `main.js` 的 `migrateTranslateProvider()` 一次性併進
+  `chatProviders`（網址與金鑰都相同就沿用既有那組）後刪掉，三個 key 一併退出 `STORE_ALLOWLIST`。
+  翻譯要用哪一顆在翻譯頁選（選項是「供應商 / 模型」逐一列出）。
+- **本地模型清單分組**：`refreshModels` 依 registry 的 `kind` 分成 語音辨識／翻譯／執行環境 三段，
+  每列的 `.model-tag` 拿掉（分組標題已經講了同一件事）。
+- **ASR 執行緒設定移除**：`asrThreads` 退出 allowlist，開機時 `store.delete` 一次；
+  設定頁那一格改成一句說明（0.6B＝sherpa CPU、1.7B＝llama-server GPU）。
+- **模型選單移到標題旁**：`.model-bar` 整條橫排 → `.page-header-row` 裡的 `.model-chip`；
+  提示文字只在「選到還沒裝好的東西」時才出現。
+
+### 驗證
+
+- `npx electron scripts/e2e-chat.js` 129 passed（新增 [M] 生圖：modalities／存檔／不回送 assistant 圖／
+  非生圖模型不帶欄位／`imageModels` 子集／只收 data URI；[N] 翻譯與聊天共用供應商）
+- `node scripts/e2e-cdp-smoke.js` 22／`e2e-stt-cdp.js` 19／`e2e-chat-cdp.js` 44（新增生圖勾選框回歸）／
+  `e2e-visual-cdp.js` 46／`e2e-usage-cdp.js` 10／`e2e-agy-cdp.js` 33／`e2e-terminal-cdp.js` 29／`e2e-tray-cdp.js` 12
+- `node scripts/test-error-hygiene.js` 32（雲端翻譯的假 store 改成供應商形狀）／`test-usage` 30／
+  `test-agy-mappers` 50／`test-markdown` 23／`test-terminal` 50／`test-vad` 11／`npx electron scripts/e2e-agy.js` 98
+- 真實雲端翻譯：打包版 CDP 呼叫 `translate('今天天氣很好。','en')` → `The weather is very nice today.`
+  （確認走的是搬移後的供應商設定，且舊 `apiUrl` key 已被 allowlist 擋掉）
+
+### 已知取捨
+
+- 生圖只驗到 mock SSE server；**沒有花使用者的額度去打真的生圖模型**。要實測就在設定的模型清單
+  勾一顆生圖模型（例如 OpenRouter 的 image preview 系列）再到聊天頁選它。
+- 供應商清單被編輯時，翻譯的選擇會跟著收斂到合法值（與聊天那組同樣的行為）。
+  這一輪的測試跑過之後，翻譯目前指到清單裡的某一組；要換直接在翻譯頁標題旁選。
+
+### 補丁：下拉展開後整份清單看不見（使用者回報）
+
+`.model-chip-select` 的背景是 `transparent`，其他 `.select` 是半透明玻璃。展開後的清單由
+作業系統畫（在頁面之外，吃不到 `backdrop-filter`），Chromium 只好拿 `<select>` 的背景色去畫 →
+退回系統白底，而 `option` 的文字仍繼承接近白的 `--text-primary`＝白底白字。
+
+修法是全域一條 `option { background-color: var(--surface-solid); color: var(--text-primary) }`，
+`--surface-solid` 是兩個主題各一個**不透明**色（dark `#1c2123`／light `#f8f9f6`）。
+所有 `<select>` 都有同一個毛病，所以修在共用層而不是那顆 chip 上。
+回歸：`e2e-visual-cdp.js` 新增 `option-contrast`（兩主題各驗底色不透明＋對比 ≥ 4.5；
+原生彈窗截圖看不到，只能驗 computed style），`e2e-visual-cdp.js` 因此變成 48 checks。
+
+## 最近變更（2026-08-28）— 模型選單重整、設定頁改成推論設定、GPU 語音辨識
+
+### 需求（使用者原話整理）
+
+1. 設定頁只做「推論設定」＋「管理模型有沒有安裝」；**要用哪一顆模型，在檔案轉錄／即時字幕頁自己選**，選單同時有本地與雲端。
+2. 檔案轉錄與即時字幕合併成一頁。
+3. 模型清單重排：語音一小（CPU）一大（GPU）；翻譯一小一大再加特製的 LinguaForge。標籤寫明量化位數。
+4. LinguaForge Q8 移除（連本機檔案一起清掉），只留 Q4。
+5. 設定頁分區改成 本地模型／雲端模型／語音朗讀／基本；語音朗讀往上；語音要能試聽。
+
+### GPU 語音辨識：為什麼是 llama-server sidecar
+
+三條路都查過／測過才決定：
+
+| 方案 | 結論 |
+|---|---|
+| sherpa-onnx 開 CUDA | npm 的 `sherpa-onnx-win-x64` 是 CPU-only 編譯；要換官方 win-x64-cuda 的 DLL，還得 CUDA 12＋cuDNN 9 版本完全對上（另外 ~700MB），對不上會**靜默**退回 CPU |
+| node-llama-cpp | `3.20`（npm latest）**沒有 multimodal／audio API**，dist 裡連 image 都 grep 不到 |
+| **llama-server sidecar** | 採用。llama.cpp 官方支援 Qwen3-ASR GGUF，`llama-server` 自帶 `/v1/audio/transcriptions`；**Windows Vulkan 版只有 34MB**、自帶 CPU backend，不需要 CUDA／cuDNN |
+
+實測數字（RTX 5060 Ti，4.42 秒音訊）：
+
+| 情況 | 結果 |
+|---|---|
+| 不帶 `--device`，只給 `--gpu-layers 99` | prompt eval **7.43 tok/s**（整包跑 CPU，不印任何錯誤） |
+| 帶 `--device Vulkan0` | prompt eval **720 tok/s**，快 **97 倍** |
+| sidecar 冷啟動 | 2.9～3.3s |
+| 轉錄（首次／第二次） | 312ms／**93ms**（約 47× 實時） |
+
+**這是最容易踩的坑**：兩種情況都成功回應、都不報錯，只有比對 tok/s 才發現在跑 CPU。
+
+另外兩件上游行為：Qwen3-ASR 經 llama-server 回來會夾 `language Chinese<asr_text>` 前綴
+（llama.cpp issue #26749，未修）→ `stripAsrTags` 剝掉；中文一律吐簡體 → 跟 CPU 那條一樣套 `s2twp`
+（判斷函式 `shouldS2twpSource` 從 `local-asr.js` 移到 `opencc.js` 共用）。
+
+### 做法
+
+- **新檔**：`src/main/llama-asr.js`（sidecar 生命週期＋multipart 轉錄，介面刻意跟 `local-asr.js` 一模一樣）、
+  `src/main/asr-select.js`（唯一的選擇點，~110 行）、
+  `src/renderer/scripts/stt-page.js`（子分頁＋模型選單）、`src/renderer/scripts/model-picker.js`（選單共用邏輯）
+- **registry**：新增 `qwen3asrgpu`／`llamaruntime`（`archive: true`，下載後 PowerShell `Expand-Archive`，
+  已安裝與否看 `check` 不看下載檔名）／`qwen354b`；移除 `linguaforge08`（Q8）
+- **模型選擇不新增狀態**：選單只是 `asrEngine`+`asrModelKey` 與 `translator`+`localTranslateModel` 的扁平視圖，
+  選了立刻寫回（跟主題一樣即時套用）。語音轉文字頁與翻譯頁共用同一份
+- **信任邊界**：`localAsr:*` 的 `modelKey` 不再由 renderer 傳，一律 main 從 store 讀；
+  `tts:preview` 新增的 `voice` 參數對 `tts-voices.js` 的固定表做白名單驗證
+- 舊使用者的 `localTranslateModel = 'linguaforge08'` 由 `main.js` 的 `RETIRED_MODEL_KEYS` 讀成 Q4
+
+### 踩到的三件事
+
+1. **`engine.js` 沒有 `setStore`**：`main.js` 的 `lazyLoad` 靠它把 store 塞進模組，而 `engine.acquire`
+   會比任何 `localAsr:*` IPC 更早發生（進頁就 prewarm）。少了這一層轉發，`asr-select` 讀不到
+   `asrModelKey`，使用者選了 GPU 模型也會 warm 成 CPU 那顆。
+2. **`#page-live.active { display: flex }` 搬過來會壞**：子分頁的顯示是 `.subtab-panel.active` 在管，
+   再對容器裸寫 display 就會蓋掉 `display: none` → 兩個子分頁疊在一起（跟當初 `.page` 同一個坑）。
+   改成內容自己 `margin: 0 auto` 置中。
+3. **批次 sed 換 model key 會誤傷斷言**：`isLlmKey('linguaforge08') === false` 被改成
+   `isLlmKey('linguaforge08q4') === false`（永遠 false），測試會假綠。改完要逐條看 diff。
+
+### 驗證
+
+新測試：`npx electron scripts/e2e-llama-asr.js` **21 passed**（含真的拉 sidecar、TTS 往返比對、程序收得掉）、
+`node scripts/e2e-stt-cdp.js` **16 passed**（打包版；跑完還原使用者的四個 store key）。
+
+回歸全綠：smoke 22／visual 46／usage-cdp 10／agy-cdp 33／chat-cdp 42／terminal-cdp 29／tray-cdp 12／
+e2e-chat 117／e2e-agy 98／mappers 50／usage 30／error-hygiene 32／markdown 23／terminal 50／VAD 11／
+reorder 15／asr-threads 10／linguaforge-decode・list ALL PASS。
+
+真實推論：
+- Qwen3.5-4B 六方向翻譯全部正確，專名（Kimi／Sol Energy）與年份（2024）都保住，無標籤前綴；GPU 上 190～440ms/句
+- 打包版切到 GPU 語音模型跑真實檔案轉錄：CPU 0.6B 回空字串、**GPU 1.7B 回「咳咳咳。」**（同一個
+  `scripts/test-sample.wav`，CPU 那顆回空是既有的已知限制）
+
+### 順手修好的：視窗被遮住時檔案轉錄會卡在 1%
+
+合併頁跑回歸時 `e2e-ui-transcribe.js` 永遠停在「準備中… 1%」。不是分頁改動造成的，
+是 `transcribe.js` 放很久的 `waitForPaint()`——它 `await` 兩層 `requestAnimationFrame`，
+而**視窗被遮住時 rAF 完全不觸發**（CDP 實測 `document.hidden: true` 時 3 秒零回呼）。
+`finally` 又把按鈕解鎖，症狀就是「按了沒反應」。修法是 rAF 配 200ms 逾時，兩者誰先到都算。
+
+### 沒做
+
+- llama-server 的 CUDA 版本（239MB＋373MB cudart）：Vulkan 已經能吃 GPU，先不做第二套
+- 聊天接生成圖片的模型：使用者當初問的是「支不支援」，沒有要求實作
+
+---
+
+## 最近變更（2026-08-28）— 「新終端機」彈窗對齊 ＋ CDP 測試不再絕對定位
+
+使用者回報「新終端機」彈窗歪掉：標題與按鈕列在 24px，欄位卻貼到 0。
+
+- **根因**：`.app-dialog` 自己 `padding: 0`，那 24px 是 `.dialog-head`／`.dialog-actions` 各寫各的。
+  五個彈窗內容區裡 `.term-new-body` 是**唯一**沒補 `padding: 4px 24px 0` 的（CDP 實測 pad 0px/0px，其餘四個都 24px）
+- 順手收窄：`.app-dialog` 的 760px 是給模型清單那種寬內容用的，三個欄位的表單改 `#termNewDialog { width: min(460px, 92vw) }`，
+  select 也拉滿寬（原本 `min-width:180px` 孤零零漂在一片空白裡）
+- **同類問題掃過了**：全 8 頁 × 1440/900/560 逐一量「子元素有沒有超出父層 content box」→ 0 筆；
+  五個彈窗在 1440／560 兩個寬度都對齊、無溢出。只有 `.term-new-body` 這一處
+- 檢查折進 `e2e-visual-cdp.js`（新增 `dialog-align`，49 → 52 checks），一次性探測腳本不留
+
+### 順帶修好的：`e2e-terminal-cdp.js` 會誤傷使用者資料
+
+跑回歸時 3 條 FAIL，追下去不是產品壞掉，是測試自己用「第一列」與絕對總數定位：
+
+- `document.querySelector('.term-list-item')` 抓的是側欄第一列——使用者本來就有工作階段時，
+  那是**別人的**，而下一步就是點刪除。`panes === 1`／`count === 1` 這種絕對數同理必然對不上
+- 收尾只刪 `createdId`，中途建立的第二個階段沒刪：測試一中斷就在使用者側欄留一筆垃圾
+  （這次就撈到一筆 `t_mtcm9jv3_pu3dwn`，測試環境的真實殘留）
+- 改法：全部改用 `[data-id="<自己建的 id>"]` 指名，斷言改看「那個 id 的 pane 在不在」，
+  `secondId` 一併納入 finally。改完在**留著殘留資料**的情況下重跑 → 29 passed, 0 failed
+
+驗證：`e2e-visual-cdp.js` 52 ／ `e2e-terminal-cdp.js` 29 ／ `e2e-chat-cdp.js` 42 ／ `e2e-cdp-smoke.js` 22。
+
+## 最近變更（2026-08-28）— 側欄拖曳排序 ＋ AGY 自動續期真的修好
+
+### 一：終端機側欄加拖曳
+
+聊天側欄本來就有拖曳＋Alt+↑↓，實作與終端機需要的一模一樣（連 class 都共用），
+所以抽成 `src/renderer/scripts/list-reorder.js`，兩頁都用它，沒有各寫一份。
+碰撞判定沿用 `usage-reorder.js` 的 `pickCollision`。
+
+### 二：AGY 自動續期在打包版一直沒生效（root cause 找到了）
+
+上一輪做的「代跑 `agy.exe models` 續期」看起來有做，實際上每次都在等逾時：
+使用者的請求卡滿 60 秒才回 `TOKEN_EXPIRED`，而同一支指令從主控台跑只要 2～3 秒。
+
+原因**不是**憑證、不是 stdout、也不是 CLI 需要主控台，而是 **`execFile`**：
+它把三個 stdio 都接成 pipe，而且**不會把 stdin 那條關掉**——`agy.exe` 拿到一條開著、
+永遠收不到 EOF 的管線，就在那裡等輸入。
+
+`scripts/probe-agy-nudge.js` 的實測矩陣（這支留著，之後動 `runAgyCli` 前先跑）：
+
+| 寫法 | 結果 |
+|---|---|
+| A `execFile`（現況） | **逾時 25s** |
+| B `spawn` + stdin `ignore` | exit 0，2.8s |
+| C 找不到憑證 + stdin `ignore` | exit 0，2.2s |
+| D 找不到憑證 + stdin 繼承 | exit 0，2.1s |
+| E `spawn` + stdin `pipe`（不寫也不關） | **逾時 25s** ← 證實是 stdin |
+| F `spawn` + 三個都 `ignore`（採用） | exit 0，2.1s |
+
+修法：`runAgyCli` 改用 `spawn(exe, ['models'], { windowsHide: true, stdio: 'ignore' })`，
+逾時從 60s 降到 30s（正常 2～3 秒，這只是防真的卡住）。
+走真正 `credential.acquire` 的計時：**1798ms**（原本會等滿逾時）。
+
+回歸測試：`e2e-agy.js` 新增「代跑 CLI 的 stdin 是 ignore」「代跑 CLI 不開視窗」，
+擋住有人為了「簡潔」改回 `execFile`。
+
+### 驗證
+
+- `npx electron scripts/e2e-agy.js` → 98 passed
+- `node scripts/e2e-terminal-cdp.js` → 29 passed（新增拖曳與 Alt+↑ 兩條）
+- `node scripts/e2e-chat-cdp.js` → 42 passed（聊天側欄拖曳原本就有測，抽共用後仍過）
+- 其餘回歸：smoke 22／visual 49／usage-cdp 10／agy-cdp 33／tray 12／terminal 50／
+  e2e-terminal 27／mappers 50／usage 30／error-hygiene 32／markdown 23／usage-reorder 15
+
+## 最近變更（2026-08-28）— 終端機分頁（AI 代理用）
+
+### 需求
+
+nav 加一個終端機分頁；側欄像聊天那樣多開與管理，**每一列要看得出「運行中」還是「已完成」**
+（同時跑三個代理時，一眼知道哪個跑完該回去看）。新終端機可選啟動指令、跑完要提醒、
+每個工作階段記住工作目錄。
+
+### 技術選擇（都先實測過才寫）
+
+| 事項 | 結果 |
+|---|---|
+| `@lydell/node-pty` | Electron 43 直接 require 就能用（N-API prebuilt，不需 electron-rebuild） |
+| ConPTY 視窗標題當忙碌訊號 | **不行**，跑 `ping` 期間標題一直是 `powershell.exe` |
+| 只靠 OSC 133 提示字元標記 | **不行**，PSReadLine 在外部輸出時重繪，三秒內重送 9 次 `D;0` |
+| `D` 標記帶 `Get-History` id 去重 | **可以**，ping 期間全是 id=1 的重繪，結束才 id=2；`cmd /c exit 7` 正確回 code=1 |
+| xterm.js vendoring | **不用**，`lib/xterm.mjs`／`addon-fit.mjs` 直接相對路徑 import `node_modules` |
+
+### 做法
+
+- `src/main/terminal/`：`status.js`（純函式狀態機）／`pty.js`（生命週期＋256KB scrollback＋
+  16ms 輸出合併）／`store.js`（`<userData>/terminals.json`，只存 metadata）／`ipc.js`（逐一列舉白名單）
+- 忙碌判定雙軌：**送出非空指令 → 運行中**；**新的 history id 的 `D` 標記 → 已完成＋離開碼**；
+  沒有 shell integration（cmd）或代理 REPL 的情況靠**靜默**（有指令在跑 4s／已回提示字元 0.8s）
+- shell integration 用 `-NoExit -Command` 注入一層 prompt wrapper，字串**完全不含雙引號**
+- 信任邊界：shell／preset 只收 key（執行檔與指令在 main 固定表）、cwd 走 `terminal:pickDirectory`
+  系統對話框再 `statSync().isDirectory()`、write ≤8KB、cols/rows 夾值、最多 20 個工作階段
+- renderer 每個階段留一份 xterm 實例（切分頁只換顯示）；`open()` 回快照＋`seq`，
+  監聽器收到 `seq <=` 的片段直接丟掉，避免快照與串流重疊
+
+### 踩到的兩個坑
+
+1. **`term.open()` 掛在 `display:none` 的格子上**會開出 0×0 終端機 → 提示字元整段消失，
+   但之後的輸出又正常，看起來像 pty 沒起來。改成 `createPane` 先切 `is-active` 再 open。
+2. **第一個看到的 `D` 標記不是「跑完了」**，是「現在這個提示字元」。原本 `maxHistoryId` 從 -1
+   起跳，指令送出後遇到的第一次重繪就被當成完成。
+
+### 驗證
+
+- `node scripts/test-terminal.js` → 50 passed
+- `npx electron scripts/e2e-terminal.js` → 27 passed（真 ConPTY，連跑兩次都穩）
+- `node scripts/e2e-terminal-cdp.js` → 27 passed（打包版）
+- 回歸：smoke 22／visual 49／usage 10／chat 42／agy-cdp 33／tray 12／agy 96／mappers 50／
+  usage 30／error-hygiene 32／markdown 23／usage-reorder 15
+
+> smoke 的「long text translated in chunks」曾失敗一次，原因是使用者的雲端翻譯指向自己的 AGY
+> 反代而 Antigravity token 過期（AGY 日誌 `TOKEN_EXPIRED`，耗時 60s = `nudgeCli` 逾時）。
+> 手動跑一次 `agy models` 續期後就 22/22。**順帶發現：自動續期在打包版沒生效**——
+> 同一支 `agy.exe models` 從主控台跑只要 3 秒，App 用 `execFile(windowsHide:true)` 代跑卻等滿 60 秒。
+> 疑似 CLI 在沒有主控台／stdin 時卡在互動式重新登入。下次處理這條時從這裡查起。
+
+## 最近變更（2026-08-28）— 常駐系統匣 ＋ 開機自啟動
+
+### 需求
+
+關掉視窗後 AGY 反代要繼續服務（接上去的客戶端不能斷），並且能設定開機自動啟動。
+
+### 做法（`src/main/main.js`）
+
+- `closeToTray`（store，**預設開**）：主視窗 `close` 事件 `preventDefault()` + `hide()`，
+  第一次縮起來才建 `Tray`（顯示 VoiceInk／結束 VoiceInk）。關掉開關就恢復「關窗即結束」。
+- 開機自啟動：`app.setLoginItemSettings({ openAtLogin, args: ['--hidden'] })`。
+  **真相在 OS，不進 store**——使用者可能在工作管理員的「開機」分頁直接停用，
+  存一份自己的布林值只會跟系統對不上。`isDev` 不註冊（會把 node_modules 的 electron.exe 排進去）。
+  帶 `--hidden` 開機時視窗直接 `show: false`。
+- 單一實例鎖：常駐之後這是必要條件，不是保險。
+- `agy-page.js` 輪詢加 `document.hidden` 檔板：那條會開 PowerShell 讀 Credential Manager。
+- 設定 → 外觀新增兩個 checkbox（`.setting-check`），跟主題一樣即時套用、不用按儲存。
+
+### 踩到的兩件事
+
+1. **輸掉單一實例鎖的那份要 `app.quit()`，不是 `app.exit()`**。exit 立刻砍掉自己，
+   「我來過了」的通知來不及送到第一份 → 藏在系統匣時再點捷徑有時叫不出視窗。
+2. **`document.hidden` 同時代表「被完全遮住」**。CDP 測試從背景 node 程序 spawn 第二份，
+   Windows 不給前景權，`show()` 之後馬上被終端機遮回去（`visibilitychange` 記到
+   `visible → hidden`）。斷言改看「有沒有 visible 過」後三連跑 12/12 穩定。
+
+### 驗證
+
+`node scripts/e2e-tray-cdp.js` 12 passed（含**藏起來時 `http://127.0.0.1:8788/health` 回 ok**，
+即反代真的沒斷）。回歸：smoke 22、visual 43、usage-cdp 10、chat-cdp 42、agy-cdp 33 全過。
+
+## 最近變更（2026-08-28）— AGY token 自動續期（不再「用幾分鐘就斷線」）
+
+### 症狀
+
+客戶端接上 AGY 反代後幾十分鐘就開始 401／`TOKEN_EXPIRED`，使用者得自己再跑一次 `agy` 指令才會通。
+
+### 根因
+
+Antigravity 的 access token 只有 1 小時（實測憑證 `expiry` 就是 +1h）。續期需要 OAuth client id／secret，
+但那是 Antigravity IDE 的 public desktop client，**刻意不寫進原始碼**（見 CLAUDE.md），
+所以 `refreshAccessToken` 在使用者機器上永遠回空字串。
+到期後 VoiceInk 只能等「有人跑一次 Antigravity CLI」把新 token 寫回 Windows Credential Manager——
+而那個「有人」以前就是使用者本人。
+
+### 修法（`src/main/agy/credential.js`）
+
+我們沒有憑證，但 CLI 有：`agy.exe models` 是最便宜的「要連上游」子指令（實測 1.8s／exit 0），
+跑完就會續期並寫回同一個 Credential Manager 項目。所以由我們代跑：
+
+- `nudgeCli(deps)`：跑 `agy.exe models`，失敗吞掉。冷卻 60 秒 ＋ `nudgeInFlight` 合併
+  （token 尾聲每個請求都會走到 `loadToken`，沒冷卻會連開一堆 186MB 的程序）
+- **stale 但還沒真的過期** → `void nudgeCli()` 背景跑，這次照常回舊 token，不擋使用者
+- **真的過期或 `mustRefresh`（上游 401）** → `await nudgeCli()` 後重讀憑證；
+  重讀結果必須是**不同的** access token 才算續期成功，否則照樣拋 `TOKEN_EXPIRED`
+- `agyCliPath(env)` 從 `detectSources` 抽出來共用；CLI 沒裝就直接跳過（IDE 使用者維持原行為）
+
+回歸：`npx electron scripts/e2e-agy.js`（96 passed）新增四條——自動續期、續期失敗仍拋錯、
+背景續期不擋請求、連續請求不連開程序。測試自建假 `LOCALAPPDATA/agy/bin/agy.exe`，
+不依賴開發機有沒有裝 CLI，也不會真的把 `agy.exe` 叫起來。
+
+### 沒驗到的
+
+沒有等真實 token 過期做端到端實測（要 ~1 小時，且偽造 Credential Manager 內容有弄丟登入的風險）。
+「跑 CLI 就會續期並寫回」這一點的依據是使用者原本的手動流程本來就有效。
 
 ## 最近變更（2026-08-25）— 再開一次啟動
 

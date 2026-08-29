@@ -17,6 +17,7 @@ import {
   ASR_MODEL_KEY,
   resolveTranslateModelKey
 } from './app.js'
+import { resolveCloudTranslate } from './model-picker.js'
 
 // ===== DOM 元素 =====
 let liveLanguage
@@ -111,8 +112,10 @@ export function initLiveCaption() {
     refreshLiveTranslatorHint()
     // 未擷取且已預熱：重載以套用 localTranslateModel / llmGpu / translator / asrEngine
     if (isCapturing || isStarting || !electronAPI.engine) return
-    const page = document.getElementById('page-live')
-    if (!page?.classList.contains('active')) return
+    // 要「頁在前景」而且「停在即時字幕這個子分頁」才重新預熱
+    const page = document.getElementById('page-stt')
+    const livePanel = document.getElementById('stt-live')
+    if (!page?.classList.contains('active') || !livePanel?.classList.contains('active')) return
     if (prewarmed || prewarmInFlight) {
       await cooldownEngine()
     }
@@ -199,9 +202,18 @@ async function startCapture() {
     const needsTranslationBackend = targetLanguage !== 'auto'
 
     const status = await electronAPI.models.status()
-    if (settings.asrEngine !== 'cloud' && !status.models[ASR_MODEL_KEY]?.downloaded) {
-      showToast('本地 ASR 模型尚未下載，請先到設定下載', 'error')
-      return
+    if (settings.asrEngine !== 'cloud') {
+      const asrKey = settings.asrModelKey || ASR_MODEL_KEY
+      const asrDef = status.models[asrKey]
+      if (!asrDef?.downloaded) {
+        showToast(`本地語音模型（${asrDef?.label || asrKey}）尚未下載，請到設定 → 本地模型下載`, 'error')
+        return
+      }
+      if (asrDef.requires && !status.models[asrDef.requires]?.downloaded) {
+        const runtimeLabel = status.models[asrDef.requires]?.label || asrDef.requires
+        showToast(`還缺「${runtimeLabel}」，請到設定 → 本地模型下載`, 'error')
+        return
+      }
     }
     if (settings.asrEngine === 'cloud' && !settings.asrApiKey) {
       showToast('雲端語音轉文字需要 API Key，請到設定填寫', 'error')
@@ -214,8 +226,8 @@ async function startCapture() {
         return
       }
     }
-    if (needsTranslationBackend && settings.translator === 'cloud' && !settings.apiKey) {
-      showToast('雲端翻譯需要 API Key，請到設定填寫', 'error')
+    if (needsTranslationBackend && settings.translator === 'cloud' && !resolveCloudTranslate(settings).ready) {
+      showToast('雲端翻譯還沒選好供應商與模型，請在上方選單挑一顆', 'error')
       return
     }
 
@@ -406,11 +418,11 @@ function applySampleGain(samples) {
  */
 async function transcribeUtterance(samples) {
   const epoch = sessionEpoch
+  // 模型由 main 讀 store 決定（asrEngine ＋ asrModelKey），renderer 不指定
   const sourceText = (await electronAPI.localAsr.transcribe({
     samples,
     sampleRate: TARGET_SAMPLE_RATE,
-    lang: targetLanguage,
-    modelKey: ASR_MODEL_KEY
+    lang: targetLanguage
   }) || '').trim()
 
   // 停止／重開後才 resolve 的 stale ASR 結果不得再進管線（否則觸發翻譯並幽靈重載已卸載的 LLM）

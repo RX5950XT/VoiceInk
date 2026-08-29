@@ -93,6 +93,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
         lang,
         chunkIndex: opts?.chunkIndex
       }),
+    /**
+     * 設定頁試聽：唸 main 固定的範例句，用還沒儲存的語音／語速
+     * @param {string} lang
+     * @param {string} voice  必須在 main 的語音白名單內，否則退回該語言預設
+     * @param {number} rate   -50…100
+     */
+    preview: (lang, voice, rate) => ipcRenderer.invoke('tts:preview', { lang, voice, rate }),
     cancel: () => ipcRenderer.invoke('tts:cancel')
   },
 
@@ -111,6 +118,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // ===== 系統／LLM 能力 =====
   system: {
+    getStartup: () => ipcRenderer.invoke('system:getStartup'),
+    setStartup: (enabled) => ipcRenderer.invoke('system:setStartup', enabled === true),
     gpuCapability: () => ipcRenderer.invoke('system:gpuCapability'),
     refreshGpuCapability: () => ipcRenderer.invoke('system:refreshGpuCapability'),
     installCudaEnv: () => ipcRenderer.invoke('system:installCudaEnv'),
@@ -151,6 +160,38 @@ contextBridge.exposeInMainWorld('electronAPI', {
     clearLogs: () => ipcRenderer.invoke('agy:clearLogs'),
     /** 端到端自我測試：自動挑模型，從本機閘道真的送一則訊息 */
     test: () => ipcRenderer.invoke('agy:test')
+  },
+
+  // ===== 終端機 =====
+  // shell 與啟動指令都只傳 key（執行檔路徑在 main 的固定表）；工作目錄一律走系統對話框。
+  terminal: {
+    /** @returns {Promise<{ ok: boolean, data?: { shells: object[], presets: object[], maxSessions: number } }>} */
+    catalog: () => ipcRenderer.invoke('terminal:catalog'),
+    list: () => ipcRenderer.invoke('terminal:list'),
+    /** @param {{ shell?: string, preset?: string, cwd?: string, title?: string }} req */
+    create: (req) => ipcRenderer.invoke('terminal:create', req || {}),
+    rename: (id, title) => ipcRenderer.invoke('terminal:rename', id, title),
+    delete: (id) => ipcRenderer.invoke('terminal:delete', id),
+    /** @param {string[]} ids 側欄拖曳後的完整順序 */
+    reorder: (ids) => ipcRenderer.invoke('terminal:reorder', ids),
+    /** 掛上分頁；回傳目前畫面快照與 seq（早於 seq 的 data 事件要丟掉） */
+    open: (id, cols, rows) => ipcRenderer.invoke('terminal:open', id, cols, rows),
+    write: (id, data) => ipcRenderer.invoke('terminal:write', id, data),
+    resize: (id, cols, rows) => ipcRenderer.invoke('terminal:resize', id, cols, rows),
+    kill: (id) => ipcRenderer.invoke('terminal:kill', id),
+    pickDirectory: () => ipcRenderer.invoke('terminal:pickDirectory'),
+    /** @param {(payload: { id: string, seq: number, data: string }) => void} callback */
+    onData: (callback) => {
+      const handler = (_event, payload) => callback(payload)
+      ipcRenderer.on('terminal:data', handler)
+      return () => ipcRenderer.removeListener('terminal:data', handler)
+    },
+    /** @param {(payload: { id: string, state: string, exitCode: number | null }) => void} callback */
+    onStatus: (callback) => {
+      const handler = (_event, payload) => callback(payload)
+      ipcRenderer.on('terminal:status', handler)
+      return () => ipcRenderer.removeListener('terminal:status', handler)
+    }
   },
 
   // ===== 聊天（雲端串流）=====

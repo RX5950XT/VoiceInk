@@ -11,6 +11,11 @@ const PORT = 9238
 const EXE = path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
+function stopChildTree(child) {
+  if (!child?.pid) return
+  try { spawn('taskkill', ['/F', '/T', '/PID', String(child.pid)], { stdio: 'ignore' }) } catch {}
+}
+
 function getJson(url) {
   return new Promise((resolve, reject) => {
     http.get(url, res => {
@@ -117,11 +122,19 @@ async function main() {
     await mainCdp.connect()
     // 即時頁改成進分頁才載入腳本；先點進 live，再用 hint 當 readiness gate。
     await waitFor(
-      () => mainCdp.eval(`document.readyState === 'complete' && !!document.querySelector('[data-page="live"]')`),
+      () => mainCdp.eval(`document.readyState === 'complete' && !!document.querySelector('[data-page="stt"]')`),
       15000,
       'renderer 初始化'
     )
-    await mainCdp.eval(`document.querySelector('[data-page="live"]').click()`)
+    // 語音轉文字是合併頁：先進頁（stt-page 是 dynamic import，子分頁的 click 監聽在那時才綁），
+    // 等監聽綁好再點「即時字幕」子分頁，否則第一次 click 會落空。
+    await mainCdp.eval(`document.querySelector('[data-page="stt"]').click(), 'ok'`)
+    await waitFor(
+      () => mainCdp.eval(`!!document.getElementById('sttAsrModel')?.options.length`),
+      15000,
+      '語音轉文字頁初始化'
+    )
+    await mainCdp.eval(`document.querySelector('#sttSubtabs [data-subtab="live"]').click(), 'ok'`)
     await waitFor(
       () => mainCdp.eval(`(() => {
         const hint = document.getElementById('liveTranslatorHint')?.textContent || ''
@@ -132,7 +145,7 @@ async function main() {
     )
 
     await mainCdp.eval(`(() => {
-      document.querySelector('[data-page="live"]').click()
+      document.querySelector('#sttSubtabs [data-subtab="live"]').click()
       document.getElementById('liveLanguage').value = 'auto'
       document.getElementById('startLiveBtn').click()
     })()`)
@@ -293,14 +306,14 @@ async function main() {
           window.electronAPI.store.get('asrEngine', 'local'),
           window.electronAPI.store.get('asrApiKey', ''),
           window.electronAPI.store.get('translator', 'local'),
-          window.electronAPI.store.get('apiKey', ''),
+          window.electronAPI.store.get('translateModelId', ''),
           window.electronAPI.models.status()
         ])
         return {
           asrEngine,
           hasAsrKey: !!asrKey,
           translator,
-          hasTranslateKey: !!translateKey,
+          translateModel: translateKey,
           asrDownloaded: !!models.models?.qwen3asr?.downloaded
         }
       })()`)
@@ -322,8 +335,7 @@ async function main() {
   } finally {
     mainCdp?.close()
     subtitleCdp?.close()
-    try { child.kill() } catch {}
-    try { spawn('taskkill', ['/F', '/IM', 'VoiceInk.exe'], { stdio: 'ignore' }) } catch {}
+    stopChildTree(child)
   }
 }
 

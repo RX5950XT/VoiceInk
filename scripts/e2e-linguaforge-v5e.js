@@ -81,11 +81,11 @@ async function main() {
 
   // --- registry points at v5e ---
   try {
-    const rel = models.ggufRelativePath('linguaforge08')
+    const rel = models.ggufRelativePath('linguaforge08q4')
     if (!rel || !rel.includes('gguf-v5e') || !rel.includes('v5e')) {
       throw new Error(`unexpected gguf path: ${rel}`)
     }
-    if (!models.isLlmKey('linguaforge08')) throw new Error('not in whitelist')
+    if (!models.isLlmKey('linguaforge08q4')) throw new Error('not in whitelist')
     if (!models.status().models.linguaforge08) throw new Error('missing in status')
     pass('registry v5e path', rel)
   } catch (e) {
@@ -94,20 +94,20 @@ async function main() {
 
   // --- download if needed ---
   try {
-    if (models.isDownloaded('linguaforge08')) {
-      pass('already downloaded', models.modelDir('linguaforge08'))
+    if (models.isDownloaded('linguaforge08q4')) {
+      pass('already downloaded', models.modelDir('linguaforge08q4'))
     } else {
       console.log('Downloading linguaforge08 (v5e Q4_K_M)…')
       let lastPct = -1
       const t0 = Date.now()
-      await models.download('linguaforge08', ({ receivedBytes, totalBytes }) => {
+      await models.download('linguaforge08q4', ({ receivedBytes, totalBytes }) => {
         const pct = totalBytes ? Math.floor((receivedBytes / totalBytes) * 100) : 0
         if (pct >= lastPct + 10 || pct === 100) {
           lastPct = pct
           console.log(`  download ${pct}%  (${receivedBytes}/${totalBytes})`)
         }
       })
-      if (!models.isDownloaded('linguaforge08')) {
+      if (!models.isDownloaded('linguaforge08q4')) {
         throw new Error('download finished but isDownloaded=false')
       }
       const ms = Date.now() - t0
@@ -123,7 +123,7 @@ async function main() {
   const store = {
     data: {
       translator: 'local',
-      localTranslateModel: 'linguaforge08',
+      localTranslateModel: 'linguaforge08q4',
       llmGpu: false
     },
     get(k, d) {
@@ -137,7 +137,7 @@ async function main() {
     const warm = await localLlm.warm()
     if (!warm?.ok) throw new Error(JSON.stringify(warm))
     const info = localLlm.getLoadInfo()
-    if (info.key !== 'linguaforge08') throw new Error(`loaded key=${info.key}`)
+    if (info.key !== 'linguaforge08q4') throw new Error(`loaded key=${info.key}`)
     pass('warm linguaforge08', `${Date.now() - t0}ms backend=${info.backend}`)
   } catch (e) {
     fail('warm', e)

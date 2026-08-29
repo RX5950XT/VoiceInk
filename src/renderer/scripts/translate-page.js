@@ -11,6 +11,39 @@ import {
   openSettingsPage,
   resolveTranslateModelKey
 } from './app.js'
+import {
+  translateOptions,
+  currentTranslateValue,
+  fillSelect,
+  applyTranslateChoice,
+  readinessHint,
+  warnNotReady,
+  resolveCloudTranslate
+} from './model-picker.js'
+import { syncCustomSelects } from './custom-select.js'
+
+/** @type {{ value: string, label: string, ready: boolean }[]} */
+let modelOpts = []
+
+/**
+ * 頁面上方的翻譯模型選單（與語音轉文字頁共用同一份設定）
+ */
+async function refreshModelBar() {
+  const select = document.getElementById('translatePageModel')
+  if (!select) return
+  // 雲端選項來自聊天供應商清單，設定頁剛改完就得看到新的那組
+  settings = await getSettings()
+  const status = await electronAPI.models.status()
+  modelOpts = translateOptions(status.models || {}, settings)
+  fillSelect(select, modelOpts, currentTranslateValue(settings))
+  const hint = document.getElementById('translateModelHint')
+  if (hint) {
+    const msg = readinessHint(select, modelOpts)
+    hint.textContent = msg
+    hint.classList.toggle('is-warning', !!msg)
+    hint.classList.toggle('hidden', !msg)
+  }
+}
 
 /**
  * 單次送模型的字數上限：本地 context 2048 tokens（prompt + 輸出）共用。
@@ -95,7 +128,17 @@ export function initTranslatePage() {
     error: document.getElementById('translateError')
   }
 
-  el.openSettingsBtn?.addEventListener('click', () => openSettingsPage('translate'))
+  el.openSettingsBtn?.addEventListener('click', () => openSettingsPage('cloud'))
+  el.modelSelect = document.getElementById('translatePageModel')
+  el.modelHint = document.getElementById('translateModelHint')
+  el.modelSelect?.addEventListener('change', async () => {
+    await applyTranslateChoice(el.modelSelect.value)
+    warnNotReady(readinessHint(el.modelSelect, modelOpts))
+    settings = await getSettings()
+    await refreshModelBar()
+    await refreshUiState()
+    await syncEngineForSettings()
+  })
   el.swapBtn?.addEventListener('click', onSwap)
   el.sourceLang?.addEventListener('change', onLanguageChange)
   el.targetLang?.addEventListener('change', onLanguageChange)
@@ -118,6 +161,7 @@ export function initTranslatePage() {
 
   document.addEventListener('settings-changed', async () => {
     settings = await getSettings()
+    await refreshModelBar()
     await refreshUiState()
     await syncEngineForSettings()
   })
@@ -132,6 +176,7 @@ export function initTranslatePage() {
  */
 export async function prewarmTranslatePage() {
   settings = await getSettings()
+  await refreshModelBar()
   await refreshUiState()
   if (!electronAPI.engine) return
   if (settings.translator !== 'local') {
@@ -233,10 +278,11 @@ async function refreshUiState() {
       canTranslate = true
     }
   } else {
-    statusLabel = '翻譯：雲端 LLM'
-    if (!settings.apiKey) {
-      bannerMsg = '雲端翻譯需要 API Key，請到設定填寫。'
-      statusLabel = '翻譯：雲端 LLM（未設定 Key）'
+    const cloud = resolveCloudTranslate(settings)
+    statusLabel = cloud.modelId ? `翻譯：雲端 · ${cloud.modelId}` : '翻譯：雲端 LLM'
+    if (!cloud.ready) {
+      bannerMsg = '雲端翻譯需要一組填好 API Key 的供應商，請到設定 → 雲端模型設定。'
+      statusLabel = '翻譯：雲端 LLM（未設定）'
     } else {
       canTranslate = true
     }
@@ -459,6 +505,7 @@ function onSwap() {
   el.sourceLang.value = tgt
   el.targetLang.value =
     src === 'auto' ? detectScriptLang(el.input?.value || '') : src
+  syncCustomSelects()
   onLanguageChange()
 }
 

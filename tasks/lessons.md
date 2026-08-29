@@ -4,6 +4,11 @@
 
 ## Electron / Windows
 
+- **同一時間只能跑一支 CDP 測試**：App 有單一實例鎖，背景跑 `e2e-usage-cdp` 的同時又在前景跑別支，後開的那份會被鎖擋掉並退出，症狀是拖曳／狀態類斷言隨機失敗（實際發生：usage 的拖曳測試報 overlay 不存在，單獨重跑就全綠）。要並行只能改成各自獨立的 userData，現在的做法是**一支一支跑**。
+- **設定欄位重複＝同一組金鑰要填兩次**：聊天與翻譯都是 OpenAI 相容的 chat completions，卻各有一組 `apiUrl`／`apiKey`／`modelId`，使用者得把同一組東西填兩遍還要自己記得同步。判斷標準是「端點協議一不一樣」而不是「功能一不一樣」——生圖模型同理，它跟文字模型只差請求帶不帶 `modalities`，所以是模型清單裡的一個勾，不是新的一組欄位。
+- **合併設定要連遷移一起做**：把舊 key 移出 allowlist 卻沒搬資料，使用者的雲端翻譯會安靜地變成「沒設定」。搬移要在 `initStore` 一次做完並刪掉舊 key，而且**寫入成功才刪**。
+- **供應商清單一變動，所有指向它的選擇都要收斂**：只收斂聊天那組的話，翻譯會留著已刪供應商的 id。共用清單就得有一份共用的 reconcile（`reconcileProviderSelection` 各跑一次）。
+
 - **ASR 也要 serial lock + loadEnabled**：LLM 有 `withTranslateLock` 且 unload 會等 queue；ASR 若沒有，stop 後 in-flight `transcribe` 會 `getRecognizer` 幽靈重載（`users` 全 false 但 `asrLoaded: true`）。修法：`withAsrLock` 包 transcribe/unload、`loadEnabled=false` 於 unload 開頭、transcribe 無載入則 throw。live+file 並行也靠同一把鎖避免雙 `createAsync`。
 - **prewarm 旗標不可早於 acquire 成功**：`prewarmed=true` 若在 await 前就設，cooldown 會 release 掉「尚未佔用」的 owner，而 in-flight acquire 之後成功卻無人 release → 模型洩漏。用 `prewarmGen` 作廢過期結果；擷取已接手（`engineAcquired`/`isStarting`）時**不可**對同一 live owner 再 release。
 - **openFolder／store 要白名單**：download/remove 有 `MODELS[key]`，openFolder 漏了就可用 `..\\` 跳出 models 建目錄；store 任意 key 在 XSS 後可改 `apiUrl` 外洩 API Key。
@@ -386,3 +391,118 @@ AGY 反代回報「Antigravity token 已過期」，但 CLI 明明登入著、�
 **教訓**：白名單是好設計，但它讓「模組加方法」與「對外開放」變成兩件事。
 新增 main 端對外方法時，一併檢查 `main.js` 的 service 物件；
 而且 e2e 測 service 模組不等於測 IPC，要有一條 CDP 斷言擋住「回通用錯誤訊息」這個症狀。
+
+## 2026-08-28 — 共用容器的內距寫在子元素上時，新子元素一定會漏
+
+「新終端機」彈窗歪掉：標題與按鈕在 24px，欄位貼到 0。`.app-dialog` 自己 `padding: 0`，
+那 24px 是 `.dialog-head`／`.dialog-actions` 各自寫的，於是每加一個內容區就得記得補一次。
+五個彈窗裡四個補了、最新的那個沒補。
+
+**教訓**：這種「靠每個子元素自己記得」的排版約定，遲早會漏掉一個。
+不改架構的話，至少要有一條會失敗的檢查——量子元素的實際左右邊界，
+而不是靠人看截圖（歪 24px 在小視窗裡真的看不太出來）。
+
+## 2026-08-28 — CDP 測試用「第一列」定位，會刪到使用者的資料
+
+`e2e-terminal-cdp.js` 三條 FAIL，追下去不是產品壞掉：它用
+`document.querySelector('.term-list-item')`（側欄第一列）和 `panes === 1`（絕對總數）
+指涉「自己建的那個」。使用者本來就有工作階段時，第一列是別人的——而下一步就是點刪除。
+收尾又只刪了兩個測試階段中的一個，中斷一次就在使用者側欄留一筆垃圾（這次真的撈到）。
+
+**教訓**：E2E 跑在使用者的真實資料上，測試的定位條件必須是「我自己建的那個」
+（`[data-id="…"]`），不能是「畫面上第一個」或「總共幾個」。
+建立的每一個實體都要進收尾清單。驗證修好沒有，就在**留著殘留資料**的狀態下重跑。
+
+## 2026-08-28 — 「偵測得到 GPU」不等於「正在用 GPU」
+
+接 `llama-server` 做本地 GPU 語音辨識，第一版帶了 `--gpu-layers 99`，服務起得來、
+`/health` 回 ok、轉錄結果也正確——看起來全綠。實際上整包在跑 CPU：
+prompt eval 只有 7.43 tok/s。加上 `--device Vulkan0` 之後是 720 tok/s，**差 97 倍**。
+兩種情況都不印任何警告，`--list-devices` 也照樣列得出 Vulkan 裝置。
+
+**教訓**：接外部推論執行檔時，「有沒有報錯」「結果對不對」都證明不了它用了加速器。
+第一件事應該是量一個**能分辨 CPU 與 GPU 的數字**（tok/s、每秒幀數、實時倍率），
+並把它印在測試輸出裡，之後任何人改參數都看得出退化。
+
+## 2026-08-28 — 改 require 目標時，要順著呼叫鏈找「以前不需要、現在需要」的東西
+
+把 `engine.js` 的 `require('./local-asr')` 換成新的門面 `asr-select` 之後，功能看起來正常，
+但使用者選 GPU 模型時仍會預熱到 CPU 那顆。原因是 `main.js` 的 `lazyLoad` 靠模組的 `setStore`
+把 store 塞進去，而 `engine.js` 以前不需要 store 所以沒有這個方法——換了 require 之後，
+它變成間接持有 store 的那一層，卻沒人告訴它。而 `engine.acquire`（進頁就 prewarm）
+又比任何 `localAsr:*` IPC 更早發生，所以症狀只在「進頁預熱」這條路徑出現。
+
+**教訓**：換 require 目標不是等價替換。新模組需要什麼初始化（store、設定、生命週期），
+就要沿著呼叫鏈往上找誰負責供給；「以前不需要」正是最容易漏的那一格。
+
+## 2026-08-28 — 批次 sed 換識別字會把斷言改成永遠成立
+
+下架 LinguaForge Q8 時用 `sed 's/linguaforge08/linguaforge08q4/g'` 掃過整個 scripts/，
+把剛寫好的 `isLlmKey('linguaforge08') === false`（驗證舊 key 真的失效）
+改成了 `isLlmKey('linguaforge08q4') === false`——那是永遠 false，測試從此假綠。
+同一次還把 `KEYS = ['linguaforge08', 'linguaforge08q4']` 變成兩個一樣的元素。
+
+**教訓**：批次改識別字時，**斷言與清單是最危險的兩種上下文**：
+前者可能被改成恆真／恆假，後者可能塌成重複項。改完一定要 `git diff` 逐條看過，
+特別是含 `=== false`／`!includes`／陣列字面值的那幾行。
+
+## 2026-08-28 — `await requestAnimationFrame` 在視窗被遮住時等於死結
+
+合併語音轉文字頁之後跑 `e2e-ui-transcribe.js`，轉錄永遠停在「準備中… 1%」。
+一開始以為是自己剛改的分頁載入順序，實際上是 `transcribe.js` 裡放很久的 `waitForPaint()`：
+它 `await` 兩層 `requestAnimationFrame` 只為了讓進度面板先畫出來，
+但**視窗被遮住時 rAF 完全不觸發**（CDP 量到 `document.hidden: true` 時 3 秒零回呼），
+於是整條流程卡死。`finally` 還把按鈕解鎖，症狀是「按了沒反應」。
+
+**教訓**：rAF 是「畫面好看」的手段，不是流程的門檻。任何 `await` 一個
+「要瀏覽器願意配合才會回呼」的東西（rAF、transitionend、animationend、IntersectionObserver）
+都必須配逾時。順帶一提：這也說明 CDP 測試「拿不到前景」不只是測試環境的雜訊，
+它剛好會逼出使用者把視窗放到背景時的真實行為。
+
+## 2026-08-28 — 只驗截圖驗不到「原生控制項展開後」的樣子
+
+`.model-chip-select` 是新做的模型選單，`e2e-visual-cdp.js` 七頁 × 兩主題 × 三尺寸全綠、
+截圖也漂亮——因為截圖裡它永遠是收合的。使用者一點開就看到白底配近白文字，整份清單消失。
+原因是原生下拉的清單畫在頁面之外（吃不到 `backdrop-filter`），Chromium 拿 `<select>` 的
+背景色去畫，而那顆是 `transparent`、其他 `.select` 是半透明玻璃，兩種都會退回系統白底。
+
+**教訓**：`<select>`／`<input type=date|file>`／原生 tooltip 這類「有一半由作業系統畫」的元件，
+主題化不能只設容器。深色主題下**每個能自己畫背景的子元素都要明寫不透明底色**。
+測試也要跟著換手法：截圖對這種展開態沒有用，改驗 computed style（底色 alpha ＝ 1、
+前景對比 ≥ 4.5）。順帶一提，修這種毛病要修在共用層——全站的 `<select>` 都有同一個問題，
+只補那顆被抱怨的等於留著其他幾顆等下次被抱怨。
+
+## 2026-08-29 — CDP 測試的清理權限只限於自己建立的程序
+
+`taskkill /IM VoiceInk.exe` 會連使用者安裝版一起關掉；測試只能用暫存 `--user-data-dir`，
+並以 spawn 回傳的 PID 加 `/T` 清理自己的程序樹。Windows 上 AGY 的 SQLite 檔可能晚一點才放鎖，
+暫存目錄刪除要有限重試。背景回歸也必須真的讓測試視窗進 `document.hidden`，不能只看可見 DOM。
+## 2026-08-29 — 原生下拉只能把收合態做好，選取色要另訂 token
+
+原生 `<select>` 的展開清單由 Windows/Chromium 畫，圓角與陰影不能可靠地跟頁面 CSS 一起走；真正能控制的是收合態的尺寸、箭頭、邊框，以及 `<option>` 的不透明底色與選取色。把半透明玻璃直接套到清單會在深色主題變成白底近白字。
+
+**教訓**：保留原生鍵盤與可及性，收合態用共用控制項規則統一；`option` 的背景／前景另用主題 token，並用 computed style 驗證對比，不要靠截圖假設原生彈窗長相。
+
+## 2026-08-29 — 狀態樣式要比 hover 更高特異度
+
+思考按鈕的啟用規則雖然寫在 hover 後面，仍會被 `.composer-btn:hover:not(:disabled)` 較高特異度蓋掉，導致滑鼠移上去看不出是否開啟。
+
+**教訓**：toggle 的 selected/pressed 狀態要有專用的 hover 規則，且測試至少要比較開／關兩個 computed background；只驗 `aria-pressed` 不足以證明畫面清楚。
+
+## 2026-08-29 — 原生下拉彈窗的圓角不能靠 CSS 修好
+
+把 `<select>` 收合態做得一致，仍解不了使用者看到的展開清單：Windows/Chromium 把它畫在頁面外，圓角、陰影、hover 列和頁面主題都不受 renderer CSS 控制。
+
+**教訓**：需要一致視覺時，保留原生 `<select>` 作為資料與事件來源，另外做共用 ARIA listbox；用 fixed portal 避開 `overflow`，dialog 內則掛回 top layer。測試不能只看收合態，至少要點開模型清單、選一項、驗 `change`、鍵盤移動與 Esc 收合。
+
+## 2026-08-29 — `optgroup` 沒有 `options` 集合
+
+聊天模型清單用 `<optgroup>` 分供應商；自訂下拉共用層把 `child.options` 當成 `HTMLSelectElement` 的 API，點擊聊天模型按鈕時才拋 `TypeError`，所以看起來像「按鈕點不開」。
+
+**教訓**：處理 `<select>` 子節點時要分清 `HTMLSelectElement.options` 與 `HTMLOptGroupElement`；群組選項用 `querySelectorAll('option')`。另外，自訂清單寬度不能只複製觸發鈕，窄版長文字要量內容寬度並受視窗邊界限制，避免逐字直排。
+
+## 2026-08-29 — 共用 `label` 規則會蓋掉元件排列
+
+設定頁的 `.setting-group label { display: block; margin-bottom: 8px; }` 比 `.chat-model-flag` 更具特異度，讓生圖標籤退回 block；勾選框與文字就會依 inline 基線排列，看起來上下歪掉。
+
+**教訓**：把 `label` 當作可點擊元件時，元件自己的 `display` 與外距要用同等特異度覆蓋（例如 `label.chat-model-flag`），並用實際子元素中心線做回歸，不只量外框。

@@ -150,9 +150,9 @@ async function main() {
       return cdp.eval(`document.getElementById('page-settings')?.classList.contains('active') === true`)
     }, 15_000, '切到設定頁')
 
-    await cdp.eval(`document.querySelector('.settings-nav-item[data-section="chat"]').click()`)
+    await cdp.eval(`document.querySelector('.settings-nav-item[data-section="cloud"]').click()`)
     await waitFor(
-      () => cdp.eval(`document.getElementById('set-chat')?.classList.contains('active') === true`),
+      () => cdp.eval(`document.getElementById('set-cloud')?.classList.contains('active') === true`),
       15_000, '切到聊天設定分區'
     )
     // 設定表單是非同步載入的，等它安定後再開始操作，避免重繪洗掉待測狀態
@@ -166,8 +166,8 @@ async function main() {
           providers: [...(select?.options || [])].map((o) => o.textContent),
           name: document.getElementById('chatProviderNameInput')?.value || '',
           apiUrl: document.getElementById('chatApiUrlInput')?.value || '',
-          rows: document.querySelectorAll('#chatModelList input').length,
-          placeholder: document.querySelector('#chatModelList input')?.placeholder || ''
+          rows: document.querySelectorAll('#chatModelList input[type="text"]').length,
+          placeholder: document.querySelector('#chatModelList input[type="text"]')?.placeholder || ''
         }
       })()`)
       return snapshot.providers.length ? snapshot : null
@@ -186,9 +186,9 @@ async function main() {
     console.log('\n新增模型列')
 
     const added = await cdp.eval(`(() => {
-      const before = document.querySelectorAll('#chatModelList input').length
+      const before = document.querySelectorAll('#chatModelList input[type="text"]').length
       document.getElementById('chatAddModelBtn').click()
-      const inputs = [...document.querySelectorAll('#chatModelList input')]
+      const inputs = [...document.querySelectorAll('#chatModelList input[type="text"]')]
       return {
         grew: inputs.length === before + 1,
         lastIsEmpty: inputs.at(-1).value === '',
@@ -213,7 +213,7 @@ async function main() {
         selectedIsNew: select.value === select.options[select.options.length - 1].value,
         focused: document.activeElement === nameInput,
         name: nameInput.value,
-        rows: document.querySelectorAll('#chatModelList input').length
+        rows: document.querySelectorAll('#chatModelList input[type="text"]').length
       }
     })()`)
     check('新增供應商後下拉多一項', afterAdd.grew)
@@ -237,7 +237,7 @@ async function main() {
       const firstId = select.options[0].value
       document.getElementById('chatApiUrlInput').value = 'https://draft.test/v1'
       document.getElementById('chatAddModelBtn').click()
-      const input = [...document.querySelectorAll('#chatModelList input')].at(-1)
+      const input = [...document.querySelectorAll('#chatModelList input[type="text"]')].at(-1)
       input.value = 'draft/model-x'
 
       select.value = firstId
@@ -249,12 +249,35 @@ async function main() {
       return {
         switchedAway: switchedUrl !== 'https://draft.test/v1',
         url: document.getElementById('chatApiUrlInput').value,
-        models: [...document.querySelectorAll('#chatModelList input')].map((i) => i.value)
+        models: [...document.querySelectorAll('#chatModelList input[type="text"]')].map((i) => i.value)
       }
     })()`)
     check('切到別組時欄位確實換掉', draftKept.switchedAway)
     check('切回來時 URL 草稿還在', draftKept.url === 'https://draft.test/v1', draftKept.url)
     check('切回來時模型草稿還在', draftKept.models.includes('draft/model-x'), draftKept.models.join(','))
+
+    // 生圖標記跟模型 ID 在同一列（不另開「圖片模型」欄位），切走再切回也要留著
+    const imageFlag = await cdp.eval(`(() => {
+      const rows = [...document.querySelectorAll('#chatModelList .chat-model-row')]
+      const row = rows.at(-1)
+      const box = row?.querySelector('input[data-image-flag]')
+      if (!box) return { hasBox: false }
+      box.checked = true
+      const select = document.getElementById('chatProviderSelect')
+      const mine = select.value
+      select.value = select.options[0].value
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+      select.value = mine
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+      const back = [...document.querySelectorAll('#chatModelList .chat-model-row')]
+        .find((r) => r.querySelector('input[type="text"]')?.value === 'draft/model-x')
+      return {
+        hasBox: true,
+        kept: back?.querySelector('input[data-image-flag]')?.checked === true
+      }
+    })()`)
+    check('模型列有「生圖」勾選框', imageFlag.hasBox)
+    check('生圖標記切換供應商後仍在', imageFlag.kept, JSON.stringify(imageFlag))
 
     const deleted = await cdp.eval(`(() => {
       const original = window.confirm
@@ -274,7 +297,10 @@ async function main() {
     const original = await cdp.eval(`(async () => ({
       providers: await window.electronAPI.store.get('chatProviders', []),
       providerId: await window.electronAPI.store.get('chatProviderId', ''),
-      modelId: await window.electronAPI.store.get('chatModelId', '')
+      modelId: await window.electronAPI.store.get('chatModelId', ''),
+      // 翻譯跟聊天共用這份清單：中途改動供應商會連帶把翻譯的選擇收斂掉，一起還原
+      translateProviderId: await window.electronAPI.store.get('translateProviderId', ''),
+      translateModelId: await window.electronAPI.store.get('translateModelId', '')
     }))()`)
 
     try {
@@ -321,7 +347,7 @@ async function main() {
         document.getElementById('chatScanApplyBtn').click()
         return {
           open: document.getElementById('chatScanDialog').open,
-          rows: [...document.querySelectorAll('#chatModelList input')].map((i) => i.value)
+          rows: [...document.querySelectorAll('#chatModelList input[type="text"]')].map((i) => i.value)
         }
       })()`)
       check('套用後彈窗關閉', applied.open === false)
@@ -343,6 +369,8 @@ async function main() {
         await window.electronAPI.store.set('chatProviders', ${JSON.stringify(original.providers)})
         await window.electronAPI.store.set('chatProviderId', ${JSON.stringify(original.providerId)})
         await window.electronAPI.store.set('chatModelId', ${JSON.stringify(original.modelId)})
+        await window.electronAPI.store.set('translateProviderId', ${JSON.stringify(original.translateProviderId)})
+        await window.electronAPI.store.set('translateModelId', ${JSON.stringify(original.translateModelId)})
       })()`)
     }
 

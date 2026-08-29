@@ -22,12 +22,12 @@ async function main() {
 
   // --- registry ---
   try {
-    if (!models.isLlmKey('linguaforge08') || !models.isLlmKey('qwen35translate')) {
+    if (!models.isLlmKey('linguaforge08q4') || !models.isLlmKey('qwen35translate')) {
       throw new Error('isLlmKey')
     }
     if (models.isLlmKey('qwen3asr')) throw new Error('asr 不該是 llm key')
     if (!models.status().models.linguaforge08) throw new Error('linguaforge08 應出現在 status')
-    if (!models.ggufRelativePath('linguaforge08')?.endsWith('.gguf')) {
+    if (!models.ggufRelativePath('linguaforge08q4')?.endsWith('.gguf')) {
       throw new Error('lingua gguf path')
     }
     if (!models.ggufRelativePath('qwen35translate')?.includes('Qwen3.5')) {
@@ -63,7 +63,7 @@ async function main() {
   // --- resolveLocalTranslateModel fallback ---
   try {
     const mockStore = {
-      data: { localTranslateModel: 'linguaforge08' },
+      data: { localTranslateModel: 'linguaforge08q4' },
       get(k, d) {
         return k in this.data ? this.data[k] : d
       }
@@ -72,9 +72,9 @@ async function main() {
     const key = localLlm.resolveLocalTranslateModel(mockStore)
     // 若 lingua 未下載而 qwen 已下載 → fallback
     const qwenDl = models.isDownloaded('qwen35translate')
-    const lingDl = models.isDownloaded('linguaforge08')
+    const lingDl = models.isDownloaded('linguaforge08q4')
     console.log(`  downloaded: qwen=${qwenDl} lingua=${lingDl} resolved=${key}`)
-    if (lingDl && key !== 'linguaforge08') throw new Error(`expected lingua, got ${key}`)
+    if (lingDl && key !== 'linguaforge08q4') throw new Error(`expected lingua, got ${key}`)
     if (!lingDl && qwenDl && key !== 'qwen35translate') throw new Error(`expected qwen, got ${key}`)
     pass('resolveLocalTranslateModel')
   } catch (e) {
@@ -90,7 +90,7 @@ async function main() {
       const Store = (await import('electron-store')).default
       const store = new Store({ name: 'e2e-llm-device-tmp' })
       store.set('localTranslateModel', localLlm.resolveLocalTranslateModel({
-        get: (k, d) => (k === 'localTranslateModel' ? 'linguaforge08' : d)
+        get: (k, d) => (k === 'localTranslateModel' ? 'linguaforge08q4' : d)
       }))
       store.set('llmGpu', false)
       store.set('translator', 'local')

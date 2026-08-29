@@ -6,6 +6,7 @@
  */
 
 import { showToast, getSettings, electronAPI, cleanIpcError, ASR_MODEL_KEY, resolveTranslateModelKey } from './app.js'
+import { resolveCloudTranslate } from './model-picker.js'
 
 // ===== DOM 元素 =====
 let dropZone
@@ -45,13 +46,20 @@ const MAX_FILE_BYTES = 200 * 1024 * 1024
 
 /**
  * 等瀏覽器畫完一幀（隱藏選項／顯示進度後必須，否則 main 忙載模型時看起來像黑屏）
+ *
+ * **一定要有逾時**：視窗被遮住或縮到系統匣時 `requestAnimationFrame` 根本不會觸發，
+ * 沒有逾時的話整條轉錄流程就永遠卡在「準備中… 1%」（CDP 實測：`document.hidden` 為 true
+ * 時 rAF 3 秒內完全沒回呼）。畫面只是好看，卡住的是使用者的工作。
  * @returns {Promise<void>}
  */
 function waitForPaint() {
   return new Promise((resolve) => {
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => resolve())
-    })
+    const done = () => {
+      clearTimeout(timer)
+      resolve()
+    }
+    const timer = setTimeout(done, 200)
+    requestAnimationFrame(() => requestAnimationFrame(done))
   })
 }
 
@@ -300,8 +308,17 @@ async function startTranscription() {
     const status = await electronAPI.models.status()
     const useCloudAsr = settings.asrEngine === 'cloud'
 
-    if (!useCloudAsr && !status.models?.[ASR_MODEL_KEY]?.downloaded) {
-      throw new Error('本地 ASR 模型尚未下載，請先到設定下載')
+    if (!useCloudAsr) {
+      const asrKey = settings.asrModelKey || ASR_MODEL_KEY
+      const asrDef = status.models?.[asrKey]
+      if (!asrDef?.downloaded) {
+        throw new Error(`本地語音模型（${asrDef?.label || asrKey}）尚未下載，請到設定 → 本地模型下載`)
+      }
+      // GPU 那顆要搭 llama.cpp 執行環境，缺了會在 warm 才失敗，這裡先講清楚
+      if (asrDef.requires && !status.models?.[asrDef.requires]?.downloaded) {
+        const runtimeLabel = status.models?.[asrDef.requires]?.label || asrDef.requires
+        throw new Error(`還缺「${runtimeLabel}」，請到設定 → 本地模型下載`)
+      }
     }
     if (useCloudAsr && !settings.asrApiKey) {
       throw new Error('雲端語音轉文字需要 API Key，請到設定填寫')
@@ -315,8 +332,8 @@ async function startTranscription() {
         throw new Error('本地翻譯模型尚未下載，請先到設定下載')
       }
     }
-    if (willTranslate && settings.translator === 'cloud' && !settings.apiKey) {
-      throw new Error('雲端翻譯需要 API Key，請到設定填寫')
+    if (willTranslate && settings.translator === 'cloud' && !resolveCloudTranslate(settings).ready) {
+      throw new Error('雲端翻譯還沒選好供應商與模型，請在上方選單挑一顆')
     }
 
     // 本地：先載 ASR；雲端 ASR 不載 sherpa（串流過程長，LLM 等 ASR 完再載）
@@ -343,10 +360,10 @@ async function startTranscription() {
     updateProgress(10, useCloudAsr ? '正在雲端轉錄…' : '正在解碼並轉錄…')
     await waitForPaint()
 
+    // 模型由 main 讀 store 決定（asrEngine ＋ asrModelKey），renderer 不指定
     const asrResult = await electronAPI.localAsr.transcribeFile({
       filePath,
-      lang: language,
-      modelKey: ASR_MODEL_KEY
+      lang: language
     })
     if (epoch !== transcribeEpoch) return
 

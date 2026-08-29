@@ -5,7 +5,7 @@ const http = require('http')
 
 const PORT = 9241
 const EXE = path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
-const EXPECTED_ORDER = ['chat', 'usage', 'agy', 'transcribe', 'live', 'translate', 'settings']
+const EXPECTED_ORDER = ['chat', 'terminal', 'usage', 'agy', 'stt', 'translate', 'settings']
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 function getJson(url) {

@@ -92,7 +92,7 @@ async function main() {
   const Store = (await import('electron-store')).default
   const store = new Store({ name: 'bench-llm-device-tmp' })
   const key = localLlm.resolveLocalTranslateModel({
-    get: (k, d) => (k === 'localTranslateModel' ? 'linguaforge08' : d)
+    get: (k, d) => (k === 'localTranslateModel' ? 'linguaforge08q4' : d)
   })
   store.set('localTranslateModel', key)
   store.set('translator', 'local')

@@ -54,13 +54,13 @@ const BAD = [
 async function main() {
   const localLlm = require('../src/main/local-llm')
   const models = require('../src/main/models')
-  if (!models.isDownloaded('linguaforge08')) {
+  if (!models.isDownloaded('linguaforge08q4')) {
     console.error('FAIL linguaforge08 未下載')
     process.exit(1)
   }
 
   const store = {
-    data: { translator: 'local', localTranslateModel: 'linguaforge08', llmGpu: false },
+    data: { translator: 'local', localTranslateModel: 'linguaforge08q4', llmGpu: false },
     get(k, d) {
       return k in this.data ? this.data[k] : d
     }

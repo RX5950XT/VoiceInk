@@ -4,7 +4,8 @@
  * warm / unload 經 serial chain + 與各模組 generation 配合
  */
 
-const localAsr = require('./local-asr')
+/** 依使用者選的模型分流到 sherpa（CPU）或 llama-server（GPU） */
+const localAsr = require('./asr-select')
 const localLlm = require('./local-llm')
 
 /** @type {{ live: boolean, file: boolean, translate: boolean }} */
@@ -127,4 +128,14 @@ function status() {
   }
 }
 
-module.exports = { acquire, release, unloadAll, status }
+/**
+ * main 的 lazyLoad 會在第一次 require 時呼叫這裡。
+ * **一定要轉給 asr-select**：`engine.acquire` 可能比任何 `localAsr:*` IPC 更早發生
+ * （進頁就 prewarm），沒轉的話它讀不到 `asrModelKey`，使用者選了 GPU 模型也會 warm 成 CPU 那顆。
+ * @param {object} store
+ */
+function setStore(store) {
+  localAsr.setStore(store)
+}
+
+module.exports = { setStore, acquire, release, unloadAll, status }

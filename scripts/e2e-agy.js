@@ -527,13 +527,21 @@ async function main() {
 
   {
     const iso = (deltaMs) => new Date(Date.now() + deltaMs).toISOString()
-    const credFor = (expiry) => JSON.stringify({
-      token: { access_token: 'live-token', refresh_token: 'r', expiry }
+    const credFor = (expiry, token = 'live-token') => JSON.stringify({
+      token: { access_token: token, refresh_token: 'r', expiry }
     })
-    const deps = (expiry) => ({
+    // 假的 LOCALAPPDATA：讓 agyCliPath 找得到「CLI」，才會走到續期路徑。
+    // 沒有它的話測試會依開發機上有沒有裝 agy.exe 而時好時壞。
+    const cliEnv = { LOCALAPPDATA: path.join(userDataPath, 'nudge-localappdata') }
+    fs.mkdirSync(path.join(cliEnv.LOCALAPPDATA, 'agy', 'bin'), { recursive: true })
+    fs.writeFileSync(path.join(cliEnv.LOCALAPPDATA, 'agy', 'bin', 'agy.exe'), 'stub')
+    const deps = (expiry, extra = {}) => ({
+      env: cliEnv,
       readCredential: async () => credFor(expiry),
       refresh: async () => null, // 沒有 client id／secret，refresh 一定拿不到
-      loadCodeAssist: async () => ({ project: 'p', tier: 'Pro' })
+      loadCodeAssist: async () => ({ project: 'p', tier: 'Pro' }),
+      runCli: async () => { throw new Error('CLI 不可用') }, // 預設：續期不成功
+      ...extra
     })
 
     // tokenIsStale 的 15 分鐘是「該去續期了」的提前量。refresh 拿不到時把它當成
@@ -563,6 +571,61 @@ async function main() {
       after401 = error
     }
     check('401 之後不得復用未過期的舊 token', after401?.code === 'TOKEN_EXPIRED', String(after401?.code))
+
+    // 這是「用一下就斷線」的修法：我們沒有 client id／secret，refresh 一定拿不到，
+    // 但 Antigravity CLI 自己有，跑一次任何要連上游的子指令就會續期並寫回
+    // Credential Manager。以前得使用者手動下指令，現在由我們代跑。
+    credential.reset()
+    let cliRuns = 0
+    let renewed = false
+    const selfHealing = deps(iso(-60 * 1000), {
+      readCredential: async () => (renewed
+        ? credFor(iso(55 * 60 * 1000), 'renewed-token')
+        : credFor(iso(-60 * 1000))),
+      runCli: async () => { cliRuns += 1; renewed = true }
+    })
+    const healed = await credential.acquire(selfHealing)
+    check('token 過期時自動跑一次 CLI 續期', cliRuns === 1, `跑了 ${cliRuns} 次`)
+    check('續期後直接拿到新 token，不必使用者手動下指令', healed.token === 'renewed-token', healed.token)
+
+    // 續期失敗（CLI 沒裝／登出）仍要拋錯，不能把同一顆死 token 再送一次
+    credential.reset()
+    const staleAfterCli = deps(iso(-60 * 1000), { runCli: async () => {} })
+    let stillDead = null
+    try {
+      await credential.acquire(staleAfterCli)
+    } catch (error) { stillDead = error }
+    check('CLI 續期後還是同一顆過期 token → 照樣拋 TOKEN_EXPIRED',
+      stillDead?.code === 'TOKEN_EXPIRED', String(stillDead?.code))
+
+    // 還沒過期但已進入「該續期」區間：背景叫 CLI 去換，這次照常用舊 token，不擋使用者
+    credential.reset()
+    let bgRuns = 0
+    const warmup = deps(iso(7 * 60 * 1000), { runCli: async () => { bgRuns += 1 } })
+    const served = await credential.acquire(warmup)
+    check('快過期時照常回舊 token（不擋這次請求）', served.token === 'live-token', served.token)
+    check('同時在背景請 CLI 續期', bgRuns === 1, `跑了 ${bgRuns} 次`)
+
+    // 冷卻：token 尾聲每個請求都會走到這裡，不能每次都開一個程序
+    credential.reset()
+    let burst = 0
+    const bursty = deps(iso(7 * 60 * 1000), { runCli: async () => { burst += 1 } })
+    for (let i = 0; i < 5; i += 1) {
+      credential.invalidateToken() // 逼每一輪都重走 loadToken
+      try { await credential.acquire(bursty) } catch { /* 401 情境下會拋，這裡只看 CLI 次數 */ }
+    }
+    check('連續請求不會連開一堆 agy.exe', burst === 1, `跑了 ${burst} 次`)
+    credential.reset()
+
+    // 代跑 CLI 一定要用 spawn 且 stdin=ignore。改回 execFile（三個 stdio 都是 pipe，
+    // 而且 stdin 那條永遠不會關）會讓 agy.exe 卡在等輸入，使用者的請求整整卡滿逾時
+    // 才拿到 TOKEN_EXPIRED——同一支指令從主控台跑只要 2～3 秒。實測矩陣見
+    // scripts/probe-agy-nudge.js。
+    check('代跑 CLI 的 stdin 是 ignore（不能留一條開著的 pipe）',
+      credential.CLI_SPAWN_OPTIONS.stdio === 'ignore' ||
+      credential.CLI_SPAWN_OPTIONS.stdio?.[0] === 'ignore',
+      JSON.stringify(credential.CLI_SPAWN_OPTIONS))
+    check('代跑 CLI 不開視窗', credential.CLI_SPAWN_OPTIONS.windowsHide === true)
 
     // 暫時性失敗（PowerShell 讀憑證逾時、loadCodeAssist 網路抖動）**不可以**設 mustRefresh。
     // 設了的話：之後每一輪都強制 refresh，而沒有 CLIENT_ID／SECRET 時 refresh 一定回 null，

@@ -8,7 +8,8 @@
 
 import { showToast, electronAPI, cleanIpcError, openSettingsPage } from './app.js'
 import { renderMarkdown } from './markdown.js'
-import { pickCollision, mergeVisibleOrder } from './usage-reorder.js'
+import { mergeVisibleOrder } from './usage-reorder.js'
+import { createListReorder } from './list-reorder.js'
 
 const DEFAULT_CHAT_API_URL = 'https://openrouter.ai/api/v1'
 const DEFAULT_CHAT_MODEL = 'google/gemini-3-flash-preview'
@@ -20,8 +21,6 @@ const MAX_PROVIDER_MODELS = 30
 const RENDER_THROTTLE_MS = 60
 /** 捲到底的判定容差 */
 const BOTTOM_SLACK_PX = 48
-/** 側欄拖曳的啟動門檻：小於這個距離仍當成點擊 */
-const DRAG_THRESHOLD_PX = 4
 /** 刪除鈕按下後等待二次確認的時間，逾時自動復原 */
 const DELETE_ARM_MS = 3000
 /** 輸入框自動長高的上限（超過就內部捲動） */
@@ -68,7 +67,7 @@ let scanModelsBtn = null
  * 表單一次只顯示一組供應商，但儲存是整批寫回，所以編輯中的內容得留在記憶體裡：
  * 切換下拉時先把畫面上的欄位收回草稿，再把新選的那組畫上去。
  * 直接每次讀寫 store 會讓「改到一半切走再切回來」的內容消失。
- * @type {Array<{ id: string, name: string, apiUrl: string, apiKey: string, models: string[] }>}
+ * @type {Array<{ id: string, name: string, apiUrl: string, apiKey: string, models: string[], imageModels: string[] }>}
  */
 let providerDraft = []
 let draftId = ''
@@ -107,8 +106,6 @@ let promptDraft = []
 let promptDraftId = ''
 /** 處於「再按一次確認刪除」狀態的按鈕 @type {HTMLButtonElement | null} */
 let armedDeleteBtn = null
-/** 拖曳中的側欄狀態 @type {{ id: string, el: HTMLElement, startX: number, startY: number, active: boolean } | null} */
-let dragState = null
 let inited = false
 
 /**
@@ -173,7 +170,7 @@ export function initChatPage() {
   document.getElementById('chatScanNoneBtn')?.addEventListener('click', () => toggleScanAll(false))
   document.getElementById('chatScanCancelBtn')?.addEventListener('click', () => scanDialog?.close())
   document.getElementById('chatScanApplyBtn')?.addEventListener('click', applyScanSelection)
-  document.getElementById('chatOpenSettingsBtn')?.addEventListener('click', () => openSettingsPage('chat'))
+  document.getElementById('chatOpenSettingsBtn')?.addEventListener('click', () => openSettingsPage('cloud'))
   document.getElementById('toggleChatApiKeyVisibility')?.addEventListener('click', toggleKeyVisibility)
 
   initComposer()
@@ -424,72 +421,15 @@ async function persistOrder() {
   await electronAPI.chat.reorder(ids)
 }
 
-/**
- * @param {PointerEvent} event
- */
-function onItemPointerDown(event) {
-  if (event.button !== 0 || event.target.closest('.chat-list-btn, .chat-list-rename')) return
-  const el = event.currentTarget
-  dragState = { id: el.dataset.id, el, startX: event.clientX, startY: event.clientY, active: false }
-  window.addEventListener('pointermove', onDragMove)
-  window.addEventListener('pointerup', onDragEnd)
-  window.addEventListener('pointercancel', onDragEnd)
-}
-
-/**
- * @param {PointerEvent} event
- */
-function onDragMove(event) {
-  if (!dragState) return
-  if (!dragState.active) {
-    const moved = Math.hypot(event.clientX - dragState.startX, event.clientY - dragState.startY)
-    if (moved < DRAG_THRESHOLD_PX) return
-    dragState.active = true
-    dragState.el.classList.add('is-dragging')
-    listEl.classList.add('is-reordering')
-  }
-  const items = [...listEl.querySelectorAll('.chat-list-item')]
-  const rects = items.map((el) => {
-    const r = el.getBoundingClientRect()
-    return { id: el.dataset.id, left: r.left, top: r.top, width: r.width, height: r.height }
-  })
-  const targetId = pickCollision({ x: event.clientX, y: event.clientY }, rects)
-  if (!targetId || targetId === dragState.id) return
-  const from = items.findIndex((el) => el.dataset.id === dragState.id)
-  const to = items.findIndex((el) => el.dataset.id === targetId)
-  if (from < 0 || to < 0) return
-  const target = items[to]
-  if (to > from) target.after(dragState.el)
-  else target.before(dragState.el)
-}
-
-function onDragEnd() {
-  window.removeEventListener('pointermove', onDragMove)
-  window.removeEventListener('pointerup', onDragEnd)
-  window.removeEventListener('pointercancel', onDragEnd)
-  const state = dragState
-  dragState = null
-  if (!state?.active) return
-  state.el.classList.remove('is-dragging')
-  listEl.classList.remove('is-reordering')
-  void persistOrder()
-}
-
-/**
- * Alt+↑／↓ 搬動（鍵盤也要能排序）
- * @param {KeyboardEvent} event
- */
-function onItemKeydown(event) {
-  if (!event.altKey || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return
-  event.preventDefault()
-  const el = event.currentTarget
-  const sibling = event.key === 'ArrowUp' ? el.previousElementSibling : el.nextElementSibling
-  if (!sibling?.classList.contains('chat-list-item')) return
-  if (event.key === 'ArrowUp') sibling.before(el)
-  else sibling.after(el)
-  el.querySelector('.chat-list-open')?.focus()
-  void persistOrder()
-}
+// 拖曳與 Alt+方向鍵的實作與終端機側欄完全一樣 → 共用 list-reorder.js，不各寫一份
+const reorder = createListReorder({
+  getList: () => listEl,
+  itemSelector: '.chat-list-item',
+  ignoreSelector: '.chat-list-btn, .chat-list-rename',
+  onCommit: () => void persistOrder()
+})
+const onItemPointerDown = reorder.onPointerDown
+const onItemKeydown = reorder.onKeydown
 
 /**
  * @param {string} id
@@ -709,14 +649,29 @@ function onMessagesClick(event) {
   const copyCode = target.closest?.('.md-copy')
   if (copyCode) {
     const code = copyCode.closest('.md-code')?.querySelector('code')
-    if (code) copyText(code.textContent)
+    if (code) {
+      copyText(code.textContent)
+      const prev = copyCode.textContent
+      copyCode.textContent = '✓ 已複製'
+      copyCode.classList.add('is-copied')
+      setTimeout(() => {
+        copyCode.textContent = prev
+        copyCode.classList.remove('is-copied')
+      }, 1500)
+    }
     return
   }
   const action = target.closest?.('.chat-msg-action')
   if (!action) return
   const wrap = action.closest('.chat-msg')
-  if (action.dataset.action === 'copy') copyText(wrap?.__rawText || '')
-  else if (action.dataset.action === 'regenerate') handleRegenerate()
+  if (action.dataset.action === 'copy') {
+    copyText(wrap?.__rawText || '')
+    const prev = action.textContent
+    action.textContent = '✓ 已複製'
+    setTimeout(() => { action.textContent = prev }, 1500)
+  } else if (action.dataset.action === 'regenerate') {
+    handleRegenerate()
+  }
 }
 
 /**
@@ -1040,6 +995,7 @@ async function refreshModelSelect() {
   for (const provider of providers) {
     const models = Array.isArray(provider?.models) ? provider.models : []
     if (!models.length) continue
+    const imageSet = new Set(provider?.imageModels || [])
     const group = document.createElement('optgroup')
     group.label = provider.name || '未命名供應商'
     for (const model of models) {
@@ -1048,7 +1004,8 @@ async function refreshModelSelect() {
       index += 1
       option.dataset.providerId = provider.id
       option.dataset.model = model
-      option.textContent = model
+      // 生圖模型在選單裡標出來，不然選到之後只會覺得「怎麼回了一張圖」
+      option.textContent = imageSet.has(model) ? `🖼 ${model}` : model
       if (provider.id === activeProviderId && model === currentModel) option.selected = true
       group.appendChild(option)
     }
@@ -1245,6 +1202,18 @@ function appendModelRow(value, options = {}) {
   input.type = 'text'
   input.className = 'input'
   input.value = value
+  // 生圖與文字走同一個端點、同一組金鑰，差別只在請求要不要帶 modalities，
+  // 所以標記就掛在模型那一列，不另開一份「圖片模型」清單
+  const flag = document.createElement('label')
+  flag.className = 'chat-model-flag'
+  flag.title = '這顆是生圖模型（呼叫時帶 modalities: image）'
+  const flagBox = document.createElement('input')
+  flagBox.type = 'checkbox'
+  flagBox.checked = options.image === true
+  flagBox.dataset.imageFlag = '1'
+  const flagText = document.createElement('span')
+  flagText.textContent = '生圖'
+  flag.append(flagBox, flagText)
   // placeholder 不可以是 DEFAULT_CHAT_MODEL：新增出來的空列會跟上一列文字一模一樣，
   // 只差在灰色，看起來像重複項而不是「等你填」。
   input.placeholder = '模型 ID'
@@ -1256,20 +1225,30 @@ function appendModelRow(value, options = {}) {
   remove.setAttribute('aria-label', '移除模型')
   remove.textContent = '−'
   remove.addEventListener('click', () => row.remove())
-  row.appendChild(input)
-  row.appendChild(remove)
+  row.append(input, flag, remove)
   modelListEl.appendChild(row)
   if (options.focus) input.focus()
 }
 
 /**
- * @returns {{ models: string[], dropped: number }} dropped 是空白與重複的總數
+ * @returns {{ models: string[], imageModels: string[], dropped: number }} dropped 是空白與重複的總數
  */
 function readModelRows() {
-  if (!modelListEl) return { models: [], dropped: 0 }
-  const raw = [...modelListEl.querySelectorAll('input')].map((i) => i.value.trim())
-  const models = [...new Set(raw.filter(Boolean))]
-  return { models, dropped: raw.length - models.length }
+  if (!modelListEl) return { models: [], imageModels: [], dropped: 0 }
+  const rows = [...modelListEl.querySelectorAll('.chat-model-row')].map((row) => ({
+    id: row.querySelector('input[type="text"]')?.value.trim() || '',
+    image: row.querySelector('input[data-image-flag]')?.checked === true
+  }))
+  const seen = new Set()
+  const models = []
+  const imageModels = []
+  for (const row of rows) {
+    if (!row.id || seen.has(row.id)) continue
+    seen.add(row.id)
+    models.push(row.id)
+    if (row.image) imageModels.push(row.id)
+  }
+  return { models, imageModels, dropped: rows.length - models.length }
 }
 
 // ===== 供應商草稿 =====
@@ -1285,8 +1264,9 @@ function captureProviderFields() {
   provider.name = providerNameInput?.value.trim() || ''
   provider.apiUrl = apiUrlInput?.value.trim() || ''
   provider.apiKey = apiKeyInput?.value.trim() || ''
-  const { models, dropped } = readModelRows()
+  const { models, imageModels, dropped } = readModelRows()
   provider.models = models
+  provider.imageModels = imageModels
   return dropped
 }
 
@@ -1313,7 +1293,8 @@ function renderProviderFields() {
   if (apiUrlInput) apiUrlInput.value = provider?.apiUrl || ''
   if (apiKeyInput) apiKeyInput.value = provider?.apiKey || ''
   modelListEl?.replaceChildren()
-  for (const model of provider?.models || []) appendModelRow(model)
+  const imageSet = new Set(provider?.imageModels || [])
+  for (const model of provider?.models || []) appendModelRow(model, { image: imageSet.has(model) })
   if (providerHintEl) {
     providerHintEl.textContent = has
       ? '以下欄位屬於目前選取的供應商，按下方「儲存設定」才會寫入。'
@@ -1338,7 +1319,8 @@ function handleAddProvider() {
     name: '新供應商',
     apiUrl: DEFAULT_CHAT_API_URL,
     apiKey: '',
-    models: []
+    models: [],
+    imageModels: []
   }
   providerDraft.push(provider)
   draftId = provider.id
@@ -1468,10 +1450,12 @@ function applyScanSelection() {
     scanDialog?.close()
     return
   }
-  const merged = [...new Set([...readModelRows().models, ...chosen])]
+  const before = readModelRows()
+  const imageSet = new Set(before.imageModels)
+  const merged = [...new Set([...before.models, ...chosen])]
   const limited = merged.slice(0, MAX_PROVIDER_MODELS)
   modelListEl?.replaceChildren()
-  for (const model of limited) appendModelRow(model)
+  for (const model of limited) appendModelRow(model, { image: imageSet.has(model) })
   scanDialog?.close()
   const skipped = merged.length - limited.length
   showToast(skipped > 0
@@ -1504,7 +1488,8 @@ export async function loadChatSettings() {
     name: p.name || '',
     apiUrl: p.apiUrl || '',
     apiKey: p.apiKey || '',
-    models: Array.isArray(p.models) ? [...p.models] : []
+    models: Array.isArray(p.models) ? [...p.models] : [],
+    imageModels: Array.isArray(p.imageModels) ? [...p.imageModels] : []
   }))
   draftId = providerDraft.find((p) => p.id === activeId)?.id || providerDraft[0]?.id || ''
   renderProviderSelect()

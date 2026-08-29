@@ -128,7 +128,7 @@ async function main() {
   // Also try getSettings path like UI
   const settingsPath = await cdp.eval(`(async () => {
     try {
-      const keys = ['translator','captionDisplayMode','apiUrl','apiKey','modelId']
+      const keys = ['translator','captionDisplayMode','translateProviderId','translateModelId']
       const out = {}
       for (const k of keys) out[k] = await window.electronAPI.store.get(k, null)
       const status = await window.electronAPI.models.status()
