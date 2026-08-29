@@ -16,7 +16,8 @@ VoiceInk：Windows Electron AI 工作台（**聊天**＋**終端機**＋**AI 訂
 - **聊天與模型 UI**：共用自訂 ARIA listbox，修正 `optgroup` 模型清單點擊例外；清單寬度依內容調整且保持單行，模型 ID／生圖標記／移除按鈕同高對齊。
 - **語音與終端機**：本地 ASR 依模型分流 CPU／Vulkan GPU；終端機支援多工作階段、狀態與背景執行。
 - **AGY 與穩定性**：補上狀態競態、憑證續期、流量轉換與受限 IPC 的回歸保護。
-- **驗證**：`npm run build`、`npm run electron:pack`、`node scripts/e2e-visual-cdp.js`（54/54）通過；本次 release 會再產生 NSIS 安裝檔並上傳。
+- **驗證**：`npm run build`、`npm run electron:pack`、`node scripts/e2e-visual-cdp.js`（54/54）通過；`npm run electron:build` 已產生並上傳 NSIS 安裝檔 `VoiceInk Setup 1.9.0.exe`（SHA-256：`1D754B85C19BBD2C8C8CEB97E39D8D197ED930099BA86889F1B7E010363AA08E`）。
+- **發行**：提交 `c1e6040`、tag `v1.9.0` 已推送；GitHub Release：<https://github.com/RX5950XT/VoiceInk/releases/tag/v1.9.0>。
 
 ## 架構
 

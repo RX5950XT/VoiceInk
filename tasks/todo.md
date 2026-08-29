@@ -2,9 +2,14 @@
 
 ## v1.9.0 發行（2026-08-30）
 - [x] 確認 `v1.9.0` 未與本地／遠端 tags 重複。
-- [ ] 提交版本與文件更新並建立 `v1.9.0` tag。
-- [ ] 產生並驗證 NSIS 安裝檔。
-- [ ] 推送分支／tag 並建立 GitHub Release。
+- [x] 提交版本與文件更新並建立 `v1.9.0` tag。
+- [x] 產生並驗證 NSIS 安裝檔。
+- [x] 推送分支／tag 並建立 GitHub Release。
+
+### Review
+- 提交：`c1e6040`（`feat: 發行 v1.9.0 UI 與模型工作台更新`）。
+- 安裝檔：`dist/VoiceInk Setup 1.9.0.exe`，SHA-256 `1D754B85C19BBD2C8C8CEB97E39D8D197ED930099BA86889F1B7E010363AA08E`。
+- Release：<https://github.com/RX5950XT/VoiceInk/releases/tag/v1.9.0>。
 
 ## 本輪完成修復（2026-08-29）
 - [x] 修正 AGY Base URL 的舊狀態覆寫，驗證 `e2e-agy-cdp.js`。
