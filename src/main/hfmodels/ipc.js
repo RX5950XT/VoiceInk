@@ -11,6 +11,8 @@
  *   - **不外送金鑰**：`runtimeStatus` 只回 { running, port }；router 的 api key 留在 main
  */
 
+const { makeInvoke } = require('../ipc-invoke')
+
 /**
  * @param {any} value
  * @returns {string}
@@ -20,23 +22,16 @@ function str(value) {
 }
 
 function registerHfModelsIpc({ ipcMain, service, isMainSender }) {
-  const invoke = async (event, action) => {
-    if (!isMainSender(event)) {
-      return { ok: false, error: { code: 'FORBIDDEN', message: '僅主視窗可操作本機模型' } }
-    }
-    try {
-      return { ok: true, data: await action() }
-    } catch (error) {
-      return {
-        ok: false,
-        error: {
-          code: error?.code || 'HFMODELS_ERROR',
-          // 這幾支的錯誤訊息都是我們自己寫死的字串（上游 body 早在 hub／runtime 就被擋掉了）
-          message: error?.message || '本機模型操作失敗'
-        }
-      }
-    }
-  }
+  const invoke = makeInvoke({
+    isMainSender,
+    forbidden: '僅主視窗可操作本機模型',
+    // 這幾支的錯誤訊息都是我們自己寫死的字串（上游 body 早在 hub／runtime 就被擋掉了），
+    // 所以這一組吃 `message` 而不是共用外殼預設的 `userMessage`
+    publicError: (error) => ({
+      code: error?.code || 'HFMODELS_ERROR',
+      message: error?.message || '本機模型操作失敗'
+    })
+  })
 
   // ---- 探索 ----
   ipcMain.handle('hfmodels:search', (event, query, sort) => (

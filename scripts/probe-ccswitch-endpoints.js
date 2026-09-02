@@ -3,12 +3,12 @@
 /**
  * 探測 `presets.js` 裡每一家的端點到底在不在。**加新的一家之前先跑這支。**
  *
- * 做法：依 `validationFormat` 不帶真金鑰 POST 該格式的端點。
+ * 做法：依預設 `apiFormat` 不帶真金鑰 POST 該格式的端點。
  * - 400／401／403／422／429 ＝端點真的在，只是請求或憑證不合 → 合格
  * - 404 ＝網址或格式路徑是錯的
  * - 逾時／DNS 失敗 ＝ 這裡看不出來，可能是地區封鎖，要人自己判斷
  *
- * `custom` 與官方訂閱跳過；其餘六家依各自預設驗證格式驗，避免拿 Anthropic
+ * `custom` 與官方訂閱跳過；其餘六家依各自預設上游格式驗，避免拿 Anthropic
  * 路徑去測 OpenAI 端點。
  *
  *     node scripts/probe-ccswitch-endpoints.js
@@ -39,7 +39,7 @@ function bodyFor(format) {
  * @returns {Promise<{ status: number, note: string, url: string }>}
  */
 async function probe(preset) {
-  const format = preset.validationFormat || preset.apiFormat
+  const format = preset.apiFormat
   const baseUrl = String(preset.wireBaseUrl || preset.baseUrl).replace(/\/+$/, '')
   const headers = {
     'content-type': 'application/json',
@@ -81,7 +81,7 @@ async function probe(preset) {
 
 async function main() {
   const targets = presets.PRESETS.filter((preset) => preset.id !== 'custom' && preset.auth !== 'none')
-  console.log(`探測 ${targets.length} 個內建端點（依預設驗證格式；404 = 網址或格式錯）\n`)
+  console.log(`探測 ${targets.length} 個內建端點（依預設上游格式；404 = 網址或格式錯）\n`)
 
   let bad = 0
   for (const preset of targets) {

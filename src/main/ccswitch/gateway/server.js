@@ -362,13 +362,17 @@ async function handle(req, res) {
 
   const presetId = match[1]
   const model = typeof body.model === 'string' && body.model ? body.model : 'unknown'
+  // 回給 Claude Code 的仍是它送來的那個名字（含 `[1m]`），送上游的一定要剝掉
+  const wireModel = convert.stripContextMarker(model)
   const wantsStream = body.stream !== false
   const collector = convert.createCollector(model)
   const state = convert.newConsumeState()
   const consume = route.wire === 'responses' ? convert.consumeResponses : convert.consumeChat
-  const upstreamBody = route.wire === 'responses'
-    ? convert.toResponsesRequest(body, model)
-    : convert.toChatRequest(body, model)
+  const converted = route.wire === 'responses'
+    ? convert.toResponsesRequest(body, wireModel)
+    : convert.toChatRequest(body, wireModel)
+  // Codex 的 Responses 端點跟公版不一樣（store / max_output_tokens / temperature），見 convert.js
+  const upstreamBody = route.auth === 'codex' ? convert.forCodexBackend(converted) : converted
 
   let response
   try {

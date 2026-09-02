@@ -2,7 +2,7 @@
  * Claude Code 工作台頁（renderer）。
  *
  * 三個子分頁：供應商切換／MCP 伺服器／CLI 版本。端點、檔案路徑與 npm 套件名都在
- * main 的固定表；上游／驗證格式由使用者在供應商彈窗選擇，這裡只送受限的格式值。
+ * main 的固定表；上游格式由使用者在供應商彈窗選擇，這裡只送受限的格式值。
  *
  * DOM 全程 `createElement` ＋ `textContent`，零 innerHTML（跟 `markdown.js` 同一條規矩）。
  * 刪除是就地二次確認（跟聊天側欄一樣），不用 `window.confirm`——原生彈窗會擋住整個 App。
@@ -272,7 +272,9 @@ function tileMeta(item, preset) {
     : item.hasKey ? `金鑰 ····${item.keyTail}` : '尚未填金鑰'
   const warn = (preset?.auth === 'key' && !item.hasKey) ||
     (item.route === 'gateway' && !gateway?.running)
-  return { text: `${route} · ${format} · ${auth}`, warn }
+  // 宣告了 1M 就講出來——不然開了之後在卡片上完全看不出來，只能一筆一筆點進去看
+  const oneM = item.context1m ? ' · 1M' : ''
+  return { text: `${route} · ${format} · ${auth}${oneM}`, warn }
 }
 
 /**
@@ -330,7 +332,7 @@ function providerTile(item) {
     const test = /** @type {HTMLButtonElement} */ (el('button', 'btn btn-secondary btn-sm cc-tile-test', '測試'))
     test.type = 'button'
     test.setAttribute('aria-label', `測試 ${item.name} 上游`)
-    test.title = `用${API_FORMAT_LABELS[item.validationFormat]?.label || '驗證格式'}測試上游`
+    test.title = `用${API_FORMAT_LABELS[item.apiFormat]?.label || '上游格式'}測試上游`
     test.addEventListener('click', () => void testProvider(item.id, test))
     actions.append(test)
   }
@@ -445,12 +447,11 @@ function openProviderDialog(id = '') {
   // 每次開都歸位：不重設的話上一次編輯留下的協議會被新的一筆沿用。
   // 一定要先把選項建好——空的 select 設 value 是沒有作用的。
   ensureApiFormatOptions().value = item?.apiFormat || dialogPreset()?.apiFormat || 'anthropic'
-  ensureFormatOptions('ccValidationFormatSelect').value =
-    item?.validationFormat || dialogPreset()?.validationFormat || item?.apiFormat || 'anthropic'
   // 模型四格歸位成下拉模式；值先進 input，再由 rebuild 建選項
   modelManual = false
   applyModelMode()
   for (const cell of MODEL_FIELDS) field(cell.input).value = item?.[cell.key] || ''
+  context1mCheck().checked = item?.context1m === true
   rebuildModelSelects(null)
   // 上一次沒關乾淨的登入輪詢會對著已經換掉的欄位跑
   stopLoginPoll()
@@ -469,6 +470,11 @@ function openProviderDialog(id = '') {
   })
   // 編輯時順手掃一次模型清單；失敗不吵，手動按鈕會講原因
   void autoScanModels()
+}
+
+/** 「宣告支援 1M 上下文」那顆勾（模型四格下面） */
+function context1mCheck() {
+  return /** @type {HTMLInputElement} */ (document.getElementById('ccContext1mCheck'))
 }
 
 /** 這次彈窗的對象走哪家 preset（新增＝自訂）。preset 一律由 main 的表決定 */
@@ -581,8 +587,8 @@ function field(id) {
  * @param {string} id
  * @returns {HTMLSelectElement}
  */
-function ensureFormatOptions(id) {
-  const select = /** @type {HTMLSelectElement} */ (document.getElementById(id))
+function ensureApiFormatOptions() {
+  const select = /** @type {HTMLSelectElement} */ (document.getElementById('ccApiFormatSelect'))
   if (select.options.length) return select
   for (const key of catalog?.apiFormats || []) {
     const option = document.createElement('option')
@@ -591,10 +597,6 @@ function ensureFormatOptions(id) {
     select.append(option)
   }
   return select
-}
-
-function ensureApiFormatOptions() {
-  return ensureFormatOptions('ccApiFormatSelect')
 }
 
 /** 依這次編輯的對象決定顯示哪些欄位、以及各欄的預設值提示 */
@@ -608,18 +610,14 @@ function syncProviderDialogFields() {
   const baseUrlInput = field('ccBaseUrlInput')
   const authSelect = /** @type {HTMLSelectElement} */ (document.getElementById('ccAuthFieldSelect'))
   const formatSelect = ensureApiFormatOptions()
-  const validationSelect = ensureFormatOptions('ccValidationFormatSelect')
 
-  // 官方訂閱沒有要測的上游；其餘內建與 custom 都能自己選上游／驗證格式。
+  // 官方訂閱沒有要測的上游；其餘內建與 custom 都能自己選上游格式。
   document.getElementById('ccApiFormatGroup')?.classList.toggle('hidden', isOfficial)
   const apiFormat = formatSelect.value || preset?.apiFormat || 'anthropic'
-  const validationFormat = validationSelect.value || preset?.validationFormat || apiFormat
   const isGateway = API_FORMAT_LABELS[apiFormat]?.route === 'gateway'
   document.getElementById('ccApiFormatHint').textContent = isGateway
     ? `${API_FORMAT_LABELS[apiFormat]?.label || apiFormat} → 需要手動開啟本機轉換閘道。`
     : `${API_FORMAT_LABELS[apiFormat]?.label || apiFormat} → 不經閘道，Claude Code 直連。`
-  document.getElementById('ccValidationFormatHint').textContent =
-    `測試會用 ${API_FORMAT_LABELS[validationFormat]?.label || validationFormat} 送最小請求。`
 
   document.getElementById('ccProviderDialogDesc').textContent = preset?.hint || ''
 
@@ -841,15 +839,14 @@ async function persistProvider() {
   const authSelect = /** @type {HTMLSelectElement} */ (document.getElementById('ccAuthFieldSelect'))
   const accountSelect = /** @type {HTMLSelectElement} */ (document.getElementById('ccAccountSelect'))
   const formatSelect = /** @type {HTMLSelectElement} */ (document.getElementById('ccApiFormatSelect'))
-  const validationSelect = /** @type {HTMLSelectElement} */ (document.getElementById('ccValidationFormatSelect'))
-  /** @type {Record<string, string>} */
+  /** @type {Record<string, string | boolean>} */
   const payload = {
     name: field('ccNameInput').value,
     baseUrl: field('ccBaseUrlInput').value,
     apiFormat: formatSelect.value,
-    validationFormat: validationSelect.value,
     authField: authSelect.value,
-    oauthAccountId: accountSelect.value
+    oauthAccountId: accountSelect.value,
+    context1m: context1mCheck().checked
   }
   for (const cell of MODEL_FIELDS) payload[cell.key] = modelValue(cell)
   const apiKey = field('ccKeyInput').value
@@ -857,7 +854,7 @@ async function persistProvider() {
   // 自訂沒有預設端點，空著存下去只會在「切換」時才報錯，離填錯的地方太遠
   const editing = editingProviderId ? providers.find((entry) => entry.id === editingProviderId) : null
   const presetId = editing ? editing.presetId : 'custom'
-  if (presetId === 'custom' && !payload.baseUrl.trim()) {
+  if (presetId === 'custom' && !String(payload.baseUrl).trim()) {
     showStatus('自訂供應商要先填 Base URL')
     field('ccBaseUrlInput').focus()
     return ''

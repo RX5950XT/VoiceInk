@@ -311,9 +311,3 @@ export async function initDictation() {
   await refreshDictationRuntime()
 }
 
-/**
- * @returns {{ enabled: boolean, recording: boolean }}
- */
-export function dictationRuntimeState() {
-  return { enabled, recording }
-}

@@ -9,23 +9,15 @@
  * 錯誤訊息走 `userMessage` 白名單：只有我們自己建構、內容固定的錯誤才准原樣送出去，
  * 其餘一律變成通用訊息，避免把路徑或系統錯誤字串洩漏到畫面上。
  */
+const { makeInvoke } = require('../ipc-invoke')
+
 function registerTerminalIpc({ ipcMain, service, isMainSender, dialog, getWindow }) {
-  const invoke = async (event, action) => {
-    if (!isMainSender(event)) {
-      return { ok: false, error: { code: 'FORBIDDEN', message: '僅主視窗可操作終端機' } }
-    }
-    try {
-      return { ok: true, data: await action() }
-    } catch (error) {
-      return {
-        ok: false,
-        error: {
-          code: error?.code || 'TERMINAL_ERROR',
-          message: error?.userMessage || '終端機操作失敗'
-        }
-      }
-    }
-  }
+  const invoke = makeInvoke({
+    isMainSender,
+    forbidden: '僅主視窗可操作終端機',
+    code: 'TERMINAL_ERROR',
+    message: '終端機操作失敗'
+  })
 
   ipcMain.handle('terminal:catalog', (event) => invoke(event, () => service.catalog()))
   ipcMain.handle('terminal:list', (event) => invoke(event, () => service.listSessions()))

@@ -6,7 +6,7 @@
 
 ## 1. 這是什麼
 
-**VoiceInk**（v1.9.0）：Windows 桌面 AI 工作台，Electron 43.4.1 ＋ Vite ＋ Vanilla JS（無框架）。
+**VoiceInk**（v1.10.0）：Windows 桌面 AI 工作台，Electron 43.4.1 ＋ Vite ＋ Vanilla JS（無框架）。
 九個分頁：聊天（終端機併在同一頁）｜CC代理｜額度（＋用量統計）｜AGY 反代｜語音轉文字｜翻譯與 TTS｜系統監控（含風扇控制）｜HF模型｜設定。
 
 模組職責、資料流與 store key 一覽在 [CONTEXT.md](./CONTEXT.md) 的「架構」一節；

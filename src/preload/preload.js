@@ -201,16 +201,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** 預設供應商清單 ＋ MCP 範本（不含任何憑證） */
     catalog: () => ipcRenderer.invoke('ccswitch:catalog'),
     listProviders: () => ipcRenderer.invoke('ccswitch:listProviders'),
-    /** @param {{ presetId: string, name?: string, apiKey?: string, model?: string, apiFormat?: string, validationFormat?: string }} req */
+    /** @param {{ presetId: string, name?: string, apiKey?: string, model?: string, apiFormat?: string }} req */
     createProvider: (req) => ipcRenderer.invoke('ccswitch:createProvider', req || {}),
-    /** @param {string} id @param {{ name?: string, apiKey?: string, model?: string, apiFormat?: string, validationFormat?: string }} patch */
+    /** @param {string} id @param {{ name?: string, apiKey?: string, model?: string, apiFormat?: string }} patch */
     updateProvider: (id, patch) => ipcRenderer.invoke('ccswitch:updateProvider', id, patch || {}),
     deleteProvider: (id) => ipcRenderer.invoke('ccswitch:deleteProvider', id),
     /** @param {string[]} ids 拖曳後的完整順序 */
     reorderProviders: (ids) => ipcRenderer.invoke('ccswitch:reorderProviders', ids),
     /** 切換：把這一筆寫進 ~/.claude/settings.json 的 env（閘道需先手動開啟） */
     activateProvider: (id) => ipcRenderer.invoke('ccswitch:activateProvider', id),
-    /** @param {string} id 用儲存的驗證格式測試上游，只回傳狀態摘要 */
+    /** @param {string} id 用儲存的上游格式測試上游，只回傳狀態摘要 */
     testProvider: (id) => ipcRenderer.invoke('ccswitch:testProvider', id),
     /** @param {string} id 從 API 掃這一筆的模型清單；回 { ok, models } / { ok: false, code, error } */
     scanModels: (id) => ipcRenderer.invoke('ccswitch:scanModels', id),

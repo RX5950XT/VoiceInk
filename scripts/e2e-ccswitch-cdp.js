@@ -415,6 +415,13 @@ async function main() {
       await cdp.eval("document.getElementById('ccKeyInput').value === ''"),
       '編輯時金鑰欄留空（不回填完整金鑰）'
     )
+    // 「宣告支援 1M 上下文」：勾了要真的存進去（tile 第二行也會多一段 `· 1M`）。
+    // 只斷言 checkbox 在不在抓不到「被 CSS 收掉了」，所以量得到高度才算數
+    assert(
+      await cdp.eval("document.getElementById('ccContext1mCheck').offsetHeight > 0"),
+      '1M 勾選框看得見'
+    )
+    await cdp.eval("document.getElementById('ccContext1mCheck').checked = true")
     await cdp.eval("document.getElementById('ccNameInput').value = 'CDP 改過的名稱'")
     await cdp.eval("document.getElementById('ccProviderSaveBtn').click()")
     await waitFor(
@@ -425,6 +432,18 @@ async function main() {
       '改名生效'
     )
     pass('改名生效')
+
+    const oneM = await cdp.eval('window.electronAPI.ccswitch.listProviders()')
+    assert(
+      oneM.data.providers.find((item) => item.id === createdId)?.context1m === true,
+      '1M 宣告有存進去'
+    )
+    assert(
+      await cdp.eval(
+        `document.querySelector('#ccProviderList .cc-tile[data-id="${createdId}"]').textContent.includes('1M')`
+      ),
+      'tile 上看得出宣告了 1M'
+    )
 
     // 金鑰留空儲存不可以把原本的金鑰清掉
     const afterRename = await cdp.eval('window.electronAPI.ccswitch.listProviders()')
@@ -474,15 +493,12 @@ async function main() {
     )
     const customForm = await cdp.eval(`(() => {
       const fmt = document.getElementById('ccApiFormatSelect')
-      const validation = document.getElementById('ccValidationFormatSelect')
       return {
         formatShown: !document.getElementById('ccApiFormatGroup').classList.contains('hidden'),
         baseUrlShown: !document.getElementById('ccBaseUrlGroup').classList.contains('hidden'),
         keyShown: !document.getElementById('ccKeyGroup').classList.contains('hidden'),
         options: [...fmt.options].map((o) => o.value),
         value: fmt.value,
-        validationOptions: [...validation.options].map((o) => o.value),
-        validationValue: validation.value,
         hint: document.getElementById('ccApiFormatHint').textContent,
         placeholder: document.getElementById('ccBaseUrlInput').placeholder
       }
@@ -493,11 +509,6 @@ async function main() {
     assert(
       customForm.options.join(',') === 'anthropic,openai_chat,openai_responses',
       '三種協議都在', JSON.stringify(customForm.options)
-    )
-    assert(
-      customForm.validationOptions.join(',') === 'anthropic,openai_chat,openai_responses' &&
-        customForm.validationValue === 'anthropic',
-      '驗證格式三種選項都在且預設 Anthropic', JSON.stringify(customForm)
     )
     assert(customForm.value === 'anthropic', '預設是 Anthropic', customForm.value)
     assert(customForm.hint.includes('不經閘道'), 'Anthropic 說明講「直連」', customForm.hint)
@@ -589,18 +600,15 @@ async function main() {
     )
     const codexFormats = await cdp.eval(`(() => {
       const api = document.getElementById('ccApiFormatSelect')
-      const validation = document.getElementById('ccValidationFormatSelect')
       return {
         shown: !document.getElementById('ccApiFormatGroup').classList.contains('hidden'),
         api: api.value,
-        validation: validation.value,
         options: [...api.options].map((option) => option.value)
       }
     })()`)
     assert(codexFormats.shown && codexFormats.api === 'openai_responses' &&
-      codexFormats.validation === 'openai_responses' &&
       codexFormats.options.join(',') === 'anthropic,openai_chat,openai_responses',
-    'Codex 可手動選上游與驗證格式且預設 Responses', JSON.stringify(codexFormats))
+    'Codex 可手動選上游格式且預設 Responses', JSON.stringify(codexFormats))
     const oauthUi = await cdp.eval(`(() => {
       const select = document.getElementById('ccAccountSelect')
       return {
@@ -661,8 +669,7 @@ async function main() {
       '直連供應商不顯示登入區'
     )
     assert(
-      await cdp.eval(`document.getElementById('ccApiFormatSelect').value === 'anthropic' &&
-        document.getElementById('ccValidationFormatSelect').value === 'anthropic'`),
+      await cdp.eval(`document.getElementById('ccApiFormatSelect').value === 'anthropic'`),
       'OpenRouter 可手動選格式且預設 Anthropic'
     )
     // 內建預設一律不顯示端點欄（連直連這幾家也不顯示）：表上的位址是實測查證過的事實，

@@ -7,23 +7,15 @@
  * 這裡讀的是使用者家目錄裡的 session 記錄，**回給 renderer 的只有彙總數字**——
  * 路徑、對話內容、專案名稱一律不出 main。
  */
+const { makeInvoke } = require('../ipc-invoke')
+
 function registerCodeUsageIpc({ ipcMain, service, isMainSender }) {
-  const invoke = async (event, action) => {
-    if (!isMainSender(event)) {
-      return { ok: false, error: { code: 'FORBIDDEN', message: '僅主視窗可查詢用量' } }
-    }
-    try {
-      return { ok: true, data: await action() }
-    } catch (error) {
-      return {
-        ok: false,
-        error: {
-          code: error?.code || 'CODE_USAGE_ERROR',
-          message: error?.userMessage || '用量統計失敗'
-        }
-      }
-    }
-  }
+  const invoke = makeInvoke({
+    isMainSender,
+    forbidden: '僅主視窗可查詢用量',
+    code: 'CODE_USAGE_ERROR',
+    message: '用量統計失敗'
+  })
 
   ipcMain.handle('codeusage:stats', (event, query) => (
     invoke(event, () => service.stats(query || {}))

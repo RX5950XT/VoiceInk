@@ -1731,17 +1731,10 @@
             <label for="ccNameInput">名稱</label>
             <input type="text" id="ccNameInput" class="input" maxlength="60" placeholder="例如：工作用 OpenRouter" />
           </div>
-          <div class="setting-group hidden cc-format-grid" id="ccApiFormatGroup">
-            <div class="cc-format-cell">
-              <label for="ccApiFormatSelect">上游格式</label>
-              <select id="ccApiFormatSelect" class="select"></select>
-              <p id="ccApiFormatHint" class="setting-hint"></p>
-            </div>
-            <div class="cc-format-cell">
-              <label for="ccValidationFormatSelect">驗證格式</label>
-              <select id="ccValidationFormatSelect" class="select"></select>
-              <p id="ccValidationFormatHint" class="setting-hint">「測試」會用這個格式送一個最小請求。</p>
-            </div>
+          <div class="setting-group hidden" id="ccApiFormatGroup">
+            <label for="ccApiFormatSelect">上游格式</label>
+            <select id="ccApiFormatSelect" class="select"></select>
+            <p id="ccApiFormatHint" class="setting-hint"></p>
           </div>
           <div class="setting-group" id="ccBaseUrlGroup">
             <label for="ccBaseUrlInput">Base URL</label>
@@ -1804,6 +1797,16 @@
               </label>
             </div>
             <p id="ccScanHint" class="setting-hint">留空的那一格就用這家的預設值（灰字就是預設）。按「從 API 載入模型」把這家的模型清單抓進下拉。</p>
+            <label class="setting-check">
+              <input id="ccContext1mCheck" type="checkbox" />
+              <span>宣告支援 1M 上下文</span>
+            </label>
+            <p class="setting-hint">
+              在四個等級的模型名尾巴加上 <code>[1m]</code>，Claude Code 看到就把上下文窗當成 1M
+              （跟 CC Switch 同一套約定；後綴由 Claude Code 自己剝掉，不會送到上游）。
+              <strong>只有上游真的支援 1M 才可以開</strong>：這是「宣告」不是「升級」，
+              對面其實只有 200K／372K 的話，講到超過就會被上游擋下來。
+            </p>
           </div>
         </div>
         <div class="dialog-actions">

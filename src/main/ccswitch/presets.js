@@ -37,7 +37,6 @@
  * @property {'key' | 'cli' | 'none'} auth
  * @property {'ANTHROPIC_AUTH_TOKEN' | 'ANTHROPIC_API_KEY' | ''} keyField
  * @property {'anthropic' | 'openai_responses' | 'openai_chat'} apiFormat 預設上游格式
- * @property {'anthropic' | 'openai_responses' | 'openai_chat'} validationFormat 預設驗證格式
  * @property {string} baseUrl 上游位址（direct 直接寫進 env；gateway 給閘道用）
  * @property {string} wireBaseUrl 上游 API 根位址（接上格式路徑）
  * @property {Record<string, string>} env 這家要額外寫進去的 env（模型名、上下文窗等）
@@ -55,7 +54,6 @@ const PRESETS = [
     auth: 'none',
     keyField: '',
     apiFormat: 'anthropic',
-    validationFormat: 'anthropic',
     // 官方端點是 Claude Code 的內建預設，我們什麼都不寫才是對的——寫一個
     // `https://api.anthropic.com` 進去反而會蓋掉企業版／自架代理的既有設定
     baseUrl: '',
@@ -69,7 +67,6 @@ const PRESETS = [
     auth: 'cli',
     keyField: '',
     apiFormat: 'openai_responses',
-    validationFormat: 'openai_chat',
     // CLI 的 OAuth token 打 api.x.ai 一律 403 spending-limit（那條是給 API 金鑰用的、
     // 看的是儲值餘額）；訂閱制的 Grok CLI 走 cli-chat-proxy.grok.com（實測 200）
     baseUrl: 'https://cli-chat-proxy.grok.com/v1',
@@ -91,7 +88,6 @@ const PRESETS = [
     auth: 'cli',
     keyField: '',
     apiFormat: 'openai_responses',
-    validationFormat: 'openai_responses',
     baseUrl: 'https://chatgpt.com/backend-api/codex',
     wireBaseUrl: 'https://chatgpt.com/backend-api/codex',
     // 沒帶 client_version 會回 400 missing field；帶舊版（0.55.0）會拿到空清單
@@ -116,7 +112,6 @@ const PRESETS = [
     auth: 'key',
     keyField: 'ANTHROPIC_AUTH_TOKEN',
     apiFormat: 'openai_responses',
-    validationFormat: 'openai_responses',
     baseUrl: 'https://ollama.com/v1',
     wireBaseUrl: 'https://ollama.com/v1',
     modelsUrl: 'https://ollama.com/v1/models',
@@ -139,7 +134,6 @@ const PRESETS = [
     // Go 閘道的 /v1/messages 只認 x-api-key，Bearer 會被靜默忽略 → 必須用 ANTHROPIC_API_KEY
     keyField: 'ANTHROPIC_API_KEY',
     apiFormat: 'openai_responses',
-    validationFormat: 'openai_chat',
     baseUrl: 'https://opencode.ai/zen/go',
     wireBaseUrl: 'https://opencode.ai/zen/go/v1',
     modelsUrl: 'https://opencode.ai/zen/go/v1/models',
@@ -159,7 +153,6 @@ const PRESETS = [
     auth: 'key',
     keyField: 'ANTHROPIC_AUTH_TOKEN',
     apiFormat: 'openai_chat',
-    validationFormat: 'anthropic',
     baseUrl: 'https://api.commandcode.ai/provider',
     wireBaseUrl: 'https://api.commandcode.ai/provider/v1',
     // 模型清單是 OpenAI 形狀（`data[].id`），跟 messages 端點不同層
@@ -180,7 +173,6 @@ const PRESETS = [
     auth: 'key',
     keyField: 'ANTHROPIC_AUTH_TOKEN',
     apiFormat: 'anthropic',
-    validationFormat: 'anthropic',
     baseUrl: 'https://openrouter.ai/api',
     wireBaseUrl: 'https://openrouter.ai/api/v1',
     // preset 的 baseUrl 是 Anthropic 形狀（/api），模型清單在 OpenAI 形狀的 /api/v1 那邊
@@ -201,7 +193,6 @@ const PRESETS = [
     auth: 'key',
     keyField: 'ANTHROPIC_AUTH_TOKEN',
     apiFormat: 'anthropic',
-    validationFormat: 'anthropic',
     baseUrl: '',
     wireBaseUrl: '',
     env: {},
@@ -221,7 +212,7 @@ function getPreset(id) {
 
 /**
  * 給 renderer 填清單用（不含任何憑證）。
- * @returns {Array<{ id: string, name: string, route: string, auth: string, keyField: string, apiFormat: string, validationFormat: string, baseUrl: string, wireBaseUrl: string, modelsUrl: string, modelsAuth: string, hint: string, models: string[] }>}
+ * @returns {Array<{ id: string, name: string, route: string, auth: string, keyField: string, apiFormat: string, baseUrl: string, wireBaseUrl: string, modelsUrl: string, modelsAuth: string, hint: string, models: string[] }>}
  */
 function catalog() {
   return PRESETS.map((preset) => ({
@@ -231,7 +222,6 @@ function catalog() {
     auth: preset.auth,
     keyField: preset.keyField,
     apiFormat: preset.apiFormat,
-    validationFormat: preset.validationFormat,
     baseUrl: preset.baseUrl,
     wireBaseUrl: preset.wireBaseUrl || '',
     modelsUrl: preset.modelsUrl || '',

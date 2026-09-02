@@ -115,7 +115,7 @@ function catalog() {
   return {
     presets: presets.catalog(),
     authFields: providers.AUTH_FIELDS,
-    // 非官方供應商都能選上游／驗證格式；Anthropic 直連，其餘經本機閘道轉換
+    // 非官方供應商都能選上游格式；Anthropic 直連，其餘經本機閘道轉換
     apiFormats: providers.API_FORMATS,
     // 哪幾家可以在本 App 直接登入，以及各自是哪種流程（UI 的文案不同）
     oauthFlows: Object.values(oauth.FLOWS).map((flow) => ({
@@ -156,7 +156,7 @@ async function activateProvider(id) {
 }
 
 /**
- * 用這一筆目前儲存的驗證格式送最小請求；不經本機閘道、不回傳上游 body。
+ * 用這一筆目前儲存的上游格式送最小請求；不經本機閘道、不回傳上游 body。
  * @param {string} id
  */
 async function testProvider(id) {

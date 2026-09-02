@@ -10,23 +10,15 @@
  * 從 store 讀（`dictationLlm`），跟聊天與翻譯同一個規矩。
  */
 
+const { makeInvoke } = require('../ipc-invoke')
+
 function registerDictationIpc({ ipcMain, service, isMainSender }) {
-  const invoke = async (event, action) => {
-    if (!isMainSender(event)) {
-      return { ok: false, error: { code: 'FORBIDDEN', message: '僅主視窗可操作語音輸入' } }
-    }
-    try {
-      return { ok: true, data: await action() }
-    } catch (error) {
-      return {
-        ok: false,
-        error: {
-          code: error?.code || 'DICTATION_ERROR',
-          message: error?.userMessage || '語音輸入操作失敗'
-        }
-      }
-    }
-  }
+  const invoke = makeInvoke({
+    isMainSender,
+    forbidden: '僅主視窗可操作語音輸入',
+    code: 'DICTATION_ERROR',
+    message: '語音輸入操作失敗'
+  })
 
   ipcMain.handle('dictation:status', (event) => invoke(event, () => service.status()))
   ipcMain.handle('dictation:refresh', (event) => invoke(event, () => service.refresh()))

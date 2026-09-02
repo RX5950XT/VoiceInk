@@ -6631,20 +6631,6 @@ h6.md-h { font-size: 14px; }
   flex: 1 1 auto;
 }
 
-.cc-format-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-}
-
-.cc-format-cell {
-  min-width: 0;
-}
-
-.cc-format-cell > label {
-  display: block;
-  margin-bottom: 6px;
-}
 
 /* 「＋」那一格：唯一的新增入口 */
 .cc-tile.is-add {
@@ -6679,9 +6665,6 @@ h6.md-h { font-size: 14px; }
 }
 
 @media (max-width: 640px) {
-  .cc-format-grid {
-    grid-template-columns: 1fr;
-  }
 
   .cc-row {
     flex-wrap: wrap;

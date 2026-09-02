@@ -18,7 +18,7 @@ CC代理（Claude Code 工作台）｜額度｜AGY反代｜語音轉文字｜翻
 | 聊天 | 多組供應商（`chatProviders`＋`chatProviderId`＋`chatModelId`），各帶 url／key／模型清單，可掃 `/models`；**雲端翻譯共用同一份清單**（`translateProviderId`＋`translateModelId`）。系統提示 preset、thinking 開關、圖片附件、生圖模型（`imageModels`）、訊息複製與重新生成、側欄搜尋與拖曳排序。會話存 `<userData>/chats.json` |
 | 終端機 | **與聊天同一頁**（側欄上半對話／下半終端機，主區 `#chatMain` ⇄ `#termMain`）。`@lydell/node-pty`（ConPTY）＋ xterm.js；側欄多開、狀態「運行中／已完成／已結束」＋未讀點。shell 與啟動指令是 main 固定表（renderer 只送 key），cwd 走系統對話框。metadata 存 `<userData>/terminals.json`（**不存畫面內容**） |
 | HF模型 | `src/main/hfmodels/`：在 Hugging Face 搜 GGUF → 下載 → 一鍵載入 → **直接出現在聊天的模型選單**。探索頁是左清單／右模型卡兩欄（README＋每個量化的大小與「這台跑不跑得動」）。推論走 `llama-server` 的 **router 模式**（`--models-dir`＋`--models-preset`，一顆程序管全部模型），參數由 `plan.js`（估算）＋官方 `llama-fit-params`（實測）決定，每一項都可覆寫、可原始參數直通、可 `llama-bench` 實測調校。模型放 `hfModelsDir`（可自選，預設 `<userData>/hf-models`），一顆一個子資料夾（`mmproj-*.gguf` 同夾＝多模態） |
-| Claude Code 工作台 | `src/main/ccswitch/`：供應商（CC Switch 式 tile，一鍵改 `~/.claude/settings.json` 的 `env`；「Claude 官方訂閱」排第一、內建各家自動播種、「＋」新增自訂；**端點只有自訂能填，六家內建可選上游／驗證格式**）／MCP（`~/.claude.json`）／CLI 版本。走閘道那幾家經 `ccswitch/gateway/` 轉協議；Codex／Grok 可 App 內 OAuth 或沿用 CLI 憑證 |
+| Claude Code 工作台 | `src/main/ccswitch/`：供應商（CC Switch 式 tile，一鍵改 `~/.claude/settings.json` 的 `env`；「Claude 官方訂閱」排第一、內建各家自動播種、「＋」新增自訂；**端點只有自訂能填，六家內建可選上游格式**）／MCP（`~/.claude.json`）／CLI 版本。走閘道那幾家經 `ccswitch/gateway/` 轉協議；Codex／Grok 可 App 內 OAuth 或沿用 CLI 憑證 |
 | 系統監控 | `src/main/sysmon/`：常駐 `probe.ps1` 取樣器＋`nvidia-smi -l`；四個子分頁（總覽／處理程序／壓力測試／風扇控制）。磁碟**按實體碟分開**顯示，S.M.A.R.T. 走免提權 NVMe IOCTL（健康度／通電時數／寫入總量／溫度，CrystalDiskInfo 那半邊）；壓力測試 CPU／GPU 各一排四格（負載／功耗／溫度／轉速）＋磁碟測速（`bench.js`，測試檔跑完刪掉）。感測器走提權 sidecar，預設進頁自動啟用；**風扇控制**（`fans.js`＋`sensors-task.js`）走同一顆 sidecar 的雙向管道，通用機殼示意圖＋可拖點的轉速曲線，開機自啟動時直接接管（排程工作免 UAC） |
 | 額度 | 七家（Claude Code／Codex／Antigravity／OpenCode Go／Grok／Ollama Cloud／Command Code），**全部走官方端點**，只在手動同步時查詢，快取 `<userData>/usage.json`；Main-only 固定來源 |
 | 用量統計 | `src/main/codeusage/`：從五家 CLI 的本機 session 記錄算 token／花費（跟「訂閱額度」是兩件事），增量掃描，桶子存 `<userData>/code-usage.json` |
@@ -57,6 +57,11 @@ npm run build:hook       # 語音輸入原生熱鍵 sidecar（需 .NET 8 SDK）�
 - 設定走 electron-store IPC，**key 僅 allowlist**。以下**不走** `store:*`，各有獨立 store／IPC：
   聊天（`chat:*`／`chats.json`）、終端機（`terminal:*`／`terminals.json`）、AGY（`agy:*`）、
   語音輸入紀錄與字典（`dictation:*`／`dictations.json`）、用量統計（`codeusage:*`）。
+- 八組模組 IPC（agy／ccswitch／codeusage／dictation／hfmodels／sysmon／terminal／usage）的
+  「只有主視窗能呼叫 ＋ 回 `{ ok, data }`／`{ ok, error }` ＋ 錯誤訊息走 `userMessage` 白名單」
+  收在 `src/main/ipc-invoke.js` 的 `makeInvoke()`。**收掉的只是那段 try/catch，
+  每組仍然要逐一列舉自己的 handler**（漏一行的坑照舊存在）。要換一套收斂規則就傳 `publicError`
+  （usage 與 hfmodels 各有自己的一套）。回歸：`test-ipc-invoke.js`
 - 本地 ASR 模型 key 走 `models.isAsrKey()`；`models.openFolder` 僅收 registry key 或根目錄。
 - 兩窗 `sandbox: true`；CSP `connect-src 'self' https: http:`（自訂 API URL 的前提，不要改回白名單）。
 - **UI／功能改動完成後先跑 `npm run electron:pack`** 更新免安裝預覽；完整安裝檔僅發佈時再打。
@@ -427,7 +432,7 @@ npm run build:hook       # 語音輸入原生熱鍵 sidecar（需 .NET 8 SDK）�
   preset 表重排，否則拖好的順序會被下一次重畫洗掉。「＋」固定收在最後且不參與排序
   （選擇器一律 `.cc-tile:not(.is-add)`）。
 - **供應商的「上游格式」就是路由開關**：`anthropic` → 直連，`openai_chat`／`openai_responses` → 經本機閘道；六家內建與自訂都能選。
-  「驗證格式」另外獨立保存，測試鈕用它送最小請求，避免把模型／端點只當成一種協議。
+  測試鈕一律以選定的「上游格式」送最小請求驗證連線。
   `providers.routeFor()` 是唯一推導點，`list()` 把算好的 `route` 回給 renderer；
   renderer **不可以自己看 `preset.route`**（custom 在表上寫的是 `direct`，會漏掉整組自訂供應商——
   閘道狀態列、「需要閘道」徽章三處都會錯）。切換供應商**不會自動啟動閘道**，閘道只由頁面上的單一開關手動啟停。
@@ -445,6 +450,23 @@ npm run build:hook       # 語音輸入原生熱鍵 sidecar（需 .NET 8 SDK）�
   （用「值空不空」判斷的話，使用者刻意清空某一格會在下次讀檔被塞回去）。
 - **`presets.js` 的端點與格式要對照官方文件／實測**：401／403 代表端點在但驗證失敗，404 才是 URL 或格式路徑不符；
   不同家不能共用同一條路徑。加新的一家先跑 `probe-ccswitch-endpoints.js`，變更格式要同步更新測試鈕的驗證路徑。
+- **Codex 的 Responses 端點不是公版**（實測 `probe-ccswitch-codex.js`）：`store` 一定要明寫 `false`
+  （不寫 400 `Store must be set to false`）、`max_output_tokens` 與 `temperature` 一律 400
+  `Unsupported parameter`。三個都在 `convert.forCodexBackend`，**只對 Codex 那條路由套**
+  （Grok／Ollama／OpenCode 走同一個 `toResponsesRequest` 但沒有這些限制）。
+  症狀是閘道一律回「上游回應失敗（HTTP 400）」→ Claude Code 顯示 502，看不出是哪個參數。
+  同一組限制在「測試」鈕的 `models-scan.probeBody` 也要套（那邊也送 `max_output_tokens: 1`）。
+- **「宣告 1M 上下文」＝模型名尾巴加 `[1m]`**（跟 cc-switch 同一套約定）。實測（本機 sink 收 Claude Code
+  真流量）：`[1m]` **是唯一開關**——只設 `CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000` 不會讓它送 1M beta，
+  Claude Code 自己的提示也寫「append [1m] to the model name for 1M」。加了之後**它會自己把後綴剝掉再送**
+  （上游收到乾淨的模型名），並自己在 `anthropic-beta` 補 `context-1m-2025-08-07`——所以直連那幾家
+  不會因為開了 1M 就打壞。
+  四個等級都要加，而且 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` 與 **`CLAUDE_CODE_AUTO_COMPACT_WINDOW`
+  兩個鍵要一起放大**——只加後綴的話，preset 原本釘住的自動壓縮窗（Codex 是 372000）會把門檻夾回去
+  （`Math.min(模型視窗, 這個值)`），視窗開了也用不到。
+  閘道仍要 `convert.stripContextMarker`：**舊版 Claude Code 會原樣送出**（cc-switch issue #3980），
+  而上游不認（實測 Codex 回 400 `The 'gpt-5.6-sol[1m]' model is not supported`）。
+  **這是「宣告」不是「升級」**：上游只有 372K 卻宣告 1M，講到超過就會被上游擋下來，UI 要講明。
 - **Grok 的訂閱制走 `cli-chat-proxy.grok.com` 不是 `api.x.ai`**：CLI 的 OAuth token 打 api.x.ai 一律
   403 `personal-team-blocked:spending-limit`（那條是給 **API 金鑰**用的、看儲值餘額，跟訂閱額度無關）。
   閘道上游同網域的 `/v1/responses`，**要帶 `x-grok-client-version`**（不帶回 426 outdated）。
@@ -918,7 +940,7 @@ npm run build:hook       # 語音輸入原生熱鍵 sidecar（需 .NET 8 SDK）�
 | HF模型（本機 LLM） | `node scripts/test-hfmodels.js`（GGUF 檔頭／量化與分片歸組／參數決策／KV 估算／INI）＋`node scripts/probe-hf-router.js`（**實測 router 的真實行為**，動 runtime.js 前先跑）＋`node scripts/probe-hf-hub.js`（打真 HF：搜尋／檔案樹／Range 抓檔頭）＋`node_modules/electron/dist/electron.exe scripts/probe-hf-detail.js`（**打真 HF**：模型卡／README／每個量化的可行性，動 `detail()` 前後都要跑）＋`npx electron scripts/e2e-hfmodels.js`（起 router → 載入 → 真的發一次請求 → 卸載 → 收程序）＋`node scripts/e2e-hf-cdp.js`（打包版 UI，**模型庫指到暫存資料夾、不碰使用者的模型**） |
 | 熱鍵可用性 | `node scripts/probe-dictation-hook.js`（原生 sidecar；`--live` 會等你按鍵）＋`npx electron scripts/probe-uiohook.js`（退路）＋`node_modules/electron/dist/electron.exe scripts/probe-dictation-latency.js`（節流矩陣）＋`scripts/probe-dictation-live.js`（**會搶前景焦點**，只在使用者沒在用電腦時跑）＋`probe-dictation-hud.js`（三種狀態截圖） |
 | Claude Code 工作台 | `node scripts/test-ccswitch.js`（settings.json 外科式合併／預設表／播種／models-scan／路由推導／MCP／PKCE）＋`node scripts/e2e-ccswitch-cdp.js`（打包版，**不碰使用者的 settings.json**） |
-| 供應商端點／模型 | `node scripts/probe-ccswitch-endpoints.js`（動 `presets.js` 端點前後都要跑）／`probe-ccswitch-models.js`（動 `modelsUrl` 前跑）／`probe-ccswitch-scan-ui.js`（實機掃描） |
+| 供應商端點／模型 | `node scripts/probe-ccswitch-endpoints.js`（動 `presets.js` 端點前後都要跑）／`probe-ccswitch-models.js`（動 `modelsUrl` 前跑）／`probe-ccswitch-codex.js`（**打真 Codex**：哪些參數會 400，動 `forCodexBackend`／`probeBody` 前跑）／`probe-ccswitch-scan-ui.js`（實機掃描） |
 | 轉換閘道 | `node scripts/test-ccswitch-gateway.js`＋`node scripts/e2e-ccswitch-gateway.js`（自開 mock 上游） |
 | 用量統計 | `node scripts/test-code-usage.js`＋`npx electron scripts/e2e-code-usage.js`（**真的讀本機記錄**，實測 5.4GB）＋`npx electron scripts/probe-code-usage-audit.js`（**不經 codeusage 自己重算一次**再對帳；動 `parsers.js`／`pricing.js` 前後都要跑） |
 | AGY | `node scripts/test-agy-mappers.js`＋`npx electron scripts/e2e-agy.js`（mock cloudcode-pa）＋`node scripts/e2e-agy-cdp.js`；動映射表／端點順序前先跑 `npx electron scripts/probe-agy-upstream.js`，動 `runAgyCli` 前跑 `probe-agy-nudge.js` |
@@ -932,6 +954,7 @@ npm run build:hook       # 語音輸入原生熱鍵 sidecar（需 .NET 8 SDK）�
 | 翻譯解碼 | `node scripts/probe-prompt-path.js`（prompt 逐 token）＋`node scripts/verify-chat-wrapper-fix.js`；打包版本地 LLM 走不走得通用 `node scripts/probe-packed-local-llm.js`（動 `build.files` 的 node-llama-cpp 規則前後都要跑） |
 | 翻譯頁語言鈕 | `node scripts/probe-translate-lang.js`（來源 5 顆／目標 4 顆、交換、560px 不溢出）；**預設跑原始碼**（先開著 `npx vite`），打包版指 `VOICEINK_EXE` |
 | 錯誤衛生 | `node scripts/test-error-hygiene.js` |
+| IPC 共用外殼 | `node scripts/test-ipc-invoke.js` |
 | 常駐／自啟動 | `node scripts/e2e-tray-cdp.js` |
 | 視覺／RWD | `node scripts/e2e-visual-cdp.js`（七頁 × dark/light × 三尺寸）＋`node scripts/test-usage-reorder.js` |
 | 冒煙 | `node scripts/e2e-cdp-smoke.js` |

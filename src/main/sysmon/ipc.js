@@ -9,23 +9,15 @@
  * 錯誤訊息走 `userMessage` 白名單：只有我們自己建構、內容固定的錯誤才准原樣送出去。
  */
 
+const { makeInvoke } = require('../ipc-invoke')
+
 function registerSysmonIpc({ ipcMain, service, isMainSender }) {
-  const invoke = async (event, action) => {
-    if (!isMainSender(event)) {
-      return { ok: false, error: { code: 'FORBIDDEN', message: '僅主視窗可操作系統監控' } }
-    }
-    try {
-      return { ok: true, data: await action() }
-    } catch (error) {
-      return {
-        ok: false,
-        error: {
-          code: error?.code || 'SYSMON_ERROR',
-          message: error?.userMessage || '系統監控操作失敗'
-        }
-      }
-    }
-  }
+  const invoke = makeInvoke({
+    isMainSender,
+    forbidden: '僅主視窗可操作系統監控',
+    code: 'SYSMON_ERROR',
+    message: '系統監控操作失敗'
+  })
 
   ipcMain.handle('sysmon:status', (event) => invoke(event, () => service.status()))
   ipcMain.handle('sysmon:start', (event, intervalKey) => (

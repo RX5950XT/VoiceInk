@@ -1,6 +1,33 @@
 # VoiceInk UI & Design Token Polish Todo
 
-## 進行中（2026-09-03）— 清理專案目錄與專案外受影響垃圾
+## 完成（2026-09-03）— CC 代理編輯彈窗清理多餘驗證格式，僅保留上游格式
+
+- [x] 1. 檢視並更新 `scripts/test-ccswitch.js`，將 validationFormat 斷言改為直接以 apiFormat 測試
+- [x] 2. 移除 `src/renderer/index.html` 中的 `ccValidationFormatSelect` 與 `cc-format-grid`，簡化上游格式選單排版
+- [x] 3. 更新 `src/renderer/scripts/ccswitch-page.js`，移除 validationFormat 所有參照與欄位傳遞，測試上游一律使用 apiFormat
+- [x] 4. 更新 `src/main/ccswitch/`（`presets.js`, `providers.js`, `models-scan.js`），移除 validationFormat，測試端點一律走 apiFormat
+- [x] 5. 更新 `scripts/probe-ccswitch-endpoints.js` 與 `scripts/e2e-ccswitch-cdp.js`
+- [x] 6. 執行單元測試、錯誤衛生測試與端點探測驗證
+- [x] 7. 重新打包免安裝預覽（`npm run electron:pack`）並驗證
+- [x] 8. 於最終回覆詳盡說明 AUTH_TOKEN / API_KEY 選單在各供應商顯示／隱藏之設計原理
+
+### 回顧
+
+- **驗證格式清理**：
+  - 徹底移除 `validationFormat` 與 `#ccValidationFormatSelect`，恢復單一「上游格式」下拉選單。
+  - 測試按鈕 `testProvider` 一律依該供應商設定的 `apiFormat`（上游格式）發送最小健康檢查請求（OpenAI Responses POST `/responses`、OpenAI Chat POST `/chat/completions`、Anthropic POST `/messages`）。
+  - 各模組（HTML、CSS、JS、IPC、Main presets/providers/models-scan、測試腳本、文件）同步清理一致。
+- **測試與建置驗證**：
+  - `node scripts/test-ccswitch.js`：250 passed, 0 failed
+  - `node scripts/test-ccswitch-gateway.js`：53 passed, 0 failed
+  - `node scripts/probe-ccswitch-endpoints.js`：6 家內建端點全數正常回應 HTTP 401
+  - `node scripts/test-error-hygiene.js`：82 passed, 0 failed
+  - `npm run build`：Vite 前端建置成功
+  - `npm run electron:pack` ＋ asar 就地覆寫：`dist/win-unpacked/VoiceInk.exe` 產出成功，SHA256 雜湊一致
+  - `node scripts/e2e-ccswitch-cdp.js`：122 passed, 0 failed
+  - `node scripts/e2e-cdp-smoke.js`：22 passed, 0 failed
+
+## 完成（2026-09-03）— 清理專案目錄與專案外受影響垃圾
 
 - [x] 1. 終止背景鎖定程序（`VoiceInk`、`VoiceInkHook`）釋放檔案鎖
 - [x] 2. 清理專案內暫存與建置產物（`dist/win-unpacked-*`、`dist/win-unpacked.tmp`、`native/sysmon-sensors/{bin,obj}`，釋放 ~6.07GB）
@@ -1202,3 +1229,28 @@ CDP（打包版）：`e2e-cdp-smoke` 22／`e2e-terminal-cdp` 30／`e2e-chat-cdp`
 驗證用的殼：`contextBridge` 的物件是 frozen 且 non-configurable，CDP 換不掉 `fanList`；
 改成另起一個 `contextIsolation: false` 的視窗載 vite 的 renderer、preload 直接塞假 API，
 就能在不碰真硬體、不跳 UAC 的前提下量版面、截圖、模擬拖曳（視窗用 `showInactive()` 不搶焦點）。
+
+---
+
+## 2026-09-03 — CC 代理：1M 上下文開關＋修好 Codex 502
+
+- [x] 實測 Codex 上游到底吃什麼參數（`scripts/probe-ccswitch-codex.js`，打真 ChatGPT 後端）
+- [x] `gateway/convert.forCodexBackend()`：補 `store: false`、拿掉 `max_output_tokens`／`temperature`
+      （只對 `route.auth === 'codex'` 套，其餘走 Responses 的三家沒有這些限制）
+- [x] 「測試」鈕的 `models-scan.probeBody()` 套同一份，並補上 `OpenAI-Beta` 標頭
+- [x] 供應商新增 `context1m`：四個等級的模型名補 `[1m]`＋兩個窗口鍵設 1000000
+- [x] `gateway/server.js` 送上游前 `stripContextMarker()`（後綴是給 Claude Code 看的，上游會 400）
+- [x] UI：彈窗勾選框（模型四格下面）、tile 第二行顯示 `· 1M`
+- [x] 回歸：`test-ccswitch.js` 補 5 條、`e2e-ccswitch-gateway.js` 補 5 條（先確認修復前是紅的）
+- [x] 文件：CLAUDE.md 地雷兩條＋驗證表、CONTEXT.md 變更紀錄
+
+### 回顧
+
+502 只是症狀。閘道刻意把非 429 的上游狀態碼一律收斂成 502（不透傳 401／403 是對的），
+代價是「上游說我參數錯了」跟「上游掛了」在畫面上長得一模一樣——所以這種問題只能靠
+直接打真上游的 probe 找出來，不能靠讀日誌。三個地雷都是 ChatGPT 後端自己的規矩，
+公版 OpenAI Responses 文件上查不到。
+
+1M 那邊的重點是「兩個鍵一起改」：只加 `[1m]` 後綴的話視窗確實變 1M，但 Codex preset 釘住的
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW = 372000` 會把自動壓縮門檻夾在 372K，使用者會覺得
+「開了 1M 但還是很早就壓縮」，而且完全看不出原因。

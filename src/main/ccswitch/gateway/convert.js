@@ -31,6 +31,38 @@ const STOP_REASONS = {
   content_filter: 'end_turn'
 }
 
+/**
+ * 剝掉模型名尾巴的 `[1m]`（`providers.resolveEnv` 加的 1M 宣告，跟 cc-switch 同一套約定）。
+ *
+ * **現行版本的 Claude Code 自己就會剝**（實測：`ANTHROPIC_MODEL=some-model[1m]` 送出去的是
+ * `some-model`，而且它自己在 `anthropic-beta` 加上 `context-1m-2025-08-07`），所以這支在今天
+ * 是空轉的。留著是因為**舊版會原樣送出**（cc-switch issue #3980 的 `claude-fable-5[1m]`），
+ * 而上游一律不認——實測 Codex 回 400 `The 'gpt-5.6-sol[1m]' model is not supported`。
+ * 成本是一次 regex，換掉「使用者的 CLI 比較舊就整條掛掉」。
+ * @param {unknown} model
+ * @returns {string}
+ */
+function stripContextMarker(model) {
+  return String(model || '').replace(/\[1m\]$/i, '')
+}
+
+/**
+ * ChatGPT Codex 後端的 Responses 端點不是公版（實測 `scripts/probe-ccswitch-codex.js`）：
+ * - 不明寫 `store: false` → 400 `Store must be set to false`
+ * - 帶 `max_output_tokens` 或 `temperature` → 400 `Unsupported parameter`
+ *
+ * 其餘走 Responses 的上游（Grok／Ollama Cloud／OpenCode Go）沒有這些限制，
+ * 所以只對 Codex 那條路由套，不要改成全體通用。
+ * @param {object} request
+ * @returns {object}
+ */
+function forCodexBackend(request) {
+  const out = { ...request, store: false }
+  delete out.max_output_tokens
+  delete out.temperature
+  return out
+}
+
 // ===== Anthropic → 上游 =====
 
 /**
@@ -580,6 +612,8 @@ function errorStream(collector, code) {
 }
 
 module.exports = {
+  stripContextMarker,
+  forCodexBackend,
   SCHEMA_KEYS,
   STOP_REASONS,
   systemToText,

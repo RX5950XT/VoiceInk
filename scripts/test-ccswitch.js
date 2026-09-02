@@ -209,7 +209,7 @@ console.log('\n[D] 預設表')
   ok('預設用到的 env 鍵都在 MANAGED_ENV_KEYS 內', stray.length === 0, stray.join(','))
 }
 
-// ===== 內建供應商格式與驗證格式 =====
+// ===== 內建供應商格式 =====
 console.log('\n[D1] 內建供應商格式')
 {
   const expectedFormats = {
@@ -220,18 +220,9 @@ console.log('\n[D1] 內建供應商格式')
     commandcode: 'openai_chat',
     openrouter: 'anthropic'
   }
-  const expectedValidation = {
-    'grok-build': 'openai_chat',
-    codex: 'openai_responses',
-    'ollama-cloud': 'openai_responses',
-    'opencode-go': 'openai_chat',
-    commandcode: 'anthropic',
-    openrouter: 'anthropic'
-  }
   for (const [id, format] of Object.entries(expectedFormats)) {
     const preset = presets.getPreset(id)
     ok(`${id} 預設上游格式正確`, preset?.apiFormat === format, preset?.apiFormat)
-    ok(`${id} 預設驗證格式正確`, preset?.validationFormat === expectedValidation[id], preset?.validationFormat)
   }
   const expectedWireUrls = {
     'grok-build': 'https://cli-chat-proxy.grok.com/v1/responses',
@@ -363,6 +354,27 @@ console.log('\n[E] resolveEnv')
   ok('閘道路由指向本機', viaGateway.ANTHROPIC_BASE_URL === 'http://127.0.0.1:8790/p/codex')
   ok('閘道路由帶閘道自己的金鑰', viaGateway.ANTHROPIC_AUTH_TOKEN === 'gw-key')
   ok('Codex 釘住 372K 窗口', viaGateway.CLAUDE_CODE_MAX_CONTEXT_TOKENS === '372000')
+
+  // [1M] 宣告：Claude Code 認模型名尾巴的 `[1m]`（cc-switch 同一套約定）
+  const oneM = providers.resolveEnv({ presetId: 'codex', apiKey: '', model: '', context1m: true }, gw)
+  ok('宣告 1M 時四個等級都補後綴',
+    oneM.ANTHROPIC_MODEL.endsWith('[1m]') && oneM.ANTHROPIC_DEFAULT_HAIKU_MODEL.endsWith('[1m]') &&
+    oneM.ANTHROPIC_DEFAULT_SONNET_MODEL.endsWith('[1m]') && oneM.ANTHROPIC_DEFAULT_OPUS_MODEL.endsWith('[1m]'),
+    JSON.stringify(oneM.ANTHROPIC_MODEL))
+  // 只加後綴而不動窗口鍵的話，preset 釘住的 372000 會把自動壓縮門檻夾回去
+  ok('宣告 1M 時兩個窗口鍵一起放大',
+    oneM.CLAUDE_CODE_MAX_CONTEXT_TOKENS === '1000000' && oneM.CLAUDE_CODE_AUTO_COMPACT_WINDOW === '1000000',
+    `${oneM.CLAUDE_CODE_MAX_CONTEXT_TOKENS}/${oneM.CLAUDE_CODE_AUTO_COMPACT_WINDOW}`)
+  const oneMTyped = providers.resolveEnv(
+    { presetId: 'openrouter', apiKey: 'k', model: 'foo[1M]', context1m: true }
+  )
+  ok('使用者自己打了 [1M] 也不會疊成兩層', oneMTyped.ANTHROPIC_MODEL === 'foo[1m]', oneMTyped.ANTHROPIC_MODEL)
+  const noOneM = providers.resolveEnv({ presetId: 'openrouter', apiKey: 'k', model: 'foo' })
+  ok('沒宣告就不加後綴、不動窗口鍵',
+    noOneM.ANTHROPIC_MODEL === 'foo' && noOneM.CLAUDE_CODE_MAX_CONTEXT_TOKENS === undefined)
+  // 官方訂閱的定義是「什麼都不寫」，勾了 1M 也不能破例
+  ok('官方訂閱勾了 1M 仍然一個鍵都不寫',
+    Object.keys(providers.resolveEnv({ presetId: 'official', context1m: true })).length === 0)
 
   const trailing = providers.resolveEnv({ presetId: 'grok-build', apiKey: '', model: '' }, { baseUrl: 'http://127.0.0.1:8790/p/', apiKey: 'k' })
   ok('閘道網址尾斜線不會變成雙斜線', trailing.ANTHROPIC_BASE_URL === 'http://127.0.0.1:8790/p/grok-build')
@@ -653,7 +665,7 @@ async function runModelsScan() {
   seen.length = 0
   const probe = await modelsScan.testProvider({
     presetId: 'commandcode', apiKey: 'cmd-key', model: 'deepseek/deepseek-v4-flash',
-    validationFormat: 'openai_chat'
+    apiFormat: 'openai_chat'
   }, { fetchImpl: respondWith({ ok: true }) })
   ok('上游測試回報 HTTP 成功', probe.ok && probe.responded && probe.status === 200)
   ok('測試用了選定格式的端點', seen[0]?.url === 'https://api.commandcode.ai/provider/v1/chat/completions')
@@ -662,7 +674,7 @@ async function runModelsScan() {
 
   const rejected = await modelsScan.testProvider({
     presetId: 'commandcode', apiKey: 'cmd-key', model: 'claude-sonnet-5',
-    validationFormat: 'openai_chat'
+    apiFormat: 'openai_chat'
   }, { fetchImpl: respondWith({ error: 'probe-secret' }, 401) })
   ok('HTTP 401 仍算收到上游回應', !rejected.ok && rejected.responded && rejected.status === 401)
   ok('測試錯誤不帶上游本文', !String(rejected.error).includes('probe-secret'))
@@ -670,7 +682,7 @@ async function runModelsScan() {
   seen.length = 0
   const anthropicProbe = await modelsScan.testProvider({
     presetId: 'openrouter', apiKey: 'or-key', model: 'anthropic/claude-sonnet-5',
-    validationFormat: 'anthropic'
+    apiFormat: 'anthropic'
   }, { fetchImpl: respondWith({ ok: true }) })
   ok('Anthropic 測試回報 HTTP 成功', anthropicProbe.ok && anthropicProbe.responded)
   ok('Anthropic 測試帶版本標頭', seen[0]?.headers['anthropic-version'] === '2023-06-01')

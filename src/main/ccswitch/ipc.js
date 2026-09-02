@@ -10,23 +10,15 @@
  * 錯誤訊息走 `userMessage` 白名單：只有我們自己建構、內容固定的錯誤才准原樣送出去。
  * 檔案系統的錯誤字串會夾帶完整路徑，一律收斂成通用訊息。
  */
+const { makeInvoke } = require('../ipc-invoke')
+
 function registerCcSwitchIpc({ ipcMain, service, isMainSender }) {
-  const invoke = async (event, action) => {
-    if (!isMainSender(event)) {
-      return { ok: false, error: { code: 'FORBIDDEN', message: '僅主視窗可操作' } }
-    }
-    try {
-      return { ok: true, data: await action() }
-    } catch (error) {
-      return {
-        ok: false,
-        error: {
-          code: error?.code || 'CCSWITCH_ERROR',
-          message: error?.userMessage || 'Claude Code 設定操作失敗'
-        }
-      }
-    }
-  }
+  const invoke = makeInvoke({
+    isMainSender,
+    forbidden: '僅主視窗可操作',
+    code: 'CCSWITCH_ERROR',
+    message: 'Claude Code 設定操作失敗'
+  })
 
   ipcMain.handle('ccswitch:catalog', (event) => invoke(event, () => service.catalog()))
 

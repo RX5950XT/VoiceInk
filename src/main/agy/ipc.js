@@ -8,23 +8,15 @@
  * 會帶這個欄位。上游錯誤（UpstreamError）的 message 是狀態碼、也可能夾雜外部字串，
  * 沒有這個欄位就一律變成通用訊息。
  */
+const { makeInvoke } = require('../ipc-invoke')
+
 function registerAgyIpc({ ipcMain, service, isMainSender }) {
-  const invoke = async (event, action) => {
-    if (!isMainSender(event)) {
-      return { ok: false, error: { code: 'FORBIDDEN', message: '僅主視窗可操作反向代理' } }
-    }
-    try {
-      return { ok: true, data: await action() }
-    } catch (error) {
-      return {
-        ok: false,
-        error: {
-          code: error?.code || 'AGY_ERROR',
-          message: error?.userMessage || '反向代理操作失敗'
-        }
-      }
-    }
-  }
+  const invoke = makeInvoke({
+    isMainSender,
+    forbidden: '僅主視窗可操作反向代理',
+    code: 'AGY_ERROR',
+    message: '反向代理操作失敗'
+  })
 
   ipcMain.handle('agy:status', (event) => invoke(event, () => service.status()))
   ipcMain.handle('agy:start', (event) => invoke(event, async () => {

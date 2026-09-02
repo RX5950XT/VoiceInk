@@ -208,6 +208,16 @@ async function main() {
     ok('上游收到 Responses 形狀', Array.isArray(lastUpstream.body.input))
     ok('上游收到我們給的 token', lastUpstream.headers.authorization === 'Bearer fake-token')
     ok('Codex 有帶 account id 標頭', lastUpstream.headers['chatgpt-account-id'] === 'acct_1')
+    // ChatGPT Codex 後端跟公版 Responses 不一樣（實測見 scripts/probe-ccswitch-codex.js）：
+    // 少了 store:false 或多了 max_output_tokens／temperature 一律 400，經閘道之後只剩一句 502
+    ok('Codex 有明寫 store:false', lastUpstream.body.store === false, JSON.stringify(lastUpstream.body.store))
+    ok('Codex 不送 max_output_tokens', lastUpstream.body.max_output_tokens === undefined)
+    ok('Codex 不送 temperature', lastUpstream.body.temperature === undefined)
+
+    // Claude Code 宣告 1M 時模型名尾巴會帶 [1m]，上游不認得（400 model is not supported）
+    const oneM = await request(port, '/codex/v1/messages', { ...anthropicBody, model: 'gpt-5.6-sol[1m]' })
+    ok('宣告 1M 的請求照樣成功', oneM.status === 200, String(oneM.status))
+    ok('送上游的模型名剝掉了 [1m]', lastUpstream.body.model === 'gpt-5.6-sol', String(lastUpstream.body.model))
 
     console.log('\n[C] 非串流')
     const nonStream = await request(port, '/codex/v1/messages', { ...anthropicBody, stream: false })

@@ -9,6 +9,7 @@
  */
 
 const presets = require('./presets')
+const convert = require('./gateway/convert')
 const { fetchModels } = require('../chat-models')
 
 const API_FORMATS = new Set(['anthropic', 'openai_chat', 'openai_responses'])
@@ -56,16 +57,16 @@ function resolveScanTarget(provider) {
 }
 
 /**
- * 依使用者選的驗證格式建立最小測試端點。端點仍只來自 main 的 preset 或已存 custom URL。
- * @param {{ presetId?: string, validationFormat?: string, apiFormat?: string, baseUrl?: string }} provider
+ * 依使用者選的上游格式建立最小測試端點。端點仍只來自 main 的 preset 或已存 custom URL。
+ * @param {{ presetId?: string, apiFormat?: string, baseUrl?: string }} provider
  * @returns {{ url: string, format: string, auth: string, authField: string, codex: boolean } | null}
  */
 function resolveProbeTarget(provider) {
   const preset = presets.getPreset(provider?.presetId)
   if (!preset || preset.auth === 'none') return null
-  const format = API_FORMATS.has(String(provider?.validationFormat || ''))
-    ? String(provider.validationFormat)
-    : (preset.validationFormat || preset.apiFormat)
+  const format = API_FORMATS.has(String(provider?.apiFormat || ''))
+    ? String(provider.apiFormat)
+    : preset.apiFormat
   const base = preset.id === 'custom'
     ? String(provider?.baseUrl || '').trim().replace(/\/+$/, '')
     : String(preset.wireBaseUrl || preset.baseUrl || '').trim().replace(/\/+$/, '')
@@ -85,9 +86,10 @@ function resolveProbeTarget(provider) {
 /**
  * @param {string} format
  * @param {string} model
+ * @param {boolean} [codex] Codex 後端的 Responses 端點不吃公版參數（見 gateway/convert.js）
  * @returns {object}
  */
-function probeBody(format, model) {
+function probeBody(format, model, codex = false) {
   if (format === 'anthropic') {
     return {
       model,
@@ -104,12 +106,13 @@ function probeBody(format, model) {
       stream: false
     }
   }
-  return { model, input: 'ping', max_output_tokens: 1, stream: false }
+  const responses = { model, input: 'ping', max_output_tokens: 1, stream: false }
+  return codex ? convert.forCodexBackend(responses) : responses
 }
 
 /**
  * 用一個最小請求確認端點有沒有回 HTTP；不讀 response body，避免把上游內容帶出 main。
- * @param {{ presetId: string, validationFormat?: string, apiFormat?: string, baseUrl?: string, apiKey?: string, authField?: string, oauthAccountId?: string, model?: string, sonnetModel?: string, haikuModel?: string, opusModel?: string }} provider
+ * @param {{ presetId: string, apiFormat?: string, baseUrl?: string, apiKey?: string, authField?: string, oauthAccountId?: string, model?: string, sonnetModel?: string, haikuModel?: string, opusModel?: string }} provider
  * @param {{ fetchImpl?: typeof fetch }} [options]
  * @returns {Promise<{ ok: boolean, responded: boolean, status?: number, code: string, error?: string, format?: string, url?: string, latencyMs?: number }>}
  */
@@ -136,6 +139,7 @@ async function testProvider(provider, options = {}) {
       if (target.codex) {
         headers['chatgpt-account-id'] = accountId || ''
         headers.originator = 'codex_cli_rs'
+        headers['OpenAI-Beta'] = 'responses=experimental'
       } else {
         headers['x-grok-client-version'] = GROK_CLI_VERSION
       }
@@ -156,7 +160,7 @@ async function testProvider(provider, options = {}) {
     const response = await (options.fetchImpl || globalThis.fetch)(target.url, {
       method: 'POST',
       headers,
-      body: JSON.stringify(probeBody(target.format, model)),
+      body: JSON.stringify(probeBody(target.format, model, Boolean(target.codex))),
       signal: controller.signal
     })
     const status = Number(response?.status) || 0
@@ -178,7 +182,7 @@ async function testProvider(provider, options = {}) {
       result.error = status === 401 || status === 403
         ? `上游有回應，但驗證失敗（HTTP ${status}）`
         : status === 404
-          ? `上游有回應，但 URL 或驗證格式不符（HTTP ${status}）`
+          ? `上游有回應，但 URL 或上游格式不符（HTTP ${status}）`
           : `上游有回應（HTTP ${status}）`
     }
     return result

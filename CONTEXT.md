@@ -7,7 +7,7 @@
 ## 專案概況
 
 VoiceInk：Windows Electron AI 工作台。Vanilla JS + Vite，無前端框架；Electron 43.4.1 ＋ Node.js 22。
-已發行 **v1.9.0**，目前開發分支 `feat/voice-input`（尚未發行的內容見「最近變更」）。
+已發行 **v1.10.0**（全域語音輸入、系統監控、HF模型、CC 代理工作台）。
 
 nav 九頁：聊天（預設，**終端機在同一頁**）｜CC代理（原「Claude Code」，data-page 仍是 `ccswitch`）｜額度｜AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型（本機 LLM）｜設定。
 
@@ -21,6 +21,8 @@ src/main/
   chat-store.js       會話持久化（獨立 store → <userData>/chats.json）
   chat-images.js      圖片附件：<userData>/chat-images/，檔名 allowlist、孤兒回收
   chat-models.js      /models 掃描（fetchModels／extractIds，聊天與 ccswitch 共用）
+  ipc-invoke.js       八組模組 IPC 的共用外殼 makeInvoke()：主視窗守衛 ＋ { ok, data|error }
+                      ＋ userMessage 白名單（handler 仍由各模組自己逐一列舉）
   terminal/           ConPTY 工作階段：pty.js、status.js（OSC 133 ＋ 靜默雙軌，純函式）、
                       store.js（shell／preset／cwd 固定表）、ipc.js
   ccswitch/           Claude Code 工作台：claude-settings.js（外科式改 env）、presets.js、
@@ -98,16 +100,55 @@ native/  dictation-hook/（WH_KEYBOARD_LL，→ resources/hook/）  sysmon-senso
 值格式：ASR＝`local:<key>`／`cloud:<設定 id>:<模型 id>`；LLM＝`local:<key>`／`cloud:<供應商 id>:<模型 id>`／`''`。
 翻譯與 TTS 頁**不在這組**，維持全域 `translator`／`localTranslateModel`／`translateProviderId`／`translateModelId`。
 
-## 最近變更（2026-09-03，分支 `feat/voice-input`）— CC 代理改為手動閘道與可選格式
+## 最近變更（2026-09-03）— 發行 v1.10.0 ＋ 八組模組 IPC 收成共用外殼
+
+- **版本**：`package.json` 1.9.0 → **1.10.0**，README 改寫版本區塊並補上缺的「系統監控」章節與
+  「用量統計」子分頁說明；GitHub 倉庫 About 一併更新。
+- **`src/main/ipc-invoke.js`（新）**：agy／ccswitch／codeusage／dictation／hfmodels／sysmon／
+  terminal／usage 八份 `ipc.js` 各自抄了一段一字不差的
+  「`isMainSender` 守衛 → try → `{ ok, data }` → catch → `{ ok, error }`」，收進 `makeInvoke()`。
+  **只收掉那段 try/catch，handler 仍由各模組逐一列舉**（service 加方法卻漏一行的坑照舊存在，
+  那是刻意的白名單）。usage 與 hfmodels 的錯誤收斂規則不同，走 `publicError` 覆寫。
+  回歸：`node scripts/test-ipc-invoke.js` 11/11。
+
+## 最近變更（2026-09-03，分支 `feat/voice-input`）— CC 代理：1M 上下文開關＋修好 Codex 502
+
+- **Codex 一直 502 的真正原因**：ChatGPT 後端的 `/responses` 不是公版——不明寫 `store: false`
+  回 400 `Store must be set to false`，帶 `max_output_tokens` 或 `temperature` 回 400
+  `Unsupported parameter`。閘道把所有非 429 的上游狀態碼收斂成 502，所以畫面上只看得到 502。
+  修法是 `gateway/convert.forCodexBackend()`（只對 `route.auth === 'codex'` 套），
+  「測試」鈕的 `models-scan.probeBody()` 也套同一份。實測矩陣 `scripts/probe-ccswitch-codex.js`。
+- **新增「宣告支援 1M 上下文」勾選**（供應商彈窗的模型四格下面，tile 第二行會顯示 `· 1M`）：
+  照 cc-switch 的作法在四個等級的模型名尾巴加 `[1m]`，Claude Code 看到就把上下文窗當成 1M；
+  同時把 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` 與 `CLAUDE_CODE_AUTO_COMPACT_WINDOW` 一起設成 1000000
+  （只加後綴的話 Codex preset 釘住的 372000 會把自動壓縮門檻夾回去）。
+  存在 `cc-providers.json` 的 `context1m`，官方訂閱那筆照樣什麼都不寫。
+- **`[1m]` 的實測結論**（本機 sink 收 Claude Code 真流量，不是看文件猜的）：
+  後綴是唯一開關（單設 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` 不會送 1M beta）；
+  現行版本的 Claude Code **自己會把後綴剝掉**再送上游，並自己在 `anthropic-beta` 補
+  `context-1m-2025-08-07`，所以直連那幾家（OpenRouter／自訂）開 1M 不會打壞。
+  `gateway/server.js` 的 `convert.stripContextMarker()` 是**防舊版**（cc-switch issue #3980
+  記錄舊版會原樣送出），上游不認（實測 Codex 400 model is not supported）。
+- 跟 cc-switch 對過的地方：Codex 預設（`gpt-5.6-sol`／`gpt-5.6-luna`＋雙鍵釘 372000）、
+  OpenCode Go（`deepseek-v4-flash`＋`ANTHROPIC_API_KEY`）、OpenRouter 四格模型**與他們一字不差**；
+  Codex 請求整形也對過他們的 `transform_responses.rs`（`store:false`／刪 `max_output_tokens`／
+  刪 `temperature`／刪 `top_p`，我們本來就不送 `top_p`）。他們多送的
+  `include: ["reasoning.encrypted_content"]` 我們用不到——我們的轉換一律丟掉 thinking block，
+  實測工具往返兩輪（function_call → function_call_output）不帶它照樣 200。
+- 驗證：`node scripts/test-ccswitch.js` 255/255、`node scripts/e2e-ccswitch-gateway.js` 40/40、
+  `node scripts/test-ccswitch-gateway.js` 53/53、`node scripts/test-error-hygiene.js` 82/82、
+  `node scripts/probe-ccswitch-codex.js` 7/7（打真 Codex）、
+  `node scripts/e2e-ccswitch-cdp.js` 125/125、`node scripts/e2e-visual-cdp.js` 71/71（打包版）。
+
+## 最近變更（2026-09-03，分支 `feat/voice-input`）— CC 代理改為手動閘道與上游格式（清理多餘驗證格式）
 
 - 移除切換供應商時自動啟動閘道；頁面只留一顆 `role=switch` 開關，啟停完全由使用者操作。
-- 六家內建供應商各自保存 `apiFormat`（上游格式）與 `validationFormat`（測試格式），舊資料讀入會回到新的官方預設：
+- 清理多餘的「驗證格式（validationFormat）」，僅保留「上游格式（apiFormat）」：測試上游端點時一律直接使用選定的上游格式送最小請求驗證連線。
+- 六家內建供應商各自保存 `apiFormat`（上游格式），舊資料讀入會回到新的官方預設：
   Grok／Codex／Ollama Cloud／OpenCode Go＝OpenAI Responses；Command Code＝OpenAI Chat；OpenRouter＝Anthropic Messages。
-- 驗證格式依官方端點現況分開預設：Grok＝Chat；Codex／Ollama＝Responses；OpenCode Go＝Chat；Command Code／OpenRouter＝Anthropic Messages。
-  OpenCode Go 與 Command Code 會依模型切換 Chat／Responses／Messages，所以兩欄都保留手動選擇，不把一家硬寫死成單一路徑。
 - 內建 URL 仍由 main 固定，`wireBaseUrl` 只供閘道／測試組成路徑；自訂 URL 仍只接受 `http(s)`。新增 `ccswitch:testProvider` 與 tile「測試」鈕，測試只回固定摘要（成功／是否收到 HTTP／狀態碼／延遲），不讀上游 body。
 - 官方依據： [xAI REST API](https://api.x.ai/docs/)／[Grok Build README](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-shell/README.md)、[OpenAI Codex](https://openai.com/index/unrolling-the-codex-agent-loop/)、[Ollama OpenAI compatibility](https://docs.ollama.com/api/openai-compatibility)、[Ollama Cloud](https://docs.ollama.com/cloud)、[OpenCode Go](https://dev.opencode.ai/docs/go/)、[Command Code provider](https://commandcode.ai/docs/provider)、[OpenRouter Anthropic Messages](https://openrouter.ai/docs/api/api-reference/anthropic-messages/create-messages?explorer=true)。
-- 驗證：`node scripts/test-ccswitch.js` 256/256、`node scripts/test-ccswitch-gateway.js` 53/53、`node scripts/e2e-ccswitch-gateway.js` 35/35、`node scripts/test-error-hygiene.js` 82/82、`node scripts/probe-ccswitch-endpoints.js` 六端點均回 401、`npm run build` 與 `npm run electron:pack -- --config.directories.output=dist/win-unpacked-ccswitch-final3` 均通過；打包版 `e2e-ccswitch-cdp.js` 123/123。
+- 驗證：`node scripts/test-ccswitch.js` 250/250、`node scripts/test-ccswitch-gateway.js` 53/53、`node scripts/e2e-ccswitch-gateway.js` 35/35、`node scripts/test-error-hygiene.js` 82/82、`node scripts/probe-ccswitch-endpoints.js` 六端點均回 401。
 
 ## 最近變更（2026-09-02，分支 `feat/voice-input`）— 系統監控新增「風扇控制」子分頁
 
@@ -528,8 +569,8 @@ static 框約 6 秒。
 
 ## 已知取捨與未做
 
-- **轉換閘道沒有對真的上游端到端實測過**（轉換與 SSE 都是打自開的 mock 驗的）：
-  要實測就切到 Codex 或 Grok Build 再跑一次 `claude -p`，那會花掉使用者的訂閱額度。
+- **轉換閘道只有 Codex 的請求形狀對真上游驗過**（`probe-ccswitch-codex.js`）：SSE 回程與其餘四家
+  仍是打自開的 mock 驗的。要整條實測就切過去跑一次 `claude -p`，那會花掉使用者的訂閱額度。
 - **CDP 測試各自用暫存 `--user-data-dir`**：設定是乾淨的，但模型靠 junction 接回真的資料夾；
   需要資料才跑得動的測試（聊天供應商、AGY 埠）自己在測試裡種。
 - **`probe-dictation-live.js` 需要前景焦點**，只能在使用者沒在用電腦時跑。

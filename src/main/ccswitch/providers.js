@@ -45,6 +45,14 @@ const AUTH_FIELDS = Object.freeze(['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY'])
 /** 上游與驗證都共用這三種協議；上游選擇同時決定是否進本機閘道。 */
 const API_FORMATS = Object.freeze(['anthropic', 'openai_chat', 'openai_responses'])
 
+/**
+ * 「宣告 1M 上下文」寫進去的窗口大小。Claude Code 看到模型名尾巴的 `[1m]` 就把視窗
+ * 當成 1M（跟 cc-switch 同一套約定），兩個窗口鍵一起釘住是為了自動壓縮的門檻——
+ * 只加後綴的話，這家 preset 原本釘住的 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`
+ * （Codex 是 372000）會把壓縮門檻夾回去，視窗開了也用不到。
+ */
+const ONE_M_TOKENS = '1000000'
+
 /** 三種上游格式的路徑；內建 `wireBaseUrl` 已含 `/v1`，所以 Messages 只接 `/messages` */
 const WIRE_PATHS = Object.freeze({ anthropic: '/messages', chat: '/chat/completions', responses: '/responses' })
 
@@ -145,16 +153,6 @@ function apiFormatFor(provider, preset) {
   return API_FORMATS.includes(picked) ? picked : preset.apiFormat
 }
 
-/**
- * 這一筆用哪種格式做「測試響應」。
- * @param {{ validationFormat?: unknown }} provider
- * @param {{ validationFormat?: string, apiFormat: string }} preset
- * @returns {string}
- */
-function validationFormatFor(provider, preset) {
-  const picked = text(provider?.validationFormat, 40)
-  return API_FORMATS.includes(picked) ? picked : (preset.validationFormat || preset.apiFormat)
-}
 
 /**
  * 路由：講 Anthropic 的直連，其餘一律經本機閘道轉換。
@@ -257,14 +255,12 @@ function sanitizeAll(raw) {
       name: text(item.name, MAX_NAME) || preset.name,
       baseUrl: allowsCustomUrl(preset) ? url(item.baseUrl) : '',
       apiFormat: migrateBuiltinFormat ? preset.apiFormat : apiFormatFor(item, preset),
-      validationFormat: migrateBuiltinFormat
-        ? preset.validationFormat
-        : validationFormatFor(item, preset),
       formatVersion: FORMAT_VERSION,
       authField: preset.auth === 'key' ? authFieldFor(item, preset) : '',
       apiKey: preset.auth === 'key' ? text(item.apiKey, MAX_KEY) : '',
       // 這一筆綁哪個在本 App 登入的帳號（空＝退回讀已安裝 CLI 的憑證）
       oauthAccountId: preset.auth === 'cli' ? text(item.oauthAccountId, 60) : '',
+      context1m: item.context1m === true,
       model,
       haikuModel: legacy ? model : text(item.haikuModel, MAX_MODEL),
       sonnetModel: legacy ? model : text(item.sonnetModel, MAX_MODEL),
@@ -333,6 +329,17 @@ function resolveEnv(provider, gateway) {
   for (const [field, key] of Object.entries(MODEL_FIELDS)) {
     const value = text(provider?.[field], MAX_MODEL)
     if (value) env[key] = value
+  }
+
+  // 宣告 1M：四個等級的模型名尾巴都補 `[1m]`（已經有就不再疊一層），窗口兩個鍵一起放大。
+  // 上游真的沒有 1M 的話不會因此變大，只是 Claude Code 會比較晚壓縮；閘道送出前會把
+  // 後綴剝掉（`convert.stripContextMarker`），不會拿一個上游不認得的模型名去打。
+  if (provider?.context1m === true) {
+    for (const key of MODEL_KEYS) {
+      if (env[key]) env[key] = `${String(env[key]).replace(/\[1m\]$/i, '')}[1m]`
+    }
+    env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = ONE_M_TOKENS
+    env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = ONE_M_TOKENS
   }
 
   return env
@@ -445,11 +452,11 @@ async function seedBuiltins(items) {
       name: preset.name,
       baseUrl: '',
       apiFormat: preset.apiFormat,
-      validationFormat: preset.validationFormat,
       formatVersion: FORMAT_VERSION,
       authField: '',
       apiKey: '',
       oauthAccountId: '',
+      context1m: false,
       model: '',
       haikuModel: '',
       sonnetModel: '',
@@ -497,11 +504,11 @@ function list(options = {}) {
         name: item.name,
         baseUrl: item.baseUrl,
         apiFormat: item.apiFormat,
-        validationFormat: item.validationFormat,
         // UI 要講「這筆會直連還是經閘道」，自訂那筆是算出來的，renderer 別自己推
         route: routeFor(item, presets.getPreset(item.presetId)),
         authField: item.authField,
         oauthAccountId: item.oauthAccountId,
+        context1m: item.context1m,
         model: item.model,
         haikuModel: item.haikuModel,
         sonnetModel: item.sonnetModel,
@@ -520,7 +527,7 @@ function list(options = {}) {
 }
 
 /**
- * @param {{ presetId?: string, name?: string, apiKey?: string, model?: string, apiFormat?: string, validationFormat?: string }} req
+ * @param {{ presetId?: string, name?: string, apiKey?: string, model?: string, apiFormat?: string }} req
  */
 function create(req) {
   return withStore(async () => {
@@ -544,11 +551,11 @@ function create(req) {
       name: text(req?.name, MAX_NAME) || preset.name,
       baseUrl: allowsCustomUrl(preset) ? url(req?.baseUrl) : '',
       apiFormat: apiFormatFor(req, preset),
-      validationFormat: validationFormatFor(req, preset),
       formatVersion: FORMAT_VERSION,
       authField: preset.auth === 'key' ? authFieldFor(req, preset) : '',
       apiKey: preset.auth === 'key' ? text(req?.apiKey, MAX_KEY) : '',
       oauthAccountId: preset.auth === 'cli' ? text(req?.oauthAccountId, 60) : '',
+      context1m: req?.context1m === true,
       model: text(req?.model, MAX_MODEL),
       haikuModel: text(req?.haikuModel, MAX_MODEL),
       sonnetModel: text(req?.sonnetModel, MAX_MODEL),
@@ -563,7 +570,7 @@ function create(req) {
 /**
  * 更新一筆。`apiKey` 沒帶就保留原值（UI 顯示遮罩，不會把完整金鑰送回來）。
  * @param {string} id
- * @param {{ name?: string, apiKey?: string, model?: string, apiFormat?: string, validationFormat?: string }} patch
+ * @param {{ name?: string, apiKey?: string, model?: string, apiFormat?: string }} patch
  */
 function update(id, patch) {
   return withStore(async () => {
@@ -585,11 +592,6 @@ function update(id, patch) {
       }
       if (preset && typeof patch?.apiFormat === 'string') {
         next.apiFormat = apiFormatFor(patch, preset)
-      }
-      if (preset && typeof patch?.validationFormat === 'string') {
-        next.validationFormat = validationFormatFor(patch, preset)
-      }
-      if (preset && (typeof patch?.apiFormat === 'string' || typeof patch?.validationFormat === 'string')) {
         next.formatVersion = FORMAT_VERSION
       }
       if (preset?.auth === 'key' && typeof patch?.authField === 'string') {
@@ -598,6 +600,7 @@ function update(id, patch) {
       if (preset?.auth === 'cli' && typeof patch?.oauthAccountId === 'string') {
         next.oauthAccountId = text(patch.oauthAccountId, 60)
       }
+      if (typeof patch?.context1m === 'boolean') next.context1m = patch.context1m
       // 四個等級各自可改；沒帶那一格就維持原值（跟金鑰同一條規矩）
       for (const field of Object.keys(MODEL_FIELDS)) {
         if (typeof patch?.[field] === 'string') next[field] = text(patch[field], MAX_MODEL)
@@ -780,7 +783,6 @@ module.exports = {
   AUTH_FIELDS,
   API_FORMATS,
   apiFormatFor,
-  validationFormatFor,
   wireForFormat,
   wireUrlFor,
   routeFor,
