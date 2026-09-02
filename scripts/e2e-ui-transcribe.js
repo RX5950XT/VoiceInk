@@ -3,11 +3,25 @@
  */
 const http = require('http')
 const path = require('path')
-const { spawn } = require('child_process')
+const os = require('os')
 const fs = require('fs')
+const { spawn } = require('child_process')
 
 const PORT = 9251
-const EXE = path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
+// Windows 偶爾會有別的東西鎖住 dist/win-unpacked（打包失敗、防毒掃描中），
+// 這時可以打包到別的資料夾再用 VOICEINK_EXE 指過去，測試不必等鎖放掉
+const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
+// 暫存 user-data-dir：使用者開著的正式實例佔 single-instance lock，
+// 沒有自己的資料夾會被擋掉（second-instance 轉交後退出，CDP 等不到主視窗）
+const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-cdp-'))
+// 模型放在 `<userData>/models`，換了 user-data-dir 就等於一顆模型都沒裝（轉錄會直接失敗）。
+// 用 junction 把真正的模型資料夾接進來——只讀不寫，設定仍然各自獨立。
+{
+  const real = path.join(process.env.APPDATA || os.homedir(), 'voiceink', 'models')
+  if (fs.existsSync(real)) {
+    try { fs.symlinkSync(real, path.join(USER_DATA_DIR, 'models'), 'junction') } catch { /* 沒有就當沒裝 */ }
+  }
+}
 const SAMPLE = path.join(__dirname, 'test-sample.wav')
 
 function sleep(ms) {
@@ -88,7 +102,7 @@ class Cdp {
 
 async function main() {
   if (!fs.existsSync(EXE)) throw new Error('missing ' + EXE)
-  const child = spawn(EXE, [`--remote-debugging-port=${PORT}`], {
+  const child = spawn(EXE, [`--remote-debugging-port=${PORT}`, `--user-data-dir=${USER_DATA_DIR}`], {
     stdio: ['ignore', 'pipe', 'pipe']
   })
   let mainLog = ''
@@ -119,7 +133,7 @@ async function main() {
     await cdp.eval(`document.querySelector('[data-page="stt"]')?.click(), 'ok'`)
     for (let i = 0; i < 40; i++) {
       await sleep(250)
-      const ready = await cdp.eval(`!!document.getElementById('sttAsrModel')?.options.length`)
+      const ready = await cdp.eval(`!!document.getElementById('fileAsrModel')?.options.length`)
       if (ready) break
     }
     await cdp.eval(`document.querySelector('#sttSubtabs [data-subtab="file"]')?.click(), 'ok'`)

@@ -26,6 +26,13 @@ let agyPage = null
 let terminalPage = null
 /** @type {typeof import('./stt-page.js') | null} */
 let sttPage = null
+/** @type {typeof import('./sysmon-page.js') | null} */
+let sysmonPage = null
+/** @type {typeof import('./ccswitch-page.js') | null} */
+let ccSwitchPage = null
+
+/** 額度來源。只給「非 Electron 環境」的假 electronAPI 用，真值在 `src/main/usage/constants.js`。 */
+const USAGE_PROVIDERS = ['claude-code', 'codex', 'antigravity', 'opencode-go', 'grok', 'ollama', 'commandcode']
 
 /** @returns {Promise<typeof import('./live-caption.js')>} */
 async function loadLiveCaption() {
@@ -78,6 +85,27 @@ async function loadSttPage() {
   return sttPage
 }
 
+/** @returns {Promise<typeof import('./sysmon-page.js')>} */
+async function loadSysmonPage() {
+  if (!sysmonPage) sysmonPage = await import('./sysmon-page.js')
+  return sysmonPage
+}
+
+/** @returns {Promise<typeof import('./ccswitch-page.js')>} */
+async function loadCcSwitchPage() {
+  if (!ccSwitchPage) ccSwitchPage = await import('./ccswitch-page.js')
+  return ccSwitchPage
+}
+
+/** @type {typeof import('./hf-page.js') | null} */
+let hfPage = null
+
+/** @returns {Promise<typeof import('./hf-page.js')>} */
+async function loadHfPage() {
+  if (!hfPage) hfPage = await import('./hf-page.js')
+  return hfPage
+}
+
 /**
  * 進「語音轉文字」頁：兩個子分頁的模組都要在（切子分頁不該再等一次 import），
  * 但引擎只給目前這個子分頁用——即時字幕 prewarm 很貴，停在檔案轉錄時不該先付。
@@ -90,6 +118,11 @@ async function activateSttSubtab(subtab) {
     live.prewarmEngine()
   } else {
     liveCaption?.cooldownEngine()
+  }
+  // 語音輸入不 acquire 引擎：它的模型是按下右 Alt 才用，預熱等於整天佔著記憶體
+  if (subtab === 'dictation') {
+    const page = await import('./dictation-page.js')
+    await page.refreshDictationPage()
   }
 }
 
@@ -145,7 +178,7 @@ export const electronAPI = window.electronAPI || {
   },
   usage: {
     load: async () => ({ ok: true, data: {
-      accounts: ['claude-code', 'codex', 'antigravity', 'opencode-go', 'grok'].map((provider, order) => ({
+      accounts: USAGE_PROVIDERS.map((provider, order) => ({
         id: provider,
         provider,
         accountName: provider,
@@ -158,10 +191,8 @@ export const electronAPI = window.electronAPI || {
         order
       })),
       settings: {
-        visibleProviders: ['claude-code', 'codex', 'antigravity', 'opencode-go', 'grok'],
-        providerOrder: ['claude-code', 'codex', 'antigravity', 'opencode-go', 'grok'],
-        opencodeWeeklyReset: { day: 1, hour: 7, minute: 0 },
-        opencodeMonthlyReset: { day: 29, hour: 0, minute: 0 }
+        visibleProviders: [...USAGE_PROVIDERS],
+        providerOrder: [...USAGE_PROVIDERS]
       },
       lastSyncedAt: null,
       diagnostics: []
@@ -268,6 +299,8 @@ const SETTING_DEFAULTS = {
   asrApiUrl: DEFAULT_ASR_API_URL,
   asrApiKey: '',
   asrModelId: DEFAULT_ASR_MODEL,
+  /** 多組雲端 ASR 設定，每組底下可以有好幾顆轉錄模型（功能頁的選單就是從這裡長出來的） */
+  asrClouds: [],
   ttsVoices: { ...DEFAULT_TTS_VOICES },
   /** 語速百分比偏移 -50…100 */
   ttsRate: 0,
@@ -276,7 +309,13 @@ const SETTING_DEFAULTS = {
   /** 本地 ASR 模型：qwen3asr（sherpa，CPU）/ qwen3asrgpu（llama-server，GPU） */
   asrModelKey: 'qwen3asr',
   /** 本地 LLM 是否使用 CUDA（需 NVIDIA ≥6GB）。全域：任何一頁用到本地翻譯都吃這個設定 */
-  llmGpu: false
+  llmGpu: false,
+  /** 語音輸入：全域右 Alt 的總開關（同時決定要不要開麥克風與鍵盤 hook） */
+  dictationEnabled: false,
+  /** 語音輸入整理後的輸出語言 */
+  dictationLang: 'zh-TW',
+  /** 語音輸入的整理模型：''（不整理）／`local:<key>`／`cloud:<供應商 id>:<模型 id>` */
+  dictationLlm: ''
 }
 
 /** 預設本地 ASR 模型 key（實際用哪顆由 main 讀 `asrModelKey` 決定） */
@@ -376,7 +415,8 @@ export async function getSettings() {
     localTranslateModel: normalizeLocalTranslateModel(raw.localTranslateModel),
     asrModelKey: normalizeAsrModelKey(raw.asrModelKey),
     llmGpu: raw.llmGpu === true,
-    chatProviders: Array.isArray(raw.chatProviders) ? raw.chatProviders : []
+    chatProviders: Array.isArray(raw.chatProviders) ? raw.chatProviders : [],
+    asrClouds: Array.isArray(raw.asrClouds) ? raw.asrClouds : []
   }
 }
 
@@ -385,7 +425,13 @@ const navItems = document.querySelectorAll('.nav-tab')
 const pages = document.querySelectorAll('.page')
 const asrApiUrlInput = document.getElementById('asrApiUrlInput')
 const asrApiKeyInput = document.getElementById('asrApiKeyInput')
-const asrModelIdInput = document.getElementById('asrModelIdInput')
+const asrModelListEl = document.getElementById('asrModelList')
+const asrAddModelBtn = document.getElementById('asrAddModelBtn')
+const asrCloudSelect = document.getElementById('asrCloudSelect')
+const asrCloudNameInput = document.getElementById('asrCloudNameInput')
+const asrAddCloudBtn = document.getElementById('asrAddCloudBtn')
+const asrDeleteCloudBtn = document.getElementById('asrDeleteCloudBtn')
+const asrCloudHint = document.getElementById('asrCloudHint')
 const toggleAsrApiKeyVisibility = document.getElementById('toggleAsrApiKeyVisibility')
 const modelList = document.getElementById('modelList')
 const modelsPathText = document.getElementById('modelsPathText')
@@ -423,10 +469,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   initNavigation()
   initChatPage()
   refreshChatPage()
+  // 終端機跟聊天共用這一頁：側欄的終端機清單啟動時就要接上（動態 import，不卡啟動）
+  loadTerminalPage().then((m) => m.refreshTerminalPage())
   // 子分頁切換要跟著換引擎擁有者：停在檔案轉錄時不該預熱即時字幕
   document.addEventListener('stt-subtab-changed', (e) => {
     activateSttSubtab(/** @type {CustomEvent} */ (e).detail?.subtab)
   })
+  // 語音輸入的熱鍵是全域的，停在哪一頁都要收得到 → 啟動就掛，不等使用者切過去
+  import('./dictation.js')
+    .then((m) => m.initDictation())
+    .catch((err) => console.warn('[語音輸入] 初始化失敗:', err))
 })
 
 // ===== 主題管理 =====
@@ -534,6 +586,33 @@ function initNavigation() {
 }
 
 /**
+ * 聊天與終端機共用同一頁：主區要顯示哪一個由最後點選的側欄項目決定。
+ * 'chat'＝對話主區、'terminal'＝終端機主區。切分頁時保持原樣，不重置。
+ * @type {'chat' | 'terminal'}
+ */
+let chatPaneMode = 'chat'
+
+/**
+ * 切換聊天頁的主區（對話／終端機）。
+ * DOM 的切換是同步的——呼叫端（點側欄項目、ccswitch 的更新按鈕）要先切再操作，
+ * xterm 的 fit 才量得到尺寸；模組載入與清單重讀是背景跑。
+ * @param {'chat' | 'terminal'} mode
+ */
+export function setChatPaneMode(mode) {
+  if (mode !== 'chat' && mode !== 'terminal') return
+  if (mode === chatPaneMode && mode === 'chat') return
+  chatPaneMode = mode
+  const chatMain = document.getElementById('chatMain')
+  const termMain = document.getElementById('termMain')
+  if (chatMain) chatMain.classList.toggle('hidden', mode !== 'chat')
+  if (termMain) termMain.classList.toggle('hidden', mode !== 'terminal')
+  // 終端機主區剛從 display:none 顯現，xterm 要等這一幀才 fit 得準
+  if (mode === 'terminal') {
+    loadTerminalPage().then((m) => m.refreshTerminalPage())
+  }
+}
+
+/**
  * 切換主分頁
  * @param {string} pageName
  */
@@ -548,8 +627,15 @@ export function switchPage(pageName) {
     page.classList.toggle('active', page.id === `page-${pageName}`)
   })
   // 先啟動新頁 acquire，再 release 舊頁，避免中間 owner 歸零觸發 unload＋重付 warm
-  if (pageName === 'chat') refreshChatPage()
-  if (pageName === 'terminal') loadTerminalPage().then((m) => m.refreshTerminalPage())
+  if (pageName === 'chat') {
+    refreshChatPage()
+    // 聊天與終端機同頁：兩邊的清單與狀態都要接上
+    loadTerminalPage().then((m) => m.refreshTerminalPage())
+    setChatPaneMode(chatPaneMode)
+  }
+  if (pageName === 'ccswitch') loadCcSwitchPage().then((m) => m.refreshCcSwitchPage())
+  if (pageName === 'hfmodels') loadHfPage().then((m) => m.start())
+  if (pageName === 'sysmon') loadSysmonPage().then((m) => m.refreshSysmonPage())
   if (pageName === 'usage') loadUsagePage().then((m) => m.refreshUsagePage())
   if (pageName === 'agy') loadAgyPage().then((m) => m.refreshAgyPage())
   if (pageName === 'stt') {
@@ -566,7 +652,12 @@ export function switchPage(pageName) {
   if (pageName !== 'stt') liveCaption?.cooldownEngine()
   if (pageName !== 'translate') translatePage?.cooldownTranslatePage()
   if (pageName !== 'usage') usagePage?.cooldownUsagePage()
+  // 取樣器會開 PowerShell 與 nvidia-smi；離開這一頁就該停，不能在背景一直跑
+  if (pageName !== 'sysmon') sysmonPage?.cooldownSysmonPage()
   if (pageName !== 'agy') agyPage?.cooldownAgyPage()
+  // **離開 HF模型頁不關 router**：聊天要用它，關掉等於每次切頁都把模型卸載一次。
+  // 這裡只收自己的計時器。
+  if (pageName !== 'hfmodels') hfPage?.stop()
 }
 
 /**
@@ -929,6 +1020,153 @@ async function onInstallCudaEnv() {
   }
 }
 
+// ===== 雲端 ASR 多組設定（跟聊天供應商同一套草稿機制）=====
+
+/** 全部設定 @type {Array<{ id: string, name: string, apiUrl: string, apiKey: string, models: string[] }>} */
+let asrCloudsDraft = []
+/** 目前編輯中的那一筆 */
+let asrCloudDraftId = ''
+
+function newAsrCloudId() {
+  return `ac_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+}
+
+/** 把畫面上的欄位收回草稿。切換設定與儲存前都要先做，否則編輯中的內容會掉。 */
+function captureAsrCloudFields() {
+  const cur = asrCloudsDraft.find((c) => c.id === asrCloudDraftId)
+  if (!cur) return
+  cur.name = asrCloudNameInput?.value.trim() || ''
+  cur.apiUrl = asrApiUrlInput?.value.trim() || ''
+  cur.apiKey = asrApiKeyInput?.value.trim() || ''
+  cur.models = readAsrModelRows()
+}
+
+/**
+ * 一組設定底下的模型清單（跟聊天供應商同一套：一列一顆、可增可刪）
+ * @param {string} value
+ * @param {{ focus?: boolean }} [options]
+ */
+function appendAsrModelRow(value, options = {}) {
+  if (!asrModelListEl) return
+  const row = document.createElement('div')
+  row.className = 'chat-model-row'
+  const input = document.createElement('input')
+  input.type = 'text'
+  input.className = 'input'
+  input.value = value
+  input.setAttribute('list', 'asrModelSuggestions')
+  input.placeholder = '轉錄模型 ID'
+  input.setAttribute('aria-label', '轉錄模型 ID')
+  const remove = document.createElement('button')
+  remove.type = 'button'
+  remove.className = 'btn-icon'
+  remove.title = '移除'
+  remove.setAttribute('aria-label', '移除模型')
+  remove.textContent = '−'
+  remove.addEventListener('click', () => row.remove())
+  row.append(input, remove)
+  asrModelListEl.appendChild(row)
+  if (options.focus) input.focus()
+}
+
+/** @returns {string[]} 去掉空白與重複 */
+function readAsrModelRows() {
+  if (!asrModelListEl) return []
+  const out = []
+  for (const row of asrModelListEl.querySelectorAll('.chat-model-row')) {
+    const id = row.querySelector('input[type="text"]')?.value.trim() || ''
+    if (id && !out.includes(id)) out.push(id)
+  }
+  return out
+}
+
+function renderAsrCloudSelect() {
+  if (!asrCloudSelect) return
+  asrCloudSelect.replaceChildren()
+  for (const cloud of asrCloudsDraft) {
+    const option = document.createElement('option')
+    option.value = cloud.id
+    option.textContent = cloud.name || '未命名設定'
+    asrCloudSelect.appendChild(option)
+  }
+  asrCloudSelect.value = asrCloudDraftId
+  asrCloudSelect.disabled = asrCloudsDraft.length === 0
+  syncCustomSelects()
+}
+
+function renderAsrCloudFields() {
+  const cur = asrCloudsDraft.find((c) => c.id === asrCloudDraftId) || null
+  const has = Boolean(cur)
+  for (const el of [asrCloudNameInput, asrApiUrlInput, asrApiKeyInput, asrAddModelBtn, asrDeleteCloudBtn]) {
+    if (el) el.disabled = !has
+  }
+  if (asrCloudNameInput) asrCloudNameInput.value = cur?.name || ''
+  if (asrApiUrlInput) asrApiUrlInput.value = cur?.apiUrl || ''
+  if (asrApiKeyInput) asrApiKeyInput.value = cur?.apiKey || ''
+  asrModelListEl?.replaceChildren()
+  const modelList = cur?.models?.length ? cur.models : (cur ? [DEFAULT_ASR_MODEL] : [])
+  for (const model of modelList) appendAsrModelRow(model)
+  if (asrCloudHint) {
+    asrCloudHint.textContent = has
+      ? '以下欄位屬於目前選取的設定，按下方「儲存設定」才會寫入。'
+      : '尚未有任何設定，按「＋ 新增」建立一組。'
+  }
+}
+
+function handleAsrCloudSwitch() {
+  captureAsrCloudFields()
+  asrCloudDraftId = asrCloudSelect?.value || ''
+  renderAsrCloudFields()
+}
+
+function handleAddAsrCloud() {
+  captureAsrCloudFields()
+  const cloud = {
+    id: newAsrCloudId(),
+    name: '新設定',
+    apiUrl: DEFAULT_ASR_API_URL,
+    apiKey: '',
+    models: [DEFAULT_ASR_MODEL]
+  }
+  asrCloudsDraft.push(cloud)
+  asrCloudDraftId = cloud.id
+  renderAsrCloudSelect()
+  renderAsrCloudFields()
+  asrCloudNameInput?.focus()
+  asrCloudNameInput?.select()
+}
+
+function handleDeleteAsrCloud() {
+  const cur = asrCloudsDraft.find((c) => c.id === asrCloudDraftId)
+  if (!cur) return
+  const label = cur.name || '未命名設定'
+  if (!window.confirm(`刪除設定「${label}」？它的 API Key 與模型清單會一併移除。`)) return
+  asrCloudsDraft = asrCloudsDraft.filter((c) => c.id !== asrCloudDraftId)
+  asrCloudDraftId = asrCloudsDraft[0]?.id || ''
+  renderAsrCloudSelect()
+  renderAsrCloudFields()
+}
+
+async function loadAsrCloudSettings() {
+  if (!asrApiUrlInput) return
+  const [clouds, activeId] = await Promise.all([
+    electronAPI.store.get('asrClouds', []),
+    electronAPI.store.get('asrCloudId', '')
+  ])
+  // 深拷貝成草稿：直接改 IPC 回來的物件不會有任何效果
+  asrCloudsDraft = (Array.isArray(clouds) ? clouds : []).map((c) => ({
+    id: c.id,
+    name: c.name || '',
+    apiUrl: c.apiUrl || '',
+    apiKey: c.apiKey || '',
+    // 舊檔只有單一 modelId，讀進來變成只有一顆的清單
+    models: Array.isArray(c.models) ? [...c.models] : (c.modelId ? [c.modelId] : [])
+  }))
+  asrCloudDraftId = asrCloudsDraft.find((c) => c.id === activeId)?.id || asrCloudsDraft[0]?.id || ''
+  renderAsrCloudSelect()
+  renderAsrCloudFields()
+}
+
 let segmentsInited = false
 
 /**
@@ -937,9 +1175,7 @@ let segmentsInited = false
 async function loadSettingsForm() {
   const settings = await getSettings()
 
-  if (asrApiUrlInput) asrApiUrlInput.value = settings.asrApiUrl || DEFAULT_ASR_API_URL
-  if (asrApiKeyInput) asrApiKeyInput.value = settings.asrApiKey || ''
-  if (asrModelIdInput) asrModelIdInput.value = settings.asrModelId || DEFAULT_ASR_MODEL
+  await loadAsrCloudSettings()
 
   const llmGpuSeg = settings.llmGpu ? 'gpu' : 'cpu'
   const theme = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark'
@@ -948,6 +1184,10 @@ async function loadSettingsForm() {
     initSegment('llmGpuSegment', llmGpuSeg)
     initSegment('themeSegment', theme, onThemeSegmentChange)
     initSettingsNav()
+    asrCloudSelect?.addEventListener('change', handleAsrCloudSwitch)
+    asrAddModelBtn?.addEventListener('click', () => appendAsrModelRow('', { focus: true }))
+    asrAddCloudBtn?.addEventListener('click', handleAddAsrCloud)
+    asrDeleteCloudBtn?.addEventListener('click', handleDeleteAsrCloud)
     segmentsInited = true
   } else {
     setSegmentValue('llmGpuSegment', llmGpuSeg)
@@ -971,12 +1211,22 @@ async function loadSettingsForm() {
 
 async function saveSettings() {
   let llmGpu = segmentValues.llmGpuSegment === 'gpu'
-  const asrApiKey = (asrApiKeyInput?.value || '').trim()
 
-  // 後端選擇已移到各功能頁的模型選單，這裡只在「目前真的選了雲端」時擋空金鑰
-  const current = await getSettings()
-  if (current.asrEngine === 'cloud' && !asrApiKey) {
-    showToast('目前語音轉文字選的是雲端，需要 API Key', 'error')
+  // 先把畫面欄位收回雲端 ASR 草稿，再取「目前選用那一筆」的金鑰來擋空
+  captureAsrCloudFields()
+  const curCloud = asrCloudsDraft.find((c) => c.id === asrCloudDraftId) || null
+  const badCloud = asrCloudsDraft.find((c) => c.apiUrl && !/^https?:\/\//i.test(c.apiUrl))
+  if (badCloud) {
+    showToast(`設定「${badCloud.name || '未命名'}」的 API URL 要以 http:// 或 https:// 開頭`, 'error')
+    return
+  }
+
+  // 後端選擇已移到各子分頁自己的模型選單，這裡只在「有任何一頁真的選了雲端」時擋空金鑰
+  const usingCloudAsr = await Promise.all(
+    ['fileAsr', 'liveAsr', 'dictationAsr'].map((k) => electronAPI.store.get(k, 'local:qwen3asr'))
+  ).then((values) => values.some((v) => String(v || '').startsWith('cloud')))
+  if (usingCloudAsr && !curCloud?.apiKey) {
+    showToast('有頁面的語音轉文字選的是雲端，需要 API Key', 'error')
     return
   }
   const chatValidation = validateChatSettings()
@@ -993,9 +1243,9 @@ async function saveSettings() {
   const ttsRate = normalizeTtsRate(ttsRateInput ? Number(ttsRateInput.value) : 0)
 
   await Promise.all([
-    electronAPI.store.set('asrApiUrl', (asrApiUrlInput?.value || '').trim() || DEFAULT_ASR_API_URL),
-    electronAPI.store.set('asrApiKey', asrApiKey),
-    electronAPI.store.set('asrModelId', (asrModelIdInput?.value || '').trim() || DEFAULT_ASR_MODEL),
+    // 舊的 asrApiUrl／asrApiKey／asrModelId 不再寫入；readConfig 對空清單仍退回它們保底
+    electronAPI.store.set('asrClouds', asrCloudsDraft),
+    electronAPI.store.set('asrCloudId', asrCloudDraftId),
     electronAPI.store.set('ttsVoices', readTtsVoicesFromForm()),
     electronAPI.store.set('ttsRate', ttsRate),
     electronAPI.store.set('llmGpu', llmGpu),

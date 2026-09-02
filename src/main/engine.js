@@ -7,6 +7,21 @@
 /** 依使用者選的模型分流到 sherpa（CPU）或 llama-server（GPU） */
 const localAsr = require('./asr-select')
 const localLlm = require('./local-llm')
+const modelScope = require('./model-scope')
+
+/** @type {{ get: (k: string, d?: unknown) => unknown } | null} */
+let storeRef = null
+
+/**
+ * owner 就是 scope（translate 例外：那是翻譯與 TTS 頁的全域設定）。
+ * @param {'live'|'file'|'translate'} owner
+ * @returns {string} 空字串＝用全域設定
+ */
+function llmKeyFor(owner) {
+  if (owner === 'translate') return ''
+  const llm = modelScope.readLlm(storeRef, owner)
+  return llm.mode === 'local' ? llm.modelKey : ''
+}
 
 /** @type {{ live: boolean, file: boolean, translate: boolean }} */
 const users = { live: false, file: false, translate: false }
@@ -58,8 +73,9 @@ async function acquire(owner, needs = {}) {
 
     // ASR 與 LLM 互相獨立，並行 warm 縮短同時載入兩模型的等待（warm 各自 catch 不 reject）
     const [asrRes, llmRes] = await Promise.all([
-      wantAsr ? localAsr.warm() : Promise.resolve(null),
-      wantLlm ? localLlm.warm() : Promise.resolve(null)
+      // owner 就是 scope：檔案轉錄與即時字幕各自選各自的 ASR 模型
+      wantAsr ? localAsr.warm(owner === 'live' ? 'live' : 'file') : Promise.resolve(null),
+      wantLlm ? localLlm.warm(llmKeyFor(owner)) : Promise.resolve(null)
     ])
     if (asrRes) warnings.push(...(asrRes.warnings || []))
     if (llmRes) warnings.push(...(llmRes.warnings || []))
@@ -131,10 +147,12 @@ function status() {
 /**
  * main 的 lazyLoad 會在第一次 require 時呼叫這裡。
  * **一定要轉給 asr-select**：`engine.acquire` 可能比任何 `localAsr:*` IPC 更早發生
- * （進頁就 prewarm），沒轉的話它讀不到 `asrModelKey`，使用者選了 GPU 模型也會 warm 成 CPU 那顆。
+ * （進頁就 prewarm），沒轉的話它讀不到該 scope 的 ASR 選擇，使用者選了 GPU 模型也會
+ * warm 成 CPU 那顆。
  * @param {object} store
  */
 function setStore(store) {
+  storeRef = /** @type {{ get: (k: string, d?: unknown) => unknown }} */ (store)
   localAsr.setStore(store)
 }
 

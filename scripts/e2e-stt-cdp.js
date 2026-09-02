@@ -2,16 +2,27 @@
  * 打包版 CDP：語音轉文字合併頁 ＋ 設定頁四分區 ＋ 語音試聽
  * 用法：node scripts/e2e-stt-cdp.js（會自己啟動 dist/win-unpacked/VoiceInk.exe）
  *
- * 這支會改到 `asrEngine`／`asrModelKey`／`translator`／`localTranslateModel` 四個 store key，
- * **開頭先讀下來、finally 一定寫回**，不留下測試痕跡在使用者的設定裡。
+ * 這支會改到三個子分頁各自的模型選擇（`fileAsr`／`fileLlm`／`liveAsr`／`liveLlm`／
+ * `dictationAsr`）與翻譯頁的全域那組，**開頭先讀下來、finally 一定寫回**，
+ * 不留下測試痕跡在使用者的設定裡。
  */
 const { spawn } = require('child_process')
 const path = require('path')
+const os = require('os')
+const fs = require('fs')
 const http = require('http')
 
 const PORT = 9243
-const EXE = path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
-const RESTORE_KEYS = ['asrEngine', 'asrModelKey', 'translator', 'localTranslateModel']
+// Windows 偶爾會有別的東西鎖住 dist/win-unpacked（打包失敗、防毒掃描中），
+// 這時可以打包到別的資料夾再用 VOICEINK_EXE 指過去，測試不必等鎖放掉
+const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
+// 暫存 user-data-dir：使用者開著的正式實例佔 single-instance lock，
+// 沒有自己的資料夾會被擋掉（second-instance 轉交後退出，CDP 等不到主視窗）
+const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-cdp-'))
+const RESTORE_KEYS = [
+  'fileAsr', 'fileLlm', 'liveAsr', 'liveLlm', 'dictationAsr',
+  'translator', 'localTranslateModel'
+]
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 function getJson(url) {
@@ -85,7 +96,7 @@ async function waitFor(action, timeoutMs, label) {
 }
 
 async function main() {
-  const child = spawn(EXE, [`--remote-debugging-port=${PORT}`], { stdio: ['ignore', 'pipe', 'pipe'] })
+  const child = spawn(EXE, [`--remote-debugging-port=${PORT}`, `--user-data-dir=${USER_DATA_DIR}`], { stdio: ['ignore', 'pipe', 'pipe'] })
   let processLog = ''
   child.stdout.on('data', (c) => { processLog += c })
   child.stderr.on('data', (c) => { processLog += c })
@@ -127,7 +138,7 @@ async function main() {
 
     // ---- 合併頁結構 ----
     await cdp.eval(`document.querySelector('[data-page="stt"]').click(), 'ok'`)
-    await waitFor(() => cdp.eval(`!!document.getElementById('sttAsrModel')?.options.length`), 10000, '模型選單填好')
+    await waitFor(() => cdp.eval(`!!document.getElementById('fileAsrModel')?.options.length`), 10000, '模型選單填好')
 
     const layout = await cdp.eval(`(() => ({
       subtabs: [...document.querySelectorAll('#sttSubtabs .subtab')].map((b) => b.dataset.subtab),
@@ -135,34 +146,44 @@ async function main() {
       activeCount: document.querySelectorAll('#page-stt .subtab-panel.active').length,
       hasDropZone: !!document.querySelector('#stt-file #dropZone'),
       hasLiveBtn: !!document.querySelector('#stt-live #startLiveBtn'),
+      hasDictation: !!document.querySelector('#stt-dictation #dictationEnabledInput'),
       // 舊的兩個 nav 分頁與 section 都不該還在
       noOldNav: !document.querySelector('[data-page="transcribe"], [data-page="live"]'),
       noOldSections: !document.getElementById('page-transcribe') && !document.getElementById('page-live')
     }))()`)
     ok(
-      '檔案轉錄與即時字幕合併成一頁的子分頁',
-      JSON.stringify(layout?.subtabs) === JSON.stringify(['file', 'live']) &&
+      '檔案轉錄／即時字幕／語音輸入合併成一頁的子分頁',
+      JSON.stringify(layout?.subtabs) === JSON.stringify(['file', 'live', 'dictation']) &&
         layout.activePanel === 'stt-file' && layout.activeCount === 1 &&
-        layout.hasDropZone && layout.hasLiveBtn && layout.noOldNav && layout.noOldSections,
+        layout.hasDropZone && layout.hasLiveBtn && layout.hasDictation &&
+        layout.noOldNav && layout.noOldSections,
       JSON.stringify(layout)
     )
 
-    // 模型選單貼在標題那一列，不是自己佔一條橫排
-    const chips = await cdp.eval(`(() => {
-      const head = document.querySelector('#page-stt .page-header')
-      const bar = document.getElementById('sttModelBar')
-      const title = head?.querySelector('h1')
+    // 三個子分頁各自有自己的模型選單，而且都在自己的面板裡（不在共用的標題列）
+    const bars = await cdp.eval(`(() => {
+      const inPanel = (panelId, selectId) => {
+        const panel = document.getElementById(panelId)
+        const sel = document.getElementById(selectId)
+        return !!panel && !!sel && panel.contains(sel)
+      }
       return {
-        insideHeader: !!head && head.contains(bar),
-        sameRow: title && bar
-          ? Math.abs(title.getBoundingClientRect().top - bar.getBoundingClientRect().top) < 60
-          : false,
-        translateInsideHeader: !!document.querySelector('#page-translate .page-header #translateModelBar'),
-        hintHidden: document.getElementById('sttModelHint')?.classList.contains('hidden') === true
+        fileAsr: inPanel('stt-file', 'fileAsrModel'),
+        fileLlm: inPanel('stt-file', 'fileLlmModel'),
+        liveAsr: inPanel('stt-live', 'liveAsrModel'),
+        liveLlm: inPanel('stt-live', 'liveLlmModel'),
+        dictAsr: inPanel('stt-dictation', 'dictationAsrModel'),
+        dictLlm: inPanel('stt-dictation', 'dictationLlmSelect'),
+        noSharedBar: !document.getElementById('sttModelBar') && !document.getElementById('sttModelHint'),
+        headerHasNoSelect: !document.querySelector('#page-stt .page-header select'),
+        translateInsideHeader: !!document.querySelector('#page-translate .page-header #translateModelBar')
       }
     })()`)
-    ok('模型選單就在頁面標題旁（不另佔一條橫排）',
-      chips?.insideHeader && chips.sameRow && chips.translateInsideHeader, JSON.stringify(chips))
+    ok('三個子分頁各自有 ASR 與 LLM 選單、都在自己的面板裡',
+      bars?.fileAsr && bars.fileLlm && bars.liveAsr && bars.liveLlm && bars.dictAsr && bars.dictLlm,
+      JSON.stringify(bars))
+    ok('標題旁不再有共用的模型選單',
+      bars?.noSharedBar && bars.headerHasNoSelect && bars.translateInsideHeader, JSON.stringify(bars))
 
     const switched = await cdp.eval(`(async () => {
       document.querySelector('#sttSubtabs [data-subtab="live"]').click()
@@ -175,63 +196,94 @@ async function main() {
     ok('子分頁可以來回切', switched?.live === 'stt-live' && switched?.back === 'stt-file',
       JSON.stringify(switched))
 
-    // ---- 模型選單：選了要寫回 store ----
+    // ---- 模型選單：選了要寫回自己那一個 store key ----
     const asrValues = await cdp.eval(
-      `[...document.getElementById('sttAsrModel').options].map((o) => o.value)`
+      `[...document.getElementById('fileAsrModel').options].map((o) => o.value)`
     )
+    // 雲端那幾項是「每一組設定的每一顆轉錄模型」，所以數量跟使用者設定有關；
+    // 這裡只確認兩顆本地在前、後面至少有一個雲端項
     ok(
       'ASR 選單同時列出兩顆本地模型與雲端',
-      JSON.stringify(asrValues) === JSON.stringify(['local:qwen3asr', 'local:qwen3asrgpu', 'cloud']),
+      asrValues[0] === 'local:qwen3asr' && asrValues[1] === 'local:qwen3asrgpu'
+        && asrValues.slice(2).every((v) => v.startsWith('cloud'))
+        && asrValues.length >= 3,
       JSON.stringify(asrValues)
     )
 
     const wroteGpu = await cdp.eval(`(async () => {
-      const sel = document.getElementById('sttAsrModel')
+      const sel = document.getElementById('fileAsrModel')
       sel.value = 'local:qwen3asrgpu'
       sel.dispatchEvent(new Event('change'))
       await new Promise((r) => setTimeout(r, 500))
-      return {
-        engine: await window.electronAPI.store.get('asrEngine', null),
-        key: await window.electronAPI.store.get('asrModelKey', null)
+      return await window.electronAPI.store.get('fileAsr', null)
+    })()`)
+    ok('選 GPU 模型會寫回 fileAsr', wroteGpu === 'local:qwen3asrgpu', String(wroteGpu))
+
+    // 這是這次改動的核心：三頁各存各的，改一頁不可以動到另外兩頁
+    const isolated = await cdp.eval(`(async () => {
+      const set = async (id, value) => {
+        const sel = document.getElementById(id)
+        sel.value = value
+        sel.dispatchEvent(new Event('change'))
+        await new Promise((r) => setTimeout(r, 400))
       }
+      // 雲端選項現在是「哪一組設定的哪一顆模型」（cloud:設定id:模型id），
+      // 寫死 'cloud' 會設不進去（沒有這個 option）→ 取選單裡真的存在的第一個雲端項
+      const cloudValue = [...document.getElementById('liveAsrModel').options]
+        .map((o) => o.value).find((v) => v.startsWith('cloud'))
+      await set('liveAsrModel', cloudValue)
+      await set('dictationAsrModel', 'local:qwen3asr')
+      await set('fileLlmModel', 'local:qwen35translate')
+      await set('liveLlmModel', 'local:qwen354b')
+      const keys = ['fileAsr', 'liveAsr', 'dictationAsr', 'fileLlm', 'liveLlm']
+      const out = { cloudValue }
+      for (const k of keys) out[k] = await window.electronAPI.store.get(k, null)
+      return out
     })()`)
-    ok('選 GPU 模型會寫回 asrEngine=local ＋ asrModelKey',
-      wroteGpu?.engine === 'local' && wroteGpu?.key === 'qwen3asrgpu', JSON.stringify(wroteGpu))
+    ok(
+      '三個子分頁的 ASR 選擇互不干擾',
+      isolated?.fileAsr === 'local:qwen3asrgpu' && isolated?.liveAsr === isolated?.cloudValue &&
+        isolated?.dictationAsr === 'local:qwen3asr',
+      JSON.stringify(isolated)
+    )
+    ok(
+      '檔案轉錄與即時字幕的翻譯模型也各存各的',
+      isolated?.fileLlm === 'local:qwen35translate' && isolated?.liveLlm === 'local:qwen354b',
+      JSON.stringify(isolated)
+    )
 
-    const wroteCloud = await cdp.eval(`(async () => {
-      const sel = document.getElementById('sttAsrModel')
-      sel.value = 'cloud'
-      sel.dispatchEvent(new Event('change'))
-      await new Promise((r) => setTimeout(r, 500))
-      return await window.electronAPI.store.get('asrEngine', null)
-    })()`)
-    ok('選雲端會寫回 asrEngine=cloud', wroteCloud === 'cloud', String(wroteCloud))
-
-    const wroteLlm = await cdp.eval(`(async () => {
-      const sel = document.getElementById('sttTranslateModel')
-      sel.value = 'local:qwen35translate'
-      sel.dispatchEvent(new Event('change'))
-      await new Promise((r) => setTimeout(r, 500))
-      return {
-        translator: await window.electronAPI.store.get('translator', null),
-        model: await window.electronAPI.store.get('localTranslateModel', null)
-      }
-    })()`)
-    ok('翻譯選單會寫回 translator ＋ localTranslateModel',
-      wroteLlm?.translator === 'local' && wroteLlm?.model === 'qwen35translate', JSON.stringify(wroteLlm))
-
-    // ---- 兩頁共用同一份設定 ----
-    const shared = await cdp.eval(`(async () => {
+    // ---- 翻譯與 TTS 頁是另一組（全域 key），不被子分頁的選擇帶著跑 ----
+    const translatePage = await cdp.eval(`(async () => {
+      await window.electronAPI.store.set('translator', 'local')
+      await window.electronAPI.store.set('localTranslateModel', 'linguaforge08q4')
       document.querySelector('[data-page="translate"]').click()
       await new Promise((r) => setTimeout(r, 900))
       return document.getElementById('translatePageModel')?.value || ''
     })()`)
-    ok('翻譯頁的選單跟語音轉文字頁看到同一份設定', shared === 'local:qwen35translate', String(shared))
+    ok('翻譯與 TTS 頁用自己的全域設定（不跟子分頁共用）',
+      translatePage === 'local:linguaforge08q4', String(translatePage))
+
+    // 回語音轉文字頁，確認重讀後畫面跟 store 對得上
+    const reread = await cdp.eval(`(async () => {
+      document.querySelector('[data-page="stt"]').click()
+      await new Promise((r) => setTimeout(r, 900))
+      return {
+        file: document.getElementById('fileAsrModel')?.value || '',
+        live: document.getElementById('liveAsrModel')?.value || '',
+        dict: document.getElementById('dictationAsrModel')?.value || ''
+      }
+    })()`)
+    ok('重新進頁時三個選單各自讀回自己的值',
+      reread?.file === 'local:qwen3asrgpu' && reread?.live === isolated?.cloudValue &&
+        reread?.dict === 'local:qwen3asr',
+      JSON.stringify(reread))
 
     // ---- 未安裝的模型要標出來 ----
     const notReady = await cdp.eval(`(async () => {
       const status = await window.electronAPI.models.status()
       const missing = Object.values(status.models).filter((m) => !m.downloaded).map((m) => m.key)
+      document.querySelector('[data-page="translate"]').click()
+      await new Promise((r) => setTimeout(r, 700))
       const labels = [...document.getElementById('translatePageModel').options].map((o) => o.textContent)
       return { missing, marked: labels.filter((l) => l.includes('未安裝')).length }
     })()`)

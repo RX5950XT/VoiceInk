@@ -11,7 +11,9 @@ const PROVIDERS = [
   ['codex', 'Codex', '#46a5ff'],
   ['antigravity', 'Antigravity', '#59c889'],
   ['opencode-go', 'OpenCode', '#f0bd4f'],
-  ['grok', 'Grok', '#a8a8b3']
+  ['grok', 'Grok', '#a8a8b3'],
+  ['ollama', 'Ollama Cloud', '#5fc9c9'],
+  ['commandcode', 'Command Code', '#b078e8']
 ]
 const PROVIDER_META = new Map(PROVIDERS.map(([id, label, accent]) => [id, { label, accent }]))
 const STATUS_LABELS = {
@@ -59,9 +61,7 @@ function initialState() {
     })),
     settings: {
       visibleProviders: PROVIDERS.map(([id]) => id),
-      providerOrder: PROVIDERS.map(([id]) => id),
-      opencodeWeeklyReset: { day: 1, hour: 7, minute: 0 },
-      opencodeMonthlyReset: { day: 29, hour: 0, minute: 0 }
+      providerOrder: PROVIDERS.map(([id]) => id)
     },
     lastSyncedAt: null,
     diagnostics: []
@@ -94,10 +94,10 @@ function formatWindowTitle(window) {
   return window.label ? `${window.label} · ${kind}` : kind
 }
 
-function formatCountdown(resetAt, nowMs = Date.now()) {
-  if (!resetAt) return '未提供重置時間'
+function formatCountdown(resetAt, nowMs = Date.now(), kind = '', used = NaN) {
+  if (!resetAt) return kind === 'rolling-5h' && Number(used) === 0 ? '尚未啟動' : '上游未提供重置時間'
   const target = Date.parse(resetAt)
-  if (!Number.isFinite(target)) return '未提供重置時間'
+  if (!Number.isFinite(target)) return '上游未提供重置時間'
   const remaining = target - nowMs
   if (remaining <= 0) return '可重新整理'
   const totalMinutes = Math.floor(remaining / 60_000)
@@ -121,8 +121,10 @@ function createQuotaRow(window) {
   const row = createElement('div', 'usage-quota-row')
   const head = createElement('div', 'usage-quota-head')
   head.appendChild(createElement('strong', '', formatWindowTitle(window)))
-  const reset = createElement('span', 'usage-reset-label', formatCountdown(window.resetAt))
+  const reset = createElement('span', 'usage-reset-label', formatCountdown(window.resetAt, Date.now(), window.kind, window.used))
   reset.dataset.resetAt = window.resetAt || ''
+  reset.dataset.windowKind = window.kind
+  reset.dataset.windowUsed = String(window.used)
   head.appendChild(reset)
 
   const value = percentage(window)
@@ -146,13 +148,12 @@ function createQuotaRow(window) {
  * 訂閱方案文字。同步後 main 會把真實方案寫進 planName
  * （`Claude Pro / Max`、`ChatGPT Plus`、`Antigravity Google AI Pro`、`Grok SuperGrok`…）；
  * 沒同步過時它等於 provider 名稱，那就沒有資訊量、不顯示。
- * OpenCode 沒有訂閱方案概念（planName 是「本機估算（Go 上限）」，footer 的可信度已經講過了）。
  * @param {{ provider: string, planName: string, status: string }} account
  * @param {string} label
  * @returns {string}
  */
 function planLabel(account, label) {
-  if (account.provider === 'opencode-go' || account.status === 'disconnected') return ''
+  if (account.status === 'disconnected') return ''
   const plan = String(account.planName || '').trim()
   if (!plan || plan === label) return ''
   // 卡片標題已經寫著 provider 名字，`Antigravity Google AI Pro` 只留後半段
@@ -549,19 +550,27 @@ function renderSummary() {
 function render() {
   if (!state || !byId('usageGrid')) return
   if (sortSession) finishSortSession()
+  const accounts = visibleAccounts()
+  const grid = byId('usageGrid')
+  grid.dataset.cardCount = String(accounts.length)
   const fragment = document.createDocumentFragment()
-  for (const account of visibleAccounts()) fragment.appendChild(createCard(account))
+  for (const account of accounts) fragment.appendChild(createCard(account))
   if (!fragment.childNodes.length) {
     fragment.appendChild(createElement('p', 'usage-grid-empty', '所有項目都已隱藏，可從「顯示設定」重新開啟。'))
   }
-  byId('usageGrid').replaceChildren(fragment)
+  grid.replaceChildren(fragment)
   renderSummary()
   updateCountdowns()
 }
 
 function updateCountdowns() {
   document.querySelectorAll('#usageGrid [data-reset-at]').forEach((element) => {
-    element.textContent = formatCountdown(element.dataset.resetAt)
+    element.textContent = formatCountdown(
+      element.dataset.resetAt,
+      Date.now(),
+      element.dataset.windowKind,
+      element.dataset.windowUsed
+    )
   })
 }
 
@@ -597,15 +606,6 @@ async function saveUsageSettings(settings) {
   }
 }
 
-function formatTime(config) {
-  return `${String(config.hour).padStart(2, '0')}:${String(config.minute).padStart(2, '0')}`
-}
-
-function parseTime(value) {
-  const match = /^(\d{2}):(\d{2})$/.exec(value || '')
-  return match ? { hour: Number(match[1]), minute: Number(match[2]) } : { hour: 0, minute: 0 }
-}
-
 function populateSettingsDialog() {
   const visible = new Set(state.settings.visibleProviders)
   const toggles = byId('usageProviderToggles')
@@ -620,31 +620,12 @@ function populateSettingsDialog() {
     fragment.appendChild(row)
   }
   toggles.replaceChildren(fragment)
-  const weekly = state.settings.opencodeWeeklyReset
-  const monthly = state.settings.opencodeMonthlyReset
-  byId('usageWeeklyDay').value = String(weekly.day)
-  byId('usageWeeklyTime').value = formatTime(weekly)
-  byId('usageMonthlyDay').value = String(monthly.day)
-  byId('usageMonthlyTime').value = formatTime(monthly)
 }
 
 function readDialogSettings() {
   const visibleProviders = [...byId('usageProviderToggles').querySelectorAll('input:checked')]
     .map((input) => input.value)
-  const weeklyTime = parseTime(byId('usageWeeklyTime').value)
-  const monthlyTime = parseTime(byId('usageMonthlyTime').value)
-  return {
-    ...state.settings,
-    visibleProviders,
-    opencodeWeeklyReset: {
-      day: Number(byId('usageWeeklyDay').value),
-      ...weeklyTime
-    },
-    opencodeMonthlyReset: {
-      day: Number(byId('usageMonthlyDay').value),
-      ...monthlyTime
-    }
-  }
+  return { ...state.settings, visibleProviders }
 }
 
 async function onSync() {
@@ -704,23 +685,41 @@ function bindDialogs() {
   })
 }
 
-function populateMonthlyDays() {
-  const select = byId('usageMonthlyDay')
-  const fragment = document.createDocumentFragment()
-  for (let day = 1; day <= 31; day++) {
-    const option = createElement('option', '', `${day} 日`)
-    option.value = String(day)
-    fragment.appendChild(option)
+/**
+ * 子分頁切換。「訂閱額度」看還剩多少（官方 API），「用量統計」看實際用掉多少
+ * （本機 session 記錄）——是兩件事，所以分兩個子分頁而不是硬塞進同一片。
+ *
+ * 統計那半的程式碼另外 dynamic import：它會掃 GB 等級的記錄，沒點進去就不該載。
+ * @param {'quota'|'stats'} name
+ */
+function showUsageSubtab(name) {
+  document.querySelectorAll('#usageSubtabs .subtab').forEach((btn) => {
+    const on = btn.dataset.subtab === name
+    btn.classList.toggle('active', on)
+    btn.setAttribute('aria-selected', on ? 'true' : 'false')
+  })
+  document.querySelectorAll('#page-usage .subtab-panel').forEach((panel) => {
+    panel.classList.toggle('active', panel.dataset.subtab === name)
+  })
+  // 額度那組操作鈕只對訂閱額度有意義
+  byId('usageDiagnosticsBtn')?.classList.toggle('hidden', name !== 'quota')
+  byId('usageSettingsBtn')?.classList.toggle('hidden', name !== 'quota')
+  byId('usageSyncBtn')?.classList.toggle('hidden', name !== 'quota')
+  if (name === 'stats') {
+    void import('./code-usage-page.js').then((mod) => mod.refreshCodeUsagePage())
   }
-  select.replaceChildren(fragment)
 }
 
 export async function initUsagePage() {
   if (initialized || !byId('page-usage')) return
   initialized = true
   state = initialState()
-  populateMonthlyDays()
   byId('usageSyncBtn').addEventListener('click', onSync)
+  document.querySelectorAll('#usageSubtabs .subtab').forEach((btn) => {
+    btn.addEventListener('click', () => showUsageSubtab(
+      /** @type {'quota'|'stats'} */ (btn.dataset.subtab)
+    ))
+  })
   bindDialogs()
   render()
   try {

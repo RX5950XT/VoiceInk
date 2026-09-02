@@ -6,6 +6,7 @@ const path = require('path')
 const fs = require('fs')
 const models = require('./models')
 const chat = require('./chat')
+const modelScope = require('./model-scope')
 const chatStore = require('./chat-store')
 const { sanitizeTtsVoices, DEFAULT_TTS_VOICES, VOICES_BY_LANG, listVoices } = require('./tts-voices')
 
@@ -20,6 +21,12 @@ const TTS_PREVIEW_TEXT = Object.freeze({
 const { registerUsageIpc } = require('./usage/ipc')
 const { registerAgyIpc } = require('./agy/ipc')
 const { registerTerminalIpc } = require('./terminal/ipc')
+const { registerSysmonIpc } = require('./sysmon/ipc')
+const { registerHfModelsIpc } = require('./hfmodels/ipc')
+const { registerCcSwitchIpc } = require('./ccswitch/ipc')
+const { registerCodeUsageIpc } = require('./codeusage/ipc')
+const { registerDictationIpc } = require('./dictation/ipc')
+const dictationHud = require('./dictation/hud')
 
 const bootStartedAt = Date.now()
 function bootLog(step) {
@@ -43,7 +50,7 @@ function lazyLoad(id) {
   }
 }
 
-/** 本地 ASR 門面：依 `asrModelKey` 分流 sherpa（CPU）／llama-server（GPU） */
+/** 本地 ASR 門面：依各頁自己的 ASR 選擇分流 sherpa（CPU）／llama-server（GPU） */
 const loadLocalAsr = lazyLoad('./asr-select')
 const loadLocalLlm = lazyLoad('./local-llm')
 const loadEngine = lazyLoad('./engine')
@@ -57,7 +64,12 @@ const loadGpu = lazyLoad('./gpu-capability')
 const loadCudaEnv = lazyLoad('./cuda-env')
 
 let agyMod = null
+let dictationMod = null
 let terminalMod = null
+let sysmonMod = null
+let ccSwitchMod = null
+let codeUsageMod = null
+let hfModelsMod = null
 let backgroundStarted = false
 /** @type {Promise<object>|null} */
 let storeReady = null
@@ -75,6 +87,8 @@ let isQuitting = false
 
 // 開發模式判斷
 const isDev = !app.isPackaged
+
+dictationHud.configure({ isDev, preload: path.join(__dirname, '../preload/preload.js') })
 
 // 開機自啟動時帶的旗標：靜靜地縮在系統匣，不要跳一扇窗出來
 const HIDDEN_FLAG = '--hidden'
@@ -101,6 +115,10 @@ const STORE_ALLOWLIST = new Set([
   'asrApiUrl',
   'asrApiKey',
   'asrModelId',
+  // 雲端 ASR 多組設定（可切換）；asrApiUrl／asrApiKey／asrModelId 是搬移前的舊 key，
+  // readConfig 的保底還會讀，所以不刪
+  'asrClouds',
+  'asrCloudId',
   'theme',
   'closeToTray',
   'subtitleFontScale',
@@ -118,7 +136,24 @@ const STORE_ALLOWLIST = new Set([
   'translateModelId',
   'chatPrompts',
   'chatPromptId',
-  'chatThinking'
+  'chatThinking',
+  'sysmonInterval',
+  'sysmonSort',
+  'sysmonSensors',
+  'dictationEnabled',
+  'dictationLang',
+  // HF模型：資料夾可自選（大模型放不進 C 碟）、同時載入幾顆、開 App 要不要自動起 router。
+  // **`hfToken` 刻意不在這裡**：它是機密，只走 `hfmodels:setToken`，renderer 讀不到
+  'hfModelsDir',
+  'hfModelsMax',
+  'hfAutoStart',
+  // 三個子分頁各自的模型選擇（值的格式見 model-scope.js）
+  'fileAsr',
+  'fileLlm',
+  'liveAsr',
+  'liveLlm',
+  'dictationAsr',
+  'dictationLlm'
 ])
 
 const TRANSLATOR_VALUES = new Set(['cloud', 'local'])
@@ -129,8 +164,30 @@ const TRANSLATE_TARGET_LANGS = new Set(['zh-TW', 'zh-CN', 'en', 'ja', 'ko'])
 const MAX_TRANSLATE_CHARS = 1500
 const DEFAULT_LLM_KEY = 'linguaforge08q4'
 const DEFAULT_ASR_MODEL_KEY = 'qwen3asr'
-/** 已下架的模型 key → 接替者（讀到舊值就當成新值，不必寫回） */
-const RETIRED_MODEL_KEYS = Object.freeze({ linguaforge08: 'linguaforge08q4' })
+/** 已下架的模型 key → 接替者（讀到舊值就當成新值，不必寫回）；表在 models.js */
+const RETIRED_MODEL_KEYS = models.RETIRED_MODEL_KEYS
+
+/** 語音輸入的整理語言（跟翻譯的目標語言同一組） */
+const DICTATION_LANGS = new Set(['zh-TW', 'zh-CN', 'en', 'ja', 'ko'])
+
+/**
+ * 某一頁的 LLM 選擇：''（不使用）／`local:<llm key>`／`cloud:<供應商 id>:<模型 id>`。
+ *
+ * 跟聊天／翻譯同一個規矩——只認「目前真的存在」的供應商與模型，
+ * 不然刪掉一組供應商之後，這裡還會拿舊的 id 去打別人的端點。
+ * @param {import('./model-scope').Scope} scope
+ * @param {unknown} raw
+ * @returns {string}
+ */
+function sanitizeScopedLlm(scope, raw) {
+  // `allProviders` 才看得到「本機模型」那一筆（router 跑著時才有）：
+  // 用 `sanitizeProviders` 的話，三個子分頁選了本機模型會在下一次收斂時被清掉
+  return modelScope.sanitizeLlm(
+    raw,
+    chat.allProviders(),
+    modelScope.LLM_OPTIONAL[scope]
+  )
+}
 
 /**
  * @param {unknown} val
@@ -169,6 +226,41 @@ async function loadAgy() {
 }
 
 /**
+ * 語音辨識的共用入口。scope 決定讀哪一頁的選擇（三頁各存一份），
+ * 本地再由 `asr-select` 依那一頁選的模型分流。scope 由呼叫點決定，
+ * **不接受 renderer 傳進來**。
+ * @param {import('./model-scope').Scope} scope
+ * @param {{ samples: unknown, sampleRate?: number, lang?: string }} req
+ * @returns {Promise<string>}
+ */
+async function transcribeSamples(scope, req) {
+  if (!store) await initStore()
+  if (modelScope.readAsr(store, scope).engine === 'cloud') {
+    return loadCloudAsr().transcribeSamples(req || {}, store, scope)
+  }
+  return loadLocalAsr().transcribe(scope, req)
+}
+
+/**
+ * 第一次用到語音輸入才載模組（會 require 低階鍵盤 hook 的原生模組）。
+ * @returns {Promise<object>}
+ */
+async function loadDictation() {
+  await initStore()
+  if (!dictationMod) {
+    dictationMod = require('./dictation')
+    dictationMod.setStore(store)
+    dictationMod.configure({
+      emit: (payload) => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('dictation:event', payload)
+      },
+      transcribe: (req) => transcribeSamples('dictation', req)
+    })
+  }
+  return dictationMod
+}
+
+/**
  * 第一次用到終端機才載模組（node-pty 是原生模組，不該擋啟動）。
  * @returns {object}
  */
@@ -183,6 +275,126 @@ function loadTerminal() {
 }
 
 /**
+ * 第一次進 Claude Code 頁才載模組（會讀使用者家目錄的設定檔，不該擋啟動）。
+ * @returns {object}
+ */
+function loadCcSwitch() {
+  if (!ccSwitchMod) {
+    ccSwitchMod = require('./ccswitch')
+    ccSwitchMod.configure({
+      userDataPath: app.getPath('userData'),
+      // OAuth 登入要把使用者帶去系統瀏覽器；只放行我們自己組出來的 https 授權網址
+      openExternal: (url) => {
+        if (typeof url === 'string' && url.startsWith('https://')) void shell.openExternal(url)
+      }
+    })
+  }
+  return ccSwitchMod
+}
+
+/**
+ * 第一次看用量統計才載模組（會掃 GB 等級的本機 session 記錄，不該擋啟動）。
+ * @returns {object}
+ */
+function loadCodeUsage() {
+  if (!codeUsageMod) {
+    codeUsageMod = require('./codeusage')
+    codeUsageMod.configure({ userDataPath: app.getPath('userData') })
+  }
+  return codeUsageMod
+}
+
+/**
+ * 第一次進系統監控頁才載模組（會開 PowerShell 與 nvidia-smi 子程序，不該擋啟動）。
+ * @returns {object}
+ */
+function loadSysmon() {
+  if (!sysmonMod) {
+    sysmonMod = require('./sysmon').createSysmonService()
+    sysmonMod.setEmitter((payload) => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('sysmon:event', payload)
+    })
+  }
+  // 每次都重帶：風扇設定要 store，而 loadSysmon 可能比 initStore 早發生
+  sysmonMod.configure({
+    store: store || undefined,
+    userDataPath: app.getPath('userData'),
+    packaged: app.isPackaged
+  })
+  return sysmonMod
+}
+
+/**
+ * 「HF模型」服務。第一次用到才 require——它會拉進 llama.cpp router 那一整串。
+ * @returns {object}
+ */
+function loadHfModels() {
+  if (!hfModelsMod) {
+    hfModelsMod = require('./hfmodels')
+    hfModelsMod.init({
+      userDataPath: app.getPath('userData'),
+      store: store || undefined,
+      onEvent: (payload) => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('hfmodels:event', payload)
+      }
+    })
+  }
+  // store 可能比第一次呼叫還晚好（IPC 進得來的時間點不保證）
+  if (store) hfModelsMod.setStore(store)
+  return hfModelsMod
+}
+
+/**
+ * 讓聊天看得到「本機模型」。
+ *
+ * **只在 router 已經跑著時才回東西**：`localSource` 不可以自己去啟動 router，
+ * 那會讓「打開聊天頁」變成「載入一顆 20GB 的模型」。真的要用時
+ * `chat.send` 會走 `ensureLocalModel` 把它叫起來。
+ */
+function wireChatLocalProvider() {
+  chat.setLocalSource(
+    () => {
+      if (!hfModelsMod) return null
+      const endpoint = hfModelsMod.endpoint()
+      if (!endpoint) return null
+      return { ...endpoint, models: hfLocalModelIds }
+    },
+    async (modelId) => {
+      try {
+        await loadHfModels().ensureRuntime()
+        return await loadHfModels().loadModel(modelId)
+      } catch {
+        return false
+      }
+    }
+  )
+}
+
+/**
+ * router 現在有哪幾顆模型可以用（含還沒載入的——選了才載）。
+ * 用快取而不是每次去問：`chat.readConfig` 是同步的，而問 router 要走 HTTP。
+ * @type {string[]}
+ */
+let hfLocalModelIds = []
+
+/**
+ * @returns {Promise<string[]>}
+ */
+async function refreshHfLocalModels() {
+  if (!hfModelsMod || !hfModelsMod.runtimeStatus().running) {
+    hfLocalModelIds = []
+    return hfLocalModelIds
+  }
+  try {
+    const rows = await hfModelsMod.refreshModels()
+    hfLocalModelIds = rows.map((row) => String(row?.id || '')).filter(Boolean)
+  } catch {
+    hfLocalModelIds = []
+  }
+  return hfLocalModelIds
+}
+
+/**
  * 第一幀出來之後才自動接續反代，不跟開窗搶磁碟。
  */
 function scheduleBackgroundServices() {
@@ -190,6 +402,17 @@ function scheduleBackgroundServices() {
   backgroundStarted = true
   initStore()
     .then(() => {
+      // 語音輸入的熱鍵要在背景也活著（使用者多半是在別的程式裡按右 Alt）
+      if (store.get('dictationEnabled') === true) {
+        loadDictation()
+          .then((d) => {
+            // refresh 是 async（原生熱鍵 sidecar 要等它回 READY），失敗只記錄不影響其他功能
+            void d.refresh().catch((err) => console.warn('[dictation] refresh failed:', err?.message || err))
+            // 指示器視窗先建好（維持隱藏）：第一次按右 Alt 才不會先看到一扇空白視窗
+            dictationHud.warm()
+          })
+          .catch((err) => console.warn('[dictation] autoStart failed:', err?.message || err))
+      }
       if (store.get('agyEnabled') !== true) return { ok: false, error: 'DISABLED' }
       return loadAgy().then((service) => service.autoStart())
     })
@@ -241,7 +464,11 @@ async function initStore() {
       migrateChatSystemPrompt()
       migrateChatProviders()
       chat.setStore(store)
+      wireChatLocalProvider()
       migrateTranslateProvider()
+      migrateAsrClouds(await loadCloudAsr())
+      // 三個子分頁各自的模型選擇：舊版只有一組全域設定，第一次啟動時拿它當起點
+      modelScope.seedFromLegacy(store)
       // 語音辨識執行緒的選項已移除（一律「自動」）：舊值留著會讓 sherpa 永遠鎖在
       // 使用者當年隨手選的數字，而且畫面上再也沒有地方看得到
       if (store.has('asrThreads')) store.delete('asrThreads')
@@ -335,11 +562,36 @@ function migrateTranslateProvider() {
 }
 
 /**
+ * 雲端 ASR 多組設定的起點：`asrClouds` 還沒有值時，把舊的單組
+ * （asrApiUrl／asrApiKey／asrModelId）搬成「預設」那筆。舊 key **不刪**——
+ * readConfig 對 asrClouds 空清單仍會退回舊 key 保底（手改設定檔、測試 mock 都靠它），
+ * 而三個字串留在設定檔的成本是零。
+ */
+function migrateAsrClouds(asrCloudMod) {
+  const existing = asrCloudMod.sanitizeAsrClouds(store.get('asrClouds', []))
+  if (existing.length) {
+    // 已經有清單了，但可能還是舊形狀（單一 `modelId`）。sanitize 會把它讀成只有一顆的
+    // `models` 陣列，這裡寫回去——不寫的話 renderer 直接讀 store 會看到沒有 models 的列，
+    // 功能頁的雲端選項就整個不見了（實測踩過）
+    store.set('asrClouds', existing)
+    return
+  }
+  const seed = asrCloudMod.asrCloudsFromLegacy(
+    store.get('asrApiUrl', ''),
+    store.get('asrApiKey', ''),
+    store.get('asrModelId', '')
+  )
+  if (!seed.length) return
+  store.set('asrClouds', seed)
+  store.set('asrCloudId', seed[0].id)
+}
+
+/**
  * 目前翻譯供應商的模型清單（`translateProviderId` 失效時退回第一組）
  * @returns {string[]}
  */
 function translateProviderModels() {
-  const list = chat.sanitizeProviders(store.get('chatProviders', []))
+  const list = chat.allProviders()
   const wanted = String(store.get('translateProviderId', '') || '')
   return (list.find((p) => p.id === wanted) || list[0])?.models || []
 }
@@ -352,6 +604,9 @@ function translateProviderModels() {
  */
 function reconcileProviderSelection(list, providerKey, modelKey) {
   const wanted = String(store.get(providerKey, '') || '')
+  // 選著「本機模型」的時候不要動它：那一筆只有 router 跑著才在清單裡，
+  // 收斂掉的話「編輯任何一組雲端供應商」就會順手把使用者的本機模型選擇改掉
+  if (wanted === chat.LOCAL_PROVIDER_ID) return
   const active = list.find((p) => p.id === wanted) || list[0] || null
   store.set(providerKey, active?.id || '')
   const model = String(store.get(modelKey, '') || '')
@@ -483,6 +738,8 @@ function createMainWindow() {
     if (subtitleWindow) {
       subtitleWindow.close()
     }
+    // 錄音在主視窗那一側，主視窗沒了就不可能還在錄——指示器留著只會浮在桌面上
+    dictationHud.close()
   })
 }
 
@@ -629,6 +886,9 @@ ipcMain.handle('store:get', async (event, key, defaultValue) => {
   }
   if (key === 'chatProviders') return chat.sanitizeProviders(val)
   if (key === 'chatProviderId') {
+    // 「本機模型」永遠算合法：它只有在 router 跑著時才出現在清單裡，
+    // 用清單判斷的話「關掉 router → 選擇被改成別家 → 重開也回不來」
+    if (val === chat.LOCAL_PROVIDER_ID) return val
     const list = chat.sanitizeProviders(store.get('chatProviders', []))
     return list.some((p) => p.id === val) ? val : (list[0]?.id || '')
   }
@@ -638,6 +898,7 @@ ipcMain.handle('store:get', async (event, key, defaultValue) => {
     return models.includes(val) ? val : (models[0] || '')
   }
   if (key === 'translateProviderId') {
+    if (val === chat.LOCAL_PROVIDER_ID) return val
     const list = chat.sanitizeProviders(store.get('chatProviders', []))
     return list.some((p) => p.id === val) ? val : (list[0]?.id || '')
   }
@@ -651,6 +912,15 @@ ipcMain.handle('store:get', async (event, key, defaultValue) => {
     return list.some((p) => p.id === val) ? val : ''
   }
   if (key === 'chatThinking') return val === true
+  if (key === 'dictationEnabled') return val === true
+  if (key === 'dictationLang') return DICTATION_LANGS.has(val) ? val : 'zh-TW'
+  if (key === 'fileAsr' || key === 'liveAsr' || key === 'dictationAsr') {
+    // 帶著雲端 ASR 設定清單去驗：不帶的話 `cloud:<設定>:<模型>` 會被當成不認得而降級
+    return modelScope.sanitizeAsr(val, modelScope.cloudsOf(store))
+  }
+  if (key === 'fileLlm') return sanitizeScopedLlm('file', val)
+  if (key === 'liveLlm') return sanitizeScopedLlm('live', val)
+  if (key === 'dictationLlm') return sanitizeScopedLlm('dictation', val)
   // closeToTray 預設開：使用者要的就是「關掉視窗反代不斷」，沒設定過時不該退回關閉
   if (key === 'closeToTray') return val !== false
   return val
@@ -715,6 +985,24 @@ ipcMain.handle('store:set', async (event, key, value) => {
     store.set(key, typeof value === 'string' ? value.trim() : value)
     return true
   }
+  if (key === 'asrClouds') {
+    const cloudAsr = await loadCloudAsr()
+    const list = cloudAsr.sanitizeAsrClouds(value)
+    store.set(key, list)
+    // 清單變動後當前選用可能已被刪掉 → 收斂，否則 readConfig 會退回第一筆而 UI 不知道
+    const cur = String(store.get('asrCloudId', '') || '')
+    store.set('asrCloudId', list.some((c) => c.id === cur) ? cur : (list[0]?.id || ''))
+    // 三個子分頁各自選的「哪一組設定的哪一顆模型」也要跟著收斂（同 chatProviders 那條）
+    modelScope.reconcileAll(store)
+    return true
+  }
+  if (key === 'asrCloudId') {
+    const cloudAsr = await loadCloudAsr()
+    const list = cloudAsr.sanitizeAsrClouds(store.get('asrClouds', []))
+    const active = list.find((c) => c.id === value) || list[0] || null
+    store.set(key, active?.id || '')
+    return true
+  }
   if (key === 'chatProviders') {
     const list = chat.sanitizeProviders(value)
     store.set(key, list)
@@ -722,10 +1010,12 @@ ipcMain.handle('store:set', async (event, key, value) => {
     // 翻譯用的是同一份清單，所以兩組選擇都要收
     reconcileProviderSelection(list, 'chatProviderId', 'chatModelId')
     reconcileProviderSelection(list, 'translateProviderId', 'translateModelId')
+    // 三個子分頁的 LLM 選擇都是「供應商 id + 模型 id」的字串，同樣可能指到已刪掉的那一組
+    modelScope.reconcileAll(store)
     return true
   }
   if (key === 'chatProviderId' || key === 'translateProviderId') {
-    const list = chat.sanitizeProviders(store.get('chatProviders', []))
+    const list = chat.allProviders()
     const active = list.find((p) => p.id === value) || list[0] || null
     store.set(key, active?.id || '')
     // 換供應商就換模型池，舊選擇不再有效
@@ -758,6 +1048,32 @@ ipcMain.handle('store:set', async (event, key, value) => {
   }
   if (key === 'chatThinking') {
     store.set(key, value === true)
+    return true
+  }
+  if (key === 'dictationEnabled') {
+    store.set(key, value === true)
+    // 全域鍵盤 hook 的開關就是這個 key，寫完立刻套用（不必再按儲存）
+    loadDictation().then(async (d) => {
+      await d.refresh()
+      // 開著就順手把指示器視窗建起來（隱藏著），省掉第一次按下時的載入空窗
+      if (value === true) dictationHud.warm()
+      else dictationHud.close()
+    }).catch((err) => {
+      console.error('[dictation] refresh failed:', err?.message || err)
+    })
+    return true
+  }
+  if (key === 'dictationLang') {
+    store.set(key, DICTATION_LANGS.has(value) ? value : 'zh-TW')
+    return true
+  }
+  if (key === 'fileAsr' || key === 'liveAsr' || key === 'dictationAsr') {
+    store.set(key, modelScope.sanitizeAsr(value, modelScope.cloudsOf(store)))
+    return true
+  }
+  if (key === 'fileLlm' || key === 'liveLlm' || key === 'dictationLlm') {
+    const scope = key.slice(0, -3)
+    store.set(key, sanitizeScopedLlm(scope, value))
     return true
   }
   if (key === 'closeToTray') {
@@ -854,6 +1170,23 @@ ipcMain.handle('system:openCudaDownloadPage', async () => {
 
 ipcMain.handle('llm:loadInfo', () => loadLocalLlm().getLoadInfo())
 
+// 語音輸入的桌面指示器。
+// 狀態只信主視窗（錄音在那一側）；指示器自己只送得出 ✕／✓ 兩個動作，而且要證明
+// 那則訊息真的來自指示器那扇視窗——否則任何 renderer 都能偽造「使用者按了送出」。
+ipcMain.handle('dictation:hudState', (event, payload) => {
+  if (!assertMainWindowSender(event)) return false
+  return dictationHud.update(payload || {})
+})
+
+ipcMain.handle('dictation:hudAction', (event, action) => {
+  if (!dictationHud.isSender(event)) return false
+  if (action !== 'cancel' && action !== 'stop') return false
+  if (!mainWindow || mainWindow.isDestroyed()) return false
+  // 走跟全域熱鍵同一條路：主視窗的 dictation.js 已經在處理 stop／cancel
+  mainWindow.webContents.send('dictation:event', { type: action, data: {} })
+  return true
+})
+
 // 字幕視窗控制
 ipcMain.handle('subtitle:show', () => {
   if (!subtitleWindow) {
@@ -917,19 +1250,13 @@ ipcMain.handle('models:delete', (event, key) => models.remove(key))
 
 ipcMain.handle('models:openFolder', (event, key) => models.openFolder(key))
 
-ipcMain.handle('localAsr:transcribe', async (event, req) => {
-  if (!store) await initStore()
-  const engine = store.get('asrEngine', 'local')
-  if (engine === 'cloud') {
-    return loadCloudAsr().transcribeSamples(req || {}, store)
-  }
-  return loadLocalAsr().transcribe(req)
-})
+// 這條只有即時字幕在用（檔案走 transcribeFile、語音輸入走 dictation 服務）
+ipcMain.handle('localAsr:transcribe', async (event, req) => transcribeSamples('live', req))
 
 /** 長檔案串流轉錄（ffmpeg 切段，支援 ≥2h / ≥100MB；雲端走 mp3 segment） */
 ipcMain.handle('localAsr:transcribeFile', async (event, req) => {
   if (!store) await initStore()
-  const engine = store.get('asrEngine', 'local')
+  const engine = modelScope.readAsr(store, 'file').engine
   const onProgress = (progress) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('localAsr:fileProgress', progress)
@@ -955,7 +1282,9 @@ ipcMain.handle('translate', async (event, text, targetLang, opts) => {
   if (!TRANSLATE_TARGET_LANGS.has(lang)) {
     throw new Error(`不支援的目標語言: ${lang}`)
   }
-  return loadLocalLlm().translate(store, trimmed, lang, opts || {})
+  // scope 是白名單：renderer 只能說「我是哪一頁」，模型與金鑰仍由 main 從 store 取
+  const scope = modelScope.isScope(opts?.scope) && opts.scope !== 'dictation' ? opts.scope : ''
+  return loadLocalLlm().translate(store, trimmed, lang, { ...(opts || {}), scope })
 })
 
 // ===== Edge TTS =====
@@ -1033,6 +1362,28 @@ ipcMain.handle('chat:rename', (event, id, title) => chatStore.rename(id, title))
 ipcMain.handle('chat:reorder', (event, ids) => chatStore.reorder(ids))
 
 /**
+ * 聊天模型選單的選項來源。
+ *
+ * renderer 以前是自己讀 `chatProviders`——那樣看不到「本機模型」（它是 main 在 router
+ * 跑著時合成的一筆，刻意不落盤）。改成跟 main 要一份，兩邊就只有一個真相。
+ * **不回 apiKey**（連雲端那幾組的也不回）：選單只需要名字與模型清單。
+ */
+ipcMain.handle('chat:providerOptions', async () => {
+  if (!store) await initStore()
+  return {
+    providers: chat.allProviders().map((p) => ({
+      id: p.id,
+      name: p.name,
+      models: p.models,
+      imageModels: p.imageModels,
+      local: p.id === chat.LOCAL_PROVIDER_ID
+    })),
+    providerId: String(store.get('chatProviderId', '') || ''),
+    modelId: String(store.get('chatModelId', '') || '')
+  }
+})
+
+/**
  * 掃描某個供應商的模型清單。
  *
  * renderer 只給 providerId，網址與金鑰一律由 main 從 store 取——
@@ -1108,6 +1459,168 @@ registerTerminalIpc({
   getWindow: () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null)
 })
 
+// ===== HF模型（本機 llama.cpp router）=====
+// renderer 只送 repoId／variantId／模型 id；下載網址由 hub.fileUrl 在 main 組，
+// router 的 api key 不出 main（`runtimeStatus` 只回 running 與 port）。
+registerHfModelsIpc({
+  ipcMain,
+  service: {
+    search: (...args) => loadHfModels().search(...args),
+    inspect: (...args) => loadHfModels().inspect(...args),
+    preview: (...args) => loadHfModels().preview(...args),
+    detail: (...args) => loadHfModels().detail(...args),
+    install: (...args) => loadHfModels().install(...args),
+    cancelInstall: (...args) => loadHfModels().cancelInstall(...args),
+    listLocal: (...args) => loadHfModels().listLocal(...args),
+    removeLocal: (...args) => loadHfModels().removeLocal(...args),
+    pickAndImport: (...args) => loadHfModels().pickAndImport(...args),
+    openModelsDir: (...args) => loadHfModels().openModelsDir(...args),
+    rescan: (...args) => loadHfModels().rescan(...args),
+    updateModelSettings: (...args) => loadHfModels().updateModelSettings(...args),
+    refreshFit: (...args) => loadHfModels().refreshFit(...args),
+    tune: (...args) => loadHfModels().tune(...args),
+    autoTune: (...args) => loadHfModels().autoTune(...args),
+    cancelTune: (...args) => loadHfModels().cancelTune(...args),
+    chooseModelsDir: (...args) => loadHfModels().chooseModelsDir(...args),
+    setToken: (...args) => loadHfModels().setToken(...args),
+    tokenStatus: (...args) => loadHfModels().tokenStatus(...args),
+    hardwareInfo: (...args) => loadHfModels().hardwareInfo(...args),
+    runtimeReady: (...args) => loadHfModels().runtimeReady(...args),
+    runtimeStatus: (...args) => loadHfModels().runtimeStatus(...args),
+    // router 起停都要同步「聊天看得到哪幾顆」，不然選單會停在上一輪的狀態
+    startRuntime: async (...args) => {
+      const status = await loadHfModels().startRuntime(...args)
+      await refreshHfLocalModels()
+      return status
+    },
+    stopRuntime: (...args) => {
+      const status = loadHfModels().stopRuntime(...args)
+      hfLocalModelIds = []
+      return status
+    },
+    currentDevice: (...args) => loadHfModels().currentDevice(...args),
+    applyPresets: (...args) => loadHfModels().applyPresets(...args),
+    loadModel: (...args) => loadHfModels().loadModel(...args),
+    unloadModel: (...args) => loadHfModels().unloadModel(...args),
+    refreshModels: () => refreshHfLocalModels().then(() => loadHfModels().refreshModels())
+  },
+  isMainSender: assertMainWindowSender
+})
+
+// ===== 系統監控 =====
+// PowerShell 腳本、nvidia-smi 參數、taskkill 參數與測速目錄的驗證全在 main；
+// renderer 只送取樣間隔的 key 與要結束的 pid。
+registerSysmonIpc({
+  ipcMain,
+  service: {
+    status: (...args) => loadSysmon().status(...args),
+    start: (...args) => loadSysmon().start(...args),
+    stop: (...args) => loadSysmon().stop(...args),
+    inventory: (...args) => loadSysmon().inventory(...args),
+    detail: (...args) => loadSysmon().detail(...args),
+    killProcess: (...args) => loadSysmon().killProcess(...args),
+    enableSensors: (...args) => loadSysmon().enableSensors(...args),
+    installPawnIo: (...args) => loadSysmon().installPawnIo(...args),
+    openPawnIoPage: (...args) => loadSysmon().openPawnIoPage(...args),
+    cpuStress: (...args) => loadSysmon().cpuStress(...args),
+    memStress: (...args) => loadSysmon().memStress(...args),
+    stressStatus: (...args) => loadSysmon().stressStatus(...args),
+    diskBench: (...args) => loadSysmon().diskBench(...args),
+    cancelDiskBench: (...args) => loadSysmon().cancelDiskBench(...args),
+    // 風扇控制（identifier 由 main 對照即時通道清單驗過，見 sysmon/fans.js）
+    fanList: (...args) => loadSysmon().fanList(...args),
+    fanEnable: (...args) => loadSysmon().fanEnable(...args),
+    fanSetChannel: (...args) => loadSysmon().fanSetChannel(...args),
+    fanIdentify: (...args) => loadSysmon().fanIdentify(...args),
+    fanResetAll: (...args) => loadSysmon().fanResetAll(...args),
+    fanTaskStatus: (...args) => loadSysmon().fanTaskStatus(...args),
+    fanTaskInstall: (...args) => loadSysmon().fanTaskInstall(...args),
+    fanTaskRemove: (...args) => loadSysmon().fanTaskRemove(...args),
+    // GPU 壓力測試期間把 renderer 的背景節流關掉，測完立刻打開。
+    //
+    // 視窗被別的視窗遮住時，Chromium 會把這個 renderer 降級——GPU 指令跟著被降優先，
+    // 壓力測試就安靜地垮掉（實測 nvidia-smi 從 100% 掉到 3%，畫面上還寫著「執行中」）。
+    // **不可以改成建視窗時就 `backgroundThrottling: false`**：那會連帶讓最小化到系統匣時
+    // `document.hidden` 不再變成 true（實測過），而 AGY 頁那條五秒輪詢——每輪都會開一次
+    // PowerShell 去讀 Credential Manager——正是靠它自己停下來的。
+    // 順帶一提：關掉節流時 `document.hidden` 會跟著變成 false（縮小與 hide 都一樣，
+    // `scripts/probe-dictation-latency.js` 有量），所以它只能是「跑測試那幾秒」的暫時狀態。
+    setGpuStress: (active) => {
+      if (!mainWindow || mainWindow.isDestroyed()) return { active: false }
+      mainWindow.webContents.setBackgroundThrottling(active !== true)
+      return { active: active === true }
+    }
+  },
+  isMainSender: assertMainWindowSender
+})
+
+// ===== Claude Code 工作台（供應商切換／MCP／CLI 版本） =====
+// 端點與 npm 套件名都是 main 的固定表；格式值由白名單驗證後才送入路由，renderer 只送 preset key 與工具 key。
+// 寫入的是使用者家目錄的 ~/.claude/settings.json 與 ~/.claude.json，一律備份＋原子替換，
+// 而且只動我們管的那幾個 env 鍵與 mcpServers。
+registerCcSwitchIpc({
+  ipcMain,
+  service: {
+    catalog: (...args) => loadCcSwitch().catalog(...args),
+    listProviders: (...args) => loadCcSwitch().listProviders(...args),
+    createProvider: (...args) => loadCcSwitch().createProvider(...args),
+    updateProvider: (...args) => loadCcSwitch().updateProvider(...args),
+    deleteProvider: (...args) => loadCcSwitch().deleteProvider(...args),
+    reorderProviders: (...args) => loadCcSwitch().reorderProviders(...args),
+    activateProvider: (...args) => loadCcSwitch().activateProvider(...args),
+    testProvider: (...args) => loadCcSwitch().testProvider(...args),
+    scanProviderModels: (...args) => loadCcSwitch().scanProviderModels(...args),
+    gatewayStatus: (...args) => loadCcSwitch().gatewayStatus(...args),
+    startGateway: (...args) => loadCcSwitch().startGateway(...args),
+    stopGateway: (...args) => loadCcSwitch().stopGateway(...args),
+    listMcp: (...args) => loadCcSwitch().listMcp(...args),
+    saveMcp: (...args) => loadCcSwitch().saveMcp(...args),
+    toggleMcp: (...args) => loadCcSwitch().toggleMcp(...args),
+    deleteMcp: (...args) => loadCcSwitch().deleteMcp(...args),
+    listAccounts: (...args) => loadCcSwitch().listAccounts(...args),
+    beginLogin: (...args) => loadCcSwitch().beginLogin(...args),
+    loginStatus: (...args) => loadCcSwitch().loginStatus(...args),
+    cancelLogin: (...args) => loadCcSwitch().cancelLogin(...args),
+    removeAccount: (...args) => loadCcSwitch().removeAccount(...args),
+    checkVersions: (...args) => loadCcSwitch().checkVersions(...args),
+    versionUpdateCommand: (...args) => loadCcSwitch().versionUpdateCommand(...args)
+  },
+  isMainSender: assertMainWindowSender
+})
+
+// ===== 語音輸入（全域右 Alt）=====
+// 熱鍵、麥克風以外的每一段都在 main：ASR 模型、整理用的供應商金鑰、剪貼簿與模擬按鍵。
+// renderer 只送得出「錄好的一段 PCM」與字典的兩個字串。
+registerDictationIpc({
+  ipcMain,
+  service: {
+    status: async (...args) => (await loadDictation()).status(...args),
+    refresh: async (...args) => (await loadDictation()).refresh(...args),
+    submit: async (...args) => (await loadDictation()).submit(...args),
+    listRecords: async (...args) => (await loadDictation()).listRecords(...args),
+    removeRecord: async (...args) => (await loadDictation()).removeRecord(...args),
+    clearRecords: async (...args) => (await loadDictation()).clearRecords(...args),
+    listDictionary: async (...args) => (await loadDictation()).listDictionary(...args),
+    upsertDictionary: async (...args) => (await loadDictation()).upsertDictionary(...args),
+    removeDictionary: async (...args) => (await loadDictation()).removeDictionary(...args)
+  },
+  isMainSender: assertMainWindowSender
+})
+
+// ===== 本機 token 用量統計 =====
+// 讀的是使用者家目錄的 session 記錄與本 App 的 AGY 日誌；路徑與 SQL 固定在 main，
+// 回給 renderer 的只有彙總數字，對話內容與專案名稱一律不出 main。
+registerCodeUsageIpc({
+  ipcMain,
+  service: {
+    stats: (...args) => loadCodeUsage().stats(...args),
+    sync: (...args) => loadCodeUsage().sync(...args),
+    savePrices: (...args) => loadCodeUsage().savePrices(...args),
+    reset: (...args) => loadCodeUsage().reset(...args)
+  },
+  isMainSender: assertMainWindowSender
+})
+
 // 設定系統音訊擷取的媒體請求處理器
 app.whenReady().then(() => {
   // 沒搶到鎖的那份只負責把訊號送出去就結束，不可以建窗、更不可以 autoStart 反代（撞埠）
@@ -1131,7 +1644,15 @@ app.whenReady().then(() => {
 
   createMainWindow()
   bootLog('window created')
-  initStore().catch((err) => console.error('[store] init failed:', err?.message || err))
+  initStore()
+    .then(() => {
+      // 風扇接管：使用者上次開著就在開機自啟動時直接接手，**不必等他點開系統監控頁**。
+      // 這之前的幾秒由 BIOS 曲線負責，那是安全的預設值。
+      if (store?.get('fanControl')?.enabled !== true) return undefined
+      return loadSysmon().ensureFanControl()
+        .catch((err) => console.error('[sysmon] fan takeover failed:', err?.message || err))
+    })
+    .catch((err) => console.error('[store] init failed:', err?.message || err))
 })
 
 // 關閉前同步卸載模型，再真正退出
@@ -1145,8 +1666,28 @@ app.on('before-quit', (e) => {
   isQuitting = true
   // 終端機先收：每個工作階段都是一顆真的 conhost，不砍就會留在工作管理員裡
   if (terminalMod) terminalMod.killAll()
+  // 系統監控有三顆子程序（probe.ps1／nvidia-smi／感測器 sidecar），少收一顆就變孤兒。
+  // **這條是 await 得到的**：風扇的手動 PWM 留在晶片裡，沒等它交還就退出等於把風扇
+  // 釘在最後的轉速（事後 SetDefault 也救不回來，只有重開機）。
+  const stopSysmon = sysmonMod
+    ? Promise.resolve(sysmonMod.shutdown()).catch((err) => console.error('[sysmon] shutdown failed:', err))
+    : Promise.resolve()
+  // 低階鍵盤 hook 有自己的執行緒，不收掉會擋住程序真的結束
+  if (dictationMod) dictationMod.shutdown()
+  // llama.cpp router：它自己會帶走底下跑模型的子程序，但沒人收它就會留一台在背景吃顯存
+  if (hfModelsMod) hfModelsMod.shutdown()
+  // 指示器是 alwaysOnTop 的獨立視窗：留著就會浮在桌面上關不掉
+  dictationHud.close()
   // 反代先關：留著監聽的 socket 會讓下次啟動撞到 EADDRINUSE
-  const stopAgy = agyMod ? agyMod.shutdown() : Promise.resolve()
+  // Claude Code 的轉換閘道同理（跟 AGY 是兩個不同的埠）
+  const stopGateway = ccSwitchMod
+    ? ccSwitchMod.stopGateway().catch((err) => console.error('[ccswitch] gateway stop failed:', err))
+    : Promise.resolve()
+  const stopAgy = Promise.all([
+    stopSysmon,
+    stopGateway,
+    agyMod ? agyMod.shutdown() : Promise.resolve()
+  ])
   stopAgy
     .catch((err) => console.error('[agy] shutdown on quit failed:', err))
     .then(() => {

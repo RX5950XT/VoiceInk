@@ -15,7 +15,9 @@ const os = require('os')
 const fs = require('fs')
 
 const PORT = 9247
-const EXE = path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
+// Windows 偶爾會有別的東西鎖住 dist/win-unpacked（打包失敗、防毒掃描中），
+// 這時可以打包到別的資料夾再用 VOICEINK_EXE 指過去，測試不必等鎖放掉
+const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
 const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-e2e-terminal-'))
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -133,7 +135,9 @@ async function main() {
 
   try {
     const pages = await waitTargets()
-    cdp = new Cdp(pages[0].webSocketDebuggerUrl)
+    // 指名主視窗：語音輸入開著時還會有一扇指示器視窗
+    const mainPage = pages.find((p) => /index\.html/i.test(p.url)) || pages[0]
+    cdp = new Cdp(mainPage.webSocketDebuggerUrl)
     await cdp.connect()
     await cdp.send('Runtime.enable')
     await sleep(1200)
@@ -155,14 +159,15 @@ async function main() {
     // ===== 分頁本身 =====
     const nav = await cdp.eval(`(() => ({
       order: [...document.querySelectorAll('.nav-tab')].map((b) => b.dataset.page),
-      label: document.querySelector('.nav-tab[data-page="terminal"] .nav-text')?.textContent || ''
+      termNewBtn: !!document.getElementById('termNewBtn')
     }))()`)
-    ok('nav 有終端機分頁，排在聊天後面',
-      nav.order[0] === 'chat' && nav.order[1] === 'terminal', JSON.stringify(nav.order))
-    ok('分頁名稱是終端機', nav.label === '終端機', nav.label)
+    // 終端機已併入聊天頁：nav 不再有 terminal 分頁，側欄上半對話、下半終端機
+    ok('nav 八個分頁、聊天排第一、沒有 terminal 分頁',
+      nav.order.length === 8 && nav.order[0] === 'chat' && !nav.order.includes('terminal'), JSON.stringify(nav.order))
+    ok('側欄有「＋新終端機」按鈕', nav.termNewBtn)
 
-    await cdp.eval(`document.querySelector('.nav-tab[data-page="terminal"]').click()`)
-    ok('切到終端機頁', await waitInPage(cdp, `document.getElementById('page-terminal').classList.contains('active')`))
+    await cdp.eval(`document.querySelector('.nav-tab[data-page="chat"]').click()`)
+    ok('聊天與終端機同一頁', await waitInPage(cdp, `document.getElementById('page-chat').classList.contains('active')`))
     ok('模組載入完成（側欄畫出來了）',
       await waitInPage(cdp, `document.getElementById('termList').children.length > 0`))
     ok('沒有 renderer 例外（xterm 的 ESM 從 node_modules 載得起來）',
@@ -234,17 +239,29 @@ async function main() {
       20000
     ), await cdp.eval(`document.querySelector('.term-list-item.active .term-state')?.textContent || '(無)'`))
 
-    // ===== 未讀點之一：人在別的分頁時跑完 =====
-    ok('人在別的分頁時跑完也會亮未讀點', await cdp.eval(`(async () => {
-      document.querySelector('.nav-tab[data-page="chat"]').click()
-      await new Promise((r) => setTimeout(r, 400))
+    // ===== 未讀點之一：人在別的主區（對話）時跑完 =====
+    // 合頁後沒有「別的分頁」：切到某個對話＝使用者離開終端機主區。
+    // 這個 user-data-dir 是全新的，側欄本來沒有對話，得自己開一個（用完刪掉）。
+    // 注意：終端機列也帶 `.chat-list-item`，選擇器一定要限定在 `#chatList` 裡面。
+    const away = await cdp.eval(`(async () => {
+      document.getElementById('chatNewBtn').click()
+      await new Promise((r) => setTimeout(r, 900))
+      const row = document.querySelector('#chatList .chat-list-item')
+      const chatId = row?.dataset.id || ''
+      row?.querySelector('.chat-list-open')?.click()
+      await new Promise((r) => setTimeout(r, 500))
+      const leftTerminal = document.getElementById('termMain').classList.contains('hidden')
       await window.electronAPI.terminal.write(${JSON.stringify(createdId)}, 'echo away\\r')
       await new Promise((r) => setTimeout(r, 3500))
       const dots = document.querySelectorAll('.term-unread').length
-      document.querySelector('.nav-tab[data-page="terminal"]').click()
+      // 點側欄的終端機項目回到終端機主區（同時清掉未讀點）
+      document.querySelector('.term-list-item[data-id="${createdId}"] .chat-list-open').click()
       await new Promise((r) => setTimeout(r, 800))
-      return dots > 0 && document.querySelectorAll('.term-unread').length === 0
-    })()`))
+      await window.electronAPI.chat.delete(chatId)
+      return { chatId, leftTerminal, dots, after: document.querySelectorAll('.term-unread').length }
+    })()`)
+    ok('人在對話主區時跑完也會亮未讀點',
+      away.leftTerminal && away.dots > 0 && away.after === 0, JSON.stringify(away))
 
     // ===== 未讀點之二：另一個階段跑完，而使用者正在看的是這一個 =====
     // 這是「哪個代理做完了」的核心提示，要真的開第二個階段才測得到。
@@ -328,7 +345,9 @@ async function main() {
       return {
         found: true,
         secondPane: !!document.querySelector('.term-pane[data-id="${second}"]'),
-        firstPane: !!document.querySelector('.term-pane[data-id="${createdId}"]')
+        firstPane: !!document.querySelector('.term-pane[data-id="${createdId}"]'),
+        err: document.getElementById('termError')?.textContent || '',
+        listAfter: (await window.electronAPI.terminal.list()).data.map((s) => s.id)
       }
     })()`)
     ok('刪掉背景階段後畫布也收乾淨',
@@ -341,7 +360,8 @@ async function main() {
       const before = rows().textContent.length
       document.querySelector('.nav-tab[data-page="usage"]').click()
       await new Promise((r) => setTimeout(r, 500))
-      document.querySelector('.nav-tab[data-page="terminal"]').click()
+      // 終端機跟聊天同頁：點側欄的終端機項目切回終端機主區
+      document.querySelector('.term-list-item')?.click()
       await new Promise((r) => setTimeout(r, 600))
       const pane = document.querySelector('.term-pane[data-id="${createdId}"]')
       return { before, after: rows().textContent.length, active: pane.classList.contains('is-active') }

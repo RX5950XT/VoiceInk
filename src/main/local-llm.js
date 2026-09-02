@@ -148,10 +148,11 @@ function withTranslateLock(fn) {
 /**
  * 解析要用的本地翻譯模型 key（選中未下載時 fallback 到已下載的 qwen）
  * @param {{ get: (k: string, d?: unknown) => unknown } | null} [store]
+ * @param {string} [override] 指定 key（各頁自己的 `fileLlm`／`liveLlm` 選擇）
  * @returns {string}
  */
-function resolveLocalTranslateModel(store = storeRef) {
-  const raw = store ? store.get('localTranslateModel', DEFAULT_LLM_KEY) : DEFAULT_LLM_KEY
+function resolveLocalTranslateModel(store = storeRef, override = '') {
+  const raw = override || (store ? store.get('localTranslateModel', DEFAULT_LLM_KEY) : DEFAULT_LLM_KEY)
   const preferred = isLlmKey(raw) ? raw : DEFAULT_LLM_KEY
   if (isDownloaded(preferred)) return preferred
   if (preferred !== FALLBACK_LLM_KEY && isDownloaded(FALLBACK_LLM_KEY)) {
@@ -262,8 +263,10 @@ function fingerprintMatch(fp, key, intentGpu) {
  * 同指紋 in-flight 必 join，禁止誤 cancel（舊邏輯會在第二個呼叫者把進行中的載入作廢 → UI 顯示 LLM load cancelled）。
  * @returns {Promise<object>} session
  */
-async function getSession() {
-  const key = resolveLocalTranslateModel()
+async function getSession(keyOverride) {
+  // 本地 LLM 只有一顆 session（指紋 = model key + 意圖 GPU）。語音輸入的整理
+  // 可能指定跟翻譯不同的模型，指紋不符時走既有的「先卸再載」，不另開第二顆。
+  const key = isLlmKey(keyOverride) ? /** @type {string} */ (keyOverride) : resolveLocalTranslateModel()
   const intentGpu = await resolveWantGpu()
   const label = MODELS[key]?.label || key
 
@@ -380,13 +383,14 @@ async function warmupInference(session) {
 /**
  * 預熱本地翻譯模型（載入 ＋ 首次推論冷啟動）
  * 若遇「切頁／改設定」造成的 load cancelled，自動重試一次（避免 UI 誤報）。
+ * @param {string} [modelKey] 指定要預熱哪一顆（各頁的選擇不同；省略＝翻譯頁的全域設定）
  * @returns {Promise<{ ok: boolean, warnings: string[] }>}
  */
-async function warm() {
+async function warm(modelKey = '') {
   const warnings = []
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const session = await getSession()
+      const session = await getSession(modelKey)
       // 與實際翻譯共用 serial lock，暖機期間不與 translate/unload 互踩
       if (!warmedUp) {
         await withTranslateLock(() => warmupInference(session))
@@ -669,7 +673,8 @@ function buildContextPair(context = {}) {
  * @param {{ chunkIndex?: number, chunkCount?: number }} [chunkMeta]
  */
 async function translateLocalOnce(text, targetLang, context, options, key, chunkMeta = {}) {
-  const session = await getSession()
+  // 一定要把 key 傳下去：各頁可能選不同顆，拿全域那顆的 session 會用錯模型
+  const session = await getSession(key)
   const history = [{ type: 'system', text: buildSystemPrompt(key, targetLang, options.mode) }]
   // LinguaForge 是單輪 SFT MT 模型：多一輪對話（前文）會讓 greedy 直接複誦上一輪譯文
   // → 整篇長文每段都吐同一句。出貨格式就是 system + 單一 user，不給前文。
@@ -747,7 +752,7 @@ async function translateLocalOnce(text, targetLang, context, options, key, chunk
 }
 
 async function translateLocal(text, targetLang, context = {}, options = {}) {
-  const key = resolveLocalTranslateModel()
+  const key = resolveLocalTranslateModel(storeRef, options.modelKey || '')
   if (!isDownloaded(key)) {
     const label = MODELS[key]?.label || key
     throw new Error(`本地翻譯模型尚未下載（${label}），請先到設定下載`)
@@ -809,6 +814,12 @@ async function translateCloud(text, targetLang, cfg, context = {}, options = {})
         model: cfg.modelId,
         max_tokens: resolveMaxTokens(text, options.mode, false),
         temperature: 0,
+        // 翻譯不要思考內容，不跟聊天頁的 chatThinking 共用。
+        // 用 `exclude` 不用 `enabled: false`：後者對「強制思考」的模型會被直接拒絕
+        // （實測 OpenRouter 的 x-ai/grok-4.6 與 z-ai/glm-5.3-flash 都回
+        //  400 "Reasoning is mandatory for this endpoint and cannot be disabled."），
+        // 而 `exclude: true` 是「照樣想，但不要把思考回給我」，兩種模型都收。
+        reasoning: { exclude: true },
         messages
       }),
       signal: AbortSignal.timeout(CLOUD_TIMEOUT_MS)
@@ -837,6 +848,33 @@ async function translateCloud(text, targetLang, cfg, context = {}, options = {})
 }
 
 /**
+ * 語音輸入的文字整理：拿本地 LLM 跑一次自由 prompt。
+ *
+ * 跟翻譯共用同一顆 session 與同一把鎖——本地只有一顆模型的量能，
+ * 讓兩邊各自載一顆只會互相把對方擠掉。
+ * @param {{ text: string, system: string, modelKey?: string, maxTokens?: number }} req
+ * @returns {Promise<string>}
+ */
+async function promptOnce(req) {
+  const key = isLlmKey(req?.modelKey) ? /** @type {string} */ (req.modelKey) : resolveLocalTranslateModel()
+  if (!isDownloaded(key)) {
+    throw new Error(`本地模型尚未下載（${MODELS[key]?.label || key}），請先到設定下載`)
+  }
+  const input = String(req?.text || '').trim()
+  if (!input) return ''
+  return withTranslateLock(async () => {
+    const session = await getSession(key)
+    session.setChatHistory([{ type: 'system', text: String(req?.system || '') }])
+    const out = await session.prompt(input, {
+      maxTokens: Number.isFinite(req?.maxTokens) ? Number(req.maxTokens) : 640,
+      temperature: 0,
+      budgets: { thoughtTokens: 0 }
+    })
+    return stripThink(String(out || ''))
+  })
+}
+
+/**
  * @param {import('electron-store').default} store
  * @param {string} text
  * @param {string} targetLang
@@ -852,9 +890,14 @@ function hasLinguisticContent(text) {
 }
 
 async function translate(store, text, targetLang, opts = {}) {
+  // scope 有給（檔案轉錄／即時字幕）就用那一頁自己的選擇；沒給＝翻譯與 TTS 頁，
+  // 沿用全域的 `translator`／`localTranslateModel`／`translateProviderId`。
+  const scope = opts.scope
+  const scoped = scope ? require('./model-scope').readLlm(store, scope) : null
+  let translator = scoped ? scoped.mode : store.get('translator', 'local')
   // 舊版 none：視為 local（關閉翻譯改由目標語言「自動偵測」）
-  let translator = store.get('translator', 'local')
-  if (translator === 'none') translator = 'local'
+  if (translator === 'none' || translator === 'off') translator = 'local'
+  const localKey = scoped?.mode === 'local' ? scoped.modelKey : ''
   if (!text.trim()) return text
   // 縱深：renderer 應已擋；此處再擋一次避免任何路徑把 ♪♪♪／…… 送進小模型
   if (!hasLinguisticContent(text)) return text
@@ -864,7 +907,7 @@ async function translate(store, text, targetLang, opts = {}) {
       previousSource: opts.previousSource || '',
       previousTranslation: opts.previousTranslation || ''
     }
-    const options = { mode: opts.mode || 'file' }
+    const options = { mode: opts.mode || 'file', modelKey: localKey }
 
     let result
     if (translator === 'local') {
@@ -875,7 +918,14 @@ async function translate(store, text, targetLang, opts = {}) {
       result = await translateCloud(
         text,
         targetLang,
-        require('./chat').readTranslateConfig(),
+        scoped
+          ? {
+            apiUrl: scoped.apiUrl,
+            apiKey: scoped.apiKey,
+            modelId: scoped.modelId,
+            providerName: scoped.providerName
+          }
+          : require('./chat').readTranslateConfig(),
         context,
         options
       )
@@ -889,7 +939,7 @@ async function translate(store, text, targetLang, opts = {}) {
     // 模型自我複誦（含日文頑固句）：回原文、不轉繁——s2twp 會 mangle 使 renderer 的 echo 去重失效
     if (result.trim() === text.trim()) return result
     // LinguaForge 已在 translateLocalOnce 依 DECODE.s2twp 處理；其餘本地／雲端 zh-TW 仍過 s2twp
-    if (translator === 'local' && isLinguaforge(resolveLocalTranslateModel())) {
+    if (translator === 'local' && isLinguaforge(resolveLocalTranslateModel(storeRef, localKey))) {
       return result
     }
     return targetLang === 'zh-TW' ? s2twp(result) : result
@@ -898,6 +948,7 @@ async function translate(store, text, targetLang, opts = {}) {
 
 module.exports = {
   translate,
+  promptOnce,
   warm,
   unload,
   isLoaded,

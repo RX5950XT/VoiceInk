@@ -878,6 +878,70 @@ async function caseN() {
     !empty.apiUrl && !empty.apiKey && !empty.modelId, JSON.stringify(empty))
 }
 
+async function caseO() {
+  console.log('\n[O] 本機模型（synthetic provider）')
+  const providers = [
+    { id: 'p_a', name: 'A', apiUrl: 'https://a.example/v1', apiKey: 'ka', models: ['a/one'] }
+  ]
+  chat.setStore(makeStore({ chatProviders: providers, chatProviderId: 'p_a', chatModelId: 'a/one' }))
+
+  // router 沒跑：清單裡不該出現本機那筆
+  chat.setLocalSource(() => null)
+  ok('router 沒跑時沒有本機供應商',
+    !chat.allProviders().some((p) => p.id === chat.LOCAL_PROVIDER_ID))
+
+  // router 跑了：多一筆「本機模型」
+  chat.setLocalSource(
+    () => ({ baseUrl: 'http://127.0.0.1:8010', apiKey: 'router-key', models: ['Local-4B-Q4_K_M'] }),
+    async () => true
+  )
+  const all = chat.allProviders()
+  const local = all.find((p) => p.id === chat.LOCAL_PROVIDER_ID)
+  ok('router 跑著時清單多一筆本機供應商', !!local && all.length === 2, JSON.stringify(all.map((p) => p.id)))
+  ok('本機那筆的端點帶 /v1 與 router 金鑰',
+    local?.apiUrl === 'http://127.0.0.1:8010/v1' && local?.apiKey === 'router-key', local?.apiUrl)
+  ok('雲端那幾筆原樣保留', all[0]?.id === 'p_a' && all[0]?.apiKey === 'ka')
+
+  // 選了本機模型後 readConfig / readProvider 要找得到它
+  chat.setStore(makeStore({
+    chatProviders: providers,
+    chatProviderId: chat.LOCAL_PROVIDER_ID,
+    chatModelId: 'Local-4B-Q4_K_M'
+  }))
+  const cfg = chat.readConfig()
+  ok('選了本機模型後 readConfig 指到 router',
+    cfg.apiUrl === 'http://127.0.0.1:8010/v1' && cfg.modelId === 'Local-4B-Q4_K_M'
+      && cfg.providerId === chat.LOCAL_PROVIDER_ID,
+    JSON.stringify(cfg))
+  ok('本機模型不標成生圖模型', cfg.image === false)
+
+  // 選了不存在的本機模型 → modelId 收斂成空字串（`chat.send` 的守衛拒絕）。
+  // **不退回第一顆**：那是 main 的 reconcile 在寫 store 時做的事，
+  // readConfig 這樣做的話，「拿清單外的名字打過來」就會真的打出去一個請求。
+  chat.setStore(makeStore({
+    chatProviders: providers,
+    chatProviderId: chat.LOCAL_PROVIDER_ID,
+    chatModelId: 'not-installed'
+  }))
+  ok('不存在的本機模型 → modelId 空（守衛會拒絕）',
+    chat.readConfig().modelId === '', chat.readConfig().modelId)
+
+  // 存檔路徑的 sanitize 不可以收到 synthetic：store:set 走的是 sanitizeProviders
+  const stored = chat.sanitizeProviders([{ id: chat.LOCAL_PROVIDER_ID, name: 'X', apiUrl: 'http://x', models: ['m'] }])
+  ok('sanitizeProviders 會把 __local 擋下來（不能被寫進 config.json）',
+    stored.length === 0, JSON.stringify(stored))
+
+  // router 關了之後 `chatProviderId` 還指著 __local，但清單裡已經沒有那筆：
+  // pickProvider 退回第一筆，而「not-installed」不在 A 的清單內 → modelId 空字串。
+  // **不是自動退回 a/one**：那是 main 的 reconcile 在寫 store 時做的收斂。
+  chat.setLocalSource(() => null)
+  const fallback = chat.readConfig()
+  ok('router 關掉後退回第一筆雲端（模型不在清單內 → 空）',
+    fallback.providerId === 'p_a' && fallback.modelId === '', JSON.stringify(fallback))
+
+  chat.setLocalSource(() => null)
+}
+
 async function main() {
   await app.whenReady()
   try {
@@ -896,6 +960,7 @@ async function main() {
     await caseL()
     await caseM()
     await caseN()
+    await caseO()
   } catch (e) {
     failed++
     console.error('\n未預期例外：', e)

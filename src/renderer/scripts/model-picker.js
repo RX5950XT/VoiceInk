@@ -1,31 +1,41 @@
 /**
- * VoiceInk - 使用現場的模型選單（語音轉文字頁／翻譯頁共用）
+ * VoiceInk - 使用現場的模型選單
  *
- * 設定頁只管「裝了什麼、怎麼推論」；「這次要用哪一顆」在做事的頁面上直接選。
- * 選單是既有 store key 的扁平視圖，沒有第三份狀態：
- *   ASR  → `asrEngine`(local|cloud) ＋ `asrModelKey`
- *   翻譯 → `translator`(local|cloud) ＋ `localTranslateModel`
- *          ／雲端時再加 `translateProviderId` ＋ `translateModelId`
- * 選了立刻寫回（跟主題一樣即時套用），不必按儲存。
+ * 設定頁只管「裝了什麼、怎麼推論」；「這件事要用哪一顆」在做事的頁面上直接選。
  *
- * 雲端翻譯的模型直接列聊天供應商清單裡的每一顆——兩邊都是 OpenAI 相容的
+ * 「語音轉文字」底下三個子分頁**各自獨立**（scope＝`file`／`live`／`dictation`），
+ * 每一頁各存一份選擇，選單就放在那一頁的內容裡：
+ *   ASR → `<scope>Asr`：`local:<模型 key>` ／ `cloud:<雲端設定 id>:<模型 id>`
+ *   LLM → `<scope>Llm`：`local:<模型 key>` ／ `cloud:<供應商 id>:<模型 id>` ／ ''（不使用）
+ *
+ * 「翻譯與 TTS」頁是另一組（全域的 `translator` ＋ `localTranslateModel` ／
+ * `translateProviderId` ＋ `translateModelId`），沿用原本的 `*Translate*` 那幾支。
+ *
+ * 雲端 LLM 直接列聊天供應商清單裡的每一顆——兩邊都是 OpenAI 相容的
  * chat completions，沒必要讓使用者把同一組網址金鑰填兩次。
  */
 
 import { electronAPI, showToast } from './app.js'
 
-/** 選項值編碼：本地 `local:<模型 key>`；ASR 雲端 `cloud`；翻譯雲端 `cloud:<供應商 id>:<模型 id>` */
+/** 選項值編碼：本地 `local:<模型 key>`；ASR 雲端 `cloud`；LLM 雲端 `cloud:<供應商 id>:<模型 id>` */
 const CLOUD_VALUE = 'cloud'
 
 /** 本地 ASR 模型顯示順序（與 main models.js 的 ASR_MODEL_KEYS 一致） */
 const ASR_KEYS = ['qwen3asr', 'qwen3asrgpu']
-/** 本地翻譯模型顯示順序（與 main models.js 的 LLM_MODEL_KEYS 一致） */
+/** 本地 LLM 模型顯示順序（與 main models.js 的 LLM_MODEL_KEYS 一致） */
 const LLM_KEYS = ['linguaforge08q4', 'qwen35translate', 'qwen354b']
+
+/** 三個子分頁各自的 store key（與 main model-scope.js 一致） */
+export const SCOPE_KEYS = Object.freeze({
+  file: { asr: 'fileAsr', llm: 'fileLlm' },
+  live: { asr: 'liveAsr', llm: 'liveLlm' },
+  dictation: { asr: 'dictationAsr', llm: 'dictationLlm' }
+})
 
 /**
  * @param {Record<string, { label?: string, downloaded?: boolean, requires?: string|null }>} modelsMap
  * @param {string[]} keys
- * @param {string | null} cloudLabel null＝不加通用雲端項（翻譯改為逐一列出供應商的模型）
+ * @param {string | null} cloudLabel null＝不加通用雲端項（LLM 改為逐一列出供應商的模型）
  * @returns {{ value: string, label: string, ready: boolean }[]}
  */
 function buildOptions(modelsMap, keys, cloudLabel) {
@@ -46,19 +56,41 @@ function buildOptions(modelsMap, keys, cloudLabel) {
 }
 
 /**
+ * 本地兩顆 ＋ 每一組雲端設定底下的每一顆模型。
+ *
+ * 一組雲端設定可以放好幾顆轉錄模型（同一把金鑰、同一個端點），所以這裡跟雲端 LLM
+ * 一樣逐一列出來，值是 `cloud:<設定 id>:<模型 id>`。
  * @param {Record<string, { label?: string, downloaded?: boolean, requires?: string|null }>} modelsMap
- * @param {{ asrModelId?: string }} settings
+ * @param {{ asrClouds?: Array<{ id: string, name?: string, apiUrl?: string, apiKey?: string, models?: string[] }> }} settings
  */
 export function asrOptions(modelsMap, settings) {
-  return buildOptions(modelsMap, ASR_KEYS, settings?.asrModelId || '未設定模型 ID')
+  const options = buildOptions(modelsMap, ASR_KEYS, null)
+  const clouds = Array.isArray(settings?.asrClouds) ? settings.asrClouds : []
+  for (const cloud of clouds) {
+    const ready = Boolean(cloud?.apiUrl && cloud?.apiKey)
+    // 舊檔可能還是單一 modelId（main 開機會升級，這裡容錯免得升級前那一輪整排不見）
+    const list = cloud?.models?.length ? cloud.models : [cloud?.modelId].filter(Boolean)
+    for (const model of list) {
+      options.push({
+        value: `${CLOUD_VALUE}:${cloud.id}:${model}`,
+        label: `雲端 · ${cloud.name || '未命名'} / ${model}${ready ? '' : '（缺 API Key）'}`,
+        ready
+      })
+    }
+  }
+  if (!options.some((o) => o.value.startsWith(`${CLOUD_VALUE}:`))) {
+    options.push({ value: CLOUD_VALUE, label: '雲端 · 尚未設定轉錄模型', ready: false })
+  }
+  return options
 }
 
 /**
  * 本地三顆 ＋ 雲端供應商清單裡的每一顆
  * @param {Record<string, { label?: string, downloaded?: boolean, requires?: string|null }>} modelsMap
  * @param {{ chatProviders?: Array<{ id: string, name?: string, apiUrl?: string, apiKey?: string, models?: string[] }> }} settings
+ * @param {{ offLabel?: string }} [opts] 有 offLabel 就在最前面加一個「不使用」
  */
-export function translateOptions(modelsMap, settings) {
+export function translateOptions(modelsMap, settings, opts = {}) {
   const options = buildOptions(modelsMap, LLM_KEYS, null)
   const providers = Array.isArray(settings?.chatProviders) ? settings.chatProviders : []
   for (const provider of providers) {
@@ -74,11 +106,13 @@ export function translateOptions(modelsMap, settings) {
   if (!options.some((o) => o.value.startsWith(`${CLOUD_VALUE}:`))) {
     options.push({ value: CLOUD_VALUE, label: '雲端 · 尚未設定供應商', ready: false })
   }
+  if (opts.offLabel) options.unshift({ value: '', label: opts.offLabel, ready: true })
   return options
 }
 
 /**
- * 目前選中的雲端翻譯供應商與模型（`translateProviderId` 失效時退回第一組）
+ * 目前選中的雲端翻譯供應商與模型（`translateProviderId` 失效時退回第一組）。
+ * 這一支是「翻譯與 TTS」頁專用（全域 key）。
  * @param {{ chatProviders?: Array<{ id: string, name?: string, apiUrl?: string, apiKey?: string, models?: string[] }>,
  *           translateProviderId?: string, translateModelId?: string }} settings
  * @returns {{ provider: object|null, modelId: string, ready: boolean }}
@@ -92,20 +126,77 @@ export function resolveCloudTranslate(settings) {
 }
 
 /**
- * 目前設定對應到哪一個選項值
- * @param {{ asrEngine?: string, asrModelKey?: string }} settings
+ * 某個 scope 的雲端 LLM 是否設好了（供應商還在、金鑰有填）
+ * @param {{ chatProviders?: Array<{ id: string, apiUrl?: string, apiKey?: string, models?: string[] }> }} settings
+ * @param {string} value `<scope>Llm` 的值
+ * @returns {{ provider: object|null, modelId: string, ready: boolean }}
  */
-export function currentAsrValue(settings) {
-  return settings?.asrEngine === 'cloud' ? CLOUD_VALUE : `local:${settings?.asrModelKey || 'qwen3asr'}`
+export function resolveScopedCloud(settings, value) {
+  const raw = String(value || '')
+  if (!raw.startsWith(`${CLOUD_VALUE}:`)) return { provider: null, modelId: '', ready: false }
+  const [, providerId, ...rest] = raw.split(':')
+  const modelId = rest.join(':')
+  const providers = Array.isArray(settings?.chatProviders) ? settings.chatProviders : []
+  const provider = providers.find((p) => p.id === providerId) || null
+  return {
+    provider,
+    modelId,
+    ready: Boolean(provider?.apiUrl && provider?.apiKey && provider?.models?.includes(modelId))
+  }
 }
 
 /**
- * @param {{ translator?: string, localTranslateModel?: string }} settings
+ * 這個 scope 的 LLM 選擇代表什麼
+ * @param {string} value
+ * @returns {{ mode: 'off'|'local'|'cloud', modelKey: string }}
  */
-export function currentTranslateValue(settings) {
-  if (settings?.translator !== 'cloud') return `local:${settings?.localTranslateModel || 'linguaforge08q4'}`
-  const { provider, modelId } = resolveCloudTranslate(settings)
-  return provider && modelId ? `${CLOUD_VALUE}:${provider.id}:${modelId}` : CLOUD_VALUE
+export function parseLlmValue(value) {
+  const raw = String(value || '')
+  if (raw.startsWith('local:')) return { mode: 'local', modelKey: raw.slice('local:'.length) }
+  if (raw.startsWith(CLOUD_VALUE)) return { mode: 'cloud', modelKey: '' }
+  return { mode: 'off', modelKey: '' }
+}
+
+/**
+ * 這個 scope 的 ASR 選擇代表什麼
+ * @param {string} value
+ * @returns {{ engine: 'local'|'cloud', modelKey: string }}
+ */
+export function parseAsrValue(value) {
+  const raw = String(value || '')
+  if (raw.startsWith('local:')) {
+    return { engine: 'local', modelKey: raw.slice('local:'.length), cloudId: '', modelId: '' }
+  }
+  if (raw.startsWith(`${CLOUD_VALUE}:`)) {
+    // 模型 id 可能含冒號，設定 id 不會 → 只切第一刀
+    const [, cloudId, ...rest] = raw.split(':')
+    return { engine: 'cloud', modelKey: '', cloudId, modelId: rest.join(':') }
+  }
+  return { engine: 'cloud', modelKey: '', cloudId: '', modelId: '' }
+}
+
+/**
+ * 讀某個 scope 現在選的是什麼（main 已做過收斂，這裡直接用）
+ * @param {'file'|'live'|'dictation'} scope
+ * @returns {Promise<{ asr: string, llm: string }>}
+ */
+export async function readScope(scope) {
+  const keys = SCOPE_KEYS[scope]
+  const [asr, llm] = await Promise.all([
+    electronAPI.store.get(keys.asr, 'local:qwen3asr'),
+    electronAPI.store.get(keys.llm, '')
+  ])
+  return { asr: String(asr || 'local:qwen3asr'), llm: String(llm || '') }
+}
+
+/**
+ * @param {'file'|'live'|'dictation'} scope
+ * @param {'asr'|'llm'} kind
+ * @param {string} value
+ * @returns {Promise<void>}
+ */
+export async function writeScope(scope, kind, value) {
+  await electronAPI.store.set(SCOPE_KEYS[scope][kind], value)
 }
 
 /**
@@ -129,19 +220,17 @@ export function fillSelect(select, options, current) {
 }
 
 /**
- * @param {string} value
- * @returns {Promise<void>}
+ * 「翻譯與 TTS」頁專用（全域 key）
+ * @param {{ translator?: string, localTranslateModel?: string }} settings
  */
-export async function applyAsrChoice(value) {
-  if (value === CLOUD_VALUE) {
-    await electronAPI.store.set('asrEngine', 'cloud')
-    return
-  }
-  await electronAPI.store.set('asrEngine', 'local')
-  await electronAPI.store.set('asrModelKey', value.slice('local:'.length))
+export function currentTranslateValue(settings) {
+  if (settings?.translator !== 'cloud') return `local:${settings?.localTranslateModel || 'linguaforge08q4'}`
+  const { provider, modelId } = resolveCloudTranslate(settings)
+  return provider && modelId ? `${CLOUD_VALUE}:${provider.id}:${modelId}` : CLOUD_VALUE
 }
 
 /**
+ * 「翻譯與 TTS」頁專用（全域 key）
  * @param {string} value
  * @returns {Promise<void>}
  */

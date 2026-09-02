@@ -6,7 +6,7 @@
  */
 
 import { showToast, getSettings, electronAPI, cleanIpcError, ASR_MODEL_KEY, resolveTranslateModelKey } from './app.js'
-import { resolveCloudTranslate } from './model-picker.js'
+import { readScope, parseAsrValue, parseLlmValue, resolveScopedCloud } from './model-picker.js'
 
 // ===== DOM 元素 =====
 let dropZone
@@ -306,10 +306,14 @@ async function startTranscription() {
     updateProgress(2, '讀取設定…')
     const settings = await getSettings()
     const status = await electronAPI.models.status()
-    const useCloudAsr = settings.asrEngine === 'cloud'
+    // 這一頁自己的模型選擇（即時字幕與語音輸入各有各的）
+    const scope = await readScope('file')
+    const asrChoice = parseAsrValue(scope.asr)
+    const llmChoice = parseLlmValue(scope.llm)
+    const useCloudAsr = asrChoice.engine === 'cloud'
 
     if (!useCloudAsr) {
-      const asrKey = settings.asrModelKey || ASR_MODEL_KEY
+      const asrKey = asrChoice.modelKey || ASR_MODEL_KEY
       const asrDef = status.models?.[asrKey]
       if (!asrDef?.downloaded) {
         throw new Error(`本地語音模型（${asrDef?.label || asrKey}）尚未下載，請到設定 → 本地模型下載`)
@@ -326,14 +330,14 @@ async function startTranscription() {
 
     const language = outputLanguage.value
     const willTranslate = language !== 'auto'
-    if (willTranslate && settings.translator === 'local') {
-      const llmKey = resolveTranslateModelKey(settings, status.models)
+    if (willTranslate && llmChoice.mode === 'local') {
+      const llmKey = resolveTranslateModelKey({ localTranslateModel: llmChoice.modelKey }, status.models)
       if (!status.models?.[llmKey]?.downloaded) {
         throw new Error('本地翻譯模型尚未下載，請先到設定下載')
       }
     }
-    if (willTranslate && settings.translator === 'cloud' && !resolveCloudTranslate(settings).ready) {
-      throw new Error('雲端翻譯還沒選好供應商與模型，請在上方選單挑一顆')
+    if (willTranslate && llmChoice.mode === 'cloud' && !resolveScopedCloud(settings, scope.llm).ready) {
+      throw new Error('雲端翻譯還沒選好供應商與模型，請在這一頁的「翻譯模型」挑一顆')
     }
 
     // 本地：先載 ASR；雲端 ASR 不載 sherpa（串流過程長，LLM 等 ASR 完再載）
@@ -360,7 +364,7 @@ async function startTranscription() {
     updateProgress(10, useCloudAsr ? '正在雲端轉錄…' : '正在解碼並轉錄…')
     await waitForPaint()
 
-    // 模型由 main 讀 store 決定（asrEngine ＋ asrModelKey），renderer 不指定
+    // 模型由 main 讀 store 決定（這一頁的 `fileAsr`），renderer 不指定
     const asrResult = await electronAPI.localAsr.transcribeFile({
       filePath,
       lang: language
@@ -370,7 +374,7 @@ async function startTranscription() {
     let result = (asrResult && asrResult.text) || ''
 
     if (result && willTranslate) {
-      if (settings.translator === 'local') {
+      if (llmChoice.mode === 'local') {
         updateProgress(90, '載入翻譯模型…')
         await waitForPaint()
         const warmLlm = await electronAPI.engine.acquire('file', {
@@ -442,7 +446,8 @@ async function translateLong(text, targetLang) {
     const translated = await electronAPI.translate(group, targetLang, {
       previousSource: prevSrc,
       previousTranslation: prevTr,
-      mode: 'file'
+      mode: 'file',
+      scope: 'file'
     })
     results.push(translated)
     // 下一組前文：僅在有非 identity 譯文時延續（與 live buildContextPair 一致）

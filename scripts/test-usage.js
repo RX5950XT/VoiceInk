@@ -13,18 +13,20 @@ function loadShared() {
   }
 }
 
-test('初始狀態固定包含五家 provider 且沒有假額度', () => {
+test('初始狀態固定包含七家 provider 且沒有假額度', () => {
   const { constants, shared } = loadShared()
   assert.deepEqual(constants.PROVIDER_IDS, [
     'claude-code',
     'codex',
     'antigravity',
     'opencode-go',
-    'grok'
+    'grok',
+    'ollama',
+    'commandcode'
   ])
   assert.deepEqual(constants.DEFAULT_USAGE_SETTINGS.visibleProviders, constants.PROVIDER_IDS)
   const accounts = shared.createInitialAccounts(0)
-  assert.equal(accounts.length, 5)
+  assert.equal(accounts.length, 7)
   assert.ok(accounts.every((account) => account.windows.length === 0))
   assert.ok(accounts.every((account) => account.status === 'disconnected'))
 })
@@ -124,7 +126,7 @@ test('HTTP JSON 解析受大小限制並依狀態決定重試', async () => {
   )
 })
 
-test('Claude Code 將 OAuth usage 正規化為 5h 與 weekly', async () => {
+test('Claude Code 將 OAuth usage 正規化為 5h、weekly 與 Opus weekly', async () => {
   const { syncClaude } = require('../src/main/usage/claude')
   const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-usage-claude-'))
   const token = 'claude-sentinel-token'
@@ -143,6 +145,8 @@ test('Claude Code 將 OAuth usage 正規化為 5h 與 weekly', async () => {
         return new Response(JSON.stringify({
           five_hour: { utilization: 62.5, resets_at: '2026-08-20T15:00:00Z' },
           seven_day: { utilization: 38, resets_at: '2026-08-24T00:00:00Z' },
+          seven_day_opus: { utilization: 12, resets_at: '2026-08-24T00:00:00Z' },
+          seven_day_sonnet: null,
           extra_usage: { is_enabled: true }
         }), { status: 200 })
       },
@@ -150,13 +154,23 @@ test('Claude Code 將 OAuth usage 正規化為 5h 與 weekly', async () => {
     })
     assert.equal(request.options.headers.Authorization, `Bearer ${token}`)
     assert.equal(request.options.headers['anthropic-beta'], 'oauth-2025-04-20')
-    assert.deepEqual(account.windows.map((window) => [window.id, window.used]), [
-      ['claude-5h', 62.5],
-      ['claude-weekly', 38]
+    assert.deepEqual(account.windows.map((window) => [window.id, window.label, window.used]), [
+      ['claude-5h', '', 62.5],
+      ['claude-weekly', '', 38],
+      ['claude-weekly-opus', 'Opus', 12]
     ])
     assert.equal(account.accuracy, 'official')
     assert.equal(account.planName, 'Claude Pro / Max')
     assert.ok(!JSON.stringify(account).includes(token))
+
+    // 非 Max 方案上游把 seven_day_opus 回成 null，不可以憑空多畫一格 0%
+    const { applyClaudeUsage } = require('../src/main/usage/claude')
+    const pro = applyClaudeUsage({
+      five_hour: { utilization: 10, resets_at: '2026-08-20T15:00:00Z' },
+      seven_day: { utilization: 5, resets_at: '2026-08-24T00:00:00Z' },
+      seven_day_opus: null
+    }, Date.parse('2026-08-20T12:00:00Z'), 'pro')
+    assert.deepEqual(pro.windows.map((window) => window.id), ['claude-5h', 'claude-weekly'])
   } finally {
     fs.rmSync(homeDir, { recursive: true, force: true })
   }
@@ -328,86 +342,287 @@ test('缺少本機憑證時三個雲端 provider 都回 disconnected', async () 
   }
 })
 
-test('OpenCode 以唯讀 SQLite 加總增量成本並保留 DB 位元組', async () => {
-  const { DatabaseSync } = require('node:sqlite')
+/** 寫一份 OpenCode CLI 的 auth.json（額度金鑰的來源之一）。 */
+function writeOpenCodeAuth(homeDir, entries) {
+  const dir = path.join(homeDir, '.local', 'share', 'opencode')
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, 'auth.json'), JSON.stringify(entries))
+}
+
+test('OpenCode Go 讀官方 usage 端點的三個百分比視窗', async () => {
   const { syncOpenCode } = require('../src/main/usage/opencode')
   const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-usage-opencode-'))
-  const dbDir = path.join(homeDir, '.local', 'share', 'opencode')
-  const dbPath = path.join(dbDir, 'opencode.db')
+  const key = 'sk-opencode-sentinel'
   const nowMs = Date.parse('2026-08-20T12:00:00Z')
   try {
-    fs.mkdirSync(dbDir, { recursive: true })
-    const db = new DatabaseSync(dbPath)
-    db.exec(`create table part (
-      id text primary key,
-      message_id text not null,
-      session_id text not null,
-      time_created integer not null,
-      time_updated integer not null,
-      data text not null
-    )`)
-    const insert = db.prepare(`insert into part
-      (id, message_id, session_id, time_created, time_updated, data)
-      values (?, 'm', 's', ?, ?, ?)`)
-    insert.run('p1', nowMs - 120_000, nowMs - 120_000, JSON.stringify({ type: 'step-finish', cost: 1.5 }))
-    insert.run('p2', nowMs - 60_000, nowMs - 60_000, JSON.stringify({ type: 'step-finish', cost: 2.5 }))
-    insert.run('old', nowMs - 31 * 24 * 60 * 60 * 1000, nowMs, JSON.stringify({ type: 'step-finish', cost: 99 }))
-    insert.run('other', nowMs - 30_000, nowMs, JSON.stringify({ type: 'text', cost: 500 }))
-    db.close()
-
-    const before = fs.readFileSync(dbPath)
+    writeOpenCodeAuth(homeDir, { 'opencode-go': { type: 'api', key } })
     const account = await syncOpenCode({
       homeDir,
+      env: {},
       nowMs,
-      settings: {
-        opencodeWeeklyReset: { day: 1, hour: 7, minute: 0 },
-        opencodeMonthlyReset: { day: 1, hour: 0, minute: 0 }
+      fetchImpl: async (url, options) => {
+        assert.equal(url, 'https://opencode.ai/zen/go/v1/usage')
+        assert.equal(options.headers.Authorization, `Bearer ${key}`)
+        return new Response(JSON.stringify({
+          usage: {
+            rolling: { status: 'ok', percent: 37, resetsAt: '2026-08-20T15:00:00Z' },
+            weekly: { status: 'ok', percent: 62, resetsAt: '2026-08-24T07:00:00Z' },
+            monthly: { status: 'rate-limited', percent: 100, resetsAt: '2026-09-15T00:00:00Z' },
+            // 壞掉的那格跳過就好，不要整份丟掉（上游改過一次形狀）
+            bogus: { status: 'ok', percent: 'nope', resetsAt: '2026-09-15T00:00:00Z' }
+          }
+        }), { status: 200 })
       },
       log: () => {}
     })
-    const after = fs.readFileSync(dbPath)
-    assert.ok(before.equals(after), 'read-only sync must not mutate opencode.db')
-    assert.deepEqual(account.windows.map((window) => [window.id, window.used, window.limit]), [
-      ['opencode-5h', 4, 12],
-      ['opencode-weekly', 4, 30],
-      ['opencode-monthly', 4, 60]
+    assert.deepEqual(account.windows.map((w) => [w.id, w.kind, w.used, w.limit]), [
+      ['opencode-5h', 'rolling-5h', 37, 100],
+      ['opencode-weekly', 'weekly', 62, 100],
+      ['opencode-monthly', 'monthly', 100, 100]
     ])
-    assert.equal(account.windows[0].resetAt, new Date(nowMs - 60_000 + 5 * 60 * 60 * 1000).toISOString())
-    assert.equal(account.accuracy, 'local')
-    assert.match(account.notes, /非官方額度/)
+    assert.equal(account.windows[1].resetAt, '2026-08-24T07:00:00Z')
+    assert.equal(account.accuracy, 'official')
+    assert.equal(account.status, 'available')
+    assert.ok(!JSON.stringify(account).includes(key))
   } finally {
     fs.rmSync(homeDir, { recursive: true, force: true })
   }
 })
 
-test('OpenCode reset 計算處理同日跨週與月底不存在日期', () => {
-  const {
-    calculateNextWeeklyReset,
-    calculateNextMonthlyReset
-  } = require('../src/main/usage/opencode')
-  const weekly = { day: 1, hour: 7, minute: 0 }
-  assert.equal(
-    calculateNextWeeklyReset(weekly, Date.parse('2026-08-17T06:00:00Z')),
-    '2026-08-17T07:00:00.000Z'
-  )
-  assert.equal(
-    calculateNextWeeklyReset(weekly, Date.parse('2026-08-17T08:00:00Z')),
-    '2026-08-24T07:00:00.000Z'
-  )
-  assert.equal(
-    calculateNextMonthlyReset({ day: 31, hour: 0, minute: 0 }, Date.parse('2027-01-31T01:00:00Z')),
-    '2027-02-28T00:00:00.000Z'
-  )
+test('OpenCode Go 的 403（沒訂閱）與 401（金鑰壞掉）是兩件事', async () => {
+  const { syncOpenCode } = require('../src/main/usage/opencode')
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-usage-opencode-403-'))
+  try {
+    writeOpenCodeAuth(homeDir, { 'opencode-go': { type: 'api', key: 'sk-x' } })
+    const body = JSON.stringify({ error: { type: 'EntitlementError', message: 'OpenCode Go subscription required.' } })
+    const forbidden = await syncOpenCode({
+      homeDir,
+      env: {},
+      nowMs: 0,
+      fetchImpl: async () => new Response(body, { status: 403 }),
+      log: () => {}
+    })
+    assert.equal(forbidden.status, 'disconnected')
+    assert.match(forbidden.notes, /沒有 Go 訂閱/)
+    // 沒訂閱不是「金鑰不對」，訊息不可以把人送去檢查一把正確的金鑰
+    assert.ok(!/金鑰被拒絕|重新登入/.test(forbidden.notes))
+
+    const unauthorized = await syncOpenCode({
+      homeDir,
+      env: {},
+      nowMs: 0,
+      fetchImpl: async () => new Response('{}', { status: 401 }),
+      log: () => {}
+    })
+    assert.equal(unauthorized.status, 'disconnected')
+    assert.match(unauthorized.notes, /401/)
+
+    // 暫時性失敗要留在 connected，才吃得到 6h soft cache
+    const flaky = await syncOpenCode({
+      homeDir,
+      env: {},
+      nowMs: 0,
+      fetchImpl: async () => new Response('{}', { status: 503 }),
+      log: () => {}
+    })
+    assert.equal(flaky.status, 'connected')
+  } finally {
+    fs.rmSync(homeDir, { recursive: true, force: true })
+  }
 })
 
-test('OpenCode DB 不存在時回 disconnected 且不建立檔案', async () => {
+test('沒有 OpenCode 金鑰時回 disconnected，且金鑰解析順序是 env → auth.json', async () => {
   const { syncOpenCode } = require('../src/main/usage/opencode')
   const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-usage-opencode-missing-'))
   try {
-    const account = await syncOpenCode({ homeDir, settings: {}, nowMs: 0, log: () => {} })
-    assert.equal(account.status, 'disconnected')
-    assert.equal(account.windows.length, 0)
-    assert.equal(fs.existsSync(path.join(homeDir, '.local', 'share', 'opencode', 'opencode.db')), false)
+    const missing = await syncOpenCode({ homeDir, env: {}, nowMs: 0, log: () => {} })
+    assert.equal(missing.status, 'disconnected')
+    assert.equal(missing.windows.length, 0)
+
+    writeOpenCodeAuth(homeDir, { 'opencode-go': { type: 'api', key: 'from-file' } })
+    let seen = ''
+    await syncOpenCode({
+      homeDir,
+      env: { OPENCODE_API_KEY: 'from-env' },
+      nowMs: 0,
+      fetchImpl: async (_url, options) => {
+        seen = options.headers.Authorization
+        return new Response(JSON.stringify({ usage: {} }), { status: 200 })
+      },
+      log: () => {}
+    })
+    assert.equal(seen, 'Bearer from-env')
+  } finally {
+    fs.rmSync(homeDir, { recursive: true, force: true })
+  }
+})
+
+test('Ollama Cloud 讀 monthly usage 且不編造重置時間', async () => {
+  const { syncOllama, applyOllamaUsage, toPercent } = require('../src/main/usage/ollama')
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-usage-ollama-'))
+  const key = 'ollama-sentinel-key'
+  try {
+    writeOpenCodeAuth(homeDir, { 'ollama-cloud': { type: 'api', key } })
+    const account = await syncOllama({
+      homeDir,
+      env: {},
+      nowMs: Date.parse('2026-08-20T12:00:00Z'),
+      fetchImpl: async (url, options) => {
+        assert.equal(url, 'https://ollama.com/api/usage')
+        assert.equal(options.headers.Authorization, `Bearer ${key}`)
+        return new Response(JSON.stringify({
+          activity: { cost: '1.25000', period: { type: 'last_4_weeks' }, models: [] },
+          limits: {
+            monthly: { usage: 0.125, models: [{ name: 'gpt-oss:20b', request_count: 3 }] }
+          }
+        }), { status: 200 })
+      },
+      log: () => {}
+    })
+    assert.deepEqual(account.windows.map((w) => [w.id, w.kind, w.used, w.limit, w.resetAt]), [
+      ['ollama-monthly', 'monthly', 12.5, 100, '']
+    ])
+    assert.equal(account.accuracy, 'official')
+    assert.match(account.notes, /US\$1\.25/)
+    assert.ok(!JSON.stringify(account).includes(key))
+
+    // 比例（≤1）與百分比（>1）兩種都不能顯示成 0
+    assert.equal(toPercent(1), 100)
+    assert.equal(toPercent(42), 42)
+    assert.equal(toPercent(-1), null)
+    assert.equal(toPercent('nope'), null)
+
+    // limits 整個不見時不補假視窗
+    const empty = applyOllamaUsage({ activity: { cost: '0.00000' } }, 0)
+    assert.equal(empty.windows.length, 0)
+    assert.equal(empty.status, 'connected')
+  } finally {
+    fs.rmSync(homeDir, { recursive: true, force: true })
+  }
+})
+
+test('Command Code 讀 billing/credits 的三個視窗與訂閱重置時間', async () => {
+  const { applyCommandCodeUsage, syncCommandCode, toIsoReset } = require('../src/main/usage/commandcode')
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-usage-cmdcode-'))
+  const key = 'commandcode-sentinel-key'
+  try {
+    fs.mkdirSync(path.join(homeDir, '.commandcode'))
+    fs.writeFileSync(path.join(homeDir, '.commandcode', 'auth.json'), JSON.stringify({ apiKey: key }))
+    const account = await syncCommandCode({
+      homeDir,
+      env: {},
+      nowMs: Date.parse('2026-08-20T12:00:00Z'),
+      fetchImpl: async (url, options) => {
+        assert.equal(options.headers.Authorization, `Bearer ${key}`)
+        if (url.endsWith('/billing/credits')) {
+          // 逐字取自實機回應（只留數字）
+          return new Response(JSON.stringify({
+            credits: { monthlyCredits: 79.9020260526, purchasedCredits: 0, freeCredits: 0 },
+            windowLimits: {
+              limited: true,
+              exceeded: null,
+              fiveHour: { used: 4, cap: 16, exceeded: false, resetAt: 1787476441355 },
+              weekly: { used: 10, cap: 40, exceeded: false, resetAt: 1788063241355 }
+            }
+          }), { status: 200 })
+        }
+        assert.equal(url, 'https://api.commandcode.ai/alpha/billing/subscriptions')
+        return new Response(JSON.stringify({
+          success: true,
+          data: {
+            planId: 'individual-pro-v1',
+            status: 'active',
+            currentPeriodEnd: '2026-09-20T00:00:00Z'
+          }
+        }), { status: 200 })
+      },
+      log: () => {}
+    })
+    assert.deepEqual(account.windows.slice(0, 2).map((w) => [w.id, w.kind, w.used, w.limit, w.resetAt]), [
+      ['commandcode-5h', 'rolling-5h', 4, 16, '2026-08-23T09:14:01.355Z'],
+      ['commandcode-weekly', 'weekly', 10, 40, '2026-08-30T04:14:01.355Z']
+    ])
+    const monthly = account.windows[2]
+    assert.deepEqual([monthly.id, monthly.kind, monthly.limit, monthly.resetAt], [
+      'commandcode-monthly', 'monthly', 80, '2026-09-20T00:00:00Z'
+    ])
+    assert.ok(Math.abs(monthly.used - 0.0979739474) < 1e-9)
+    const legacyPro = applyCommandCodeUsage(
+      { credits: { monthlyCredits: 29 } },
+      0,
+      { success: true, data: { planId: 'individual-pro', currentPeriodEnd: '2026-09-20T00:00:00Z' } }
+    )
+    assert.deepEqual([legacyPro.windows[0].used, legacyPro.windows[0].limit], [1, 30])
+    assert.equal(account.accuracy, 'official')
+    assert.equal(toIsoReset(1788063241), '2026-08-30T04:14:01.000Z')
+    assert.ok(!JSON.stringify(account).includes(key))
+  } finally {
+    fs.rmSync(homeDir, { recursive: true, force: true })
+  }
+})
+
+test('Command Code 不把 usage/summary 的花費報表當成額度，缺 cap 的視窗直接跳過', () => {
+  const { applyCommandCodeUsage } = require('../src/main/usage/commandcode')
+  // `/alpha/usage/summary` 也回 200，但裡面一個上限欄位都沒有。
+  // 解析成「0% 全新未用」比空白更糟——那是會被相信的假數字。
+  const costReport = applyCommandCodeUsage({
+    totalCount: 0, totalCost: 0, totalTokens: 0, periodBasis: 'billing-period'
+  }, 0)
+  assert.equal(costReport.windows.length, 0)
+  assert.equal(costReport.status, 'connected')
+
+  // cap 缺了或是 0 只丟那一格，另一格照常
+  const partial = applyCommandCodeUsage({
+    windowLimits: { fiveHour: { used: 3 }, weekly: { used: 1, cap: 4, resetAt: 1788063241355 } }
+  }, 0)
+  assert.deepEqual(partial.windows.map((w) => w.id), ['commandcode-weekly'])
+  assert.equal(applyCommandCodeUsage({ windowLimits: { fiveHour: { used: 0, cap: 0 } } }, 0).windows.length, 0)
+
+  // 加購 credits 可以把用量推過上限，畫面不該出現超過 100% 的長條
+  const over = applyCommandCodeUsage({ windowLimits: { fiveHour: { used: 99, cap: 10 } } }, 0)
+  assert.deepEqual([over.windows[0].used, over.windows[0].limit], [10, 10])
+})
+
+test('沒有 Command Code 金鑰時回 disconnected，env 優先於 auth.json', async () => {
+  const { syncCommandCode } = require('../src/main/usage/commandcode')
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-usage-cmdcode-none-'))
+  try {
+    const missing = await syncCommandCode({ homeDir, env: {}, nowMs: 0, fetchImpl: async () => {
+      throw new Error('沒有金鑰就不該打上游')
+    }, log: () => {} })
+    assert.equal(missing.status, 'disconnected')
+    assert.equal(missing.windows.length, 0)
+    // 沒跑過 cmd login 的人是在 Studio 開一把 API key，說明要指得到那個填得進去的地方
+    assert.match(missing.notes, /CC代理/)
+
+    // 只有 CC 代理頁填了金鑰（沒有 auth.json、沒有環境變數）也要讀得到
+    const { resolveCommandCodeKey } = require('../src/main/usage/api-key')
+    const ccswitch = require('../src/main/ccswitch/providers')
+    const originalKeyForPreset = ccswitch.keyForPreset
+    ccswitch.keyForPreset = async (presetId) => (presetId === 'commandcode' ? 'from-ccswitch' : '')
+    try {
+      assert.deepEqual(
+        await resolveCommandCodeKey({ homeDir, env: {} }),
+        { key: 'from-ccswitch', source: 'ccswitch' }
+      )
+    } finally {
+      ccswitch.keyForPreset = originalKeyForPreset
+    }
+
+    fs.mkdirSync(path.join(homeDir, '.commandcode'))
+    fs.writeFileSync(path.join(homeDir, '.commandcode', 'auth.json'), JSON.stringify({ apiKey: 'from-file' }))
+    let seen = ''
+    await syncCommandCode({
+      homeDir,
+      env: { COMMAND_CODE_API_KEY: 'from-env' },
+      nowMs: 0,
+      fetchImpl: async (_url, options) => {
+        seen = options.headers.Authorization
+        return new Response('{}', { status: 200 })
+      },
+      log: () => {}
+    })
+    assert.equal(seen, 'Bearer from-env')
   } finally {
     fs.rmSync(homeDir, { recursive: true, force: true })
   }
@@ -568,13 +783,11 @@ test('Antigravity 同步只回正規化額度且 refresh secret 不進結果或�
   }
 })
 
-test('usage settings 只保留合法 provider、順序與 reset 範圍', () => {
+test('usage settings 只保留合法 provider 與順序', () => {
   const { sanitizeSettings } = require('../src/main/usage/store')
   const input = {
     visibleProviders: ['grok', 'grok', 'unknown', 'claude-code'],
-    providerOrder: ['grok', 'unknown', 'grok'],
-    opencodeWeeklyReset: { day: 9, hour: 8, minute: 90 },
-    opencodeMonthlyReset: { day: 31, hour: 23, minute: 59 }
+    providerOrder: ['grok', 'unknown', 'grok']
   }
   const result = sanitizeSettings(input)
   assert.deepEqual(result.visibleProviders, ['grok', 'claude-code'])
@@ -583,10 +796,10 @@ test('usage settings 只保留合法 provider、順序與 reset 範圍', () => {
     'claude-code',
     'codex',
     'antigravity',
-    'opencode-go'
+    'opencode-go',
+    'ollama',
+    'commandcode'
   ])
-  assert.deepEqual(result.opencodeWeeklyReset, { day: 1, hour: 8, minute: 0 })
-  assert.deepEqual(result.opencodeMonthlyReset, { day: 31, hour: 23, minute: 59 })
   input.visibleProviders.length = 0
   assert.deepEqual(result.visibleProviders, ['grok', 'claude-code'])
 })

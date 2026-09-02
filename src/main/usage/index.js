@@ -3,9 +3,11 @@
 const path = require('path')
 const { syncAntigravity, mergeExpectedWindows } = require('./antigravity')
 const { syncClaude } = require('./claude')
+const { syncCommandCode } = require('./commandcode')
 const { syncCodex } = require('./codex')
 const { CACHE_TTL_MS, MAX_DIAGNOSTICS, PROVIDER_IDS } = require('./constants')
 const { syncGrok } = require('./grok')
+const { syncOllama } = require('./ollama')
 const { syncOpenCode } = require('./opencode')
 const {
   createBaseAccount,
@@ -61,8 +63,7 @@ function mergeAccountState(currentRaw, previousRaw, nowMs = Date.now()) {
   const cacheIsFresh = Number.isFinite(previousTime) && nowMs - previousTime < CACHE_TTL_MS
   const canUseSoftCache = current.windows.length === 0 &&
     previous?.windows?.length > 0 &&
-    current.status !== 'disconnected' &&
-    (current.status === 'connected' || current.provider === 'opencode-go')
+    current.status === 'connected'
 
   if (canUseSoftCache && cacheIsFresh) {
     current.windows = previous.windows.map((window) => ({ ...window }))
@@ -99,7 +100,7 @@ function createLogger(lines) {
   }
 }
 
-async function runProviders({ settings, previousAccounts, diagnostics, nowMs }) {
+async function runProviders({ previousAccounts, diagnostics, nowMs }) {
   const homeDir = resolveHomeDir()
   const log = createLogger(diagnostics)
   const args = { homeDir, nowMs, log }
@@ -107,8 +108,11 @@ async function runProviders({ settings, previousAccounts, diagnostics, nowMs }) 
     () => syncClaude(args),
     () => syncCodex(args),
     () => syncAntigravity({ nowMs, log }),
-    () => syncOpenCode({ ...args, settings }),
-    () => syncGrok({ ...args, env: process.env })
+    () => syncOpenCode({ ...args, env: process.env }),
+    () => syncGrok({ ...args, env: process.env }),
+    () => syncOllama({ ...args, env: process.env }),
+    // 順序必須跟 PROVIDER_IDS 一致：下面是拿 index 去對 provider 名字的
+    () => syncCommandCode({ ...args, env: process.env })
   ]
   const results = await Promise.allSettled(jobs.map((job) => job()))
   return results.map((result, index) => {
@@ -132,7 +136,6 @@ async function performSync() {
   const nowMs = Date.now()
   const diagnostics = [...previous.diagnostics]
   const accounts = await runProviders({
-    settings: previous.settings,
     previousAccounts: previous.accounts,
     diagnostics,
     nowMs

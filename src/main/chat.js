@@ -60,6 +60,70 @@ function setStore(value) {
 }
 
 /**
+ * 「本機模型」那一組供應商的固定 id。
+ *
+ * 前綴用 `__` 是刻意的：`sanitizeProviders` 的 id 只收 `[A-Za-z0-9_-]`，所以它長得像
+ * 一個合法 id，但**永遠不會被寫進 `chatProviders`**（下面 `allProviders` 只在讀取時併進來，
+ * `store:set` 的存檔路徑仍然只走 `sanitizeProviders`）。
+ * 寫進去的話，使用者一刪 router 就會留下一筆指向死掉埠號的設定。
+ */
+const LOCAL_PROVIDER_ID = '__local'
+
+/**
+ * 本機 router 的供應商樣貌。由 main 在 router 跑著時提供，`null` = 沒在跑。
+ * @type {() => { baseUrl: string, apiKey: string, models: string[] } | null}
+ */
+let localSource = () => null
+
+/**
+ * 送出前確保那一顆本機模型真的載入了。
+ * @type {(modelId: string) => Promise<boolean>}
+ */
+let ensureLocalModel = async () => false
+
+/**
+ * @param {() => { baseUrl: string, apiKey: string, models: string[] } | null} source
+ * @param {(modelId: string) => Promise<boolean>} [ensure]
+ */
+function setLocalSource(source, ensure) {
+  localSource = typeof source === 'function' ? source : () => null
+  if (typeof ensure === 'function') ensureLocalModel = ensure
+}
+
+/**
+ * router 在跑就多一筆「本機模型」供應商。
+ *
+ * llama-server 本身就是 OpenAI 相容端點，所以整條聊天管線（SSE、圖片、重新生成、
+ * 上下文裁切、逾時）**一行都不用改**——本機模型就是「另一個供應商」。
+ * @returns {Provider | null}
+ */
+function localProvider() {
+  const source = localSource()
+  if (!source?.baseUrl || !source.models?.length) return null
+  return {
+    id: LOCAL_PROVIDER_ID,
+    name: '本機模型',
+    apiUrl: `${source.baseUrl.replace(/\/+$/, '')}/v1`,
+    apiKey: source.apiKey || '',
+    models: sanitizeModels(source.models),
+    imageModels: []
+  }
+}
+
+/**
+ * **讀取／驗證用**的完整供應商清單＝store 裡的 ＋ 本機那一筆。
+ *
+ * 存檔路徑（`store:set` 的 sanitize）**不可以**用這一支：synthetic 那筆會被寫進
+ * `config.json`，下次開 App 埠號早就變了。
+ * @returns {Provider[]}
+ */
+function allProviders() {
+  const list = sanitizeProviders(store?.get('chatProviders', []))
+  const local = localProvider()
+  return local ? list.concat(local) : list
+}
+
+/**
  * 取目前選中的供應商。`chatProviderId` 失效時退回第一筆，一筆都沒有就是 null。
  * @returns {Provider | null}
  */
@@ -72,7 +136,7 @@ function readProvider() {
  * @returns {Provider | null}
  */
 function pickProvider(wantedId) {
-  const providers = sanitizeProviders(store?.get('chatProviders', []))
+  const providers = allProviders()
   if (!providers.length) return null
   const wanted = String(wantedId || '').trim()
   return providers.find((p) => p.id === wanted) || providers[0]
@@ -106,6 +170,10 @@ function readTranslateConfig() {
 function readConfig() {
   const provider = readProvider()
   const wantedModel = String(store?.get('chatModelId', '') || '').trim()
+  // **刻意收斂成空字串而不是退回第一顆**：`chat.send` 的守衛靠 `!cfg.modelId` 拒絕請求。
+  // 退回第一顆的話，「拿清單外的模型名打過來」（renderer 端被 XSS 之後的行為）
+  // 會變成真的打出去一個請求，而且打的是我們選的第一顆——allowlist 的意義就沒了。
+  // 「選過的模型被刪掉要退回第一顆」由 main 的 `reconcileProviderSelection`（寫回 store）負責。
   const modelId = provider?.models.includes(wantedModel) ? wantedModel : ''
   return {
     apiUrl: provider?.apiUrl || '',
@@ -158,7 +226,10 @@ function sanitizeProviders(raw) {
     })
     if (out.length >= MAX_PROVIDERS) break
   }
-  return out
+  // 「本機模型」是 main 在 router 跑著時才合成的那一筆，**只在讀取時併進來**：
+  // 這個函式同時跑在 store:set 的存檔路徑上，讓它通過等於把一個指向死埠號的
+  // 供應商寫進 config.json（下次開 App 那個埠早就不是 router 的了）
+  return out.filter((p) => p.id !== LOCAL_PROVIDER_ID)
 }
 
 /**
@@ -416,6 +487,14 @@ async function send(req, sender) {
     if (!cfg.apiKey) return { ok: false, error: `供應商「${cfg.providerName}」尚未填 API Key` }
     if (!cfg.modelId) return { ok: false, error: '目前的聊天模型不在模型清單內，請到設定重新選擇' }
 
+    // 本機模型：沒載入就先載（「一鍵部署」＝直接開始聊）。
+    // **這一步一定要在 inflight 佔位之後**：載一顆大模型要好幾十秒，
+    // 放到守衛與佔位中間的話第二個請求會在佔位前通過守衛（那條老地雷）。
+    if (cfg.providerId === LOCAL_PROVIDER_ID) {
+      const ready = await ensureLocalModel(cfg.modelId)
+      if (!ready) return { ok: false, error: '本機模型載入失敗，請到「HF模型」→ 執行環境查看' }
+    }
+
     // 先確認對話存在再落圖片檔，否則失敗會留下沒人引用的圖
     const existing = await chatStore.get(req?.conversationId)
     if (!existing) return { ok: false, error: '找不到這個對話' }
@@ -580,6 +659,7 @@ function isBusy() {
 
 module.exports = {
   setStore,
+  setLocalSource,
   send,
   abort,
   isBusy,
@@ -587,8 +667,12 @@ module.exports = {
   sanitizeModels,
   sanitizePrompts,
   sanitizeProviders,
+  allProviders,
+  localProvider,
+  LOCAL_PROVIDER_ID,
   providerFromLegacy,
   readProvider,
+  readConfig,
   readTranslateConfig,
   extractDelta,
   DEFAULT_CHAT_API_URL,

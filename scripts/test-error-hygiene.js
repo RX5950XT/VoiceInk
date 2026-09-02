@@ -9,12 +9,13 @@
  * 一併涵蓋：
  * - `subtitleWindowBounds` 是 STORE_ALLOWLIST 裡唯一沒校驗、卻直接餵進 BrowserWindow 的 key
  * - AGY Anthropic 串流中途出錯時要先收掉開著的 content block
- * - opencode `time_created` 單位（毫秒）
+ * - 額度的 OpenCode Go／Ollama Cloud／Command Code 三支 API provider（上游 body 與金鑰不外洩）
  */
 
 'use strict'
 
 const http = require('http')
+const os = require('os')
 const path = require('path')
 const fs = require('fs')
 const Module = require('module')
@@ -73,7 +74,7 @@ async function testCloudAsr() {
   console.log('\n[cloud-asr] 上游錯誤 body 不得進使用者訊息')
   const cloudAsr = require(path.join(ROOT, 'src/main/cloud-asr.js'))
 
-  for (const status of [400, 401, 429, 500]) {
+  for (const status of [400, 401, 403, 429, 500]) {
     const up = await startServer((req, res) => {
       res.writeHead(status, { 'Content-Type': 'application/json' })
       res.end(LEAKY_BODY)
@@ -100,13 +101,51 @@ async function testCloudAsr() {
     const found = leaks(message)
     ok(`HTTP ${status} 的訊息不含上游 body`, found.length === 0, `洩漏 ${JSON.stringify(found)}｜訊息=${message}`)
     ok(`HTTP ${status} 的訊息仍帶得出狀態碼／可行動說明`,
-      /雲端 ASR/.test(message) && (message.includes(String(status)) || /API Key|請稍後|API URL/.test(message)),
+      /雲端語音辨識/.test(message) && (message.includes(String(status)) || /API Key|請稍後|API URL/.test(message)),
       `訊息=${message}`)
   }
 
-  // 純函式層：classifyHttpError 已不接受 body 參數
+  // 純函式層：classifyHttpError 已不接受 body 參數（modelId 有預設值，不算進 arity）
   ok('classifyHttpError 只吃 status（簽章不再收 body）', cloudAsr.classifyHttpError.length === 1,
     `arity=${cloudAsr.classifyHttpError.length}`)
+
+  // 403 曾經跟 401 合併成「請檢查 API Key」，害人去查一個根本正確的東西。
+  // 實測 OpenRouter 對沒開通的轉錄模型就是回 403，同一把金鑰換一顆模型立刻 200。
+  const m401 = cloudAsr.classifyHttpError(401, 'x-ai/grok-stt-1.0').message
+  const m403 = cloudAsr.classifyHttpError(403, 'x-ai/grok-stt-1.0').message
+  ok('401 才講金鑰', /API Key/.test(m401), m401)
+  ok('403 不可以叫人去檢查金鑰', !/API Key/.test(m403), m403)
+  ok('403 要指名是哪一顆模型', m403.includes('x-ai/grok-stt-1.0'), m403)
+
+  // modelId 是使用者自填的設定，不是上游 body——可以進訊息，但不能因此漏掉別的東西
+  ok('模型名沒填時不會出現空引號', !/「」/.test(cloudAsr.classifyHttpError(403).message))
+
+  // 雲端轉錄模型講中文一樣會吐簡體（實測 openai/gpt-4o-transcribe 全簡體）
+  const zhs = await startServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ text: '今天天气很好，我们一起去公园散步吧。' }))
+  })
+  const zhStore = {
+    get: (key, fallback) => ({
+      asrApiUrl: zhs.url, asrApiKey: 'sk-local-user-key', asrModelId: 'openai/gpt-4o-transcribe'
+    }[key] ?? fallback)
+  }
+  const zhOut = await cloudAsr.transcribeAudio({
+    buffer: cloudAsr.float32ToWav(new Float32Array(1600), 16000),
+    format: 'wav',
+    language: 'zh-TW',
+    store: zhStore
+  })
+  const jaOut = await cloudAsr.transcribeAudio({
+    buffer: cloudAsr.float32ToWav(new Float32Array(1600), 16000),
+    format: 'wav',
+    language: 'ja',
+    store: zhStore
+  })
+  await zhs.close()
+  ok('目標語是繁中時把雲端的簡體轉過來', zhOut === '今天天氣很好，我們一起去公園散步吧。', zhOut)
+  ok('目標語不是繁中就原樣放行（日文漢字不可被 opencc 弄髒）',
+    jaOut === '今天天气很好，我们一起去公园散步吧。', jaOut)
 }
 
 /**
@@ -136,9 +175,15 @@ async function testCloudTranslate() {
   const localLlm = require(path.join(ROOT, 'src/main/local-llm.js'))
 
   // 1) 上游回結構化 JSON 錯誤 → 不得透傳 error.message
+  let requestBody = null
   const bad = await startServer((req, res) => {
-    res.writeHead(402, { 'Content-Type': 'application/json' })
-    res.end(LEAKY_BODY)
+    let raw = ''
+    req.on('data', (chunk) => { raw += chunk })
+    req.on('end', () => {
+      try { requestBody = JSON.parse(raw) } catch { requestBody = null }
+      res.writeHead(402, { 'Content-Type': 'application/json' })
+      res.end(LEAKY_BODY)
+    })
   })
   // 雲端翻譯的端點與金鑰跟聊天共用同一份供應商清單（chat.readTranslateConfig）
   const store = cloudStore(bad.url, 'sk-local-user-key')
@@ -151,6 +196,9 @@ async function testCloudTranslate() {
     message = e.message
   }
   await bad.close()
+  // exclude 而不是 enabled:false：強制思考的模型收到後者會直接回 400
+  // （實測 OpenRouter 的 grok-4.6／glm-5.3-flash："Reasoning is mandatory for this endpoint"）
+  ok('雲端翻譯固定不要思考內容', requestBody?.reasoning?.exclude === true, JSON.stringify(requestBody))
   ok('JSON 錯誤不透傳 error.message', leaks(message).length === 0, `訊息=${message}`)
   ok('仍留下狀態碼', message.includes('402'), `訊息=${message}`)
 
@@ -235,19 +283,85 @@ function testAnthropicErrorStream() {
   ok('沒開過 block 時仍送得出 error', errFresh.includes('event: error'))
 }
 
-function testOpenCodeTimestamps() {
-  console.log('\n[usage/opencode] time_created 單位')
-  const opencode = require(path.join(ROOT, 'src/main/usage/opencode.js'))
-  const latestMs = Date.UTC(2026, 5, 10, 13, 39, 25)
-  const db = { prepare: () => ({ get: () => ({ latest: latestMs }) }) }
-  const widthMs = 5 * 60 * 60 * 1000
-  const resetAt = opencode.queryLatestReset(db, latestMs - widthMs, widthMs)
-  ok('latest 直接當毫秒用', resetAt === new Date(latestMs + widthMs).toISOString(), resetAt)
+/**
+ * OpenCode Go／Ollama Cloud／Command Code 的額度端點都吃一把 API 金鑰，回什麼字串由對方決定。
+ * 上游 body 與金鑰都不可以流進 notes（會顯示在卡片上）或診斷日誌。
+ */
+async function testUsageApiProviders() {
+  console.log('\n[usage] OpenCode Go／Ollama／Command Code 的上游錯誤與金鑰不外洩')
+  const { syncOpenCode } = require(path.join(ROOT, 'src/main/usage/opencode.js'))
+  const { syncOllama } = require(path.join(ROOT, 'src/main/usage/ollama.js'))
+  const { syncCommandCode } = require(path.join(ROOT, 'src/main/usage/commandcode.js'))
+  const KEY = 'sk-hygiene-sentinel-key'
+  const BODY = '<<upstream-secret-echo sk-hygiene-sentinel-key>>'
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-hygiene-usage-'))
+  try {
+    for (const [name, sync, envVar] of [
+      ['opencode-go', syncOpenCode, 'OPENCODE_API_KEY'],
+      ['ollama', syncOllama, 'OLLAMA_API_KEY'],
+      ['commandcode', syncCommandCode, 'COMMAND_CODE_API_KEY']
+    ]) {
+      for (const status of [401, 403, 500]) {
+        const logs = []
+        const account = await sync({
+          homeDir,
+          env: { [envVar]: KEY },
+          nowMs: 0,
+          fetchImpl: async () => new Response(BODY, { status }),
+          log: (line) => logs.push(line)
+        })
+        const text = JSON.stringify({ account, logs })
+        ok(`${name} HTTP ${status} 不回送上游 body`, !text.includes('upstream-secret-echo'), text)
+        ok(`${name} HTTP ${status} 不外洩金鑰`, !text.includes(KEY), text)
+        ok(`${name} HTTP ${status} 有給使用者看得懂的說明`, account.notes.trim().length > 0)
+      }
+    }
+  } finally {
+    fs.rmSync(homeDir, { recursive: true, force: true })
+  }
+}
 
-  const src = fs.readFileSync(path.join(ROOT, 'src/main/usage/opencode.js'), 'utf-8')
-  ok('移除了永遠觸發不到的秒／毫秒對沖', !/latest > 1_000_000_000_000 \? latest : latest \* 1000/.test(src))
-  ok('queryCost 與 queryLatestReset 用同一個毫秒篩選條件',
-    (src.match(/time_created >= \?/g) || []).length === 2)
+/**
+ * HF模型的 HF Hub 查詢：上游（HF）回什麼字串由對方決定，錯誤訊息只能有狀態摘要。
+ * 同機碼 `KEY` 會被塞進偽造的上游 body：UI 若把 body 印出來就等於把使用者輸入的 token 回音。
+ */
+async function testHfHub() {
+  console.log('\n[HF] Hugging Face 查詢的上游錯誤與金鑰不外洩')
+  const hub = require(path.join(ROOT, 'src/main/hfmodels/hub.js'))
+  const KEY = 'hf_hygiene_sentinel_token'
+  hub.setToken(KEY)
+  const BODY = `<<upstream-secret-echo ${KEY}>>`
+  for (const status of [401, 403, 500]) {
+    let logged = ''
+    const original = globalThis.fetch
+    try {
+      globalThis.fetch = async () => new Response(BODY, { status })
+      // peekFile：直接打 fetch 的那條路（searchModels／listFiles 走 fetchJson，那支有獨立的上限與包裝）
+      let message = ''
+      try {
+        await hub.peekFile('owner/repo', 'model.gguf')
+      } catch (error) {
+        message = String(error?.message || error)
+      }
+      ok(`HF peekFile HTTP ${status} 不回送上游 body`, !message.includes('upstream-secret-echo'), message)
+      ok(`HF peekFile HTTP ${status} 不外洩 token`, !message.includes(KEY), message)
+      ok(`HF peekFile HTTP ${status} 有給使用者看得懂的說明`, message.trim().length > 0, message)
+    } finally {
+      globalThis.fetch = original
+    }
+  }
+  // fetchJson 那條（searchModels）：讓它打到假網址不行——HOST 是固定的，
+  // 所以改抓「帶金鑰的請求頭不會出現在錯誤訊息」這一點：整個 hub 的錯誤都是固定字串，
+  // 這裡驗的是格式正規化：repoId／路徑不合法要拒絕，不能把任意字串接進 huggingface.co 的網址
+  for (const bad of ['../etc/passwd', 'owner/', '/name', 'owner/../..', 'a/b?x=1', 'a/b#c']) {
+    const id = hub.isRepoId(bad)
+    const p = hub.isRepoPath(bad)
+    ok(`格式正規化擋下 ${JSON.stringify(bad)}（repo=${id} path=${p}）`, !id && !p)
+  }
+  for (const good of ['unsloth/Qwen3.5-4B-GGUF', 'a/b.c_d-e']) {
+    ok(`格式正規化放行 ${JSON.stringify(good)}`, hub.isRepoId(good))
+  }
+  hub.setToken('')
 }
 
 async function main() {
@@ -256,7 +370,8 @@ async function main() {
   await testCloudTranslate()
   testSubtitleBounds()
   testAnthropicErrorStream()
-  testOpenCodeTimestamps()
+  await testUsageApiProviders()
+  await testHfHub()
   console.log(`\n${passed} passed, ${failed} failed`)
   process.exit(failed ? 1 : 0)
 }

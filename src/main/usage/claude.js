@@ -34,16 +34,20 @@ function applyClaudeUsage(raw, nowMs, subscriptionType = '') {
     (raw?.extra_usage?.is_enabled ? 'Claude Pro / Max' : 'Claude')
   account.notes = '已從 Anthropic OAuth API 讀取真實額度。'
 
+  // seven_day_opus 只有 Max 方案有值（其餘方案回 null，迴圈自己會跳過）；
+  // 那是跟「全模型每週」分開計的另一條上限，少畫一格等於使用者看不到自己是被哪一條擋住。
+  // 其餘同層欄位（seven_day_sonnet、tangelo…）目前全機回 null，是上游未上線的實驗，不收。
   const definitions = [
-    ['claude-5h', 'rolling-5h', raw?.five_hour],
-    ['claude-weekly', 'weekly', raw?.seven_day]
+    ['claude-5h', '', 'rolling-5h', raw?.five_hour],
+    ['claude-weekly', '', 'weekly', raw?.seven_day],
+    ['claude-weekly-opus', 'Opus', 'weekly', raw?.seven_day_opus]
   ]
-  for (const [id, kind, source] of definitions) {
+  for (const [id, label, kind, source] of definitions) {
     const used = Number(source?.utilization)
     if (!Number.isFinite(used)) continue
     account.windows.push(createWindow(
       id,
-      '',
+      label,
       kind,
       used,
       100,
@@ -84,7 +88,7 @@ async function syncClaude({ homeDir, nowMs = Date.now(), fetchImpl, log = () => 
         Accept: 'application/json'
       }
     })
-    log(`claude: API OK windows=${Number(!!usage.five_hour) + Number(!!usage.seven_day)}`)
+    log(`claude: API OK windows=${Number(!!usage.five_hour) + Number(!!usage.seven_day) + Number(!!usage.seven_day_opus)}`)
     return applyClaudeUsage(usage, nowMs, credentials?.claudeAiOauth?.subscriptionType)
   } catch (error) {
     log(`claude: API failed ${error.status ? `HTTP ${error.status}` : error.code || 'unknown'}`)

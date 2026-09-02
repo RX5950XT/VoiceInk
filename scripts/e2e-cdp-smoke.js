@@ -6,10 +6,25 @@
  */
 const { spawn } = require('child_process')
 const path = require('path')
+const os = require('os')
+const fs = require('fs')
 const http = require('http')
 
 const PORT = 9235
-const EXE = path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
+// 暫存 user-data-dir：使用者正在用（常駐）的 App 佔著 single-instance lock，
+// 沒有自己的資料夾會被它擋掉（second-instance 轉交後退出，CDP 連不上）
+const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-smoke-'))
+// 模型 registry 在 userData/models（正式環境 7GB）。暫存環境用 junction 接過去，
+// 翻譯那段才跑得起來；junction 刪掉不動原資料夾。
+const REAL_MODELS = path.join(process.env.APPDATA, 'voiceink', 'models')
+try {
+  if (fs.existsSync(REAL_MODELS) && !fs.existsSync(path.join(USER_DATA_DIR, 'models'))) {
+    fs.symlinkSync(REAL_MODELS, path.join(USER_DATA_DIR, 'models'), 'junction')
+  }
+} catch { /* 建不出來就沒模型，翻譯那段會以 FAIL 收場，其餘不受影響 */ }
+// Windows 偶爾會有別的東西鎖住 dist/win-unpacked（打包失敗、防毒掃描中），
+// 這時可以打包到別的資料夾再用 VOICEINK_EXE 指過去，測試不必等鎖放掉
+const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms))
@@ -95,7 +110,7 @@ async function waitTargets(timeoutMs = 30000) {
 }
 
 async function main() {
-  const child = spawn(EXE, [`--remote-debugging-port=${PORT}`], {
+  const child = spawn(EXE, [`--remote-debugging-port=${PORT}`, `--user-data-dir=${USER_DATA_DIR}`], {
     stdio: 'ignore',
     detached: false
   })
@@ -109,7 +124,9 @@ async function main() {
   try {
     await sleep(2500)
     const pages = await waitTargets()
-    const mainPage = pages.find((p) => /index\.html|VoiceInk/i.test(p.url + p.title)) || pages[0]
+    // 只認 index.html：語音輸入開著時會多一扇指示器視窗（dictation-hud.html），
+    // 而它的路徑同樣含有 "VoiceInk"，用路徑關鍵字比對會抓到那一扇
+    const mainPage = pages.find((p) => /index\.html/i.test(p.url))
     ok('main page target', !!mainPage, mainPage?.url)
 
     const cdp = new Cdp(mainPage.webSocketDebuggerUrl)
@@ -186,9 +203,9 @@ async function main() {
       }
     })()`)
     ok(
-      'seven-tab order + usage page structure',
+      'eight-tab order + usage page structure',
       JSON.stringify(usageUi?.order) === JSON.stringify([
-        'chat', 'terminal', 'usage', 'agy', 'stt', 'translate', 'settings'
+        'chat', 'ccswitch', 'usage', 'agy', 'stt', 'translate', 'sysmon', 'hfmodels', 'settings'
       ]) &&
         usageUi.hasApi &&
         usageUi.active &&
@@ -196,7 +213,7 @@ async function main() {
         usageUi.hasGrid &&
         usageUi.hasSettings &&
         usageUi.hasDiagnostics &&
-        usageUi.accounts === 5 &&
+        usageUi.accounts === 7 &&
         usageUi.cards === usageUi.visible,
       JSON.stringify(usageUi)
     )
@@ -207,6 +224,14 @@ async function main() {
 
     // 走 UI 建立新對話，再用 IPC 清掉，不留殘渣在使用者的 chats.json
     const chatUi = await cdp.eval(`(async () => {
+      document.querySelector('[data-page="chat"]')?.click()
+      await new Promise(r => setTimeout(r, 400))
+      // 暫存 user-data-dir 是全新環境：先種一組供應商，模型選單才有東西
+      await window.electronAPI.store.set('chatProviders', [
+        { id: 'smoke_prov', name: '煙霧測試', apiUrl: 'https://example.invalid/v1', apiKey: 'k', models: ['m-one', 'm-two'] }
+      ])
+      document.querySelector('[data-page="settings"]')?.click()
+      await new Promise(r => setTimeout(r, 250))
       document.querySelector('[data-page="chat"]')?.click()
       await new Promise(r => setTimeout(r, 400))
       const before = (await window.electronAPI.chat.list()).length
@@ -287,15 +312,19 @@ async function main() {
         subtabs: document.querySelectorAll('#sttSubtabs .subtab').length,
         activePanels: document.querySelectorAll('#page-stt .subtab-panel.active').length,
         defaultPanel: document.querySelector('#page-stt .subtab-panel.active')?.id || '',
-        hasAsrSelect: !!document.getElementById('sttAsrModel'),
-        hasLlmSelect: !!document.getElementById('sttTranslateModel'),
+        hasAsrSelect: !!document.getElementById('fileAsrModel'),
+        hasLlmSelect: !!document.getElementById('fileLlmModel'),
+        // 三個子分頁各自的 ASR 選單都要在
+        perTabAsr: ['fileAsrModel', 'liveAsrModel', 'dictationAsrModel']
+          .every((id) => !!document.getElementById(id)),
         noOldPages: !document.getElementById('page-transcribe') && !document.getElementById('page-live')
       }
     })()`)
     ok(
-      'stt page merges file + live into subtabs',
-      sttPage?.active && sttPage.subtabs === 2 && sttPage.activePanels === 1 &&
+      'stt page merges file + live + dictation into subtabs',
+      sttPage?.active && sttPage.subtabs === 3 && sttPage.activePanels === 1 &&
         sttPage.defaultPanel === 'stt-file' && sttPage.hasAsrSelect && sttPage.hasLlmSelect &&
+        sttPage.perTabAsr &&
         sttPage.noOldPages,
       JSON.stringify(sttPage)
     )
@@ -436,7 +465,13 @@ async function main() {
       JSON.stringify(settingsNav)
     )
 
-    const chatSettings = await cdp.eval(`(() => {
+    const chatSettings = await cdp.eval(`(async () => {
+      // 雲端設定區的模型列來自 chatProviders（前面已種過一組）；設定表單要先重載
+      await window.electronAPI.store.set('chatProviders', [
+        { id: 'smoke_prov', name: '煙霧測試', apiUrl: 'https://example.invalid/v1', apiKey: 'k', models: ['m-one', 'm-two'] }
+      ])
+      document.querySelector('[data-page="settings"]')?.click()
+      await new Promise((r) => setTimeout(r, 300))
       document.querySelector('#settingsNav [data-section="cloud"]')?.click()
       const section = document.getElementById('set-cloud')
       return {
@@ -628,6 +663,10 @@ async function main() {
     ok('suite', false, e.message || String(e))
   } finally {
     stopChildTree(child)
+    // Windows 釋放暫存 SQLite 較慢，有限重試
+    for (let i = 0; i < 5; i += 1) {
+      try { fs.rmSync(USER_DATA_DIR, { recursive: true, force: true }); break } catch { await sleep(600) }
+    }
   }
 
   const failed = results.filter((r) => !r.pass)

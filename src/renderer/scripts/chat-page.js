@@ -6,7 +6,7 @@
  * 串流結束後重新向 main 取整份會話，確保畫面與 chats.json 一致。
  */
 
-import { showToast, electronAPI, cleanIpcError, openSettingsPage } from './app.js'
+import { showToast, electronAPI, cleanIpcError, openSettingsPage, setChatPaneMode } from './app.js'
 import { renderMarkdown } from './markdown.js'
 import { mergeVisibleOrder } from './usage-reorder.js'
 import { createListReorder } from './list-reorder.js'
@@ -436,6 +436,8 @@ const onItemKeydown = reorder.onKeydown
  */
 async function openConversation(id) {
   if (streaming) return
+  // 聊天與終端機同頁：點對話就是切回對話主區
+  setChatPaneMode('chat')
   const conv = await electronAPI.chat.get(id)
   if (!conv) {
     await reloadList()
@@ -449,6 +451,7 @@ async function openConversation(id) {
 
 async function handleNew() {
   if (streaming) return
+  setChatPaneMode('chat')
   const conv = await electronAPI.chat.create()
   currentId = conv.id
   renderMessages([])
@@ -982,11 +985,12 @@ function setSendingState(sending) {
 
 async function refreshModelSelect() {
   if (!modelSelect) return
-  const [providers, activeProviderId, currentModel] = await Promise.all([
-    electronAPI.store.get('chatProviders', []),
-    electronAPI.store.get('chatProviderId', ''),
-    electronAPI.store.get('chatModelId', '')
-  ])
+  // 向 main 要選項而不是自己讀 store：「本機模型」那一組是 main 在 router 跑著時
+  // 合成的（刻意不落盤），自己讀 `chatProviders` 永遠看不到它
+  const options = await electronAPI.chat.providerOptions()
+  const providers = Array.isArray(options?.providers) ? options.providers : []
+  const activeProviderId = options?.providerId || ''
+  const currentModel = options?.modelId || ''
   modelSelect.replaceChildren()
 
   // option.value 用流水號、真正的資料放 dataset：

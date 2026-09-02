@@ -3,11 +3,25 @@
  */
 const { spawn } = require('child_process')
 const path = require('path')
-const http = require('http')
+const os = require('os')
 const fs = require('fs')
+const http = require('http')
 
 const PORT = 9241
-const EXE = path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
+// Windows 偶爾會有別的東西鎖住 dist/win-unpacked（打包失敗、防毒掃描中），
+// 這時可以打包到別的資料夾再用 VOICEINK_EXE 指過去，測試不必等鎖放掉
+const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
+// 暫存 user-data-dir：使用者開著的正式實例佔 single-instance lock，
+// 沒有自己的資料夾會被擋掉（second-instance 轉交後退出，CDP 等不到主視窗）
+const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-cdp-'))
+// 模型放在 `<userData>/models`，換了 user-data-dir 就等於一顆模型都沒裝（轉錄會直接失敗）。
+// 用 junction 把真正的模型資料夾接進來——只讀不寫，設定仍然各自獨立。
+{
+  const real = path.join(process.env.APPDATA || os.homedir(), 'voiceink', 'models')
+  if (fs.existsSync(real)) {
+    try { fs.symlinkSync(real, path.join(USER_DATA_DIR, 'models'), 'junction') } catch { /* 沒有就當沒裝 */ }
+  }
+}
 const SAMPLE = path.join(__dirname, 'test-sample.wav')
 
 function sleep(ms) {
@@ -139,7 +153,7 @@ async function main() {
   }
   console.log('sample', SAMPLE, fs.statSync(SAMPLE).size)
 
-  const child = spawn(EXE, [`--remote-debugging-port=${PORT}`], {
+  const child = spawn(EXE, [`--remote-debugging-port=${PORT}`, `--user-data-dir=${USER_DATA_DIR}`], {
     stdio: 'pipe',
     detached: false
   })
@@ -150,7 +164,8 @@ async function main() {
   try {
     await sleep(3000)
     const pages = await waitTargets()
-    const mainPage = pages.find((p) => /index\.html|VoiceInk/i.test(p.url + p.title)) || pages[0]
+    // 只認 index.html（指示器視窗的路徑也含 "VoiceInk"）
+    const mainPage = pages.find((p) => /index\.html/i.test(p.url))
     console.log('page', mainPage.url)
 
     const cdp = new Cdp(mainPage.webSocketDebuggerUrl)
@@ -160,6 +175,13 @@ async function main() {
     await cdp.send('Log.enable').catch(() => {})
 
     await snapshot(cdp, 'initial')
+
+    // 預設頁是「聊天」：不先切到語音轉文字 → 檔案轉錄，檔案選了也不會被收下
+    // （症狀是 dropZone 一直開著、進度面板永遠沒出現，看起來像轉錄壞掉）
+    await cdp.eval(`document.querySelector('[data-page="stt"]')?.click(), 'ok'`)
+    await sleep(600)
+    await cdp.eval(`document.querySelector('#sttSubtabs [data-subtab="file"]')?.click(), 'ok'`)
+    await sleep(600)
 
     // set file via CDP
     const doc = await cdp.send('DOM.getDocument', { depth: 0 })

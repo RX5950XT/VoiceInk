@@ -52,6 +52,31 @@ const MODELS = {
     mmproj: 'mmproj-Qwen3-ASR-1.7B-Q8_0.gguf',
     requires: 'llamaruntime'
   },
+  /**
+   * 同一版的 CUDA 建置（可選）。NVIDIA 卡上 prompt 處理與 MoE offload 明顯快過 Vulkan，
+   * 代價是要多下載一份 CUDA runtime。
+   *
+   * **兩個 zip 解到同一個資料夾**：llama 那包不含 CUDA runtime DLL，少了 cudart
+   * `llama-server.exe` 會在啟動時因為找不到 DLL 而直接結束（沒有可讀的錯誤訊息）。
+   * CUDA 13.x 需要 NVIDIA 驅動 ≥ 580；UI 只在偵測到夠新的驅動時才建議裝。
+   *
+   * ponytail: `check` 只認 llama 那包的檔案（zip 內容清單拿不到，cudart 的 DLL 檔名
+   * 隨 CUDA 小版本會變）。cudart 沒解開的症狀是「啟動失敗」，`runtime.js` 的
+   * stderr 尾巴看得到，不會靜默錯。
+   */
+  llamaruntimecuda: {
+    label: `llama.cpp 執行環境 · CUDA 13.3（${LLAMA_BUILD}）`,
+    kind: 'runtime',
+    totalBytes: 537_500_000,
+    base: `https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_BUILD}/`,
+    files: [
+      `llama-${LLAMA_BUILD}-bin-win-cuda-13.3-x64.zip`,
+      'cudart-llama-bin-win-cuda-13.3-x64.zip'
+    ],
+    archive: true,
+    check: ['llama-server.exe', 'ggml-cuda.dll'],
+    binary: 'llama-server.exe'
+  },
   /** GPU ASR 的執行檔（llama-server）；zip 內是扁平結構，解壓即用 */
   llamaruntime: {
     label: `llama.cpp 執行環境 · Vulkan（${LLAMA_BUILD}）`,
@@ -111,6 +136,17 @@ function isLlmKey(key) {
  */
 function isAsrKey(key) {
   return typeof key === 'string' && ASR_MODEL_KEYS.includes(key)
+}
+
+/** 已下架的 key → 現行 key（舊使用者存過的設定要讀得回來） */
+const RETIRED_MODEL_KEYS = Object.freeze({ linguaforge08: 'linguaforge08q4' })
+
+/**
+ * @param {unknown} key
+ * @returns {unknown} 非下架 key 原樣回傳（含非字串，交給呼叫端的白名單擋）
+ */
+function migrateModelKey(key) {
+  return (typeof key === 'string' && RETIRED_MODEL_KEYS[key]) || key
 }
 
 /**
@@ -354,6 +390,8 @@ module.exports = {
   LLAMA_BUILD,
   isLlmKey,
   isAsrKey,
+  RETIRED_MODEL_KEYS,
+  migrateModelKey,
   ggufRelativePath,
   filePath,
   modelDir,

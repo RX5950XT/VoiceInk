@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    VoiceInk 的語音輸入熱鍵 sidecar。
+
+    為什麼要獨立一顆執行檔：`uiohook-napi` 只能「監聽」按鍵，攔不下來——右 Alt 照樣會
+    送到使用者當下的程式，Windows 看到「單獨一顆 Alt 按下又放開」就去啟動選單列
+    （瀏覽器因此把焦點跳到工具列，使用者實際回報過）。要真的吞掉那顆鍵，只能自己裝一個
+    WH_KEYBOARD_LL hook 並在 callback 回傳 1。
+
+    為什麼不做成 Node 原生模組：那需要 node-gyp／prebuild 與 ABI 對齊，而這個專案已經
+    有一顆 .NET sidecar（系統監控的感測器）走同一套路——多一顆小程式比多一條建置鏈便宜。
+
+    **這顆不提權**（跟感測器那顆不同）：低階鍵盤 hook 不需要管理員權限，
+    只是攔不到以管理員身分執行的程式，那可以接受。
+
+    建置：npm run build:hook
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>VoiceInkHook</AssemblyName>
+    <RootNamespace>VoiceInkHook</RootNamespace>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <!-- 整支只有 P/Invoke 與字串輸出，沒有反射，裁掉安全（37MB → 12MB 左右） -->
+    <PublishTrimmed>true</PublishTrimmed>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <DebugType>none</DebugType>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+</Project>

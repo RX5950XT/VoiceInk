@@ -1,4 +1,4 @@
-import { electronAPI, showToast } from './app.js'
+import { electronAPI, showToast, setChatPaneMode } from './app.js'
 import { createListReorder } from './list-reorder.js'
 // renderer 沒有 bundler，但 xterm 有現成的 ESM 產物，相對路徑直接載就好：
 // vendoring 只會多一份得跟著升級的複本（markdown.js 那條慣例同理）。
@@ -129,6 +129,57 @@ function showError(message) {
 
 // ===== 側欄 =====
 
+/**
+ * 狀態徽章的內容（新建與就地更新共用）。
+ * @param {HTMLElement} badge
+ * @param {{ state: string, exitCode?: number }} item
+ */
+function paintBadge(badge, item) {
+  badge.className = `term-state term-state-${item.state}`
+  badge.textContent = STATE_LABELS[item.state] || item.state
+  if (item.state === 'idle' && Number.isFinite(item.exitCode) && item.exitCode !== 0) {
+    badge.textContent = `${STATE_LABELS.idle} · 離開碼 ${item.exitCode}`
+    badge.classList.add('term-state-bad')
+  }
+}
+
+/**
+ * 未讀點的有無（新建與就地更新共用）。
+ * @param {HTMLElement} titleRow
+ * @param {string} id
+ */
+function paintUnread(titleRow, id) {
+  const dot = titleRow.querySelector('.term-unread')
+  if (!unread.has(id)) {
+    dot?.remove()
+    return
+  }
+  if (dot) return
+  const next = document.createElement('span')
+  next.className = 'term-unread'
+  next.title = '跑完了，還沒看過'
+  next.setAttribute('aria-label', '有新輸出')
+  titleRow.appendChild(next)
+}
+
+/**
+ * 狀態變動只改那一列的徽章與未讀點，**不重建整份清單**。
+ * PowerShell 的提示字元標記會連續重送（實測三秒 9 次），重畫會把待確認的刪除鈕
+ * 與就地改名的輸入框整顆換掉 → 跑著的終端機刪不掉、也改不了名。
+ * @param {{ id: string, state: string, exitCode?: number }} item
+ */
+function refreshItemView(item) {
+  const el = listEl?.querySelector(`.term-list-item[data-id="${CSS.escape(item.id)}"]`)
+  if (!el) {
+    renderList()
+    return
+  }
+  const badge = el.querySelector('.term-state')
+  if (badge) paintBadge(/** @type {HTMLElement} */ (badge), item)
+  const titleRow = el.querySelector('.term-title-row')
+  if (titleRow) paintUnread(/** @type {HTMLElement} */ (titleRow), item.id)
+}
+
 function renderList() {
   if (!listEl) return
   // 重畫會把待確認的刪除鈕整顆換掉，計時器得先收乾淨
@@ -164,23 +215,12 @@ function buildListItem(item) {
   title.className = 'chat-list-title'
   title.textContent = item.title
   titleRow.appendChild(title)
-  if (unread.has(item.id)) {
-    const dot = document.createElement('span')
-    dot.className = 'term-unread'
-    dot.title = '跑完了，還沒看過'
-    dot.setAttribute('aria-label', '有新輸出')
-    titleRow.appendChild(dot)
-  }
+  paintUnread(titleRow, item.id)
 
   const meta = document.createElement('span')
   meta.className = 'chat-list-meta term-meta'
   const badge = document.createElement('span')
-  badge.className = `term-state term-state-${item.state}`
-  badge.textContent = STATE_LABELS[item.state] || item.state
-  if (item.state === 'idle' && Number.isFinite(item.exitCode) && item.exitCode !== 0) {
-    badge.textContent = `${STATE_LABELS.idle} · 離開碼 ${item.exitCode}`
-    badge.classList.add('term-state-bad')
-  }
+  paintBadge(badge, item)
   const cwd = document.createElement('span')
   cwd.className = 'term-cwd'
   cwd.textContent = shortenPath(item.cwd)
@@ -395,6 +435,8 @@ function showHost(on) {
  * @param {string} id
  */
 async function openSession(id) {
+  // 聊天與終端機同頁：點終端機就是切到終端機主區（同步切 DOM，xterm 才量得到尺寸）
+  setChatPaneMode('terminal')
   currentId = id
   unread.delete(id)
   showHost(true)
@@ -563,11 +605,16 @@ function onStatus(payload) {
   item.state = payload.state === 'exited' && !panes.has(payload.id) ? 'stopped' : payload.state
   item.exitCode = payload.exitCode
   // 跑完的當下不在看它 → 亮未讀點（這是「哪個代理做完了」的提示）。
-  // 「不在看」包含兩種：看的是別的工作階段，或人根本在別的分頁。
+  // 「不在看」包含兩種：看的是別的工作階段，或終端機主區沒開著
+  // （聊天跟終端機同頁：主區顯示對話時＝人不在終端機）。
+  // 主區顯示的是對話時 `termMain` 被藏起來（`termHost` 自己不會變），少這一條的話
+  // 人在對話裡，背景終端機跑完永遠不亮未讀點。
   const watching = payload.id === currentId
-    && document.getElementById('page-terminal')?.classList.contains('active')
+    && document.getElementById('page-chat')?.classList.contains('active')
+    && !document.getElementById('termMain')?.classList.contains('hidden')
+    && !hostEl?.classList.contains('hidden')
   if (wasRunning && payload.state !== 'running' && !watching) unread.add(payload.id)
-  renderList()
+  refreshItemView(item)
 }
 
 export function initTerminalPage() {
@@ -608,6 +655,31 @@ export function initTerminalPage() {
       // 訊息已顯示
     }
   })()
+}
+
+/**
+ * 開一個新工作階段並送出一行指令。
+ *
+ * 給 Claude Code 頁的「更新 CLI」用：整個 npm 安裝過程使用者看得到，出錯也自己看得懂，
+ * 比 App 偷偷在背景裝全域套件好。指令字串由 main 的固定表組出來（`ccswitch:updateCommand`），
+ * 這裡只負責轉交。
+ *
+ * @param {string} title 側欄顯示的名稱
+ * @param {string} command 送出的那一行（不含換行）
+ * @returns {Promise<string>} 新工作階段的 id
+ */
+export async function runInNewTerminal(title, command) {
+  initTerminalPage()
+  const created = await call(electronAPI.terminal.create({
+    shell: shellSelect?.value || '',
+    preset: 'shell',
+    cwd: cwdInput?.value || '',
+    title
+  }), '建立終端機失敗')
+  await reloadList()
+  await openSession(created.id)
+  await electronAPI.terminal.write(created.id, `${command}\r`)
+  return created.id
 }
 
 export function refreshTerminalPage() {

@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    VoiceInk 的感測器 sidecar。
+
+    為什麼要獨立一顆執行檔：CPU／主機板／VRM／硬碟的溫度、風扇與電壓在 Windows 上沒有
+    免權限的介面，只能靠核心驅動（LibreHardwareMonitorLib 內含的 WinRing0），而那需要
+    系統管理員。**不把整個 VoiceInk 提權**——終端機分頁會連帶用管理員身分開 shell。
+    所以只有這顆小程式走 UAC，讀數透過具名管道送回主程式。
+
+    LibreHardwareMonitorLib 是 MPL 2.0（可用於閉源專案）。
+    注意別換成名字很像的 OpenHardwareMonitorLib：那是 GPL v3 的分支。
+
+    建置：npm run build:sensors
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- net8.0 而不是 net8.0-windows：後者會把 WindowsDesktop（WPF/WinForms）整包拉進
+         自帶執行環境。實測單檔輸出 72MB → 37MB（再加 EnableCompressionInSingleFile）。 -->
+    <TargetFramework>net8.0</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>VoiceInkSensors</AssemblyName>
+    <RootNamespace>VoiceInkSensors</RootNamespace>
+    <!-- 提權：沒有這個，主機板與硬碟的感測器會安靜地整組消失（不是報錯，是空的） -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <!-- 不開 trimming：LibreHardwareMonitorLib 大量使用反射，裁掉會在執行時才炸 -->
+    <PublishTrimmed>false</PublishTrimmed>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <DebugType>none</DebugType>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      版本鎖死。**不要退回 0.9.6**：0.9.6 在 Ryzen 5000（Zen 3）上 Tctl/Tdie 一律回 0
+      （PawnIO 接進來時的迴歸，上游在 0.9.7-pre 系列才修好）。實測 5700X 就是這個症狀，
+      而且它不報錯——就是安靜地回 0，看起來像「這台機器沒有這顆感測器」。
+    -->
+    <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.7-pre728" />
+  </ItemGroup>
+
+</Project>

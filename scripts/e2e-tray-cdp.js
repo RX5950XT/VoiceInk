@@ -13,12 +13,36 @@
  */
 const { spawn, execFileSync } = require('child_process')
 const path = require('path')
+const os = require('os')
+const fs = require('fs')
 const http = require('http')
 
 const PORT = 9243
-const EXE = path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
+// Windows 偶爾會有別的東西鎖住 dist/win-unpacked（打包失敗、防毒掃描中），
+// 這時可以打包到別的資料夾再用 VOICEINK_EXE 指過去，測試不必等鎖放掉
+const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
+// 暫存 user-data-dir：使用者開著的正式實例佔 single-instance lock，
+// 沒有自己的資料夾會被擋掉（second-instance 轉交後退出，CDP 等不到主視窗）
+const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-cdp-'))
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+/**
+ * 跟 OS 借一個當下空著的埠（借完馬上還）。
+ * `agy` 的 `sanitizePort` 不收 0，寫死數字又會踩到別的程式。
+ * @returns {Promise<number>}
+ */
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const probe = http.createServer()
+    probe.once('error', reject)
+    probe.listen(0, '127.0.0.1', () => {
+      const address = probe.address()
+      const port = typeof address === 'object' && address ? address.port : 0
+      probe.close(() => (port ? resolve(port) : reject(new Error('借不到埠'))))
+    })
+  })
+}
 
 function stopChildTree(child) {
   if (!child?.pid) return
@@ -115,7 +139,7 @@ async function main() {
     console.log(`${pass ? 'PASS' : 'FAIL'}  ${name}${detail ? ' — ' + detail : ''}`)
   }
 
-  let child = spawn(EXE, [`--remote-debugging-port=${PORT}`], { stdio: 'ignore' })
+  let child = spawn(EXE, [`--remote-debugging-port=${PORT}`, `--user-data-dir=${USER_DATA_DIR}`], { stdio: 'ignore' })
   let originalCloseToTray = null
   let originalOpenAtLogin = null
   /** 反代本來是關的、由測試開起來的 → 收尾要關回去 */
@@ -186,13 +210,23 @@ async function main() {
     }
     let agyPort = await agyPortOf('window.electronAPI.agy.status()')
     if (!agyPort) {
-      agyPort = await agyPortOf('window.electronAPI.agy.start()')
+      // 使用者開著的正式實例常常已經佔著預設埠（PORT_IN_USE），測試這份改用一個真的空著的埠。
+      // 寫死一個數字會踩到別的程式（實測 47821 就被佔），所以現場問 OS 要一個。
+      // 這是暫存 user-data-dir，寫進去不會動到使用者的設定。
+      const port = await freePort()
+      await cdp.eval(
+        `window.electronAPI.agy.saveSettings({ port: ${port}, logBodies: false, retentionDays: 7 })`
+      ).catch(() => null)
+      // `agy.start()` 失敗時把原因印出來，不然只看得到「啟動失敗」
+      const started = await cdp.eval('window.electronAPI.agy.start().then(r => r?.data?.error || r?.error || "")')
+        .catch(() => 'IPC_FAILED')
+      agyPort = await agyPortOf('window.electronAPI.agy.status()')
       agyStartedByTest = agyPort > 0
-      if (!agyPort) console.log('      （反代啟動失敗，下面那條會 FAIL）')
+      if (!agyPort) console.log(`      （反代啟動失敗：${started || '未知'}，下面那條會 FAIL）`)
     }
 
     // ---- 單一實例 ----
-    const second = spawn(EXE, [], { stdio: 'ignore' })
+    const second = spawn(EXE, [`--user-data-dir=${USER_DATA_DIR}`], { stdio: 'ignore' })
     let secondExit = null
     second.on('exit', (code) => { secondExit = code })
     await sleep(4000)
@@ -225,7 +259,7 @@ async function main() {
       document.addEventListener('visibilitychange', () => window.__visLog.push(document.visibilityState))
     })()`)
     let thirdExit = null
-    const third = spawn(EXE, [], { stdio: 'ignore' })
+    const third = spawn(EXE, [`--user-data-dir=${USER_DATA_DIR}`], { stdio: 'ignore' })
     third.on('exit', (code) => { thirdExit = code })
 
     // 斷言看的是「有沒有變成 visible 過」，不是最後停在 visible。
@@ -260,7 +294,7 @@ async function main() {
     // 還原使用者設定：closeToTray 被我們改成 false、反代可能是我們開的。
     // 開機自啟動已在測項內還原。
     if (originalCloseToTray !== null) {
-      child = spawn(EXE, [`--remote-debugging-port=${PORT}`], { stdio: 'ignore' })
+      child = spawn(EXE, [`--remote-debugging-port=${PORT}`, `--user-data-dir=${USER_DATA_DIR}`], { stdio: 'ignore' })
       try {
         const pages = await waitTargets(20000)
         const page = pages.find((p) => /index\.html/i.test(p.url)) || pages[0]

@@ -1,508 +1,435 @@
 # tasks/lessons.md — 開發教訓
 
-> 修正後把模式記在這裡，session 開始時複習。
+> 修正後把**模式**記在這裡（為什麼會錯、下次怎麼避開），session 開始時複習。
+> 具體的「這行不能改」寫在 [CLAUDE.md](../CLAUDE.md) 的地雷清單，這裡只放可遷移的判斷原則。
+
+## 判斷與除錯
+
+- **額度卡先對真實回應再命名視窗**：Ollama Cloud 的現行回應是 `limits.monthly`，不是舊測試裡的 `session/weekly`；Command Code 的月額度是 `monthlyCredits` 剩餘值，必須配方案總額與 `currentPeriodEnd` 才能畫成每月已用量。重置時間也要同時接受 epoch 秒與毫秒；沒有時間就標明原因，不自行推算。
+- **先量再改**：直覺說要改的那個開關，量過之後可能不該改。語音輸入「背景反應慢」量出來是
+  只有計時器被節流、訊息派送仍 0～1ms，而熱鍵路徑上根本沒有計時器；關掉節流的代價（`document.hidden`
+  恆為 false）反而更大。結論是不改，改成用測試守住。探測腳本留著，下一個人不必再猜一次。
+- **「三個結果都一樣壞」不等於變因已控制**：Q4／Q8／f16 缺陷數相近就判定是模型問題——實際上三次跑的是
+  同一個壞 prompt（缺 4 個 token）。比較實驗前先確認「送進模型的字串」與權威來源逐字元一致。
+- **對照實驗的樣本不能從其中一組的失敗集挑**：用「Q4 翻壞的 7 句」比 Q4/Q8 看起來 Q8 完勝，
+  換成 30 句預先設計的均衡樣本後差距落在雜訊內。凡是「A 比 B 好」的宣稱，樣本必須在看到任一方輸出前就固定。
+- **沒滿足前提的觀察不能推翻假設**：token 還有 7 分鐘壽命時跑 CLI，expiry 當然不動——
+  那證明不了「CLI 不會續期」。要否證「在 X 下會 Y」，得先真的把系統推進 X。
+- **同一種故障，上游可能給你兩種說法**：`Budget 0 is invalid`（講得很清楚）與
+  `Request contains an invalid argument`（沒有資訊量）是同一個原因。判斷壞不壞要用**變因對照**，
+  不要讀錯誤訊息的字面。順帶：名字不精確會誤導下一個人（`THINKING_ONLY_MODELS` → `REJECTS_ZERO_BUDGET`）。
+- **「查不到」先確認是查不到還是自己送錯**：外部查詢失敗時先用 `curl` 原樣打一次再下結論
+  （npm `/latest` 回 406 被 `.catch(() => '')` 吃掉，UI 卻寫「離線？」）。
+- **工具回「成功」而結果明顯不對時，先驗產物不要重跑**：打包沒報錯但 asar 內容錯位，
+  一比對「asar 裡的檔案 vs 原始碼」就知道不是自己的程式碼。
+- **Windows 上「找不到誰鎖住檔案」多半是找的方法不對**：`Get-Process | Where Path` 會靜默漏掉，
+  要用 `Get-CimInstance Win32_Process` 或 Sysinternals `handle64 <檔名>`。列自己相關的程序名是猜，量一行就有答案。
+- **被鎖住不代表沒路走**：先問「它擋的是哪一種操作」——那個 handle 擋 delete 不擋 write，
+  打包到別的目錄再就地覆寫就繞過去了。環境問題不該讓可驗證的工作停下來。
+- **建置產物出怪事先整個刪掉重打**，不要原地重試，也不要先懷疑自己剛寫的程式碼。
+- **「這件事做不到」的結論留在註解裡久了會變成事實**：右 Alt「攔不下來」在專案長出 .NET sidecar
+  的建置流程之後，成本已經降到一小時。定期回頭問一次「現在還是做不到嗎」。
+
+## 外部整合
+
+- **移植時，來源的「奇怪選擇」通常是它踩過的坑**：AGY 的端點順序 `[sandbox, daily, prod]` 不是偏好而是實測結論；
+  同一批照抄還踩到 404 的模型映射、403 的 header、400 的 `thinkingBudget: 0`。
+  要刪掉任何「看起來多餘的迴避動作」之前，先問「什麼情況下這行是必要的」。
+- **「照抄那個專案」之前先問「他們那樣做對嗎」**：cc-switch 對 Codex 用 device code，
+  但 OpenAI 的 OIDC discovery 根本沒有那個 grant，他們自己文件也寫明是逆向的。
+  參考實作是線索不是規格；`client_id`／redirect／scope 從官方 CLI 執行檔實測取得最可靠。
+- **照抄上游的資料模型會毀掉使用者的設定**：cc-switch 整檔換 `settings.json` 是因為那份檔在它的世界裡歸它管。
+  移植要移植的是意圖不是實作；動別人的檔案永遠只動自己管的那幾個鍵，而且要先清掉前一手留下的。
+- **mock 測得再綠，也證明不了對面長什麼樣**：mock 是照我對協議的理解寫的，我理解錯的地方 mock 會忠實跟著錯。
+  整合功能要分兩種測試——「有沒有照我以為的規格實作」（mock）與「我以為的規格對不對」（真流量 probe）。
+  一次真實往返都沒跑過就要在文件裡明講。
+- **翻譯／相容層不該覆蓋使用者的明確指名**：上游真的有 `gemini-3-flash`，使用者打這個名字就是要這一顆。
+  映射表的職責很窄：只翻譯上游查無此名的東西。
+- **代理不該把上游的狀態碼原樣丟回去**：狀態碼是講給「這一段連線」聽的。只有對客戶端有行動意義的才透傳
+  （429 + `retry-after`），其餘收斂成 502；上游 error body 一個字都不該外流。
+- **更新方式要看它「實際上是怎麼裝的」**：「有 npm 套件」不等於「使用者是用 npm 裝的」。
+  先 `which` 一遍、把各家 `--help` 讀完，自帶 updater 的一律用它自己的。
+- **「清掉快取」不等於「換一個 token」**：作廢憑證時要問「下一次取用會走到哪條路徑」。
+  上游說失效必須壓過本機記錄的 expiry，要有明確的 `mustRefresh` 旗標。
+- **反過來，語意窄的旗標只能由產生該語意的路徑設定**：「上游回過 401」專用的旗標被一般失敗清理順手設起來，
+  就變成一次 PowerShell 逾時讓憑證永久卡住。清快取要清快取的欄位。
+  只存在記憶體的黏性錯誤狀態，一定要能自己恢復。
+- **「該續期了」不等於「已經不能用了」**：refresh deadline 與 expiry deadline 是兩條線，不能共用一個布林。
+  新寫一條路徑要用既有共用工具時，先看現有呼叫端怎麼用——不一致的地方通常是其中一邊有 bug。
+- **代跑外部 CLI 的 stdio 很要命**：`execFile` 留一條永不 EOF 的 stdin pipe，對方會卡到逾時。
+  用 `spawn` + `stdio: 'ignore'`（實測矩陣：主控台 2～3 秒，execFile 逾時）。
+
+## 資料、計價與統計
+
+- **統計類功能先確認「涵蓋率」再談「準確率」**：價目表再準，對不到 key 就是零。
+  7.8 萬筆請求記成 `unknown`（增量掃描沒把模型名跟著游標留下）、732 筆 Flash-Lite 被正規化成不存在的模型。
+- **「累計」與「單輪」長得一模一樣，加錯差十倍**：`total_token_usage` vs `last_token_usage`。
+  外部資料格式一定要拿真實檔案逐欄位確認過再寫解析器，不能照文件或憑印象。
+- **真實資料才問得出正規化夠不夠**：自己寫的 fixture 全過，一跑真實記錄就冒出
+  `claude-haiku-4-5`（報價寫 4.5）、思考檔位、`<synthetic>` 假訊息。fixture 只證明你想到的情況是對的。
+- **「填 0」比「留空」更會騙人**：沒有單價就回 `null`＋在 UI 明講「有 N 個模型沒設單價、M 次請求沒算進去」。
+  不知道就要讓它看起來像不知道，不要用一個合法的值把缺口蓋住。
+- **同一個欄位有兩種價錢時不能只算便宜的那種**：`cache_creation_input_tokens` 裡 78% 是 1 小時快取（×2），
+  卻一直用 5 分鐘價（×1.25）算，長期低估三成多而且金額「看起來很合理」。
+  計價欄位先去看上游文件有沒有「同一個數字、不同費率」的分支。
+- **上限值是會靜靜吃掉資料的東西**：單行 2MB、單檔 50MB 都是「超過就跳過」且不留痕跡。
+  防呆上限要訂在「真的異常」的量級，而且被丟掉的東西至少要能被數出來。
+- **同一件事被兩層各做一次，上層會把下層的資訊吃掉**：補值函式若依賴呼叫端才有的上下文，就只能有一個呼叫端。
+  在拿不到那個上下文的地方先跑一次「無害的預處理」，等於把下游的判斷依據抹掉。
+- **修掉「先補一輪」之後，失敗路徑仍會走同一個補值函式**：每個入口都要有「現在有沒有東西可以補」的前置條件；
+  新測試要從失敗回傳值進去，不要只測快樂路徑的部分成功。
+- **來源未連線時不可合成保守額度**：先判 account status，再做 slot merge，
+  否則會同時顯示「未連線」與四條 100% 假額度。
+
+## 測試
+
+- **測試測的是被繞過的那一層，就會一直是綠的**：兩條斷言直接餵下游函式，而 production 路徑在上游就把事情做壞了。
+  測試要從真正的進入點打進去。
+- **新寫的回歸測試一定要先在修復前跑一次**，紅了才算數，不然只是把當下的行為寫成斷言。
+  UI 斷言尤其容易寫成恆真——必要時先把修法拿掉量一次（`reproduced`／`broken`），值得多寫三行。
+- **只驗「功能開啟時」的斷言等於半套**：每加一條 UI 斷言就反問「關著／空的／還沒載入時我量過嗎？」
+  （六個沒開的彈窗一起浮出來，就是因為沒有任何一條看過「關著的時候」）。
+- **只驗截圖驗不到「原生控制項展開後」的樣子**：`<select>`／原生 tooltip 有一半由 OS 畫，
+  截圖裡它永遠是收合的。改驗 computed style（底色 alpha = 1、對比 ≥ 4.5）。
+- **定位相關的斷言要量相對關係**（trigger 與 menu 的 left 差），不要只驗結構與旗標——
+  結構對、位置錯是最常見的 UI bug 形狀。
+- **「執行中」不等於「壓到了」**：狀態機測試驗的是 UI 契約不是效果。
+  負載類功能的驗收標準必須是從外部量到的數字（`nvidia-smi`、CIM 計數器、`FreePhysicalMemory`）。
+- **「偵測得到 GPU」不等於「正在用 GPU」**：接外部推論執行檔時第一件事是量一個能分辨 CPU 與 GPU 的數字
+  （tok/s），並印在測試輸出裡，之後誰改參數都看得出退化。
+- **E2E 跑在使用者的真實資料上**：定位條件必須是「我自己建的那個」（`[data-id]`），
+  不能是「畫面上第一個」或「總共幾個」；建立的每一個實體都要進收尾清單；
+  清理權限只限於自己 spawn 的 PID（禁 `taskkill /IM`）。驗證修好沒有，就在留著殘留資料的狀態下重跑。
+- **UI 斷言要等「量得到尺寸」而不是睡固定時間**：忙碌的機器上固定 sleep 會變成假紅燈，
+  比假綠燈更浪費時間——你會先去懷疑自己剛改的東西。
+- **多開一扇視窗＝多一個 CDP page target**：指涉自己要的東西時要用夠精確的條件（`/index\.html/`），
+  用產品名比對會抓到 HUD。
+- **批次 sed 換識別字會把斷言改成永遠成立**：`=== false` 會變恆假、陣列字面值會塌成重複項。改完 `git diff` 逐條看。
+- **e2e 別把小模型的用詞正確性當紅燈**：0.8B 會音譯專名、偶發幻覺，寫進斷言只會讓測試長期是紅的而失去訊號。
+  只驗工程層能保證的：結構、污染、退化、後處理竄改。
+- **會外溢到 App 之外的動作，測試路徑一定要先切斷**（模擬 Ctrl+V、taskkill、改使用者設定檔）：
+  注入點是為了安全存在的，不是為了好測。真要端到端就先確認自己拿到前景焦點，不成立寧可中止。
+- **同一時間只能跑一支 CDP 測試**（單一實例鎖），並行會讓狀態類斷言隨機失敗。
+
+## UI 與樣式
+
+- **修 A 的時候順手壓過瀏覽器內建樣式，會生出比 A 更大的 B**：`dialog:not([open]) { display: none }`、
+  `[hidden] { display: none }` 都是 UA 樣式，作者規則壓得過。改共用元件的 `display`／`visibility` 前先問
+  「這個元素的隱藏是誰做的」，是 UA 做的就必須把條件寫進選擇器。斷言要量 `offsetHeight`。
+- **`backdrop-filter` 會偷走 `position: fixed` 的定位基準**（跟 `transform`／`filter` 一樣）。
+  修法用「先歸零、量出實際原點、再回推」，比逐一列舉誰會造成 containing block 穩健。
+- **批次改 CSS 前先確認選擇器不是某條多選擇器規則的結尾**：刪重複宣告時把共用規則的 `background` 一起刪掉，
+  全 App 的玻璃面板變透明。
+- **共用容器的內距寫在子元素上時，新子元素一定會漏**：不改架構的話至少要有一條會失敗的檢查
+  （量子元素的實際左右邊界），歪 24px 在小視窗裡看不太出來。
+- **「字體大小都差不多」的根因可能是權重反轉**：分區標題比它管轄的欄位更小更灰，階層是倒的。
+  大小與顏色兩條階層要一起擺正；視覺階層可以寫成回歸（CDP 量 `fontSize`）。
+- **狀態樣式要比 hover 更高特異度**；把 `label` 當可點擊元件時，元件自己的 `display` 要用同等特異度覆蓋。
+- **`optgroup` 沒有 `options` 集合**：群組選項要用 `querySelectorAll('option')`，
+  當成 `HTMLSelectElement` 用會拋 TypeError，症狀看起來是「按鈕點不開」。
+- **原生下拉只能把收合態做好**：展開清單畫在頁面之外，要一致視覺就保留原生 `<select>` 當資料與事件來源、
+  另做共用 ARIA listbox（fixed portal 避開 overflow，dialog 內掛回 top layer）。
+- **hover 才出現的操作等於沒有**：兩個不同的動作壓在同一塊可點區域＋一個 hover 圖示鈕，
+  使用者看不出「點哪裡會發生什麼」，觸控裝置根本沒有 hover。
+- **值不准被截成「…」**：截掉的那筆等於沒有那筆資料；長字串沒有空白可斷，要 `overflow-wrap: anywhere`。
+- **拖曳中改 DOM 順序就是卡頓與閃爍的來源**：拖曳中只用 transform 送到開始時記住的槽位，碰撞打靜態槽位，
+  放開才改一次 DOM。半透明該出現在**落點**不是跟手那張（同一張卡不能身兼兩職）。
+  偶發閃爍多半是進行中的 FLIP 被下一輪蓋掉：量 last 前 `getAnimations().cancel()`，並關掉 hover 的 transform transition。
+- **`await requestAnimationFrame` 在視窗被遮住時等於死結**：rAF 是「畫面好看」的手段不是流程的門檻，
+  任何 `await` 一個「要瀏覽器願意配合才會回呼」的東西都必須配逾時。
+- **可見狀態必須跟真正的資料上下文一起失效**：二次確認只記在 DOM、翻譯結果只在輸入變更時清、
+  平行請求共用同一個錯誤區——三者根因相同。
 
 ## Electron / Windows
 
-- **同一時間只能跑一支 CDP 測試**：App 有單一實例鎖，背景跑 `e2e-usage-cdp` 的同時又在前景跑別支，後開的那份會被鎖擋掉並退出，症狀是拖曳／狀態類斷言隨機失敗（實際發生：usage 的拖曳測試報 overlay 不存在，單獨重跑就全綠）。要並行只能改成各自獨立的 userData，現在的做法是**一支一支跑**。
-- **設定欄位重複＝同一組金鑰要填兩次**：聊天與翻譯都是 OpenAI 相容的 chat completions，卻各有一組 `apiUrl`／`apiKey`／`modelId`，使用者得把同一組東西填兩遍還要自己記得同步。判斷標準是「端點協議一不一樣」而不是「功能一不一樣」——生圖模型同理，它跟文字模型只差請求帶不帶 `modalities`，所以是模型清單裡的一個勾，不是新的一組欄位。
-- **合併設定要連遷移一起做**：把舊 key 移出 allowlist 卻沒搬資料，使用者的雲端翻譯會安靜地變成「沒設定」。搬移要在 `initStore` 一次做完並刪掉舊 key，而且**寫入成功才刪**。
-- **供應商清單一變動，所有指向它的選擇都要收斂**：只收斂聊天那組的話，翻譯會留著已刪供應商的 id。共用清單就得有一份共用的 reconcile（`reconcileProviderSelection` 各跑一次）。
-
-- **ASR 也要 serial lock + loadEnabled**：LLM 有 `withTranslateLock` 且 unload 會等 queue；ASR 若沒有，stop 後 in-flight `transcribe` 會 `getRecognizer` 幽靈重載（`users` 全 false 但 `asrLoaded: true`）。修法：`withAsrLock` 包 transcribe/unload、`loadEnabled=false` 於 unload 開頭、transcribe 無載入則 throw。live+file 並行也靠同一把鎖避免雙 `createAsync`。
-- **prewarm 旗標不可早於 acquire 成功**：`prewarmed=true` 若在 await 前就設，cooldown 會 release 掉「尚未佔用」的 owner，而 in-flight acquire 之後成功卻無人 release → 模型洩漏。用 `prewarmGen` 作廢過期結果；擷取已接手（`engineAcquired`/`isStarting`）時**不可**對同一 live owner 再 release。
-- **openFolder／store 要白名單**：download/remove 有 `MODELS[key]`，openFolder 漏了就可用 `..\\` 跳出 models 建目錄；store 任意 key 在 XSS 後可改 `apiUrl` 外洩 API Key。
-- **displayMedia handler 必須 callback**：`getSources` reject 或空陣列若不呼叫 `callback`，`getDisplayMedia` 永久挂起。
-- **檔案轉錄要重入鎖**：`users.file` 是布林，連點開始 → 雙管線 → 先完成的 `release` 卸掉後完成者的模型。
-- **長 await 前要先 paint 進度 UI**：hide 大區塊後若立刻 `await engine.acquire`（載 1GB 模型可卡 main 十數秒），renderer 可能來不及畫幀 → 深色主題下像「黑屏」。點擊後立刻 show 進度卡 + `rAF`×2；ASR/LLM 分階段載。
-- **長檔不可整檔 decodeAudioData**：2h 立體聲 44.1k PCM 可達數 GB → OOM/黑屏。正解：main 用 `ffmpeg-static` 串流 16k mono f32le，28s 切段 ASR；路徑用 `webUtils.getPathForFile`（Electron 32+ 無 `File.path`）。打包 `asarUnpack` 要含 `ffmpeg-static`。
-- **串列 promise chain 內不可 await 會再 enqueue 自己的函式**：`chain.then(async () => { await processChunk() })` 而 `processChunk` 又做 `chain = chain.then(...)` 會死鎖（尾段永遠不 resolve）。尾段要先 enqueue 再 `chain.then(finalize)`，或在 chain 內直接跑 ASR 本體。
-- **目標語 zh-TW ≠ 來源是中文**：ASR 不可對所有 `lang===zh-TW` 一律 s2twp，否則日文漢字被 opencc 弄髒。有假名/諺文就跳過，且 CJK 比例夠才轉。
-- **透明視窗是坑**：Windows 上 `transparent: true` + `frame: false` → 白色標題列殘留、`resizable` 失效、滑鼠事件異常。字幕視窗用 `transparent: false` + 深色背景 + `setMenu(null)`，透明需求改用整窗 `setOpacity`。
-- **即時字幕不要用 MediaRecorder**：`timeslice` Blob 缺 WebM header；每輪新建 recorder 雖可解碼，但 stop→restart 仍有 20–100ms 無人錄音，且固定切句、opus 編解碼都是冤枉路。現行改為 `AudioContext({sampleRate:16000})` 直取 PCM + 能量 VAD 依停頓切句。
-- 打包後原生模組路徑要把 `app.asar` 換成 `app.asar.unpacked`（sherpa DLL PATH hack）。
-- **外部程序也讀不到 asar 內檔案**：Antigravity Credential Manager bridge 在 source e2e 正常、打包版卻找不到憑證，因 PowerShell `-File` 指向 `app.asar/...ps1`。腳本要列入 `asarUnpack`，呼叫前同樣把路徑換成 `app.asar.unpacked`；這類功能一定要驗 final package，source e2e 不足。
-- **來源未連線時不可合成保守額度**：Antigravity 的「缺 slot → 沒快取就視為 100% used」只適用已連線但 API 漏欄位；若 credential 根本沒讀到，套同一 merge 會同時顯示「未連線」與四條 100% 假額度。先判 account status，再做 slot merge。
-
-## 音訊 / ASR
-
-- **靜音判斷不能交給 AI**：昂貴且易幻覺，必須客戶端訊號層過濾（RMS＋語音佔比），並先做增益補償再檢測（loopback 音量隨系統音量浮動）。
-- 雲端 chat completions 不吃 WebM → 前端轉 WAV 16-bit PCM。
-- ASR 模型輸出要 strip `<sil>`/`<unk>` 等特殊 token。
-- **sherpa-onnx-node `decodeAsync` 會 `JSON.parse` native 回傳字串**：辨識文本若含未跳脫控制字元（`\t`/`\n`/0x00–0x1F），會丟 `SyntaxError: Bad control character in string literal in JSON`，UI 顯示「轉錄失敗」。修法：載入後 patch `OfflineRecognizer.decodeAsync/getResult`，用 `repairJsonControlChars` 再 parse；失敗再 regex 抽 `text`。
-- 自迴歸 ASR 遇到音樂/雜訊會重複循環（「我，我，我…」）→ regex 偵測短單位重複 8 次即丟棄。
-- LLM 轉錄的幻覺要多層防護：客戶端 VAD → 上下文 → prompt 防呆 → 後處理過濾（長度上限＋贅句 regex）。本地 ASR 無此問題。
-
-## 本地 LLM
-
-- Qwen 系列思考模式會吃光 maxTokens 導致輸出為空 → node-llama-cpp 用 `budgets: { thoughtTokens: 0 }`，並保留 strip `<think>` 後備。
-- node-llama-cpp 是 ESM-only → CJS main process 用動態 `import()`。
-- **載入模型 ≠ 可快速推論**：`warm()` 只 `loadModel`＋`createContext` 不算就緒——node-llama-cpp **首次 `prompt` 的 compute-graph 冷啟動在 CPU 上 ~12.5s**（後續同 session ~110ms）。若這 12.5s 拖到使用者「開始字幕」後第一句才付，舊版固定 2s ASR 管線會持續產批、`translateQueue`（上限 5）塞爆丟批次，**僅翻譯顯示模式**對沒譯文的行回退顯示原文 → 整段只剩英文原文，看似「翻譯壞了」。解法：預熱時多跑一次拋棄式推論（`setChatHistory(極簡 system)` + `prompt('warmup',{maxTokens:1})`）把冷啟動挪到背景，`warmedUp` 旗標只跑一次、`unload` 重置、走 `withTranslateLock`。實測第一句 12,493ms→249ms。
-- **括號式 meta-prompt 小模型會複誦**：把前文塞進「【前文】【本段】」單一 user 訊息，0.8B 模型會原樣吐回原文甚至整段 prompt（prompt 漏進字幕）。正解：指令放 system prompt、前文當上一輪 user/assistant 對話（本地 `setChatHistory`、雲端 messages 陣列），本地雲端同構。
-
-## 流程
-
-- **明確要求的功能不能只留在未來清單**：使用者指出額度儀錶板被遺漏後，才把原本的「階段二」真正落地。交付前要逐項對照使用者原始需求與核准 spec，不以 roadmap/backlog 文字冒充完成。
-- **「不回 renderer」不等於不洩漏**：聊天 API error body 原本仍整段寫入 main console，測試假 key 直接出現在 log。所有外部 body、token、外部 error message 都不可進 console／diagnostics；只記 provider、HTTP status、內部錯誤 code 等安全摘要，測試要同時攔 IPC 與 console。
-- **系統 loopback e2e 會混到其他 App 音訊**：打包 CDP 只用一個測試 TTS 關鍵字證明 loopback→VAD→ASR 通路；ASR 精準度由隔離的 `e2e-live-pipeline` 驗多關鍵字。把三個詞都綁在系統混音測試上會因背景影片／音樂假紅燈。
-- ASR 佇列不能無限堆積：現行 VAD 先切完整語句，ASR 忙時最多保留 2 句；第 3 句進來丟最舊未處理句，以即時性優先。正常本地 ASR 快於語音實時速度，不會觸發淘汰。
-- **非語言性片段餵給小翻譯模型會變「對話模式」**：擷取系統音訊時的音樂／靜音／音效被 ASR 轉成純符號（`♪♪♪`）、`……`、`>>`、零寬/格式字元等碎片。這些過得了「≥2 非標點字元」的弱 guard（`\p{P}` 不含 Symbol `So` 與 Format `Cf`），流進 0.8B 翻譯模型後，模型不翻譯而是**當成聊天開場**回「你好，我是即時字幕翻譯引擎…請提供原文…您應該如何稱呼？」persona 問候（system prompt 給了它 persona 名稱，它就照唸）。**僅翻譯顯示模式**下整個畫面被這些 babble 佔滿，看似「翻譯壞了」。真因是輸入端，不是翻譯邏輯（模組層 e2e：正常英文全數正確、context 污染不擴散——每個碎片各自獨立觸發，非級聯）。解法：進管線前用 `hasLinguisticContent`（`text.replace(/[^\p{L}]/gu,'').length>=2`，只認字母/漢字/假名/諺文）丟棄非語言片段——`transcribeUtterance` 在進 `handleAsrResult` 前就 return（連字幕行都不建）+ `shouldTranslate` 同構；main `translate` 再擋一次（縱深）。live system prompt 改祈使句、避免「你是…引擎」自稱（降極短輸入 chatty）。殘留：單一填充詞（如 "um"）仍可能觸發一次 chatty，罕見；要根除需更大模型或輸出端 persona 偵測。
-- **「翻譯不見了」先別假設翻譯邏輯回歸**：症狀（僅翻譯模式只剩原文）可能是顯示層 + 佇列丟批次造成。除錯順序：先在模組層 e2e 直測翻譯（本案證明英文→繁中正常、零複誦）排除 LLM，再查顯示模式（`captionDisplayMode`）與佇列行為。本案真因是冷啟動丟批次（見上），非翻譯壞掉。讀使用者實際 `%APPDATA%/voiceink/config.json`（遮蔽 apiKey）比猜設定快。
-- 錯誤必須浮上 UI（狀態區＋連續失敗自動停止），只進 console 等於使用者看到永遠的「擷取中…」。
-- **await 後要重檢 session 狀態**：`transcribe`／`translate` 這種長 await 之後、以及 promise 的 `finally` 裡，一律先 `if (!isCapturing || epoch !== sessionEpoch) return`。否則停止後才 resolve 的 stale 結果會建新 batch、觸發翻譯、幽靈重載已卸載的模型，或清掉新 session 的鎖。epoch 機制存在就是為了擋這個。
-- **失敗時別把原文冒充譯文寫進 history**：翻譯空白/失敗時 push 原文當「譯文」，下一輪它變成 chat history 的 assistant 前文，等於 few-shot 教模型複誦原文（=括號式 prompt bug 的資料版）。譯文留空即可（`buildContextPair` 會因空譯文回 null 而略過）。
-- **identity 前文（譯文==原文）會教小模型複誦**：同上的隱形版。日文全漢字片段（無假名、cjkRatio 高）被 `needsTranslation` 誤判為「已是中文」，於是 `pushPair(原文,原文)` 塞進 history；這對 (X→X) 就是 few-shot 示範「原樣輸出」，下一段日文被 0.8B 整段複誦→雙語字幕變兩行日文。英文不會（永遠需翻，不走 identity 分支）。三層防護：源頭別 push identity 前文；模型自我複誦（`translated===source`）比照空譯文；`buildContextPair` 對 `prevSrc===prevTr` 回 null。e2e 可穩定重現（identity ctx 時 `ECHO=true`）。修復語言無關（KO/ES/FR/EN 皆驗過）。但殘留 0.8B 對「整句共用漢字」的日文句先天複誦（~1/6），prompt 強化與 echo 重試皆救不了（實測重試無效還加延遲）→ 靠 self-echo 守門顯示原文即可；要真正提升日文品質得換更大翻譯模型。強化 live system prompt（明講來源可能是共用漢字的日/韓文、嚴禁原樣輸出）可讓繁體較一致、不加延遲，屬低成本淨賺。
-- **別用 0.8B 翻譯模型當語言偵測器**：實測簡單分類 prompt 準確率僅 ~43%（中文→判英文、日文含假名→判英文、韓文→判中文），比漢字比例啟發式更糟又多一次推論延遲。且中文→中文不保證 echo（會改寫，如 `人工智慧→人工智能`），不能靠「全翻+echo 去重」取代啟發式。要可靠只能靠手動來源語言選單或換更大模型。動手前先用 e2e 量準確率，別假設小模型會偵測。
-- **譯文轉繁與 echo 去重的順序**：0.8B 譯文偶爾夾簡體字→翻譯 choke point（`translate` 收尾）統一過 `s2twp`（抽到 `src/main/opencc.js` 與 ASR 共用）。但**要先判 echo 再轉繁**：模型自我複誦（`result===text`，含日文頑固句）時回原文且**不轉繁**，否則 s2twp 會 mangle 原文使 renderer 的 `translated===source` 去重失效、把亂碼日文當譯文顯示。
-- **前文原文/譯文要成對過濾**：兩個 history 分開存、只單邊過濾會錯位（user 只有 X、assistant 卻含 X+Y）。存成 `{source, translation}` 成對陣列，過濾與取樣一起做。
-- **啟動要有重入旗標**：按鈕 `disabled` 若在多個 await 之後才設，雙擊會起兩條錄音管線且第一條永不停。用 JS 旗標（`isStarting`）在函式入口擋，別只靠 DOM disabled。
-- **下游佇列也要防堆積**：上游 ASR 語句 pending 上限 2，下游 `translateQueue` 上限 5，超量皆丟最舊未處理項；否則任一後端跟不上時延遲會線性擴大。
-- **視窗還原座標要驗螢幕存在**：存的 bounds 可能在已拔除的外接螢幕（負座標）→ 開在看不見處。用 `screen.getAllDisplays()` 檢查重疊，否則置中。
-- **字幕視窗 OS 層關閉（Alt+F4）要通知 renderer**：只有 `subtitle:close` IPC 會發 `subtitle:closed`；視窗 `'closed'` 事件也要補發（用 `subtitleWindow !== win` 區分 OS 關閉與 IPC 關閉），否則管線在無視窗下持續擷取。
-- **跨行程 send 前檢查 `isDestroyed()`**、雲端 `fetch` 要帶 `AbortSignal.timeout`（翻譯走 serial chain，卡死會連帶鎖死停止與卸載）。
-- **顯示模式讓「顯示端」獨佔**：雙語／僅翻譯純屬字幕彈窗的渲染選擇，就該由彈窗擁有（讀寫 store `captionDisplayMode`、單一 `currentMode` 渲染）；別讓來源端每筆 payload 夾帶 `displayMode` 又跨窗 IPC 覆寫——兩邊搶著改同一狀態必打架。source/translation 一律都送，模式只影響顯示。
-- **背景預熱綁分頁生命週期**：模型載入是最大體感延遲。進入即時分頁就 `engine.acquire` 預熱、離開且未擷取就 `release` 卸載（`switchPage` 為 hook）。`users.live` 用布林非計數，預熱與擷取共用 owner、單次 release 歸零；用 `prewarmed`／`engineAcquired` 兩支互斥旗標記錄由誰持有，擷取開始時把所有權轉交（`prewarmed=false`）、失敗或停止時一起清。
-- **獨立模型並行 warm**：ASR（sherpa）與 LLM（llama）互不相干，`Promise.all` 並行載入即可近乎減半等待；各自 `warm()` 已 catch 回傳 `{ok,warnings}`，並行不會 reject。實測同時載入無原生競態。
-- **打包跑的是 `src/` 原始碼**：`build.files` 排除 `dist/**`，main `loadFile('../renderer/...')` 直接載入 asar 內原始 ESM/HTML；`vite build` 只作驗證。改 renderer 改 `src/` 就生效，別被 `dist/renderer` 只有 index.html 誤導。
-- **e2e 用 `npx electron <script>` 時 app 名是 `Electron`**：`userData` 會指向 `Roaming/Electron`（找不到 `voiceink` 的模型）→ 開頭補 `app.setPath('userData', join(app.getPath('appData'),'voiceink'))`。UI 端可用內建 `WebSocket`（Node 22）走 CDP 驅動打包版驗證。
-- **單輪 SFT 翻譯模型別餵前文 chat history**：LinguaForge 0.8B 訓練格式是 system + 單一 user（`翻譯成…：\n<text>`）。多塞一輪 user/assistant 前文後，greedy 會直接複誦上一輪的 assistant 譯文（off-by-one echo）→ 長文分段時整篇都是第 1 段譯文。前文對 chat 型模型（qwen35translate／雲端）有益，對單輪 MT 模型是毒；別把「前文走 chat history」當通則套到所有模型。重現：`scripts/e2e-linguaforge-context.js` 連續 4 段帶前文，看 dupes。
-- **自家「清理」也會製造污染**：譯文後處理無條件剝單側引號，把合法的 `「引言」，某某說。` 開頭 「 剝掉，留下孤兒 」——看起來像模型出錯，其實是我方 regex。剝括號/引號一律先判配對。另：測試腳本為了避開 electron 依賴而**複製**一份清理邏輯，等於改一次要改兩處且測到的不是真程式碼 → 把純文字邏輯抽成無依賴模組（`translate-clean.js`）讓測試 require 真貨。除錯先看模型原始輸出（`VOICEINK_DEBUG_RAW=1`）再決定是修 prompt 還是修清理。
-- **在地化詞彙表會竄改正確譯文**：OpenCC `twp`（台灣詞彙）對已是繁體的文字照樣替換，「總參數」→「總引數」、「記憶體參數設定」→「記憶體引數設定」。看起來像模型翻錯，其實是後處理。作法：先用純字形 `tw` 探測，字串沒變＝沒有簡體字 → 原樣回傳，只有真的含簡體才套 `twp`。
-- **切段策略要用實測收斂，別靠推理**：LinguaForge 條列貼文退化，依序試了「空行為硬邊界」（bullet 區塊單獨送 → 被總結掉）、「純逐行」（`·` 被翻成「選擇器：」），最後才是「逐行＋清單標記剝除後再送、翻完貼回」。每一版都跑同一個 e2e 對照，才看得出哪個假設錯。
-- **e2e 別把小模型的用詞正確性當紅燈**：0.8B 會音譯專名（Kimi→金智美）、偶發整句幻覺，這些永遠修不好，寫進斷言只會讓測試長期是紅的而失去訊號。斷言只驗工程層能保證的：結構（行數／清單標記）、污染（persona 標籤／指令／special token）、退化（重複迴圈）、後處理竄改（引數）。
-- **重試推論前要還原 chat history**：`session.prompt` 會把這一輪寫進 history，直接重跑等於帶著剛才那段爛譯文當前文 → 複誦。重試分支第一件事就是 `setChatHistory(history)`。
-- **對照實驗的樣本不能從其中一組的失敗集挑**：先用 7 句（全部挑自 Q4 翻壞的句子）比 Q4/Q8/f16，看起來「Q8 完勝、量化是元兇」；換成 30 句預先設計的均衡樣本後，客觀缺陷 22/20/22——差距落在雜訊內，先前結論是選擇偏誤。凡是「A 比 B 好」的宣稱，樣本必須在看到任一方輸出之前就固定。
-- **量化不背模型的鍋**：0.8B 的專名丟失（NVIDIA/TSMC/H200）、幻覺年份、`說明：`／`選擇`／`圖為` 標籤前綴、多行輸入只翻第一行，f16 全精度照樣發生。個別句子 Q4 崩而 Q8 對（或反過來）是解碼路徑被擾動的隨機結果，不是系統性優勢。要判斷「模型 vs 量化」，看的是**同一批樣本的整體缺陷率**，不是幾個亮眼個案。
-
-## 2026-08-03 — 「三個精度都一樣壞」不等於權重問題
-
-- 錯誤推論：Q4／Q8／f16 缺陷數相近 → 判定是模型／語料，決定維持 Q4 並停止追查。
-- 實情：三次跑的都是**同一個壞 prompt**（缺 Qwen3.5 的空 think 前綴 4 token），變因根本沒被控制。
-- 教訓：比較實驗前先確認「送進模型的字串」與權威來源逐字元一致；prompt 是所有解碼參數的上游。
-- 通則：模型輸出出現憑空前綴／專名消失，先印 prompt，不要先寫 regex 剝前綴（剝掉的只是最顯眼的症狀）。
-- 也別盡信文件：INTEGRATION.md 說 node-llama-cpp 的 `thoughts` 六個選項都補不了，實測 3.19 的 `thoughts:'discourage'` 剛好就是；先跑 probe 再決定要不要自訂 subclass。
-
-## 2026-08-20 — 使用者要的功能可能物理上不存在
-
-- 需求：「語音轉文字跟翻譯一樣，可以選 CPU 或 GPU」。做法是先**實測**而不是先寫 UI：傳 `provider: 'cuda'` / `'directml'` 給 sherpa，得到
-  `Please compile with -DSHERPA_ONNX_ENABLE_GPU=ON. Available providers: CPUExecutionProvider, . Fallback to cpu!`
-  ——npm 的 `sherpa-onnx-win-x64` 是 CPU-only 編譯，三種 provider 耗時相同（673 / 769 / 654ms）。
-- 如果照做，會交出一個「切了也沒差」的開關，比不做更糟：使用者會以為 GPU 沒生效是別的問題。
-- 正確處置：交出**真的有效**的替代（`asrThreads`），在同一個位置用文字講清楚為什麼沒有 GPU、要快請走雲端，並把實測輸出寫進 CONTEXT/CLAUDE 以免下一個人再試一次。
-- 通則：功能請求先驗可行性再排版面。「先做 UI 之後再接後端」對這種硬體/相依性限制是反的。
-
-## 2026-08-20 — 「字體大小都差不多」的根因是權重反轉，不是字級不夠大
-
-- 症狀回報：設定選單「視覺上有些混亂、很難一眼看清楚」。
-- 直覺修法（把標題調大）只對一半。實際量出來：分區標題 13px + `--text-secondary`，欄位 label 14px + primary，說明 12px + secondary
-  ——**標題比它管轄的欄位更小更灰**，階層是倒的，所以整頁看起來是同一層。
-- 修法是把大小與顏色兩條階層同時擺正（標題 20/700 primary → 輸入 14 → 子標題與 label 13/600 secondary → 說明 12 tertiary），
-  再加資訊架構（左側分類 rail 一次顯示一區）減少單頁密度。
-- 可測：CDP 直接量 `getComputedStyle(...).fontSize`，斷言 `title > label > hint`——視覺階層是能寫成回歸測試的。
-
-## 2026-08-20 — 極小測試圖會被 vision API 拒絕
-
-- 用 8×8 PNG 當附件 fixture 測多模態，真實端點回 `400 Unable to process input image`，看起來像格式做錯。
-- 對照實驗才看得出來：只有 text 的陣列格式回 200 → 格式是對的，問題在圖太小。
-- 教訓：測 vision 的 fixture 要用真實尺寸（512×512 起跳），並且走與正式路徑相同的產生方式（這裡是 canvas → JPEG）。
-
-## 2026-08-25 — 啟動慢往往不是「Electron 本身」，是把用不到的工作排在第一扇窗前面
-
-- 預設頁是聊天，卻在 DOMContentLoaded 等 nvidia-smi、掃模型檔、load 額度、拉 Google Fonts。
-- 主行程還在開窗前掃 CUDA PATH、開 AGY SQLite 做 cleanup。
-- 修法：先 initStore + 建窗；其餘 setImmediate／進該頁再做。字體用本機，不要讓 CDN 擋住 first paint。
-
-## 2026-08-25 — 拖曳中改 DOM 順序就是卡頓與閃爍的來源
-
-- overlay + 鬼影還是卡：每個 pointermove 都 `appendChild` + FLIP，layout 每換一次槽位就重算；碰撞又去量「含 transform 的畫面座標」，卡片滑到一半就被判定成另一張，於是來回抽換。
-- Token Anxiety / dnd-kit 拖曳中**不改 DOM**，只把 item 用 transform 送到開始時記住的格子；碰撞打那份靜態槽位。放開才 `appendChild` 一次。
-- CSS transition 推開可以中途改目標；WAAPI FLIP 每次 cancel 重來，快拖時必閃。
-
-## 2026-08-25 — 額度拖曳要 overlay + 鬼影，不能讓同一張卡身兼兩職
-
-- Token Anxiety（dnd-kit）是兩層：`DragOverlay` 跟手（近乎不透明）、格子裡的 item 變 `opacity: 0.18` 當落點預覽。
-- VoiceInk 先前把**同一張卡** `translate` 跟游標，又用 `appendChild` 改它的排版槽位。槽位一動，跟手的 transform 就過期，閃爍解不完；中間空隙也點不到，所以「不靈敏」。
-- 半透明該出現在**落點**，不是跟手那張。跟手 overlay 獨立 `position:fixed`；格子裡的鬼影才是預覽。碰撞用 pointerWithin，沒命中再 closestCenter。
-
-## 2026-08-25 — Gemini 模型清單「按名稱」其實是世代＋思考強度
-
-- 第一輪做成字典序／由舊到新，看起來是排過了，但使用者掃清單時要的是「新的在上面、同代 high→low」。
-- `localeCompare` 會把 `3.10` 排到 `3.2` 前面、`flash-high` 排到 `flash-low` 前面只是碰巧（h < l），`tiered`／`extra-low`／`lite` 就亂了。
-- 修法：先拆世代號做新到舊，再從 id 裡認思考強度 token（`extra-low` 必須先於 `low`）。
-
-## 2026-08-25 — 拖曳「偶發閃爍」是進行中的 FLIP 被下一輪蓋掉
-
-- 症狀：額度卡拖動大多順，但跨過另一張時會突然跳一格再接上。
-- 真因有三層，都是 transform 被兩套系統同時改：
-  1. 上一輪 110ms FLIP 還沒跑完就開下一輪。`capturePositions` 讀到的是「含舊 invert 的畫面位置」，`getBoundingClientRect` 當 last 時舊動畫還在，新 `element.animate()` 一替換就把剩餘位移丢掉 → 卡片先閃到終點再從頭播。
-  2. CSS `.usage-card:hover { transform: translateY(-2px) }` 帶 160ms transition，跟 WAAPI 搶同一個 `transform`。
-  3. `appendChild` 改排版槽位後，被拖卡片的 `translate3d` 仍相對舊槽位；`followPointer` 還先把 transform 清成 `none` 再量，layout flush 時會閃回格子裡。
-- 修法：量 last 前 `getAnimations().cancel()`（`first` 仍用取消前的畫面位置）；`.is-sorting` 關掉 hover lift 與 transform transition；重排後立刻用矩陣扣掉現有 translate 校正被拖卡片，不要清成 `none`。
-- 可測：假元素的 `getBoundingClientRect` 在 `cancel()` 前後回不同座標，斷言 invert 用的是取消後的 last。
-
-## 2026-08-21 — 「拖曳時變半透明」不是 CSS 調不調的問題，是拖曳實作選錯
-
-- 症狀回報：額度卡按住拖動會變半透明。第一直覺是去改 `.dragging { opacity }`，但那只解一半。
-- 真正原因：用的是 HTML5 Drag and Drop——瀏覽器一定會生一張半透明拖影跟著游標，來源元素還留在原位，
-  所以當初才用 `opacity: .18` 把來源淡掉；兩者相加就是「整張卡都半透明」。`setDragImage` 也控不到透明度。
-- 修法是換實作：pointer 事件直拖，被拖的就是卡片本體（`translate3d` 跟游標、完全不透明），
-  其他卡片維持 FLIP 推開。參考專案（dnd-kit）本來就是這個模型，「對齊使用體驗」＝對齊互動模型，不是對齊色票。
-- 兩個實作細節：預覽排序會 `appendChild` 搬動卡片，`setPointerCapture` 可能被隱式釋放 → 監聽掛 `window`；
-  插入點用幾何比對而非 `elementFromPoint`，就不用為了命中測試把卡片設 `pointer-events: none`。
-- 附帶好處：合成 PointerEvent 能完整驅動這條路徑，打包版 CDP 可以直接斷言「拖曳中 opacity=1、cursor=grabbing」。
-
-## 2026-08-21 — 「清掉快取」不等於「換一個 token」
-
-401 之後只做 `cache.token = ''` 看起來像是把 token 作廢了，實際上下一輪會重讀本機憑證檔，
-看到裡面的 `expiry` 還沒到就直接再用同一個 token——上游剛剛才拒絕過它。重試次數用掉了，
-但送出去的東西一模一樣。
-
-**教訓**：作廢一份憑證時要問「下一次取用會走到哪條路徑」。憑證有兩個真實來源（本機記錄的到期時間、
-上游的實際判定），上游說失效就必須壓過本機記錄，所以要有一個明確的 `mustRefresh` 旗標，
-而不是靠清空快取間接達成。同一個模式也適用於任何「本地認為還有效、遠端已撤銷」的資源。
-
-## 2026-08-21 — 代理不該把上游的狀態碼原樣丟回去
-
-反代最初直接透傳上游狀態碼。上游 token 過期回 401，客戶端收到 401 的第一反應是「我的 API key 打錯了」——
-去檢查一個完全正確的設定。狀態碼是講給「這一段連線」聽的，不是講給上一段聽的。
-
-**教訓**：閘道要重新詮釋錯誤，而不是轉發。只有對客戶端有行動意義的才透傳（429 → 等一下再試，
-且要連 `retry-after` 一起帶），其餘一律收斂成 502「上游壞了」。同理，上游的 error body 一個字都不該外流，
-它可能帶著 token 或別人的帳號資訊。
-
-## 2026-08-21 — 移植時，來源的「奇怪選擇」通常是它踩過的坑
-
-移植 AGY 的反代時，它的端點清單是 `[sandbox, daily, prod]`，註解寫「優先級 1: Sandbox (已知有效且穩定)、
-prod 僅作為兜底」。我判斷那是額度查詢用的備援順序，反代是熱路徑不該多試網域，於是寫死只打 prod，
-還特地留了一句註解合理化。真實跑起來 prod 一律 429、sandbox 才 200——它的順序不是偏好，是實測結論。
-
-同一批還有三個一樣的錯：照抄了模型映射表（裡面有 404 的模型）、保留了 `x-goog-user-project`
-（每個端點都 403）、無條件送 `thinkingBudget: 0`（thinking-only 模型 400）。
-
-**教訓**：移植別人的整合層時，最有價值的不是程式碼結構，是那些「看起來多餘的迴避動作」——
-fallback 順序、被註解掉的 header、寫了 issue 編號的重試分支。那是別人用生產流量換來的地圖。
-要刪掉任何一個之前，先問「什麼情況下這行是必要的」，答不出來就不要動它。
-
-## 2026-08-21 — mock 測得再綠，也證明不了對面長什麼樣
-
-反代的 42 項 e2e 全綠、單元測試全綠，但第一次接真實上游就四個錯誤同時炸開。
-原因很簡單：mock 是照我對協議的理解寫的，我理解錯的地方，mock 會忠實地跟著錯。
-兩邊都是同一個誤解，測試自然對得起來。
-
-**教訓**：對外部系統的整合，測試分兩種——「我有沒有照我以為的規格實作」（mock 能測）
-和「我以為的規格對不對」（只有真流量能測）。前者綠了不能宣稱後者。
-這次補的 `scripts/probe-agy-upstream.js` 就是後者：它不驗程式碼，它驗我對上游的假設，
-而且會自我校驗（把實測結果跟程式碼裡的名單比對，不一致就印出來）。
-交付整合功能時，如果一次真實往返都沒跑過，就要在文件裡明講這件事。
-
-## 2026-08-21 — 錯誤訊息要寫給「還沒做到那件事」的人看
-
-憑證讀不到時，頁面顯示的是「找不到 Antigravity 登入憑證，請先在 Antigravity 登入」。
-這句話只對「已經裝好、只是登出了」的人有用。對還沒裝的人，它沒回答任何一個真正的問題：
-要裝什麼？去哪裝？裝完要做什麼？
-
-而且我自己也搞錯過一次——先入為主認定憑證是 IDE 在維護，跟使用者說「IDE 會保持 token 新鮮」，
-實際查下去才發現這台機器根本沒裝 IDE，是 CLI 在做這件事，`Programs\Antigravity` 只是解除安裝
-留下的空目錄。差點就把「請安裝 IDE」寫進引導文案。
-
-**教訓**：寫錯誤訊息前先問「看到這句話的人，此刻手上有什麼、缺什麼」，然後給出從那個狀態出發的
-下一步——具體到指令與網址。狀態不只一種就分支（未安裝／未登入／token 過期各給各的），
-別用一句話涵蓋所有情況。附帶一提，偵測「有沒有裝」要看執行檔，不要看資料夾：
-解除安裝常留空目錄，看目錄會把「已移除」判成「已安裝」，然後給出完全錯誤的指引。
-
-## 2026-08-21 — 同一種故障，上游可能給你兩種說法
-
-`gemini-3.6-flash-*` 在探測時全部回 400 `Request contains an invalid argument`，
-看起來就是「這個模型不能用」，我差點把整個家族從清單刪掉。實際原因跟
-`gemini-pro-agent` 一模一樣——拒絕 `thinkingBudget: 0`——只是上游對前者回
-`Budget 0 is invalid. This model only works in thinking mode.`（講得很清楚），
-對後者回一句沒有資訊量的 `invalid argument`。
-
-**教訓**：把「症狀分類」建立在錯誤訊息的字面上很脆弱。判斷一個東西是不是壞了，
-要用**變因對照**而不是讀訊息：同一個模型換幾種請求參數各打一次，
-就看得出來是模型不可用還是某個參數不被接受。這次多花三分鐘做對照，
-保住了四個可用模型。
-
-順帶一提，命名也要照著真相走。原本那份名單叫 `THINKING_ONLY_MODELS`，
-但 3.6-flash 明明能關思考（`includeThoughts: false` 完全正常），
-它只是不接受把預算設成 0。名字不精確會讓下一個人用錯誤的心智模型去推論，
-所以改名為 `REJECTS_ZERO_BUDGET`。
-
-## 2026-08-21 — 翻譯層不該覆蓋使用者的明確指名
-
-重建模型映射表時，我把 `gemini-3-flash` 導向了更新的 `gemini-3.7-flash-medium`，
-理由是「換成最新的」。但 `gemini-3-flash` 在上游真實存在——使用者打這個名字，
-就是要這個模型，不是要我幫他挑一個「更好的」。
-
-映射表的職責邊界其實很窄：**只翻譯上游查無此名的東西**
-（`claude-sonnet-4-5-20250929` 這種客戶端寫死的死名字）。
-只要上游認得，就原樣送過去。
-
-**教訓**：相容層做「善意的替換」是越界。使用者指名一個確實存在的東西時，
-系統的工作是照做，不是猜測他其實想要別的。這個錯是既有測試
-「上游真實 ID 原樣保留」擋下來的——寫測試時把「這條規則為什麼存在」
-也寫進斷言名稱，未來的自己才擋得住自己。
-
-## 2026-08-21 — 「該續期了」不等於「已經不能用了」
-
-`tokenIsStale` 對 access token 留了 15 分鐘的提前量，意思是「快到期了，去換一個」。
-但 `loadToken` 在換不到的時候直接拋 `TOKEN_EXPIRED`，把提前量當成失效線——
-結果每個 token 的最後 15 分鐘都被自己作廢。使用者回報當下，憑證還有 7 分鐘壽命。
-
-更值得記的是：**同一個判斷在專案裡已經有兩套標準**。額度頁的 `syncAntigravity`
-早就寫對了（refresh 失敗就沿用舊 token，只把 accuracy 標成 estimated），
-反代這條路徑卻是硬失敗。寫第二個消費者的時候沒去看第一個怎麼處理同一件事。
-
-**教訓**：refresh deadline 與 expiry deadline 是兩條線，不能共用一個布林值。
-還有，新寫一條路徑要用既有的共用工具時，先看現有呼叫端怎麼用——
-不一致的地方通常不是「兩種需求」，而是其中一邊有 bug。
-
-## 2026-08-21 — 沒滿足前提的觀察，不能拿來推翻假設
-
-引導文字寫「執行任一個 agy 指令，它會自動把 token 續期」。我跑了 `agy models`，
-成功，但憑證裡的 expiry 一動也沒動，於是推論「CLI 不會回寫憑證」，
-準備把引導改掉。
-
-問題是當下 token 還有 7 分鐘壽命——CLI 判斷還能用，本來就不會去換。
-我測的情境根本沒滿足「token 過期」這個前提。等真的過期後再跑一次，
-expiry 前進了整整一小時，原本的引導是對的。
-
-**教訓**：要否證一個「在 X 情況下會 Y」的說法，就得先真的把系統推進 X。
-在 X 還沒發生的時候觀察不到 Y，什麼都證明不了。
-這次成本只是多等三分鐘，代價卻是差點把正確的使用者指引改成錯的。
-
-## 2026-08-21 — 同一件事被兩層各做一次，上層會把下層的資訊吃掉
-
-`mergeExpectedWindows` 的職責是「上游沒回的視窗，先撿快取、真的沒有才當用盡」。
-它需要 previous 才做得對，而 previous 只有 `usage/index.js` 那層有。
-`syncAntigravity` 卻在回傳前先用 `previous=null` 呼叫了一次——補完之後四個 id 都存在，
-index 那層再也分不出「這是上游給的」還是「這是補的」，於是快取撿不回來、
-accuracy 也不會降級，憑空的 100% 用盡被標成「官方 API」。
-
-**教訓**：一個補值函式若依賴呼叫端才有的上下文，就只能有一個呼叫端。
-在拿不到那個上下文的地方先跑一次「無害的預處理」，實際上是把下游的判斷依據抹掉。
-
-## 2026-08-21 — 測試測的是被繞過的那一層，就會一直是綠的
-
-`test-usage.js` 早就有兩條測試在驗「缺 slot 要保留舊值」「補齊後要降級成 estimated」，
-但它們都直接餵 `mergeAccountState`。production 的路徑是
-`syncAntigravity → mergeAccountState`，前者先把事情做壞了，後者收到的輸入已經是乾淨的四條，
-所以測試永遠綠，bug 永遠在。
-
-## 2026-08-21 — 修掉「先補一輪」之後，失敗路徑仍會走同一個補值函式
-
-`syncAntigravity` 不再預先 merge 了，但 API 失敗仍回 `status=connected`、`windows=[]`。
-`mergeAccountState` 只擋 `disconnected`，空陣列照樣進 `mergeExpectedWindows` → 四條 100%。
-上一輪的回歸測的是「成功但只回部分 slot」，測不到「失敗回空窗」。
-
-**教訓**：同一補值函式的每一個入口都要有「現在有沒有東西可以補」的前置條件。
-把呼叫點從 A 搬到 B 並不表示 B 的失敗路徑自動安全。新測試要從失敗回傳值進去，不要只測快樂路徑的部分成功。
-
-## 2026-08-21 — 切頁若只卸資源、不作廢工作，下一輪會把資源載回來
-
-翻譯 cooldown 做了 `engine.release`，但分段迴圈仍 `await translate()`。
-owner 歸零後 `getSession` 沒有人佔用也會 load → 幽靈重載。
-AGY 的 `refreshAgyPage` 不 await，cooldown 先 `stopPolling`，in-flight 的 `refreshAll` 結束又 `startPolling`。
-
-**教訓**：離開頁面的清理清單是「作廢世代 ＋ 停工作 ＋ 卸資源」，缺第一個就會把後兩個抵銷。
-額度頁已經用 `#page-usage.active` 當守衛，新頁不要漏掉。
-
-同一回合我自己也踩了一次：新寫的併發測試放在「已經有 inflight」的時間點，
-舊程式一樣會擋下來。跑了修復前的版本才發現它是綠的。
-
-**教訓**：測試要從 production 真正的進入點打進去。
-還有——**新寫的回歸測試一定要先在修復前跑一次**，紅了才算數，
-不然只是把當下的行為寫成斷言。
-
-## 2026-08-21 — 被問「這是要修的嗎」，代表清單沒把判斷寫進去
-
-我把掃描結果分成「修掉的」與「沒動、但值得知道的」，後者列了七項 file:line 與症狀，
-但沒有寫每一項到底是不是 bug、為什麼沒動。使用者第一個問題就是「這是要修的嗎」。
-
-問題不在於留了觀察清單，而在於清單只有現象沒有判斷。讀的人拿到七個 file:line
-還是得自己重跑一次我的思考。後來逐項判定，結果是三個真的會出事、四個不是——
-這個比例本來就該寫在清單裡。
-
-**教訓**：回報未處理項目時，每一項都要帶上「是／不是 bug」與依據，
-而不是只列位置與現象。「值得知道」不是免於判斷的藉口；
-如果我自己也還沒判斷，那就是還沒查完，不該先報出來。
-
-## 2026-08-21 — 安全規範寫在文件裡，不等於舊模組跟上了
-
-CLAUDE.md 早就寫著「額度與聊天的 HTTP 錯誤只記安全狀態摘要，禁止把 response body／
-token／外部 error message 寫進 console、diagnostics 或 IPC」。`chat.js`、`usage/*`、
-`agy/*` 都遵守，`cloud-asr.js` 與 `local-llm.js` 沒有——因為那條規則是後來寫的，
-寫的時候只巡了當下在改的模組。
-
-規則的措辭也幫了倒忙：「額度與聊天」聽起來像只管那兩個功能，但真正的判準是
-「這個字串是不是上游可控、又會顯示給使用者」。cloud-asr 與雲端翻譯的 API URL
-同樣是使用者自填的，回什麼內容完全由對方決定。
-
-**教訓**：寫安全規範時，用「什麼情境適用」描述範圍，不要用「哪個功能」——
-功能名會讓後來的人以為別的模組不在管轄內。既有規則新增時，
-順手 grep 全庫同類路徑一次，別只修觸發當下的那個檔案。
-
-## 2026-08-24 — 使用者仍在操作電腦時，不得移動滑鼠或搶前景焦點
-
-完整桌面 QA 要求應用程式開在副螢幕，不代表可以改變使用者的游標位置或發送全域快捷鍵。
-這些操作會打斷使用者正在進行的工作，即使只持續幾秒也不可接受。
-
-**教訓**：使用者同時在用電腦時，視窗定位一律走 CDP `Browser.setWindowBounds`、
-應用程式自身的視窗 API 或其他不影響輸入裝置與前景焦點的方式；不得使用
-`Cursor.Position`、滑鼠拖曳、全域鍵盤快捷鍵或會搶焦點的桌面自動化。
-
-## 2026-08-25 — 啟動慢的主因是 unpacked native，不是某一行 setImmediate
-
-第一輪把 CUDA PATH 與 AGY 移到 `setImmediate`，拿掉 Google Fonts，使用者仍覺得慢。
-真正的開機成本是：`main.js` 頂層 require 整張模組圖（AGY＋額度＋local-llm）、
-`await initStore()` 擋住 `BrowserWindow`、以及 `app.asar.unpacked` 裡 400MB+ DLL
-（llama CUDA／Vulkan、ffmpeg）被 Defender 掃。
-
-**教訓**：量的是「點 exe 到視窗出現」，不是「我們延後了哪段 JS」。
-Windows 上 unpacked `.node`／`.dll` 就算這次沒 load，只要躺在 exe 旁邊就會被掃。
-能留 asar 的就留 asar，spawn／dlopen 第一次再拷到 **userData**。
-寫進 `app.asar.unpacked` 等於假設安裝目錄可寫——Program Files 一般使用者寫不進去，GPU 會默默退回 CPU。ffmpeg 一開始就拷 userData，GPU 套件必須同一套。
-`show: false` 等到 ready-to-show 等於把 Chromium 解析整份 HTML/JS 的時間也算進「沒開」。
-
-## 2026-08-26 — 可見狀態必須跟真正的資料上下文一起失效
-
-聊天的二次確認只記在 DOM，切換會話後仍會殘留；翻譯結果只在輸入變更時清理，改語言後仍像是有效結果；
-AGY 多個平行請求共用同一個錯誤區，其中一個成功就會把另一個失敗清掉。三者根因相同：畫面狀態沒有綁定它代表的資料上下文。
-
-**教訓**：會影響結果的輸入、選項或實體一改，就要同步取消舊操作並讓衍生畫面失效；
-平行請求的共用錯誤只能由整批流程統一清理，不能讓單一成功請求自行清除。
-
-## 2026-08-26 — 「重試用」的旗標不能拿來當「清快取」用
-
-AGY 反代回報「Antigravity token 已過期」，但 CLI 明明登入著、憑證檔還有 50 分鐘壽命，
-重登 CLI 也救不回來——因為 `mustRefresh` 這個「上游回過 401」專用旗標，被 `acquire` 的
-一般失敗清理路徑順手設了起來。一次 PowerShell 讀憑證逾時，就讓之後每一輪都強制 refresh，
-而環境沒有 client id／secret 時 refresh 必定失敗，於是永久拋 `TOKEN_EXPIRED`。
-
-**教訓**：語意窄的旗標（「這個 token 真的死了」）只能由產生該語意的那一條路徑設定。
-清快取要清快取的欄位，不要圖方便呼叫一個「順便」多做一件事的函式。
-另外：只存在記憶體的黏性錯誤狀態，使用者做什麼都好不了，一定要能自己恢復。
-
-## 2026-08-26 — 逐一列舉的 IPC 白名單，新增方法要同步補
-
-`agy:test` 在 e2e（直接呼叫 service 模組）全綠，打包版卻只回「反向代理操作失敗」：
-`main.js` 的 `registerAgyIpc({ service: { … } })` 是手寫的方法白名單，漏了一行。
-
-**教訓**：白名單是好設計，但它讓「模組加方法」與「對外開放」變成兩件事。
-新增 main 端對外方法時，一併檢查 `main.js` 的 service 物件；
-而且 e2e 測 service 模組不等於測 IPC，要有一條 CDP 斷言擋住「回通用錯誤訊息」這個症狀。
-
-## 2026-08-28 — 共用容器的內距寫在子元素上時，新子元素一定會漏
-
-「新終端機」彈窗歪掉：標題與按鈕在 24px，欄位貼到 0。`.app-dialog` 自己 `padding: 0`，
-那 24px 是 `.dialog-head`／`.dialog-actions` 各自寫的，於是每加一個內容區就得記得補一次。
-五個彈窗裡四個補了、最新的那個沒補。
-
-**教訓**：這種「靠每個子元素自己記得」的排版約定，遲早會漏掉一個。
-不改架構的話，至少要有一條會失敗的檢查——量子元素的實際左右邊界，
-而不是靠人看截圖（歪 24px 在小視窗裡真的看不太出來）。
-
-## 2026-08-28 — CDP 測試用「第一列」定位，會刪到使用者的資料
-
-`e2e-terminal-cdp.js` 三條 FAIL，追下去不是產品壞掉：它用
-`document.querySelector('.term-list-item')`（側欄第一列）和 `panes === 1`（絕對總數）
-指涉「自己建的那個」。使用者本來就有工作階段時，第一列是別人的——而下一步就是點刪除。
-收尾又只刪了兩個測試階段中的一個，中斷一次就在使用者側欄留一筆垃圾（這次真的撈到）。
-
-**教訓**：E2E 跑在使用者的真實資料上，測試的定位條件必須是「我自己建的那個」
-（`[data-id="…"]`），不能是「畫面上第一個」或「總共幾個」。
-建立的每一個實體都要進收尾清單。驗證修好沒有，就在**留著殘留資料**的狀態下重跑。
-
-## 2026-08-28 — 「偵測得到 GPU」不等於「正在用 GPU」
-
-接 `llama-server` 做本地 GPU 語音辨識，第一版帶了 `--gpu-layers 99`，服務起得來、
-`/health` 回 ok、轉錄結果也正確——看起來全綠。實際上整包在跑 CPU：
-prompt eval 只有 7.43 tok/s。加上 `--device Vulkan0` 之後是 720 tok/s，**差 97 倍**。
-兩種情況都不印任何警告，`--list-devices` 也照樣列得出 Vulkan 裝置。
-
-**教訓**：接外部推論執行檔時，「有沒有報錯」「結果對不對」都證明不了它用了加速器。
-第一件事應該是量一個**能分辨 CPU 與 GPU 的數字**（tok/s、每秒幀數、實時倍率），
-並把它印在測試輸出裡，之後任何人改參數都看得出退化。
-
-## 2026-08-28 — 改 require 目標時，要順著呼叫鏈找「以前不需要、現在需要」的東西
-
-把 `engine.js` 的 `require('./local-asr')` 換成新的門面 `asr-select` 之後，功能看起來正常，
-但使用者選 GPU 模型時仍會預熱到 CPU 那顆。原因是 `main.js` 的 `lazyLoad` 靠模組的 `setStore`
-把 store 塞進去，而 `engine.js` 以前不需要 store 所以沒有這個方法——換了 require 之後，
-它變成間接持有 store 的那一層，卻沒人告訴它。而 `engine.acquire`（進頁就 prewarm）
-又比任何 `localAsr:*` IPC 更早發生，所以症狀只在「進頁預熱」這條路徑出現。
-
-**教訓**：換 require 目標不是等價替換。新模組需要什麼初始化（store、設定、生命週期），
-就要沿著呼叫鏈往上找誰負責供給；「以前不需要」正是最容易漏的那一格。
-
-## 2026-08-28 — 批次 sed 換識別字會把斷言改成永遠成立
-
-下架 LinguaForge Q8 時用 `sed 's/linguaforge08/linguaforge08q4/g'` 掃過整個 scripts/，
-把剛寫好的 `isLlmKey('linguaforge08') === false`（驗證舊 key 真的失效）
-改成了 `isLlmKey('linguaforge08q4') === false`——那是永遠 false，測試從此假綠。
-同一次還把 `KEYS = ['linguaforge08', 'linguaforge08q4']` 變成兩個一樣的元素。
-
-**教訓**：批次改識別字時，**斷言與清單是最危險的兩種上下文**：
-前者可能被改成恆真／恆假，後者可能塌成重複項。改完一定要 `git diff` 逐條看過，
-特別是含 `=== false`／`!includes`／陣列字面值的那幾行。
-
-## 2026-08-28 — `await requestAnimationFrame` 在視窗被遮住時等於死結
-
-合併語音轉文字頁之後跑 `e2e-ui-transcribe.js`，轉錄永遠停在「準備中… 1%」。
-一開始以為是自己剛改的分頁載入順序，實際上是 `transcribe.js` 裡放很久的 `waitForPaint()`：
-它 `await` 兩層 `requestAnimationFrame` 只為了讓進度面板先畫出來，
-但**視窗被遮住時 rAF 完全不觸發**（CDP 量到 `document.hidden: true` 時 3 秒零回呼），
-於是整條流程卡死。`finally` 還把按鈕解鎖，症狀是「按了沒反應」。
-
-**教訓**：rAF 是「畫面好看」的手段，不是流程的門檻。任何 `await` 一個
-「要瀏覽器願意配合才會回呼」的東西（rAF、transitionend、animationend、IntersectionObserver）
-都必須配逾時。順帶一提：這也說明 CDP 測試「拿不到前景」不只是測試環境的雜訊，
-它剛好會逼出使用者把視窗放到背景時的真實行為。
-
-## 2026-08-28 — 只驗截圖驗不到「原生控制項展開後」的樣子
-
-`.model-chip-select` 是新做的模型選單，`e2e-visual-cdp.js` 七頁 × 兩主題 × 三尺寸全綠、
-截圖也漂亮——因為截圖裡它永遠是收合的。使用者一點開就看到白底配近白文字，整份清單消失。
-原因是原生下拉的清單畫在頁面之外（吃不到 `backdrop-filter`），Chromium 拿 `<select>` 的
-背景色去畫，而那顆是 `transparent`、其他 `.select` 是半透明玻璃，兩種都會退回系統白底。
-
-**教訓**：`<select>`／`<input type=date|file>`／原生 tooltip 這類「有一半由作業系統畫」的元件，
-主題化不能只設容器。深色主題下**每個能自己畫背景的子元素都要明寫不透明底色**。
-測試也要跟著換手法：截圖對這種展開態沒有用，改驗 computed style（底色 alpha ＝ 1、
-前景對比 ≥ 4.5）。順帶一提，修這種毛病要修在共用層——全站的 `<select>` 都有同一個問題，
-只補那顆被抱怨的等於留著其他幾顆等下次被抱怨。
-
-## 2026-08-29 — CDP 測試的清理權限只限於自己建立的程序
-
-`taskkill /IM VoiceInk.exe` 會連使用者安裝版一起關掉；測試只能用暫存 `--user-data-dir`，
-並以 spawn 回傳的 PID 加 `/T` 清理自己的程序樹。Windows 上 AGY 的 SQLite 檔可能晚一點才放鎖，
-暫存目錄刪除要有限重試。背景回歸也必須真的讓測試視窗進 `document.hidden`，不能只看可見 DOM。
-## 2026-08-29 — 原生下拉只能把收合態做好，選取色要另訂 token
-
-原生 `<select>` 的展開清單由 Windows/Chromium 畫，圓角與陰影不能可靠地跟頁面 CSS 一起走；真正能控制的是收合態的尺寸、箭頭、邊框，以及 `<option>` 的不透明底色與選取色。把半透明玻璃直接套到清單會在深色主題變成白底近白字。
-
-**教訓**：保留原生鍵盤與可及性，收合態用共用控制項規則統一；`option` 的背景／前景另用主題 token，並用 computed style 驗證對比，不要靠截圖假設原生彈窗長相。
-
-## 2026-08-29 — 狀態樣式要比 hover 更高特異度
-
-思考按鈕的啟用規則雖然寫在 hover 後面，仍會被 `.composer-btn:hover:not(:disabled)` 較高特異度蓋掉，導致滑鼠移上去看不出是否開啟。
-
-**教訓**：toggle 的 selected/pressed 狀態要有專用的 hover 規則，且測試至少要比較開／關兩個 computed background；只驗 `aria-pressed` 不足以證明畫面清楚。
-
-## 2026-08-29 — 原生下拉彈窗的圓角不能靠 CSS 修好
-
-把 `<select>` 收合態做得一致，仍解不了使用者看到的展開清單：Windows/Chromium 把它畫在頁面外，圓角、陰影、hover 列和頁面主題都不受 renderer CSS 控制。
-
-**教訓**：需要一致視覺時，保留原生 `<select>` 作為資料與事件來源，另外做共用 ARIA listbox；用 fixed portal 避開 `overflow`，dialog 內則掛回 top layer。測試不能只看收合態，至少要點開模型清單、選一項、驗 `change`、鍵盤移動與 Esc 收合。
-
-## 2026-08-29 — `optgroup` 沒有 `options` 集合
-
-聊天模型清單用 `<optgroup>` 分供應商；自訂下拉共用層把 `child.options` 當成 `HTMLSelectElement` 的 API，點擊聊天模型按鈕時才拋 `TypeError`，所以看起來像「按鈕點不開」。
-
-**教訓**：處理 `<select>` 子節點時要分清 `HTMLSelectElement.options` 與 `HTMLOptGroupElement`；群組選項用 `querySelectorAll('option')`。另外，自訂清單寬度不能只複製觸發鈕，窄版長文字要量內容寬度並受視窗邊界限制，避免逐字直排。
-
-## 2026-08-29 — 共用 `label` 規則會蓋掉元件排列
-
-設定頁的 `.setting-group label { display: block; margin-bottom: 8px; }` 比 `.chat-model-flag` 更具特異度，讓生圖標籤退回 block；勾選框與文字就會依 inline 基線排列，看起來上下歪掉。
-
-**教訓**：把 `label` 當作可點擊元件時，元件自己的 `display` 與外距要用同等特異度覆蓋（例如 `label.chat-model-flag`），並用實際子元素中心線做回歸，不只量外框。
+- **啟動慢往往不是 Electron 本身**：量的是「點 exe 到視窗出現」。主因是頂層 require 整張模組圖、
+  `await initStore()` 擋住建窗、以及 `app.asar.unpacked` 裡 400MB+ DLL 被 Defender 掃
+  （就算沒 load，躺在 exe 旁邊就會被掃）。能留 asar 就留，第一次用再拷到 **userData**
+  （寫 `app.asar.unpacked` 等於假設安裝目錄可寫，Program Files 寫不進去，GPU 會默默退回 CPU）。
+- **外部程序也讀不到 asar 內檔案**（PowerShell、conhost）：這類功能一定要驗 final package，source e2e 不足。
+- **打包「沒報錯」不等於打包成功**：別的程式抓著 `app.asar` 時產出的 asar 會每個檔案錯位、完全沒有錯誤訊息。
+- **透明視窗是坑**：Windows 上 `transparent: true` + `frame: false` → 白條殘留、`resizable` 失效、滑鼠事件異常。
+  `resizable: false` 的視窗 `setBounds` 的寬高會被**靜默忽略**。兩條路都被堵住時，通常代表設計本身該換
+  （改成視窗固定大、內容自己撐寬，兩個坑一起消失，程式也短了）。
+- **覆蓋在別人程式上面的視窗，第一個要問的是「它會不會偷走焦點」**：`focusable: false` ＋ `showInactive()`
+  不是選項，是這個功能能不能存在的前提。透明的大方框預設照樣吃滑鼠，要 `pointer-events: none`。
+- **視窗還原座標要驗螢幕存在**；OS 層關閉（Alt+F4）要補發關閉事件，否則管線在沒有視窗時繼續跑。
+- **啟動要有重入旗標**：按鈕 `disabled` 若在多個 await 之後才設，雙擊會起兩條管線。用函式入口的 JS 旗標。
+- **切頁若只卸資源、不作廢工作，下一輪會把資源載回來**：清理清單是「作廢世代 ＋ 停工作 ＋ 卸資源」，
+  缺第一個就會把後兩個抵銷。
+- **prewarm 旗標不可早於 acquire 成功**，否則 cooldown 會 release 掉尚未佔用的 owner，
+  in-flight 成功後卻無人 release → 模型洩漏。
+- **逐一列舉的 IPC 白名單，新增方法要同步補**：白名單是好設計，但它讓「模組加方法」與「對外開放」變成兩件事；
+  e2e 測 service 模組不等於測 IPC。
+- **同一支 PowerShell 腳本要 BOM ＋ AutoFlush**（5.1 沒 BOM 把 UTF-8 當 ANSI 讀；`Console.Out` 接成管線會緩衝）。
+- **不確定安裝程式參數時，先從 exe 裡撈 usage 字串**，不要用猜的一個個試
+  （`/S`／`/silent` 全部無效**而且不報錯**，只會默默開一扇要人按的提權視窗）。
+- **「裝好了」跟「找得到」是兩件事**：DLL 在磁碟上但不在 PATH，症狀跟完全沒裝一模一樣。
+- **Windows 效能計數器選錯類別，慢十倍還不會有人告訴你**：`PerfFormattedData` 500ms vs `PerfRawData` 158ms，
+  GPU 引擎 `Get-Counter` 5335ms vs raw 67ms。「這個做不到」要用實測推翻。
+- **同一時間只能跑一支需要單一實例鎖的 App**；背景常駐時只有計時器被節流，訊息派送不會。
+
+## 音訊 / ASR / 本地 LLM
+
+- **靜音與非語言片段要在訊號層擋掉**，不要交給 AI 判斷（昂貴又易幻覺）：
+  `♪♪♪`、`……`、零寬字元流進 0.8B 翻譯模型會被當成聊天開場，回一串 persona 問候佔滿字幕。
+- **括號式 meta-prompt 小模型會複誦**：指令放 system prompt、前文當上一輪對話。
+  但**單輪 SFT 翻譯模型別餵前文 chat history**（greedy 會直接複誦上一輪譯文）——
+  別把「前文走 chat history」當通則套到所有模型。
+- **失敗時別把原文冒充譯文寫進 history**，identity 前文（譯文==原文）同理：那是 few-shot 教模型複誦。
+- **重試推論前要還原 chat history**（`session.prompt` 會把這一輪寫進去，直接重跑＝帶著爛譯文當前文）。
+- **載入模型 ≠ 可快速推論**：node-llama-cpp 首次 prompt 的 compute-graph 冷啟動 ~12.5s（後續 ~110ms）。
+  預熱時要多跑一次拋棄式推論，否則第一句會塞爆佇列、丟批次，看起來像「翻譯壞了」。
+- **別用 0.8B 當語言偵測器**（實測準確率 ~43%，比漢字比例啟發式更糟又多一次延遲）。
+- **在地化詞彙表會竄改正確譯文**：OpenCC `twp` 對已是繁體的文字照樣替換（「參數」→「引數」）。
+  先用純字形 `tw` 探測，真的含簡體才套。**先判 echo 再轉繁**，否則自我複誦時會 mangle 原文使去重失效。
+- **自家「清理」也會製造污染**：無條件剝單側引號會把合法的 `「引言」，某某說` 弄成孤兒。
+  除錯先看模型原始輸出，再決定是修 prompt 還是修清理；純文字邏輯抽成無依賴模組讓測試 require 真貨。
+- **不要用 regex 剝前綴當修復**：那是止血，代表 prompt 錯了；同時發生的專名消失／年份幻覺 regex 抓不到。
+- **切段策略要用實測收斂，別靠推理**：LinguaForge 條列退化試了三版才對，每一版跑同一個 e2e 對照才看得出哪個假設錯。
+- **佇列要有上限並丟最舊**（ASR pending 2、翻譯 5），否則任一後端跟不上時延遲會線性擴大。
+- **await 後要重檢 session 狀態**（`isCapturing` / epoch），包含 `finally` 裡。
+- **量化不背模型的鍋**：專名丟失、幻覺年份、標籤前綴在 f16 全精度照樣發生。
+  要判斷「模型 vs 量化」，看的是同一批樣本的整體缺陷率，不是幾個亮眼個案。
+- **使用者要的功能可能物理上不存在**：npm 的 sherpa 是 CPU-only 編譯，做一個「切了也沒差」的開關比不做更糟。
+  功能請求先驗可行性再排版面。
+- **學習型功能要保守**：自動學詞學對了每句更準，學錯了每句被改壞而使用者不知道是誰幹的。
+  預設應該是「寧可少學」，並且讓使用者看得到、刪得掉。
+
+## 流程與溝通
+
+- **錯誤訊息要寫給「還沒做到那件事」的人看**：先問「看到這句話的人手上有什麼、缺什麼」，
+  給出從那個狀態出發的下一步（具體到指令與網址），狀態不只一種就分支。
+- **狀態碼分類不是「相近的收在一起比較整齊」，是「使用者下一步該做什麼」**：
+  401（你是誰我不認）與 403（我認得你但這個你不能碰）合併，等於把做對每一步的人送去查一個正確的設定，
+  **比沒有訊息更糟**。
+- **使用者說「我這邊是對的」時，先當真去驗證那個前提**：寫一支 probe 打真上游列出矩陣，比讀十遍程式碼快。
+- **安全規範寫在文件裡不等於舊模組跟上了**：規則要按**性質**寫（「任何 ASR 來源」「上游可控又會顯示給使用者的字串」），
+  不要按當下的清單或功能名寫；新增規則時順手 grep 全庫同類路徑。
+- **判斷該不該共用，看的是「取捨是不是同一個」，不是「值長得像不像」**：
+  三個子分頁各存一份設定不等於三份程式碼（共用同一個解析模組）。真正該避免的是**邏輯**重複。
+  改共用狀態時，要把「因為剛好都一樣所以沒事」的地方全部翻一遍。
+- **設定欄位重複＝同一組金鑰要填兩次**：判斷標準是「端點協議一不一樣」而不是「功能一不一樣」。
+  合併設定要**連遷移一起做**（寫入成功才刪舊 key），並讓所有指向它的選擇一起收斂。
+- **改 require 目標不是等價替換**：新模組需要什麼初始化，要沿著呼叫鏈往上找誰負責供給；
+  「以前不需要」正是最容易漏的那一格。
+- **回報未處理項目時每一項都要帶「是／不是 bug」與依據**：只列 file:line 與現象，讀的人得重跑一次你的思考。
+  如果自己也還沒判斷，那就是還沒查完，不該先報出來。
+- **明確要求的功能不能只留在未來清單**：交付前逐項對照使用者原始需求，不以 roadmap 文字冒充完成。
+- **錯誤必須浮上 UI**（狀態區＋連續失敗自動停止），只進 console 等於使用者看到永遠的「處理中…」。
+- **使用者仍在操作電腦時，不得移動滑鼠或搶前景焦點**：視窗定位一律走 CDP／應用程式自身的視窗 API。
+- **「全部改成暫存 user-data-dir」會連帶搬走模型與所有設定**：`<userData>/models`、`chatProviders`、
+  `agyPort` 全在那底下，一次改完會讓「需要資料才跑得動」的測試整批變紅（症狀各不相同：
+  轉錄說「模型尚未下載」、聊天說「供應商清單載入逾時」、反代說 `PORT_IN_USE`），
+  很容易誤判成剛改的功能壞了。**要隔離的是設定，不是資產**——模型用 junction 接回真的資料夾，
+  其餘缺什麼就在測試裡自己種一份。順帶：多實例測試（single-instance lock）的第二／第三份
+  **也要帶同一個 `--user-data-dir`**，否則各自拿到自己的鎖，測的東西根本沒發生。
+- **重畫整份清單會把「進行中的互動」洗掉**：待確認的刪除鈕、就地改名的輸入框都掛在 DOM 上，
+  只要有背景事件觸發一次 `renderList()` 就沒了。終端機的提示字元標記三秒會重送九次，
+  於是「跑著的終端機刪不掉」。狀態變動要**就地改那一格**，不要重建整列。
+- **同一份程式碼算出來的數字，不能用它自己的測試證明「算得對」**：`test-code-usage` 與
+  `e2e-code-usage` 全綠只證明「解析器照自己的規則跑」。要驗金額對不對，得**另外寫一支
+  完全不經那份程式碼的稽核**，自己重讀原始檔再對帳（`probe-code-usage-audit.js`）。
+  對外部系統要 probe，對「自己算的數字」也要。
+- **沉默的截斷比拋錯難查十倍**：本地整理的輸入上限 3000 字與 `promptOnce` 的 640 token 輸出上限
+  互相矛盾了很久，症狀只是「講的話少了一截」，沒有任何錯誤。凡是有 context／maxTokens 的地方，
+  **兩端的上限要放在一起算**，不要各自寫死。
+- **一組規則各自都對、合起來會錯**：字典每條各跑一次 `split/join`，`A→B` 之後 `B→C` 把 A 接力
+  改成 C。使用者只會覺得模型偶爾發瘋。**取代類的邏輯一律單趟掃描**，換過的位置不再參與比對。
+- **「檔案被別的程式抓著」之前先問「這個檔案為什麼這麼大」**：`EBUSY: unlink app.asar` 的真因是
+  `native/`（186MB 的 .NET 原始碼與 bin/obj）沒排除，asar 631MB 寫完立刻被即時掃描抓住。
+  照既有筆記繞路（打到 `%TEMP%`）只是拖時間，排掉之後 437MB 一次就過。
+- **提示詞裡的「輸出語言」會被模型當成翻譯指令**：語音輸入寫「輸出語言：繁體中文」，
+  使用者講英文時整段被翻成中文。要的是**選字習慣**就得明講「不要翻譯」。
+- **UI 的求助訊息會把人帶去修錯的東西**：「有 1 個模型還沒設單價：unknown」看起來是缺一筆單價，
+  真相是 Codex 子代理 rollout 把母 thread 的整份歷史重播一次，7.8 萬筆重複用量因為讀不到模型
+  才掉進 `unknown`。**先問「這一列本來就不該存在嗎」再去填值**——照著訊息填單價只會把一份
+  憑空多出來的花費算得更「正確」。抓法是看分佈：單一小時 16539 次請求不可能是真的。
+- **重複計算的證明要拿另一份檔案核銷，不是重跑同一支解析器**：把 fork 檔重播的每一筆
+  token_count 拿去母檔逐筆核銷（78016 筆、0 筆對不到），才同時證明「這些是重複的」與
+  「丟掉不會少算」。只斷言「unknown 不見了」的話，把真資料丟掉也照樣綠。
+- **「A 功能沒生效」通常不是 A 壞了，是 A 只活在管線的前半段**：個人字典明明有套、也寫進 prompt，
+  使用者還是覺得沒用——因為整理模型在後面把換好的專名改了回去，而那正好是輸出的最後一步。
+  **凡是「使用者的設定」與「模型的判斷」會碰頭的地方，先決定誰是權威，再讓那一方壓在最後**。
+  同一個判斷順帶救了兩件事：模型的反對意見從「丟掉」變成「扣分」（學錯的詞終於能自己退場），
+  prompt 從「全帶 60 條」變成「只帶這段用得到的」（本地 2048 context 省下一大塊）。
+- **「保守」不是永遠的美德，要看單位長度**：整理模型原本一律不准重寫整句——一句指令這樣對，
+  講了五分鐘的一段話就只是拿到一坨補了標點的逐字稿。**判準用長度不用開關**：多一個設定
+  就多一種「設錯了但看不出來」的失敗方式，而長度是免費又問不錯的訊號。
+- **原始碼裡可以躺著看不見的 NUL byte**：`text.js` 用 `\0` 當 key 分隔符（`` `${a}\0${b}` ``），
+  檔案因此是 binary，`file` 回 `data`、任何逐行工具與字串比對都對不上，編輯會莫名其妙失敗。
+  分隔符要用跳脫寫法（`\u0000`）不要直接把 byte 打進檔案。
+- **「缺很多資訊」要先量再補，不要憑感覺列清單**：系統監控總覽被回報缺硬體資訊時，
+  第一步是把 `probe.ps1` 手動跑一次看**實際吐出什麼**、再用 CDP 量出每個區塊有幾條規格、
+  幾條是破折號。量完才知道真正的缺口是「顯示器區塊 `specs: []` 整片空著」與
+  「GPU 有 nvidia-smi 時反而看不到其他顯示卡」——這兩個從程式碼掃一遍是看不出來的。
+  收尾也用同一支腳本量（60 → 118 條、4 條無值），才說得出「補完了」而不是「補了一些」。
+- **`$env:*` 在被 spawn 的子程序裡不一定存在**：`$env:firmware_type`（UEFI／Legacy）在互動式
+  主控台有值，被 Electron `spawn` 的 PowerShell 沒有——**手動跑 probe 一切正常、App 裡永遠空白**。
+  凡是「環境變數」來的值都要有一條不依賴環境的退路（這裡改推 `SecureBoot\State` 機碼）。
+  同一類的還有 `Win32_OperatingSystem.InstallDate`：欄位存在但值是空的，退回 Windows 目錄的建立時間。
+- **OEM 沒填的欄位會回「看起來像資料的字串」**：SMBIOS 的 `Default string`／`To be filled by O.E.M.`
+  原樣顯示，比留白更糟（使用者以為是我們讀錯）。清理要放在**解析層一處**，
+  不要在 UI 各處寫 `!== 'Default string'`——漏一處就露出來，而那一處通常是後來新增的欄位。
+- **UI 斷言查錯區塊會紅得很像功能壞了**：把「韌體模式」加在主機板區塊，斷言卻去系統區塊找，
+  於是看到一條 FAIL 附著一大段音效裝置的文字，第一直覺是去改 probe。
+  **診斷輸出要印出「查的是哪個容器的什麼」**，另外 `textContent` 會把 `<dt>` 跟 `<dd>` 直接黏起來
+  （「架構x64」不是「架構 x64」），標籤與值之間一律 `\s*`。
+- **可以拖的東西一律要 `user-select: none`**：CC 代理的供應商 tile 沿用側欄那套「直接搬 DOM」的
+  拖曳，按住往旁邊拉就把卡片上的文字整片反白——功能是對的，但看起來像壞掉。
+  修法不是改拖曳邏輯，是補 `user-select: none` ＋ `touch-action: none`（額度卡片一開始就有）。
+  **驗這條只能用 `Input.dispatchMouseEvent`**：合成的 PointerEvent 不會產生文字選取，
+  用 `dispatchEvent(new PointerEvent(...))` 寫的斷言是恆綠的假綠燈。
+- **打包產物「安靜壞掉」有兩種，症狀不一樣要分開認**：asar 錯位＝App 起得來、畫面在，
+  只有某幾支模組 `SyntaxError`（把 asar 裡那支抽出來 `sha256sum` 跟原始碼比對才看得出來）；
+  icudtl.dat 沒寫完＝完全開不了視窗，log 只有一行 `Invalid file descriptor to ICU data received`。
+  兩種都不是程式改壞了——**先驗產物再懷疑自己剛寫的那幾行**，重打一次（換一個乾淨的輸出資料夾）就好。
+
+## 2026-09-02 — 使用者指定的接法要先驗過，別直接照做
+
+使用者說 Command Code 走「OpenAI Chat Completions + `/provider/v1`」。實測發現
+`POST /provider/v1/messages` 回的是 **Anthropic 形狀**的 401（不存在的路徑回 404），
+錯誤 body 還會依協議換形狀 → 那家原生講 Anthropic，直連就好，不必經閘道。
+**照做會多接一層轉換**。判準：兩分鐘的探測 > 照抄一句需求。
+
+## 2026-09-02 — 一個函式被當兩件事用，收緊其中一件就會弄壞另一件
+
+`allowsCustomUrl()` 原本同時是「使用者能不能自己填 Base URL」與「這一筆實際打哪」
+（`baseUrlFor` 直接 `if (!allowsCustomUrl) return ''`）。要把它收成「只有自訂能填」時，
+內建直連那幾家會連 preset 表上的預設端點都拿不到——症狀是切過去之後 Claude Code 打到官方端點回 401。
+改法是把兩件事拆開。**改一個布林函式的語意之前，先看它所有的呼叫點在問什麼問題。**
+
+## 2026-09-02 — 只給一個總數的統計等於沒說
+
+用量統計原本只顯示總 token。實測本機 **97.5% 的 token 是 cache read**，
+$46,919 的花費裡 cache read 就佔 $32,819（70%）——使用者看到幾百億 token 只會覺得「算錯了」。
+拆成輸入／輸出／快取讀／快取寫之後才看得懂。
+**數字讓人驚訝時，先問「這個數字由什麼組成」，不是先懷疑算式。**
+
+## 2026-09-02 — 「大部分時候對」的公式最難抓
+
+`kvCacheMiB` 拿 `embedding_length ÷ head_count` 當 head_dim 算 KV 快取。這在多數模型上剛好對，
+**但 Qwen3 系列明寫 `attention.key_length = 256`，而 `embd/hc` 只有 128～160**——KV 被低估 1.6～2 倍，
+`gpu-layers` 就給太多，載入時 OOM，而使用者只看到「載入失敗」。
+公式在自己手上那幾顆模型上驗都會過；只有拿真檔案去比對「格式裡到底有沒有寫這一格」才抓得到。
+**規格裡明寫的欄位一律優先讀，推導只當缺欄位時的退路——而且退路不可以回 0**
+（回 0 等於宣稱「這東西不佔空間」，比估錯更糟）。
+
+## 2026-09-02 — 先問對面長什麼樣，再決定要不要自己寫
+
+「HF模型」原本規劃要自己寫多模型程序管理器（每顆模型一個 sidecar ＋ LRU）。
+動手前先寫了 `probe-hf-router.js` 實測 llama-server 的 router 模式，結果它全都有：
+自動發現模型、依請求路由、載入／卸載、`?reload=1` 重掃、同夾的 `mmproj-*.gguf` 自動掛上、
+kill 父程序子程序一起走。**三個原本要寫的功能變成零程式碼。**
+反過來說，如果它不照文件走，那退路是完全不同的架構——**那種分歧點要在第一步就問清楚，
+不是做到一半才發現**。判準：架構押在哪個假設上，那個假設就要最先驗。
+
+## 2026-09-02 — 官方的自動化只在「你沒設」的時候生效
+
+llama.cpp 的 `-fit on` 是預設值，會實際載一次模型量記憶體再決定 `-ngl/-ts/-ot`，
+但它**只調整使用者沒設的參數**。我們主動寫死 `gpu-layers`（用自己估的值）等於把那套默默關掉，
+還換成一個更差的估算。**「自己算」與「呼叫官方算」要先分清楚界線**：
+官方能量的（記憶體配置）就別自己估，估算只用在官方到不了的地方——
+下載前的預覽（檔案還不在本機）、官方失敗的退路、官方不管的策略（KV 檔位、投機解碼、執行緒）。
+
+## 2026-09-02 — 同一個值被兩個用途共用時，改一邊會靜靜弄壞另一邊
+
+`chat.readConfig()` 的 `modelId`：模型不在清單內時回空字串。看起來只是 UX（要不要退回第一顆），
+其實 `chat.send` 的安全守衛就靠 `!cfg.modelId` 擋下「拿清單外的模型名打過來」。
+我為了讓本機模型的選擇更順手改成「退回第一顆」，model allowlist 就靜靜失效了——
+是既有測試（[D] model allowlist）擋下來的。
+**改一個「取值」函式的 fallback 之前，先查有沒有人拿它的回傳值當守衛。**
+
+## 2026-09-02 — 測試隔離做對了會讓假綠燈變紅，那是好事
+
+`e2e-usage-cdp` 的「antigravity 有 4 個額度視窗」一直是綠的，因為那支測試沒有用暫存
+`--user-data-dir`，讀到的是使用者本機 `usage.json` 的快取。改成暫存資料夾（正確的隔離）之後，
+乾淨環境下 antigravity 走真上游回 401 → 0 個視窗 → 斷言必紅。
+**測試突然變紅時，先確認是「程式壞了」還是「測試終於誠實了」。**
+順手也修掉同一支的 hover 斷言：`sleep(250)` 固定時間在機器忙的時候會量到 transition 的中間狀態，
+改成輪詢重派 `mouseMoved` 直到量得到（＋`Page.bringToFront`——視窗還沒 show 出來時 Chromium 不更新 `:hover`）。
+
+## 2026-09-02 — 「按不下去的狀態顯示」不算功能
+
+執行環境分頁把 Vulkan／CUDA 兩顆列出來、標「已安裝／未安裝」，但**沒有安裝按鈕**。
+從程式碼看每一行都對，從畫面看使用者只能看著「未安裝」三個字乾瞪眼。
+
+**教訓**：列出一個「使用者會想改變的狀態」時，同一列就要給改變它的方法。
+「去設定頁下載」這種跨頁指引等於沒有——他人已經在這一頁了，就是為了裝它才來的。
+
+## 2026-09-02 — 把資訊藏在點擊後面，等於沒做
+
+探索頁原本是「搜到一列 → 按『看量化版本』展開 → 每個量化再各按一次『這台跑得動嗎』」。
+功能全都在，但要三層點擊才看得到 LM Studio 一眼就給的東西（README、各量化大小、跑不跑得動）。
+
+**教訓**：對照組（LM Studio）不是拿來抄版面的，是拿來數「同一個資訊要幾次點擊」的。
+順帶一提，一次全算出來反而更省：各量化共用同一份架構，檔頭只要抓一次。
+
+## 2026-09-02 — 包一層之後，原本的 CSS 收斂就失效了
+
+`custom-select.js` 把原生 `<select>` 搬到畫面外、外面包一層 `<span class="custom-select">`。
+`.hf-searchbar .select { flex: 0 0 auto }` 從此打在一個不佔位的元素上，
+隔壁的「搜尋」被擠成一條、文字直排疊到下拉上面。
+
+**教訓**：換掉一個元件的 DOM 結構時，要回頭搜「有誰用舊結構的選擇器在排版」。
+斷言要量**寬與高的關係**（`w > h`），只檢查「按鈕在不在」永遠是綠的。
+
+## 2026-09-02 — 「排查用的工具正常，正式路徑不正常」＝工具改變了現場
+
+風扇 sidecar 改成雙向管道之後，正式橋接只收到第一框就再也沒有資料；但我為了排查寫的
+probe 每 2 秒送一次心跳，**完全正常**。於是我花了好幾輪去比對「橋接和 probe 差在哪」——
+async callback？延遲 spawn？交接檔？全都不是。
+
+真正的原因是 `PipeOptions.Asynchronous` 沒帶：同一 handle 上的同步讀會擋住同步寫。
+而 probe 的心跳每次都讓 `ReadLine` 返回一次，**剛好打開了寫入的縫隙**。
+
+**教訓**：當「我的測試工具能跑、真實路徑不能跑」時，先問**工具本身做了什麼真實路徑沒做的事**，
+而不是急著找真實路徑做錯了什麼。工具多送的那顆心跳就是變因。
+回歸也要照這個修：只驗第一框會恆綠，要驗**連續好幾框**。
+
+## 2026-09-02 — 同一個坑記在 A 模組底下，做 B 模組時不會想到
+
+`main.js` 的 `registerSysmonIpc({ service })` 是逐一列舉的白名單，漏一個方法時 renderer 只拿到
+通用錯誤。這條在 CLAUDE.md 已經記過——但寫在 **AGY** 段落（`registerAgyIpc` 同樣的坑）。
+做風扇時 IPC 層、preload、單元測試全綠，打包版點下去才發現。
+
+**教訓**：地雷筆記是「做這個模組時會讀到」才有用。同一個結構性陷阱出現在第二個模組時，
+**在那個模組的段落也補一條**，不要只靠「我應該記得別處寫過」。
+
+## 2026-09-02 — 提權留下的殭屍程序會讓後續每一輪測試都紅
+
+提權跑的 sidecar 用一般 shell 的 `taskkill` 殺不掉（`Get-Process` 連 `Path` 都拿不到），
+要 `Invoke-CimMethod -MethodName Terminate`。它留著就佔住 PawnIO，
+新 sidecar 的 `Computer.Open()` 撞在一起 → 測試安靜地失敗。
+
+**教訓**：排查提權元件時，每一輪開始前先確認**上一輪真的死透了**。
+否則你會在修一個根本不存在的 bug——而且症狀每輪都不太一樣，更像是自己剛改壞的。
+
+## 2026-09-02 — CSS 變數打錯不會報錯，它只是「安靜地變成沒有」
+
+風扇控制改版時我照著記憶寫 `var(--surface)`／`var(--accent)`／`var(--border)`，
+但 `themes.css` 裡這三個名字**根本不存在**（正確的是 `--surface-glass`／`--surface-solid`、
+`--accent-primary`、`--border-color`）。結果：玻璃面板整片沒有背景、SVG 的 `fill` 變成**純黑**，
+而 console 一個字都沒印。上一版的風扇 CSS 其實已經有同樣的錯，只是比較不明顯，就這樣活了下來。
+
+**教訓**：寫新樣式前先 `grep -- '--名字:' themes.css` 確認變數真的存在。
+回歸要量 `getComputedStyle` 的**實際顏色值**（`rgba(0,0,0,0)` = 沒畫出來），
+斷言「這條規則在不在」是恆綠的。
+
+## 2026-09-02 — 用「假資料」驗 UI 這條路，在 contextBridge 面前是走不通的
+
+想把風扇頁畫滿再截圖，第一個念頭是用 CDP 把 `window.electronAPI.sysmon.fanList` 換掉。
+`contextBridge` 暴露的物件是 **frozen 且 non-configurable** 的：直接指定安靜失敗、
+`defineProperty` 直接拋、連 `document-start` 注入都來不及（preload 更早）。
+
+走得通的是**另外起一個殼**：`contextIsolation: false` 的 BrowserWindow 載 vite dev server 的
+renderer，preload 直接 `window.electronAPI = 假的`。不碰真硬體、不跳 UAC，還能量版面、截圖、
+模擬拖曳。**視窗要用 `showInactive()`**（使用者正在用電腦，不可以搶前景焦點）。
+
+**教訓**：要「餵假資料給 renderer」時，不要試圖鑽 contextBridge 的洞——換一個 preload 就好。
+
+## 2026-09-03 — 同一家供應商的格式不能只看一個預設
+
+OpenCode Go 與 Command Code 的官方文件都同時列出多種 API 路徑，而且會依模型分流。
+因此「上游格式」與「驗證格式」要分開存：前者決定 Claude Code 是否經閘道，後者只決定測試鈕送哪種最小請求；
+不可用一個全域協議假設蓋掉模型差異。測試鈕只回 HTTP 狀態與固定摘要，避免把上游錯誤本文或金鑰帶進 UI。

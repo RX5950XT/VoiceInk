@@ -191,14 +191,17 @@ async function readResponseText(response, maxBytes) {
 }
 
 async function fetchJson(url, options = {}) {
+  // 錯誤訊息裡的主詞。這支也被 ccswitch 的 CLI 版本檢查借去打 npm registry，
+  // 全部寫死「額度服務」會讓使用者看到牛頭不對馬嘴的訊息。
+  const label = typeof options.label === 'string' && options.label ? options.label : '額度服務'
   let parsedUrl
   try {
     parsedUrl = new URL(url)
   } catch {
-    throw new UsageError('INVALID_URL', '額度服務網址錯誤')
+    throw new UsageError('INVALID_URL', `${label}網址錯誤`)
   }
   if (parsedUrl.protocol !== 'https:') {
-    throw new UsageError('INVALID_URL', '額度服務只允許 HTTPS')
+    throw new UsageError('INVALID_URL', `${label}只允許 HTTPS`)
   }
 
   const fetchImpl = options.fetchImpl || globalThis.fetch
@@ -225,7 +228,7 @@ async function fetchJson(url, options = {}) {
         const status = Number(response?.status) || 0
         throw new UsageError(
           'HTTP_ERROR',
-          status ? `額度服務暫時無法使用（HTTP ${status}）` : '額度服務暫時無法使用',
+          status ? `${label}暫時無法使用（HTTP ${status}）` : `${label}暫時無法使用`,
           status
         )
       }
@@ -234,25 +237,29 @@ async function fetchJson(url, options = {}) {
       try {
         parsed = JSON.parse(text)
       } catch {
-        throw new UsageError('INVALID_RESPONSE', '額度服務回應格式錯誤')
+        throw new UsageError('INVALID_RESPONSE', `${label}回應格式錯誤`)
       }
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        throw new UsageError('INVALID_RESPONSE', '額度服務回應格式錯誤')
+      // 預設擋掉頂層陣列（額度那幾家的回應都是物件，收到陣列就是打錯端點了）。
+      // Hugging Face 的清單端點本來就回陣列，那幾支要自己指名 `allowArray`。
+      const shapeOk = parsed && typeof parsed === 'object'
+        && (options.allowArray ? true : !Array.isArray(parsed))
+      if (!shapeOk) {
+        throw new UsageError('INVALID_RESPONSE', `${label}回應格式錯誤`)
       }
       return parsed
     } catch (error) {
       const normalized = error?.name === 'AbortError'
-        ? new UsageError('TIMEOUT', '額度服務回應逾時')
+        ? new UsageError('TIMEOUT', `${label}回應逾時`)
         : error instanceof UsageError
           ? error
-          : new UsageError('NETWORK_ERROR', '無法連線額度服務')
+          : new UsageError('NETWORK_ERROR', `無法連線${label}`)
       lastError = normalized
       if (stopStatuses.has(normalized.status) || attempt === retries - 1) throw normalized
     } finally {
       clearTimeout(timer)
     }
   }
-  throw lastError || new UsageError('NETWORK_ERROR', '無法連線額度服務')
+  throw lastError || new UsageError('NETWORK_ERROR', `無法連線${label}`)
 }
 
 function publicError(error) {

@@ -9,12 +9,19 @@
 
 const { spawn } = require('child_process')
 const path = require('path')
+const os = require('os')
+const fs = require('fs')
 const http = require('http')
 
 const PORT = 9243
 const AGY_TEST_PORT = 18790
-const EXE = path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
-const EXPECTED_ORDER = ['chat', 'terminal', 'usage', 'agy', 'stt', 'translate', 'settings']
+// Windows 偶爾會有別的東西鎖住 dist/win-unpacked（打包失敗、防毒掃描中），
+// 這時可以打包到別的資料夾再用 VOICEINK_EXE 指過去，測試不必等鎖放掉
+const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
+// 暫存 user-data-dir：使用者開著的正式實例佔 single-instance lock，
+// 沒有自己的資料夾會被擋掉（second-instance 轉交後退出，CDP 等不到主視窗）
+const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-cdp-'))
+const EXPECTED_ORDER = ['chat', 'ccswitch', 'usage', 'agy', 'stt', 'translate', 'sysmon', 'hfmodels', 'settings']
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 function getJson(url) {
@@ -130,7 +137,7 @@ function rawRequest(pathname, { method = 'GET', headers = {}, body } = {}) {
 }
 
 async function main() {
-  const child = spawn(EXE, [`--remote-debugging-port=${PORT}`], { stdio: ['ignore', 'pipe', 'pipe'] })
+  const child = spawn(EXE, [`--remote-debugging-port=${PORT}`, `--user-data-dir=${USER_DATA_DIR}`], { stdio: ['ignore', 'pipe', 'pipe'] })
   let processLog = ''
   child.stdout.on('data', (chunk) => { processLog += chunk })
   child.stderr.on('data', (chunk) => { processLog += chunk })

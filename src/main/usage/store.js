@@ -15,9 +15,7 @@ let storePromise = null
 function cloneDefaults() {
   return {
     visibleProviders: [...DEFAULT_USAGE_SETTINGS.visibleProviders],
-    providerOrder: [...DEFAULT_USAGE_SETTINGS.providerOrder],
-    opencodeWeeklyReset: { ...DEFAULT_USAGE_SETTINGS.opencodeWeeklyReset },
-    opencodeMonthlyReset: { ...DEFAULT_USAGE_SETTINGS.opencodeMonthlyReset }
+    providerOrder: [...DEFAULT_USAGE_SETTINGS.providerOrder]
   }
 }
 
@@ -31,21 +29,6 @@ function uniqueProviders(raw) {
   })
 }
 
-function boundedInteger(value, min, max, fallback) {
-  const number = Number(value)
-  return Number.isInteger(number) && number >= min && number <= max
-    ? number
-    : fallback
-}
-
-function sanitizeReset(raw, fallback, dayMin, dayMax) {
-  return {
-    day: boundedInteger(raw?.day, dayMin, dayMax, fallback.day),
-    hour: boundedInteger(raw?.hour, 0, 23, fallback.hour),
-    minute: boundedInteger(raw?.minute, 0, 59, fallback.minute)
-  }
-}
-
 function sanitizeSettings(raw) {
   const defaults = cloneDefaults()
   const visible = uniqueProviders(raw?.visibleProviders)
@@ -55,19 +38,7 @@ function sanitizeSettings(raw) {
     : defaults.providerOrder
   return {
     visibleProviders: visible || defaults.visibleProviders,
-    providerOrder,
-    opencodeWeeklyReset: sanitizeReset(
-      raw?.opencodeWeeklyReset,
-      defaults.opencodeWeeklyReset,
-      0,
-      6
-    ),
-    opencodeMonthlyReset: sanitizeReset(
-      raw?.opencodeMonthlyReset,
-      defaults.opencodeMonthlyReset,
-      1,
-      31
-    )
+    providerOrder
   }
 }
 

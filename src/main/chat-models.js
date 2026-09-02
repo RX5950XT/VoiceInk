@@ -33,7 +33,8 @@ function modelsUrl(apiUrl) {
 
 /**
  * 從各種常見形狀撈出 model id。
- * OpenAI／OpenRouter 是 `{data:[{id}]}`；有些相容實作直接回陣列。
+ * OpenAI／OpenRouter 是 `{data:[{id}]}`；有些相容實作直接回陣列；
+ * ChatGPT Codex 後端回 `{models:[{slug}]}`。
  * @param {unknown} payload
  * @returns {string[]}
  */
@@ -46,7 +47,7 @@ function extractIds(payload) {
   for (const row of rows) {
     const id = typeof row === 'string'
       ? row
-      : (typeof row?.id === 'string' ? row.id : (typeof row?.name === 'string' ? row.name : ''))
+      : (typeof row?.id === 'string' ? row.id : (typeof row?.slug === 'string' ? row.slug : (typeof row?.name === 'string' ? row.name : '')))
     const trimmed = id.trim().slice(0, MAX_MODEL_ID)
     if (!trimmed || seen.has(trimmed)) continue
     seen.add(trimmed)
@@ -81,12 +82,15 @@ async function readBounded(response) {
 }
 
 /**
- * @param {{ apiUrl: string, apiKey: string, fetchImpl?: typeof fetch }} options
+ * `url` 是完整端點時直接用它（ccswitch 的 `modelsUrl` 連 query 參數都帶）；
+ * 只給 `apiUrl` 時沿用 `{apiUrl}/models`。`headers` 疊在最上層——
+ * 要自己帶 `x-api-key` 的家（Anthropic 形狀）會用它蓋掉 Bearer。
+ * @param {{ apiUrl?: string, url?: string, apiKey?: string, headers?: Record<string, string>, fetchImpl?: typeof fetch }} options
  * @returns {Promise<{ ok: true, models: string[] } | { ok: false, code: string, error: string }>}
  */
-async function fetchModels({ apiUrl, apiKey, fetchImpl }) {
-  const url = String(apiUrl || '').trim()
-  if (!/^https?:\/\//i.test(url)) {
+async function fetchModels({ apiUrl, url, apiKey, headers, fetchImpl }) {
+  const target = String(url || modelsUrl(apiUrl)).trim()
+  if (!/^https?:\/\//i.test(target)) {
     return { ok: false, code: 'BAD_URL', error: '這個供應商的 API URL 不正確' }
   }
 
@@ -95,13 +99,14 @@ async function fetchModels({ apiUrl, apiKey, fetchImpl }) {
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
 
   try {
-    const headers = { Accept: 'application/json' }
+    const base = { Accept: 'application/json' }
     const key = String(apiKey || '').trim()
-    if (key) headers.Authorization = `Bearer ${key}`
+    if (key) base.Authorization = `Bearer ${key}`
+    const requestHeaders = { ...base, ...headers }
 
-    const response = await impl(modelsUrl(url), {
+    const response = await impl(target, {
       method: 'GET',
-      headers,
+      headers: requestHeaders,
       signal: controller.signal
     })
 

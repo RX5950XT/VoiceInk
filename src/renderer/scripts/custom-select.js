@@ -325,6 +325,12 @@ function positionMenu(state) {
     ? Math.min(below, window.innerHeight - edge - height)
     : above
   const left = Math.min(Math.max(edge, rect.left), window.innerWidth - edge - width)
-  state.menu.style.left = `${Math.round(left)}px`
-  state.menu.style.top = `${Math.round(Math.max(edge, top))}px`
+  // 清單是 position: fixed，但 `.app-dialog` 的 backdrop-filter 會讓 dialog 變成
+  // fixed 子孫的定位基準——直接寫視窗座標，清單會整個位移一個 dialog 左上角（實測 +491,+286）。
+  // 先把 left/top 歸零量出實際原點再回推，不必知道是誰造成的 containing block。
+  state.menu.style.left = '0px'
+  state.menu.style.top = '0px'
+  const origin = state.menu.getBoundingClientRect()
+  state.menu.style.left = `${Math.round(left - origin.left)}px`
+  state.menu.style.top = `${Math.round(Math.max(edge, top) - origin.top)}px`
 }

@@ -20,7 +20,6 @@ import {
   warnNotReady,
   resolveCloudTranslate
 } from './model-picker.js'
-import { syncCustomSelects } from './custom-select.js'
 
 /** @type {{ value: string, label: string, ready: boolean }[]} */
 let modelOpts = []
@@ -104,6 +103,40 @@ let speakGen = 0
 let speakingPane = null
 
 /**
+ * 語言選擇：一排按鈕，按下就是選中。回傳物件的 `.value` 可讀可寫。
+ * @param {string} id 容器 id
+ * @param {string} initial 預設值
+ * @param {() => void} onChange 使用者按下（值真的變了）才觸發
+ * @returns {{ value: string }}
+ */
+function langPicker(id, initial, onChange) {
+  const root = document.getElementById(id)
+  const btns = /** @type {HTMLButtonElement[]} */ ([...(root?.querySelectorAll('.seg-btn') || [])])
+  let current = initial
+  const paint = () => btns.forEach((btn) => {
+    const on = btn.dataset.value === current
+    btn.classList.toggle('active', on)
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false')
+  })
+  btns.forEach((btn) => btn.addEventListener('click', () => {
+    if (current === btn.dataset.value) return
+    current = btn.dataset.value || current
+    paint()
+    onChange()
+  }))
+  paint()
+  return {
+    get value() { return current },
+    set value(v) {
+      // 沒有這個選項就維持原值（例如交換時偵測到韓文，但目標語言不提供韓文）
+      if (!btns.some((btn) => btn.dataset.value === v)) return
+      current = v
+      paint()
+    }
+  }
+}
+
+/**
  * 初始化
  */
 export function initTranslatePage() {
@@ -111,8 +144,8 @@ export function initTranslatePage() {
     banner: document.getElementById('translateBanner'),
     bannerText: document.getElementById('translateBannerText'),
     openSettingsBtn: document.getElementById('translateOpenSettingsBtn'),
-    sourceLang: document.getElementById('translateSourceLang'),
-    targetLang: document.getElementById('translateTargetLang'),
+    sourceLang: langPicker('translateSourceLang', 'auto', onLanguageChange),
+    targetLang: langPicker('translateTargetLang', 'zh-TW', onLanguageChange),
     swapBtn: document.getElementById('translateSwapBtn'),
     input: document.getElementById('translateInput'),
     output: document.getElementById('translateOutput'),
@@ -140,8 +173,6 @@ export function initTranslatePage() {
     await syncEngineForSettings()
   })
   el.swapBtn?.addEventListener('click', onSwap)
-  el.sourceLang?.addEventListener('change', onLanguageChange)
-  el.targetLang?.addEventListener('change', onLanguageChange)
   el.input?.addEventListener('input', onInputChange)
   el.copyInputBtn?.addEventListener('click', () => copyText(el.input.value, '已複製輸入'))
   el.copyOutputBtn?.addEventListener('click', () => copyText(el.output.value, '已複製譯文'))
@@ -505,7 +536,6 @@ function onSwap() {
   el.sourceLang.value = tgt
   el.targetLang.value =
     src === 'auto' ? detectScriptLang(el.input?.value || '') : src
-  syncCustomSelects()
   onLanguageChange()
 }
 

@@ -9,7 +9,10 @@
     "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "electron:pack": "vite build && electron-builder --win dir",
     "electron:build": "vite build && electron-builder",
-    "start": "electron ."
+    "start": "electron .",
+    "test:sysmon": "node scripts/test-sysmon.js",
+    "build:sensors": "dotnet publish native/sysmon-sensors -c Release -o resources/sensors",
+    "build:hook": "dotnet publish native/dictation-hook -c Release -o resources/hook"
   },
   "author": "",
   "license": "MIT",
@@ -29,7 +32,8 @@
     "node-edge-tts": "^1.2.10",
     "node-llama-cpp": "^3.19.0",
     "opencc-js": "^1.4.1",
-    "sherpa-onnx-node": "^1.13.4"
+    "sherpa-onnx-node": "^1.13.4",
+    "uiohook-napi": "^1.5.5"
   },
   "build": {
     "appId": "com.voiceink.app",
@@ -45,15 +49,20 @@
       "**/node_modules/sherpa-onnx-*/**",
       "**/node_modules/@node-llama-cpp/win-x64/**",
       "**/node_modules/@reflink/**",
-      "src/main/usage/read-windows-credential.ps1"
+      "**/node_modules/uiohook-napi/**",
+      "src/main/usage/read-windows-credential.ps1",
+      "src/main/sysmon/probe.ps1"
     ],
     "files": [
       "**/*",
       "!**/node_modules/@node-llama-cpp/win-x64-cuda-ext/**",
       "!**/node_modules/@node-llama-cpp/win-arm64/**",
       "!**/node_modules/node-llama-cpp/llama/**",
+      "**/node_modules/node-llama-cpp/llama/binariesGithubRelease.json",
       "!dist/**",
-      "!tasks/**"
+      "!dist-*/**",
+      "!tasks/**",
+      "!native/**"
     ],
     "win": {
       "target": "nsis",
@@ -62,6 +71,22 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
-    }
+    },
+    "extraResources": [
+      {
+        "from": "resources/sensors",
+        "to": "sensors",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/hook",
+        "to": "hook",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ]
   }
 }

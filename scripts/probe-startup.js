@@ -7,7 +7,9 @@ const path = require('path')
 const http = require('http')
 
 const PORT = 9247
-const EXE = path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
+// Windows 偶爾會有別的東西鎖住 dist/win-unpacked（打包失敗、防毒掃描中），
+// 這時可以打包到別的資料夾再用 VOICEINK_EXE 指過去，測試不必等鎖放掉
+const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
 
 function getJson(url) {
   return new Promise((resolve, reject) => {
@@ -49,7 +51,8 @@ async function main() {
 
   try {
     const { pages, ms: cdpMs } = await waitTargets(30000)
-    const mainPage = pages.find((p) => /index\.html|VoiceInk/i.test(p.url + p.title)) || pages[0]
+    // 只認 index.html（指示器視窗的路徑也含 "VoiceInk"）
+    const mainPage = pages.find((p) => /index\.html/i.test(p.url))
     const WebSocket = globalThis.WebSocket
     const ws = new WebSocket(mainPage.webSocketDebuggerUrl)
     await new Promise((res, rej) => {

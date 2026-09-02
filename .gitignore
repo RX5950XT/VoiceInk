@@ -4,6 +4,8 @@ node_modules/
 # Build outputs
 dist/
 dist-electron/
+# dist/win-unpacked 被別的程式鎖住時，會暫時打包到這裡（見 CONTEXT.md）
+dist-preview/
 out/
 build/
 release/
@@ -45,3 +47,21 @@ coverage/
 *.tmp
 *.temp
 .cache/
+
+# 系統監控的感測器 sidecar（C# 建置產物，36MB）
+# 打包前跑 `npm run build:sensors` 產生；不進版控
+native/sysmon-sensors/bin/
+native/sysmon-sensors/obj/
+resources/sensors/
+
+# 語音輸入的熱鍵 sidecar（C# 建置產物，10MB）
+# 打包前跑 `npm run build:hook` 產生；不進版控
+native/dictation-hook/bin/
+native/dictation-hook/obj/
+resources/hook/
+
+# 指示器外觀檢查的截圖（scripts/probe-dictation-hud.js）
+.tmp-hud/
+
+# 打包用的臨時輸出（dist/win-unpacked 被別的程式鎖住時的替代路徑）
+dist-hud/

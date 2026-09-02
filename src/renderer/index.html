@@ -27,13 +27,13 @@
           <span class="logo-text">VoiceInk</span>
         </div>
         <nav class="header-nav">
-          <button class="nav-tab active" data-page="chat" title="聊天" aria-label="聊天" aria-current="page">
+          <button class="nav-tab active" data-page="chat" title="聊天與終端機" aria-label="聊天與終端機" aria-current="page">
             <span class="nav-icon">💬</span>
             <span class="nav-text">聊天</span>
           </button>
-          <button class="nav-tab" data-page="terminal" title="終端機" aria-label="終端機">
-            <span class="nav-icon">▸_</span>
-            <span class="nav-text">終端機</span>
+          <button class="nav-tab" data-page="ccswitch" title="CC代理" aria-label="CC代理">
+            <span class="nav-icon">🧩</span>
+            <span class="nav-text">CC代理</span>
           </button>
           <button class="nav-tab" data-page="usage" title="額度" aria-label="額度">
             <span class="nav-icon">📊</span>
@@ -50,6 +50,14 @@
           <button class="nav-tab" data-page="translate" title="翻譯與 TTS" aria-label="翻譯與 TTS">
             <span class="nav-icon">🔤</span>
             <span class="nav-text">翻譯與 TTS</span>
+          </button>
+          <button class="nav-tab" data-page="sysmon" title="系統監控" aria-label="系統監控">
+            <span class="nav-icon">🖥️</span>
+            <span class="nav-text">系統監控</span>
+          </button>
+          <button class="nav-tab" data-page="hfmodels" title="HF模型" aria-label="HF模型">
+            <span class="nav-icon">🧠</span>
+            <span class="nav-text">HF模型</span>
           </button>
           <button class="nav-tab" data-page="settings" title="設定" aria-label="設定">
             <span class="nav-icon">⚙️</span>
@@ -69,24 +77,33 @@
 
         <!-- 內容頁面 -->
         <main class="content">
-          <!-- 聊天頁面 -->
+          <!-- 聊天＋終端機頁面：側欄上半是對話、下半是終端機，主區跟著選中的項目切換 -->
           <section id="page-chat" class="page active">
             <div class="chat-layout">
               <aside class="chat-sidebar">
-                <button type="button" id="chatNewBtn" class="btn btn-primary btn-sm chat-new-btn">
-                  ＋ 新對話
-                </button>
-                <input
-                  type="search"
-                  id="chatSearchInput"
-                  class="input input-sm chat-search"
-                  placeholder="搜尋對話…"
-                  aria-label="搜尋對話"
-                />
-                <div id="chatList" class="chat-list"></div>
+                <section class="sidebar-half">
+                  <button type="button" id="chatNewBtn" class="btn btn-primary btn-sm chat-new-btn">
+                    ＋ 新對話
+                  </button>
+                  <input
+                    type="search"
+                    id="chatSearchInput"
+                    class="input input-sm chat-search"
+                    placeholder="搜尋對話…"
+                    aria-label="搜尋對話"
+                  />
+                  <div id="chatList" class="chat-list" aria-label="對話清單"></div>
+                </section>
+                <section class="sidebar-half sidebar-half-term">
+                  <button type="button" id="termNewBtn" class="btn btn-primary btn-sm chat-new-btn">
+                    ＋ 新終端機
+                  </button>
+                  <div id="termList" class="chat-list term-list" aria-label="終端機清單"></div>
+                </section>
               </aside>
 
               <div class="chat-main">
+              <div class="chat-main" id="chatMain">
                 <div id="chatBanner" class="translate-banner hidden" role="status">
                   <span id="chatBannerText">尚未設定聊天 API</span>
                   <button type="button" id="chatOpenSettingsBtn" class="btn btn-secondary btn-sm">
@@ -154,20 +171,9 @@
                 </div>
                 <p id="chatError" class="live-error hidden" role="alert"></p>
               </div>
-            </div>
-          </section>
 
-          <!-- 終端機 -->
-          <section id="page-terminal" class="page">
-            <div class="chat-layout term-layout">
-              <aside class="chat-sidebar term-sidebar">
-                <button type="button" id="termNewBtn" class="btn btn-primary btn-sm chat-new-btn">
-                  ＋ 新終端機
-                </button>
-                <div id="termList" class="chat-list term-list"></div>
-              </aside>
-
-              <div class="term-main">
+              <!-- 終端機主區：跟聊天共用這一頁，點側欄的終端機項目才顯示 -->
+              <div class="term-main hidden" id="termMain">
                 <p id="termError" class="live-error hidden" role="alert"></p>
                 <div id="termEmpty" class="term-empty">
                   <h2>終端機</h2>
@@ -181,6 +187,468 @@
             </div>
           </section>
 
+          <!-- HF模型：在 Hugging Face 上搜模型 → 下載 → 一鍵載入 → 直接在聊天用 -->
+          <section id="page-hfmodels" class="page">
+            <div class="hf-shell">
+              <header class="page-header page-header-row">
+                <div class="page-header-text">
+                  <p class="hf-eyebrow">本機大型語言模型</p>
+                  <h1>HF模型</h1>
+                  <p class="page-desc">
+                    搜尋 Hugging Face 上的 GGUF 模型、下載後一鍵載入，載好的會直接出現在聊天的模型選單裡。
+                    推論引擎是 llama.cpp，參數依這台機器自動決定，也可以自己改。
+                  </p>
+                </div>
+                <div class="hf-runtime-chip" id="hfRuntimeChip" role="status" aria-live="polite">
+                  <span class="hf-dot" id="hfRuntimeDot" aria-hidden="true"></span>
+                  <span id="hfRuntimeText">檢查中…</span>
+                  <button type="button" id="hfRuntimeToggle" class="btn btn-secondary btn-sm">啟動</button>
+                </div>
+              </header>
+
+              <p id="hfError" class="live-error hidden" role="alert"></p>
+
+              <div class="subtabs" id="hfSubtabs" role="tablist" aria-label="本機模型">
+                <button type="button" class="subtab active" data-subtab="discover" role="tab" aria-selected="true">
+                  探索
+                </button>
+                <button type="button" class="subtab" data-subtab="library" role="tab" aria-selected="false">
+                  模型庫
+                </button>
+                <button type="button" class="subtab" data-subtab="runtime" role="tab" aria-selected="false">
+                  執行環境
+                </button>
+              </div>
+
+              <!-- 探索：搜 HF（左邊清單、右邊模型卡，比照 LM Studio） -->
+              <div class="subtab-panel active" id="hf-discover" data-subtab="discover" role="tabpanel">
+                <section class="hf-panel hf-discover">
+                  <div class="hf-searchbar">
+                    <input type="search" id="hfSearchInput" class="input" placeholder="搜尋模型，或直接貼上 owner/repo"
+                           aria-label="搜尋 Hugging Face 模型" autocomplete="off" spellcheck="false">
+                    <select id="hfSearchSort" class="select" aria-label="排序方式">
+                      <option value="downloads">下載數</option>
+                      <option value="likes">讚數</option>
+                      <option value="lastModified">最近更新</option>
+                    </select>
+                    <button type="button" id="hfSearchBtn" class="btn btn-primary">搜尋</button>
+                  </div>
+                  <div class="hf-split">
+                    <div id="hfSearchResults" class="hf-results" role="listbox"
+                         aria-label="搜尋結果" aria-live="polite"></div>
+                    <div id="hfDetail" class="hf-detail" aria-live="polite">
+                      <p class="setting-hint">
+                        點左邊任一顆模型，這裡會顯示它的模型卡（README）與所有量化版本的大小，
+                        每個版本旁邊都標「這台跑不跑得動」——那是先抓檔頭前 1MB 算出來的，不必先下載幾 GB。
+                      </p>
+                    </div>
+                  </div>
+                </section>
+              </div>
+
+              <!-- 模型庫：本機已安裝 -->
+              <div class="subtab-panel" id="hf-library" data-subtab="library" role="tabpanel">
+                <section class="hf-panel">
+                  <div class="hf-library-actions" role="group" aria-label="模型庫操作">
+                    <button type="button" id="hfRescanBtn" class="btn btn-secondary">重新掃描資料夾</button>
+                    <button type="button" id="hfOpenFolderBtn" class="btn btn-secondary">開啟模型資料夾</button>
+                    <button type="button" id="hfImportBtn" class="btn btn-secondary">匯入 .gguf</button>
+                  </div>
+                  <p class="setting-hint">
+                    也可以自己把 <code>.gguf</code> 拖進模型資料夾（一顆模型一個子資料夾，
+                    多模態的 <code>mmproj-*.gguf</code> 放同一夾），再按「重新掃描資料夾」。
+                  </p>
+                  <div id="hfLibraryList" class="hf-models" aria-live="polite"></div>
+                </section>
+              </div>
+
+              <!-- 執行環境：router 狀態、硬體、設定 -->
+              <div class="subtab-panel" id="hf-runtime" data-subtab="runtime" role="tabpanel">
+                <section class="hf-panel">
+                  <h2>這台機器</h2>
+                  <dl class="hf-specs" id="hfHardwareSpecs"></dl>
+                </section>
+
+                <section class="hf-panel">
+                  <h2>推論引擎</h2>
+                  <p class="setting-hint">
+                    Vulkan 版任何顯示卡都能跑；NVIDIA 卡上 CUDA 版的 prompt 處理與 MoE offload 明顯更快。
+                  </p>
+                  <div class="hf-library-actions">
+                    <button type="button" id="hfAutoInstallBtn" class="btn btn-primary">
+                      一鍵安裝最佳配置
+                    </button>
+                    <span id="hfAutoInstallHint" class="setting-hint" role="status"></span>
+                  </div>
+                  <div id="hfRuntimeList" class="hf-runtime-list"></div>
+                </section>
+
+                <section class="hf-panel">
+                  <h2>設定</h2>
+                  <div class="hf-setting-row">
+                    <div class="hf-setting-text">
+                      <span class="hf-setting-label">模型資料夾</span>
+                      <span class="hf-setting-value" id="hfModelsDirText">—</span>
+                      <span class="setting-hint">換資料夾不會搬移舊模型，舊的留在原地。</span>
+                    </div>
+                    <button type="button" id="hfChooseDirBtn" class="btn btn-secondary btn-sm">變更</button>
+                  </div>
+                  <div class="hf-setting-row">
+                    <div class="hf-setting-text">
+                      <span class="hf-setting-label">同時載入模型數上限</span>
+                      <span class="setting-hint">超過就會把最久沒用的那顆卸載。</span>
+                    </div>
+                    <input type="number" id="hfModelsMax" class="input hf-num" min="1" max="8" step="1"
+                           aria-label="同時載入模型數上限">
+                  </div>
+                  <div class="hf-setting-row">
+                    <div class="hf-setting-text">
+                      <span class="hf-setting-label">Hugging Face Token</span>
+                      <span class="setting-hint">
+                        只有需要授權（gated）的 repo 才要填。存起來之後不會再顯示出來。
+                      </span>
+                    </div>
+                    <div class="hf-token-row">
+                      <input type="password" id="hfTokenInput" class="input" placeholder="hf_…"
+                             autocomplete="off" aria-label="Hugging Face Token">
+                      <button type="button" id="hfTokenSaveBtn" class="btn btn-secondary btn-sm">儲存</button>
+                    </div>
+                  </div>
+                </section>
+              </div>
+            </div>
+          </section>
+
+          <!-- Claude Code：供應商切換／MCP／CLI 版本 -->
+          <section id="page-ccswitch" class="page">
+            <div class="cc-shell">
+              <header class="page-header page-header-row">
+                <div class="page-header-text">
+                  <p class="cc-eyebrow">Claude Code 工作台</p>
+                  <h1>CC代理</h1>
+                  <p class="page-desc">
+                    切換 Claude Code 走哪一家模型、管理 MCP 伺服器、看 CLI 有沒有新版。
+                    只會改 <code class="cc-code-inline">~/.claude/settings.json</code> 的 env
+                    與 <code class="cc-code-inline">~/.claude.json</code> 的 mcpServers，寫入前自動備份。
+                  </p>
+                </div>
+                <div class="cc-actions" role="group" aria-label="操作">
+                  <button type="button" id="ccRefreshBtn" class="btn btn-secondary btn-sm">重新整理</button>
+                </div>
+              </header>
+
+              <p id="ccError" class="live-error hidden" role="alert"></p>
+              <p id="ccStatus" class="cc-status hidden" role="status" aria-live="polite"></p>
+
+              <div class="subtabs" id="ccSubtabs" role="tablist" aria-label="Claude Code 設定">
+                <button type="button" class="subtab active" data-subtab="providers" role="tab" aria-selected="true">
+                  供應商
+                </button>
+                <button type="button" class="subtab" data-subtab="mcp" role="tab" aria-selected="false">
+                  MCP
+                </button>
+                <button type="button" class="subtab" data-subtab="version" role="tab" aria-selected="false">
+                  CLI 版本
+                </button>
+              </div>
+
+              <!-- 供應商 -->
+              <div class="subtab-panel active" id="cc-providers" data-subtab="providers" role="tabpanel">
+                <section class="cc-panel" aria-labelledby="ccProviderTitle">
+                  <div class="cc-panel-head">
+                    <h2 id="ccProviderTitle" class="cc-panel-title">供應商</h2>
+                  </div>
+                  <p id="ccLivePath" class="cc-panel-desc"></p>
+                  <div id="ccGateway" class="cc-gateway">
+                    <button type="button" id="ccGatewayToggleBtn" class="cc-gateway-switch" role="switch" aria-checked="false">
+                      <span class="cc-gateway-switch-track" aria-hidden="true"><span></span></span>
+                      <span>轉換閘道</span>
+                    </button>
+                    <span id="ccGatewayText" class="cc-gateway-text" role="status" aria-live="polite"></span>
+                  </div>
+                  <div id="ccProviderList" class="cc-tiles" role="list"></div>
+                </section>
+              </div>
+
+              <!-- MCP -->
+              <div class="subtab-panel" id="cc-mcp" data-subtab="mcp" role="tabpanel">
+                <section class="cc-panel" aria-labelledby="ccMcpTitle">
+                  <div class="cc-panel-head">
+                    <h2 id="ccMcpTitle" class="cc-panel-title">MCP 伺服器</h2>
+                    <button type="button" id="ccAddMcpBtn" class="btn btn-primary btn-sm">新增伺服器</button>
+                  </div>
+                  <p id="ccMcpPath" class="cc-panel-desc"></p>
+                  <div id="ccMcpList" class="cc-list" role="list"></div>
+                  <p id="ccMcpEmpty" class="cc-empty hidden">
+                    還沒有 MCP 伺服器。按「新增伺服器」從範本挑一個，或自己貼一份設定。
+                  </p>
+                </section>
+              </div>
+
+              <!-- CLI 版本 -->
+              <div class="subtab-panel" id="cc-version" data-subtab="version" role="tabpanel">
+                <section class="cc-panel" aria-labelledby="ccVersionTitle">
+                  <div class="cc-panel-head">
+                    <h2 id="ccVersionTitle" class="cc-panel-title">CLI 版本</h2>
+                    <button type="button" id="ccCheckVersionBtn" class="btn btn-secondary btn-sm">重新檢查</button>
+                  </div>
+                  <p class="cc-panel-desc">按「更新」會在終端機分頁開一個工作階段執行 npm 指令，過程看得到。</p>
+                  <div id="ccVersionList" class="cc-list" role="list"></div>
+                </section>
+              </div>
+            </div>
+          </section>
+
+          <!-- 系統監控 -->
+          <section id="page-sysmon" class="page">
+            <div class="sysmon-shell">
+              <header class="sysmon-header">
+                <div class="sysmon-heading">
+                  <p class="sysmon-eyebrow">本機硬體與資源</p>
+                  <h1>系統監控</h1>
+                  <p class="page-desc">
+                    整機規格、即時負載、完整處理程序清單與壓力測試。只有停在這一頁時才會取樣。
+                  </p>
+                </div>
+                <div class="sysmon-actions" role="group" aria-label="系統監控操作">
+                  <label class="sysmon-interval">
+                    <span>更新頻率</span>
+                    <select id="sysmonInterval" class="select" aria-label="取樣間隔">
+                      <option value="fast">1 秒</option>
+                      <option value="normal" selected>2 秒</option>
+                      <option value="slow">5 秒</option>
+                    </select>
+                  </label>
+                </div>
+              </header>
+
+              <p id="sysmonError" class="live-error hidden" role="alert"></p>
+              <!-- 完整感測器一律進頁自動啟用；只有被擋下來時才需要那顆重試鈕 -->
+              <p id="sysmonSensorNote" class="sysmon-note hidden" role="status">
+                <span id="sysmonSensorNoteText"></span>
+                <button type="button" id="sysmonSensorsBtn" class="btn btn-secondary btn-sm hidden">
+                  啟用完整感測器
+                </button>
+                <button type="button" id="sysmonPawnIoBtn" class="btn btn-secondary btn-sm hidden">
+                  自動安裝 PawnIO 驅動
+                </button>
+                <button type="button" id="sysmonPawnIoPageBtn" class="btn btn-secondary btn-sm hidden">
+                  開啟 PawnIO 下載頁
+                </button>
+              </p>
+
+              <nav class="sysmon-tabs" id="sysmonTabs" role="tablist" aria-label="系統監控子分頁">
+                <button type="button" class="sysmon-tab active" data-subtab="overview" role="tab"
+                  aria-selected="true" aria-controls="sysmon-overview">總覽</button>
+                <button type="button" class="sysmon-tab" data-subtab="processes" role="tab"
+                  aria-selected="false" aria-controls="sysmon-processes">處理程序</button>
+                <button type="button" class="sysmon-tab" data-subtab="stress" role="tab"
+                  aria-selected="false" aria-controls="sysmon-stress">壓力測試</button>
+                <button type="button" class="sysmon-tab" data-subtab="fans" role="tab"
+                  aria-selected="false" aria-controls="sysmon-fans">風扇控制</button>
+              </nav>
+
+              <!--
+                總覽：即時負載與硬體規格合在同一頁，漸進式揭露。
+                收起時每一塊只有「大數字＋進度條＋歷史曲線」，展開才出現視覺化明細、
+                規格表與感測器讀數；同性質的長清單（每核心、每條記憶體、每顆碟）再包一層摺疊。
+              -->
+              <div id="sysmon-overview" class="sysmon-panel active" role="tabpanel">
+                <div id="sysmonBlocks" class="sysmon-blocks"></div>
+              </div>
+
+              <!-- 處理程序：虛擬捲動的完整清單 -->
+              <div id="sysmon-processes" class="sysmon-panel" role="tabpanel">
+                <div class="sysmon-proc-bar">
+                  <input id="sysmonSearch" class="input sysmon-search" type="search"
+                    placeholder="搜尋名稱或 PID" aria-label="搜尋處理程序" autocomplete="off" />
+                  <span id="sysmonProcCount" class="sysmon-proc-count" role="status" aria-live="polite"></span>
+                  <span class="sysmon-proc-spacer"></span>
+                  <button type="button" id="sysmonKillBtn" class="btn btn-secondary btn-sm sysmon-danger-btn" disabled>
+                    強制結束工作
+                  </button>
+                </div>
+                <div class="sysmon-table" role="table" aria-label="處理程序清單">
+                  <div class="sysmon-thead" id="sysmonHead" role="row"></div>
+                  <div class="sysmon-tbody" id="sysmonBody" tabindex="0" role="rowgroup">
+                    <div class="sysmon-spacer" id="sysmonSpacer"></div>
+                    <div class="sysmon-rows" id="sysmonRows"></div>
+                  </div>
+                </div>
+                <p id="sysmonDetail" class="sysmon-detail" role="status" aria-live="polite"></p>
+                <p class="sysmon-detail sysmon-proc-note">VRAM 欄是 Windows 記帳的「配置量」：桌面視窗管理員（dwm）會刻意預留大塊 VRAM，
+                  工作管理員顯示的也是同一套數字；實際駐留量請看總覽頁的 GPU 讀數。</p>
+              </div>
+
+              <!-- 壓力測試：CPU／GPU／記憶體／磁碟四項，上方一條即時負載與溫度儀錶 -->
+              <div id="sysmon-stress" class="sysmon-panel" role="tabpanel">
+                <div class="sysmon-stress-gaugeboard" role="status" aria-live="off"
+                  aria-label="壓力測試即時負載與溫度">
+                  <section class="sysmon-gauge-group">
+                    <h3>CPU</h3>
+                    <div id="sysmonStressCpu" class="sysmon-gauges sysmon-gauges-cpu"></div>
+                  </section>
+                  <section class="sysmon-gauge-group">
+                    <h3>GPU</h3>
+                    <div id="sysmonStressGpu" class="sysmon-gauges sysmon-gauges-gpu"></div>
+                  </section>
+                  <section class="sysmon-gauge-group">
+                    <h3>記憶體與硬碟</h3>
+                    <div id="sysmonStressDisks" class="sysmon-gauges sysmon-gauges-disk"></div>
+                  </section>
+                </div>
+
+                <div class="sysmon-stress-grid">
+                  <section class="sysmon-stress-card">
+                    <h2>CPU 壓力測試</h2>
+                    <p class="sysmon-stress-desc">
+                      每條執行緒開一個工作緒跑純運算，把核心佔滿；預設就是這台機器的全部邏輯核心。
+                      上方儀錶會即時顯示負載與溫度。預設 5 分鐘自動停止，長時間滿載會讓溫度明顯上升。
+                    </p>
+                    <div class="sysmon-stress-row">
+                      <label for="sysmonCpuThreads">執行緒數</label>
+                      <input id="sysmonCpuThreads" type="range" min="1" max="64" step="1" value="1" />
+                      <output id="sysmonCpuThreadsOut">1</output>
+                    </div>
+                    <div class="sysmon-stress-actions">
+                      <button type="button" id="sysmonCpuStressStart" class="btn btn-primary btn-sm">開始</button>
+                      <button type="button" id="sysmonCpuStressStop" class="btn btn-secondary btn-sm" disabled>停止</button>
+                      <span id="sysmonCpuStressStat" class="sysmon-stress-stat" role="status" aria-live="polite"></span>
+                    </div>
+                  </section>
+
+                  <section class="sysmon-stress-card">
+                    <h2>GPU 壓力測試</h2>
+                    <p class="sysmon-stress-desc">
+                      在 1080p 的離屏畫面上跑重量級著色器，一批連畫多次、畫完立刻排下一批，
+                      把 GPU 佔滿；另可配置 VRAM。<strong>跑起來畫面會明顯卡頓，這是正常的</strong>
+                      （負載是在同一個程序裡跑的）。預設 5 分鐘自動停止，極端強度可能觸發
+                      驅動重置（畫面閃一下後自動復原）。
+                    </p>
+                    <div class="sysmon-stress-row">
+                      <label for="sysmonGpuLoad">負載強度</label>
+                      <input id="sysmonGpuLoad" type="range" min="1" max="5" step="1" value="3" />
+                      <output id="sysmonGpuLoadOut">3</output>
+                    </div>
+                    <div class="sysmon-stress-row">
+                      <label for="sysmonVram">VRAM 配置</label>
+                      <input id="sysmonVram" type="range" min="0" max="8192" step="256" value="0" />
+                      <output id="sysmonVramOut">0 MB</output>
+                    </div>
+                    <div class="sysmon-stress-actions">
+                      <button type="button" id="sysmonStressStart" class="btn btn-primary btn-sm">開始</button>
+                      <button type="button" id="sysmonStressStop" class="btn btn-secondary btn-sm" disabled>停止</button>
+                      <span id="sysmonStressStat" class="sysmon-stress-stat" role="status" aria-live="polite"></span>
+                    </div>
+                    <!--
+                      這張畫布只是 WebGL context 的載體，永遠不顯示：負載畫在 1920×1080 的
+                      離屏 framebuffer 上。畫到畫布本身的話每一批都要跟合成器與 swap chain
+                      打交道，量到的 GPU 使用率會隨著視窗有沒有被遮住在 3%～100% 之間跳。
+                    -->
+                    <canvas id="sysmonStressCanvas" class="sysmon-stress-canvas" width="1" height="1"
+                      aria-hidden="true" hidden></canvas>
+                  </section>
+
+                  <section class="sysmon-stress-card">
+                    <h2>記憶體壓力測試</h2>
+                    <p class="sysmon-stress-desc">
+                      配置並持續寫入指定容量，看記憶體在高佔用下的表現。預設就放在目前吃得下的最大值
+                      （可用量的七成），再多就是在測分頁交換而不是記憶體。停止就立刻釋放。
+                    </p>
+                    <div class="sysmon-stress-row">
+                      <label for="sysmonMemSize">配置容量</label>
+                      <input id="sysmonMemSize" type="range" min="1" max="64" step="1" value="4" />
+                      <output id="sysmonMemSizeOut">4 GB</output>
+                    </div>
+                    <div class="sysmon-stress-actions">
+                      <button type="button" id="sysmonMemStressStart" class="btn btn-primary btn-sm">開始</button>
+                      <button type="button" id="sysmonMemStressStop" class="btn btn-secondary btn-sm" disabled>停止</button>
+                      <span id="sysmonMemStressStat" class="sysmon-stress-stat" role="status" aria-live="polite"></span>
+                    </div>
+                  </section>
+
+                  <section class="sysmon-stress-card">
+                    <h2>磁碟測速</h2>
+                    <p class="sysmon-stress-desc">
+                      序列讀寫。選要測哪一顆硬碟（磁碟代號），測試檔由程式自己建在該碟根目錄、
+                      跑完（或中途取消）都會自動刪除，不會留下任何東西。
+                      寫入值有 fsync 是實際落盤速度；讀取值含系統快取，只能當同一台機器上的相對參考。
+                    </p>
+                    <div class="sysmon-stress-row">
+                      <label for="sysmonBenchDisk">測試位置</label>
+                      <select id="sysmonBenchDisk" class="select">
+                        <option value="">偵測中…</option>
+                      </select>
+                    </div>
+                    <div class="sysmon-stress-row">
+                      <label for="sysmonBenchSize">測試檔大小</label>
+                      <select id="sysmonBenchSize" class="select">
+                        <option value="256">256 MB</option>
+                        <option value="1024" selected>1 GB</option>
+                        <option value="4096">4 GB</option>
+                      </select>
+                    </div>
+                    <div class="sysmon-stress-actions">
+                      <button type="button" id="sysmonBenchStart" class="btn btn-primary btn-sm">開始測速</button>
+                      <button type="button" id="sysmonBenchStop" class="btn btn-secondary btn-sm" disabled>取消</button>
+                    </div>
+                    <div id="sysmonBenchResult" class="sysmon-bench-result" role="status" aria-live="polite"></div>
+                  </section>
+                </div>
+              </div>
+
+              <!--
+                風扇控制：左邊是通用機殼示意圖（晶片給不出實體位置，所以是槽位＋使用者指派，
+                配一顆「識別」按鈕讓人用聽的認），右邊是可拖點的轉速曲線。
+                內容全部由 sysmon-fans.js 產生。
+              -->
+              <div id="sysmon-fans" class="sysmon-panel" role="tabpanel">
+                <div class="fan-bar">
+                  <label class="fan-switch">
+                    <input type="checkbox" id="fanEnabled" />
+                    <span class="fan-switch-track" aria-hidden="true"></span>
+                    <span class="fan-switch-text">接管風扇</span>
+                  </label>
+                  <span id="fanStatus" class="fan-status" role="status" aria-live="polite"></span>
+                  <span class="fan-bar-spacer"></span>
+                  <button type="button" id="fanTaskBtn" class="btn btn-secondary btn-sm" hidden>建立排程工作</button>
+                  <button type="button" id="fanResetBtn" class="btn btn-secondary btn-sm">全部還原 BIOS</button>
+                </div>
+                <div id="fanNotices" class="fan-notices"></div>
+                <div class="fan-layout">
+                  <section class="fan-card fan-chassis-card">
+                    <header class="fan-card-head">
+                      <h2>機殼配置</h2>
+                      <span class="fan-card-hint">斜上方視角示意圖</span>
+                    </header>
+                    <div id="fanChassis" class="fan-chassis"></div>
+                    <p class="fan-hint">接頭名稱給不出實體位置，所以位置是預設猜的。用右側每一列的「識別」讓那顆轉到最大聲，
+                      聽出來是哪一顆之後再改成正確的位置。</p>
+                  </section>
+                  <section class="fan-card fan-list-card">
+                    <header class="fan-card-head">
+                      <h2>風扇通道</h2>
+                      <span class="fan-card-hint">點一列展開設定</span>
+                    </header>
+                    <div id="fanList" class="fan-list"></div>
+                    <div id="fanEditor" class="fan-editor" hidden></div>
+                  </section>
+                </div>
+              </div>
+            </div>
+
+            <dialog id="sysmonKillDialog" class="app-dialog sysmon-dialog" aria-labelledby="sysmonKillTitle">
+              <header class="dialog-head">
+                <h2 id="sysmonKillTitle" class="dialog-title">結束處理程序</h2>
+                <p class="dialog-desc" id="sysmonKillDesc"></p>
+              </header>
+              <footer class="dialog-actions">
+                <button type="button" id="sysmonKillCancel" class="btn btn-secondary">取消</button>
+                <button type="button" id="sysmonKillConfirm" class="btn btn-primary sysmon-danger-btn">結束</button>
+              </footer>
+            </dialog>
+          </section>
+
           <!-- 額度儀錶板 -->
           <section id="page-usage" class="page">
             <div class="usage-shell">
@@ -188,7 +656,7 @@
                 <div class="usage-heading">
                   <p class="usage-eyebrow">本機訂閱狀態</p>
                   <h1>額度儀錶板</h1>
-                  <p class="page-desc">集中查看五個 AI 工具的已用額度與重置時間；只有按下同步才會連線查詢。</p>
+                  <p class="page-desc">集中查看七個 AI 工具的已用額度與重置時間；只有按下同步才會連線查詢。</p>
                 </div>
                 <div class="usage-actions" role="group" aria-label="額度操作">
                   <button type="button" id="usageDiagnosticsBtn" class="btn btn-secondary btn-sm">診斷</button>
@@ -200,51 +668,86 @@
                 </div>
               </header>
 
-              <div class="usage-pulse" aria-label="同步摘要">
-                <div id="usageProviderSummary" class="usage-provider-summary"></div>
-                <p id="usageLastSync" class="usage-last-sync" role="status" aria-live="polite">尚未同步</p>
+              <div class="subtabs" id="usageSubtabs" role="tablist" aria-label="額度與用量">
+                <button type="button" class="subtab active" data-subtab="quota" role="tab" aria-selected="true">
+                  訂閱額度
+                </button>
+                <button type="button" class="subtab" data-subtab="stats" role="tab" aria-selected="false">
+                  用量統計
+                </button>
               </div>
 
-              <p id="usageError" class="live-error hidden" role="alert"></p>
-              <section id="usageGrid" class="usage-grid" aria-label="AI 工具額度卡片"></section>
-              <p id="usageSortStatus" class="visually-hidden" aria-live="polite"></p>
+              <!-- 訂閱額度：還剩多少（官方 API） -->
+              <div class="subtab-panel active" id="usage-quota" data-subtab="quota" role="tabpanel">
+                <div class="usage-pulse" aria-label="同步摘要">
+                  <div id="usageProviderSummary" class="usage-provider-summary"></div>
+                  <p id="usageLastSync" class="usage-last-sync" role="status" aria-live="polite">尚未同步</p>
+                </div>
+
+                <p id="usageError" class="live-error hidden" role="alert"></p>
+                <section id="usageGrid" class="usage-grid" aria-label="AI 工具額度卡片"></section>
+                <p id="usageSortStatus" class="visually-hidden" aria-live="polite"></p>
+              </div>
+
+              <!-- 用量統計：實際用掉多少 token（本機 session 記錄） -->
+              <div class="subtab-panel" id="usage-stats" data-subtab="stats" role="tabpanel">
+                <section class="cc-panel" aria-labelledby="cuTitle">
+                  <div class="cc-panel-head">
+                    <h2 id="cuTitle" class="cc-panel-title">用量統計</h2>
+                    <div class="cu-head-actions">
+                      <div id="cuRangeGroup" class="agy-range" role="group" aria-label="統計時間範圍">
+                        <button type="button" class="agy-range-btn" data-cu-range="24h" aria-pressed="false">24 小時</button>
+                        <button type="button" class="agy-range-btn is-active" data-cu-range="7d" aria-pressed="true">7 天</button>
+                        <button type="button" class="agy-range-btn" data-cu-range="30d" aria-pressed="false">30 天</button>
+                        <button type="button" class="agy-range-btn" data-cu-range="all" aria-pressed="false">全部</button>
+                      </div>
+                      <button type="button" id="cuPricesBtn" class="btn btn-secondary btn-sm">單價</button>
+                      <button type="button" id="cuSyncBtn" class="btn btn-primary btn-sm"
+                        title="讀本機的 session 記錄；只讀上次之後新增的部分。統計規則改過時會自動整份重讀">掃描本機記錄</button>
+                    </div>
+                  </div>
+                  <p id="cuSyncedAt" class="cc-panel-desc">尚未掃描。第一次會讀滿本機的 session 記錄，之後只讀新增的部分。</p>
+                  <p id="cuError" class="live-error hidden" role="alert"></p>
+
+                  <div id="cuSummary" class="cu-summary"></div>
+                  <p id="cuUncosted" class="cu-note hidden" role="status"></p>
+                </section>
+
+                <section class="cc-panel" aria-labelledby="cuTrendTitle">
+                  <div class="cc-panel-head">
+                    <h2 id="cuTrendTitle" class="cc-panel-title">趨勢</h2>
+                    <div id="cuChartLegend" class="cu-legend"></div>
+                  </div>
+                  <div id="cuChart" class="cu-chart" role="img" aria-label="用量趨勢"></div>
+                </section>
+
+                <section class="cc-panel" aria-labelledby="cuBreakdownTitle">
+                  <div class="cc-panel-head">
+                    <h2 id="cuBreakdownTitle" class="cc-panel-title">分佈</h2>
+                  </div>
+                  <div class="cu-breakdown">
+                    <div class="cu-dist">
+                      <h3 class="cu-dist-title">依工具</h3>
+                      <div id="cuProviders" class="cc-list"></div>
+                    </div>
+                    <div class="cu-dist">
+                      <h3 class="cu-dist-title">依模型</h3>
+                      <div id="cuModels" class="cc-list"></div>
+                    </div>
+                  </div>
+                </section>
+              </div>
             </div>
 
             <dialog id="usageSettingsDialog" class="app-dialog usage-dialog" aria-labelledby="usageSettingsTitle">
               <header class="dialog-head">
                 <h2 id="usageSettingsTitle" class="dialog-title">額度顯示設定</h2>
-                <p class="dialog-desc">選擇要顯示的工具、調整卡片順序，以及設定 OpenCode 本機估算的重置時間。</p>
+                <p class="dialog-desc">選擇要顯示的工具，並調整卡片順序。</p>
               </header>
               <div class="usage-dialog-body">
                 <fieldset class="usage-settings-group">
                   <legend>顯示項目</legend>
                   <div id="usageProviderToggles" class="usage-provider-toggles"></div>
-                </fieldset>
-                <fieldset class="usage-settings-group">
-                  <legend>OpenCode 重置時間</legend>
-                  <p class="usage-settings-hint">5 小時視窗依最近一次使用自動計算；每週與每月只影響倒數，成本仍採 trailing window。</p>
-                  <label class="usage-reset-row">
-                    <span>每週重置</span>
-                    <span class="usage-reset-controls">
-                      <select id="usageWeeklyDay" class="select" aria-label="OpenCode 每週重置星期">
-                        <option value="0">星期日</option>
-                        <option value="1">星期一</option>
-                        <option value="2">星期二</option>
-                        <option value="3">星期三</option>
-                        <option value="4">星期四</option>
-                        <option value="5">星期五</option>
-                        <option value="6">星期六</option>
-                      </select>
-                      <input id="usageWeeklyTime" class="input" type="time" aria-label="OpenCode 每週重置時間" />
-                    </span>
-                  </label>
-                  <label class="usage-reset-row">
-                    <span>每月重置</span>
-                    <span class="usage-reset-controls">
-                      <select id="usageMonthlyDay" class="select" aria-label="OpenCode 每月重置日期"></select>
-                      <input id="usageMonthlyTime" class="input" type="time" aria-label="OpenCode 每月重置時間" />
-                    </span>
-                  </label>
                 </fieldset>
               </div>
               <footer class="dialog-actions">
@@ -465,26 +968,12 @@
             </div>
           </section>
 
-          <!-- 語音轉文字（檔案轉錄 ＋ 即時字幕共用同一組模型選單） -->
+          <!-- 語音轉文字：三個子分頁各做各的事，模型選單各自放在自己那一頁裡 -->
           <section id="page-stt" class="page">
-            <!-- 模型選單貼在標題旁：選了立刻生效，設定頁只管下載與推論方式 -->
-            <div class="page-header page-header-row">
-              <div class="page-header-text">
-                <h1>語音轉文字</h1>
-                <p class="page-desc">轉錄音訊檔案，或擷取系統音訊做即時字幕</p>
-              </div>
-              <div class="model-chips" id="sttModelBar">
-                <label class="model-chip">
-                  <span class="model-chip-label">辨識</span>
-                  <select id="sttAsrModel" class="model-chip-select" aria-label="語音辨識模型"></select>
-                </label>
-                <label class="model-chip">
-                  <span class="model-chip-label">翻譯</span>
-                  <select id="sttTranslateModel" class="model-chip-select" aria-label="翻譯模型"></select>
-                </label>
-              </div>
+            <div class="page-header">
+              <h1>語音轉文字</h1>
+              <p class="page-desc">轉錄音訊檔案、擷取系統音訊做即時字幕，或用右 Alt 語音輸入</p>
             </div>
-            <p id="sttModelHint" class="setting-hint model-bar-hint hidden" role="status"></p>
 
             <div class="subtabs" id="sttSubtabs" role="tablist" aria-label="語音轉文字模式">
               <button type="button" class="subtab active" data-subtab="file" role="tab" aria-selected="true">
@@ -493,10 +982,26 @@
               <button type="button" class="subtab" data-subtab="live" role="tab" aria-selected="false">
                 即時字幕
               </button>
+              <button type="button" class="subtab" data-subtab="dictation" role="tab" aria-selected="false">
+                語音輸入
+              </button>
             </div>
 
             <!-- 檔案轉錄 -->
             <div class="subtab-panel active" id="stt-file" data-subtab="file" role="tabpanel">
+
+            <!-- 這一頁自己的模型（跟即時字幕、語音輸入各存各的） -->
+            <div class="scope-models" id="fileModelBar">
+              <div class="option-group">
+                <label for="fileAsrModel">辨識模型</label>
+                <select id="fileAsrModel" class="select" aria-label="檔案轉錄的語音辨識模型"></select>
+              </div>
+              <div class="option-group">
+                <label for="fileLlmModel">翻譯模型</label>
+                <select id="fileLlmModel" class="select" aria-label="檔案轉錄的翻譯模型"></select>
+              </div>
+              <p id="fileModelHint" class="setting-hint scope-models-hint hidden" role="status"></p>
+            </div>
 
             <!-- 拖放區域 -->
             <div id="dropZone" class="drop-zone">
@@ -585,6 +1090,19 @@
             <!-- 即時字幕 -->
             <div class="subtab-panel" id="stt-live" data-subtab="live" role="tabpanel">
             <div class="live-content">
+              <!-- 這一頁自己的模型（跟檔案轉錄、語音輸入各存各的） -->
+              <div class="scope-models" id="liveModelBar">
+                <div class="option-group">
+                  <label for="liveAsrModel">辨識模型</label>
+                  <select id="liveAsrModel" class="select" aria-label="即時字幕的語音辨識模型"></select>
+                </div>
+                <div class="option-group">
+                  <label for="liveLlmModel">翻譯模型</label>
+                  <select id="liveLlmModel" class="select" aria-label="即時字幕的翻譯模型"></select>
+                </div>
+                <p id="liveModelHint" class="setting-hint scope-models-hint hidden" role="status"></p>
+              </div>
+
               <!-- 語言選擇 -->
               <div class="option-group">
                 <label for="liveLanguage">目標語言</label>
@@ -631,6 +1149,89 @@
               <p id="liveError" class="live-error hidden" role="alert"></p>
             </div>
             </div>
+
+            <!-- 語音輸入：全域右 Alt 講話，整理完直接貼到游標所在的程式 -->
+            <div class="subtab-panel" id="stt-dictation" data-subtab="dictation" role="tabpanel">
+            <div class="dict-content">
+              <div class="dict-hero">
+                <div class="dict-hero-main">
+                  <label class="setting-check dict-switch">
+                    <input type="checkbox" id="dictationEnabledInput" />
+                    <span>啟用語音輸入</span>
+                  </label>
+                  <p class="setting-hint">
+                    按住右邊的 <kbd>Alt</kbd> 講話，放開就把整理好的文字貼到你正在打字的地方；
+                    快速點一下則是「開始／結束」切換，錄音中按 <kbd>Esc</kbd> 取消。
+                    啟用後即使 VoiceInk 縮在系統匣也有效。
+                  </p>
+                </div>
+                <div class="dict-state">
+                  <div id="dictationStatus" class="dict-status" role="status" aria-live="polite">
+                    <span class="status-dot"></span>
+                    <span class="dict-status-text">未啟用</span>
+                  </div>
+                  <div class="level-meter" title="麥克風音量">
+                    <div id="dictationLevel" class="level-fill"></div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="dict-options">
+                <div class="option-group">
+                  <label for="dictationAsrModel">辨識模型</label>
+                  <select id="dictationAsrModel" class="select" aria-label="語音輸入的語音辨識模型"></select>
+                </div>
+                <div class="option-group">
+                  <label for="dictationLlmSelect">整理模型</label>
+                  <select id="dictationLlmSelect" class="select" aria-label="語音輸入的整理模型"></select>
+                </div>
+                <div class="option-group">
+                  <label for="dictationLangSelect">輸出語言</label>
+                  <select id="dictationLangSelect" class="select">
+                    <option value="zh-TW">繁體中文（台灣）</option>
+                    <option value="zh-CN">簡體中文</option>
+                    <option value="en">English</option>
+                    <option value="ja">日本語</option>
+                    <option value="ko">한국어</option>
+                  </select>
+                </div>
+                <p id="dictationHint" class="setting-hint hidden" role="status"></p>
+              </div>
+
+              <div class="dict-result" id="dictationResult">
+                <div class="dict-result-head">
+                  <h3>這次的結果</h3>
+                  <button type="button" id="dictationCopyBtn" class="btn btn-secondary btn-sm">📋 複製</button>
+                </div>
+                <p class="dict-result-text" id="dictationResultText">還沒有內容。按住右 Alt 講一段話試試。</p>
+                <p class="dict-result-raw" id="dictationResultRaw"></p>
+              </div>
+
+              <div class="dict-columns">
+                <section class="dict-panel">
+                  <div class="dict-panel-head">
+                    <h3>轉錄紀錄</h3>
+                    <button type="button" id="dictationClearBtn" class="btn btn-secondary btn-sm">清空</button>
+                  </div>
+                  <div id="dictationRecords" class="dict-records"></div>
+                </section>
+
+                <section class="dict-panel">
+                  <div class="dict-panel-head">
+                    <h3>個人字典</h3>
+                    <span class="dict-panel-note">講兩次以上被改成同一個寫法就會自動收進來；整理模型若把它改了回去，就退回觀察中</span>
+                  </div>
+                  <form class="dict-term-form" id="dictationTermForm">
+                    <input type="text" id="dictationTermFrom" class="input" placeholder="聽成什麼" maxlength="16" />
+                    <span class="dict-term-arrow" aria-hidden="true">→</span>
+                    <input type="text" id="dictationTermTo" class="input" placeholder="其實是什麼" maxlength="16" />
+                    <button type="submit" class="btn btn-secondary btn-sm">新增</button>
+                  </form>
+                  <div id="dictationTerms" class="dict-terms"></div>
+                </section>
+              </div>
+            </div>
+            </div>
           </section>
 
           <!-- 翻譯與 TTS -->
@@ -657,26 +1258,24 @@
 
             <div class="translate-lang-bar">
               <div class="option-group">
-                <label for="translateSourceLang">來源語言</label>
-                <select id="translateSourceLang" class="select">
-                  <option value="auto">未指定（模型自行處理）</option>
-                  <option value="zh-TW">繁體中文（台灣）</option>
-                  <option value="zh-CN">簡體中文</option>
-                  <option value="en">English</option>
-                  <option value="ja">日本語</option>
-                  <option value="ko">한국어</option>
-                </select>
+                <label id="translateSourceLangLabel">來源語言</label>
+                <div id="translateSourceLang" class="segmented lang-seg" role="group" aria-labelledby="translateSourceLangLabel">
+                  <button type="button" class="seg-btn" data-value="auto">自動</button>
+                  <button type="button" class="seg-btn" data-value="zh-TW">繁體中文（臺灣）</button>
+                  <button type="button" class="seg-btn" data-value="zh-CN">簡體中文</button>
+                  <button type="button" class="seg-btn" data-value="en">English</button>
+                  <button type="button" class="seg-btn" data-value="ja">日本語</button>
+                </div>
               </div>
               <button type="button" id="translateSwapBtn" class="btn btn-secondary translate-swap-btn" title="交換來源與目標語言" aria-label="交換來源與目標語言">⇄</button>
               <div class="option-group">
-                <label for="translateTargetLang">目標語言</label>
-                <select id="translateTargetLang" class="select">
-                  <option value="zh-TW">繁體中文（台灣）</option>
-                  <option value="zh-CN">簡體中文</option>
-                  <option value="en">English</option>
-                  <option value="ja">日本語</option>
-                  <option value="ko">한국어</option>
-                </select>
+                <label id="translateTargetLangLabel">目標語言</label>
+                <div id="translateTargetLang" class="segmented lang-seg" role="group" aria-labelledby="translateTargetLangLabel">
+                  <button type="button" class="seg-btn" data-value="zh-TW">繁體中文（臺灣）</button>
+                  <button type="button" class="seg-btn" data-value="zh-CN">簡體中文</button>
+                  <button type="button" class="seg-btn" data-value="en">English</button>
+                  <button type="button" class="seg-btn" data-value="ja">日本語</button>
+                </div>
               </div>
             </div>
 
@@ -862,7 +1461,20 @@
 
                     <div class="settings-card">
                       <h4 class="settings-subsection-title">語音轉文字</h4>
-                      <p class="setting-hint">需支援 <code>/audio/transcriptions</code>。</p>
+                      <p class="setting-hint">需支援 <code>/audio/transcriptions</code>。可設多組設定（不同供應商或不同模型），自由切換。</p>
+                      <div class="setting-group">
+                        <label for="asrCloudSelect">設定</label>
+                        <div class="chat-provider-bar">
+                          <select id="asrCloudSelect" class="input"></select>
+                          <button type="button" id="asrAddCloudBtn" class="btn btn-secondary btn-sm">＋ 新增</button>
+                          <button type="button" id="asrDeleteCloudBtn" class="btn btn-secondary btn-sm">刪除</button>
+                        </div>
+                        <p id="asrCloudHint" class="setting-hint">以下欄位屬於目前選取的設定。</p>
+                      </div>
+                      <div class="setting-group">
+                        <label for="asrCloudNameInput">名稱</label>
+                        <input type="text" id="asrCloudNameInput" class="input" placeholder="例如 OpenRouter" maxlength="24" />
+                      </div>
                       <div class="setting-group">
                         <label for="asrApiUrlInput">API URL</label>
                         <input
@@ -885,16 +1497,23 @@
                         </div>
                       </div>
                       <div class="setting-group">
-                        <label for="asrModelIdInput">模型 ID</label>
-                        <input
-                          type="text"
-                          id="asrModelIdInput"
-                          class="input"
-                          placeholder="openai/whisper-1"
-                        />
+                        <label>模型清單</label>
+                        <div id="asrModelList" class="chat-model-list"></div>
+                        <div class="chat-model-actions">
+                          <button type="button" id="asrAddModelBtn" class="btn btn-secondary btn-sm">
+                            ＋ 新增模型
+                          </button>
+                        </div>
+                        <datalist id="asrModelSuggestions">
+                          <option value="openai/gpt-4o-mini-transcribe">最便宜，技術用語最準</option>
+                          <option value="fish-audio/transcribe-1">最快（約 0.5 秒），貴 3 倍</option>
+                          <option value="openai/gpt-4o-transcribe">中間值</option>
+                          <option value="microsoft/mai-transcribe-1.5">標點最完整，但最慢</option>
+                        </datalist>
                         <p class="setting-hint">
-                          例如 <code>openai/whisper-1</code>、
-                          <code>openai/whisper-large-v3</code>。
+                          同一組設定可以放多顆模型，語音轉文字的三個子分頁各自挑要用哪一顆。
+                          必須是<strong>轉錄模型</strong>（不是聊天模型）。上面四顆都實測過；
+                          若出現 <code>HTTP 403</code>，代表金鑰沒問題、是這一顆模型未開通，換一顆即可。
                           <a href="https://openrouter.ai/collections/speech-to-text-models" target="_blank" rel="noopener">STT 模型列表</a>
                         </p>
                       </div>
@@ -1080,6 +1699,147 @@
         </div>
       </dialog>
 
+      <dialog id="cuPricesDialog" class="app-dialog" aria-label="模型單價">
+        <div class="dialog-head">
+          <h2 class="dialog-title">模型單價</h2>
+          <p class="dialog-desc">
+            每 100 萬 token 的美金價。輸入與輸出留空＝沒有單價，那顆模型的花費不會算進總額（也不會當成 0）。
+            快取兩格可留空，會照公開規則從輸入價推（讀 ×0.1、寫 ×1.25，1 小時快取再 ×1.6）。
+            Grok 與 OpenCode 的記錄自帶花費，不需要在這裡填。
+          </p>
+        </div>
+        <div class="cc-dialog-body">
+          <div id="cuPriceRows" class="cc-list"></div>
+          <div class="setting-group">
+            <label for="cuNewModel">新增模型</label>
+            <input type="text" id="cuNewModel" class="input" placeholder="例如 gemini-3.7-flash" spellcheck="false" />
+          </div>
+        </div>
+        <div class="dialog-actions">
+          <button type="button" id="cuPricesCancelBtn" class="btn btn-secondary btn-sm">取消</button>
+          <button type="button" id="cuPricesSaveBtn" class="btn btn-primary btn-sm">儲存</button>
+        </div>
+      </dialog>
+
+      <dialog id="ccProviderDialog" class="app-dialog" aria-label="供應商">
+        <div class="dialog-head">
+          <h2 id="ccProviderDialogTitle" class="dialog-title">新增供應商</h2>
+          <p id="ccProviderDialogDesc" class="dialog-desc"></p>
+        </div>
+        <div class="cc-dialog-body">
+          <div class="setting-group">
+            <label for="ccNameInput">名稱</label>
+            <input type="text" id="ccNameInput" class="input" maxlength="60" placeholder="例如：工作用 OpenRouter" />
+          </div>
+          <div class="setting-group hidden cc-format-grid" id="ccApiFormatGroup">
+            <div class="cc-format-cell">
+              <label for="ccApiFormatSelect">上游格式</label>
+              <select id="ccApiFormatSelect" class="select"></select>
+              <p id="ccApiFormatHint" class="setting-hint"></p>
+            </div>
+            <div class="cc-format-cell">
+              <label for="ccValidationFormatSelect">驗證格式</label>
+              <select id="ccValidationFormatSelect" class="select"></select>
+              <p id="ccValidationFormatHint" class="setting-hint">「測試」會用這個格式送一個最小請求。</p>
+            </div>
+          </div>
+          <div class="setting-group" id="ccBaseUrlGroup">
+            <label for="ccBaseUrlInput">Base URL</label>
+            <input type="text" id="ccBaseUrlInput" class="input" maxlength="200" spellcheck="false" autocomplete="off" />
+            <p id="ccBaseUrlHint" class="setting-hint"></p>
+          </div>
+          <div class="setting-group" id="ccKeyGroup">
+            <label for="ccKeyInput">API 金鑰</label>
+            <div class="cc-field-row">
+              <input type="password" id="ccKeyInput" class="input" autocomplete="off" spellcheck="false" />
+              <select id="ccAuthFieldSelect" class="select" aria-label="金鑰寫入哪個環境變數"></select>
+            </div>
+            <p id="ccKeyHint" class="setting-hint"></p>
+          </div>
+          <div class="setting-group hidden" id="ccOauthGroup">
+            <label for="ccAccountSelect">登入帳號</label>
+            <div class="cc-field-row">
+              <select id="ccAccountSelect" class="select" aria-label="這一筆要用哪個登入帳號"></select>
+              <button type="button" id="ccLoginBtn" class="btn btn-secondary btn-sm">登入</button>
+            </div>
+            <p id="ccOauthHint" class="setting-hint"></p>
+            <div class="cc-oauth-wait hidden" id="ccOauthWait">
+              <p class="cc-oauth-step" id="ccOauthStep"></p>
+              <p class="cc-oauth-code hidden" id="ccOauthCode"></p>
+              <div class="cc-oauth-actions">
+                <button type="button" id="ccOauthOpenBtn" class="btn btn-secondary btn-sm">再開一次登入頁</button>
+                <button type="button" id="ccOauthCancelBtn" class="btn btn-secondary btn-sm">取消登入</button>
+              </div>
+            </div>
+            <div class="cc-account-list" id="ccAccountList" role="list"></div>
+          </div>
+          <div class="setting-group" id="ccModelGroup">
+            <div class="cc-model-head">
+              <label for="ccModelSelect">模型</label>
+              <div class="cc-model-actions">
+                <button type="button" id="ccScanModelsBtn" class="btn btn-secondary btn-sm">從 API 載入模型</button>
+                <button type="button" id="ccManualModelsBtn" class="btn btn-secondary btn-sm">手動輸入</button>
+              </div>
+            </div>
+            <div class="cc-model-grid">
+              <label class="cc-model-cell">
+                <span>主模型（兜底）</span>
+                <select id="ccModelSelect" class="select" aria-label="主模型（兜底）"></select>
+                <input type="text" id="ccModelInput" class="input hidden" maxlength="120" spellcheck="false" />
+              </label>
+              <label class="cc-model-cell">
+                <span>Haiku（小而快）</span>
+                <select id="ccHaikuSelect" class="select" aria-label="Haiku（小而快）"></select>
+                <input type="text" id="ccHaikuInput" class="input hidden" maxlength="120" spellcheck="false" />
+              </label>
+              <label class="cc-model-cell">
+                <span>Sonnet（日常）</span>
+                <select id="ccSonnetSelect" class="select" aria-label="Sonnet（日常）"></select>
+                <input type="text" id="ccSonnetInput" class="input hidden" maxlength="120" spellcheck="false" />
+              </label>
+              <label class="cc-model-cell">
+                <span>Opus（最強）</span>
+                <select id="ccOpusSelect" class="select" aria-label="Opus（最強）"></select>
+                <input type="text" id="ccOpusInput" class="input hidden" maxlength="120" spellcheck="false" />
+              </label>
+            </div>
+            <p id="ccScanHint" class="setting-hint">留空的那一格就用這家的預設值（灰字就是預設）。按「從 API 載入模型」把這家的模型清單抓進下拉。</p>
+          </div>
+        </div>
+        <div class="dialog-actions">
+          <button type="button" id="ccProviderCancelBtn" class="btn btn-secondary btn-sm">取消</button>
+          <button type="button" id="ccProviderSaveBtn" class="btn btn-primary btn-sm">儲存</button>
+        </div>
+      </dialog>
+
+      <dialog id="ccMcpDialog" class="app-dialog" aria-label="MCP 伺服器">
+        <div class="dialog-head">
+          <h2 id="ccMcpDialogTitle" class="dialog-title">新增 MCP 伺服器</h2>
+          <p class="dialog-desc">定義用 JSON 直接寫，跟 Claude Code 的 mcpServers 格式一樣。</p>
+        </div>
+        <div class="cc-dialog-body">
+          <div class="setting-group" id="ccMcpTemplateGroup">
+            <label for="ccMcpTemplate">從範本開始</label>
+            <select id="ccMcpTemplate" class="select"></select>
+          </div>
+          <div class="setting-group">
+            <label for="ccMcpIdInput">名稱</label>
+            <input type="text" id="ccMcpIdInput" class="input" maxlength="80" placeholder="context7" spellcheck="false" />
+          </div>
+          <div class="setting-group">
+            <label for="ccMcpSpecInput">定義（JSON）</label>
+            <textarea id="ccMcpSpecInput" class="input cc-json" rows="8" spellcheck="false"></textarea>
+            <p id="ccMcpSpecHint" class="setting-hint">
+              stdio 要有 command；http／sse 要有 url。Windows 上的 npx／node 會自動包成 cmd /c。
+            </p>
+          </div>
+        </div>
+        <div class="dialog-actions">
+          <button type="button" id="ccMcpCancelBtn" class="btn btn-secondary btn-sm">取消</button>
+          <button type="button" id="ccMcpSaveBtn" class="btn btn-primary btn-sm">儲存</button>
+        </div>
+      </dialog>
+
       <dialog id="chatScanDialog" class="app-dialog" aria-label="掃描到的模型">
         <div class="dialog-head">
           <h2 class="dialog-title">掃描到的模型</h2>
@@ -1103,6 +1863,85 @@
         <div class="dialog-actions">
           <button type="button" id="chatScanCancelBtn" class="btn btn-secondary btn-sm">取消</button>
           <button type="button" id="chatScanApplyBtn" class="btn btn-primary btn-sm">加入清單</button>
+        </div>
+      </dialog>
+
+      <!-- 每顆本機模型的執行參數：自動決定的值可以逐項覆寫，最下面是原始參數直通 -->
+      <dialog id="hfParamsDialog" class="app-dialog hf-dialog" aria-label="模型執行參數">
+        <div class="dialog-head">
+          <h2 class="dialog-title" id="hfParamsTitle">執行參數</h2>
+          <p id="hfParamsDesc" class="dialog-desc"></p>
+        </div>
+        <div class="hf-dialog-body">
+          <p id="hfParamsReasons" class="hf-reasons" role="status"></p>
+
+          <div class="hf-field-grid">
+            <label class="hf-field">
+              <span>上下文長度</span>
+              <input type="number" id="hfFieldCtx" class="input" min="512" step="512" placeholder="自動">
+            </label>
+            <label class="hf-field">
+              <span>GPU 層數</span>
+              <input type="number" id="hfFieldNgl" class="input" min="0" step="1" placeholder="自動">
+            </label>
+            <label class="hf-field">
+              <span>KV 快取 K</span>
+              <select id="hfFieldCtk" class="select"></select>
+            </label>
+            <label class="hf-field">
+              <span>KV 快取 V</span>
+              <select id="hfFieldCtv" class="select"></select>
+            </label>
+            <label class="hf-field">
+              <span>執行緒</span>
+              <input type="number" id="hfFieldThreads" class="input" min="1" max="64" step="1" placeholder="自動">
+            </label>
+            <label class="hf-field">
+              <span>專家放 CPU 的層數</span>
+              <input type="number" id="hfFieldMoe" class="input" min="0" step="1" placeholder="自動">
+            </label>
+            <label class="hf-field hf-field-wide">
+              <span>投機解碼</span>
+              <select id="hfFieldSpec" class="select">
+                <option value="">關閉</option>
+                <option value="ngram-mod">ngram-mod（不需草稿模型・預設）</option>
+                <option value="ngram-simple">ngram-simple</option>
+                <option value="ngram-map-k">ngram-map-k</option>
+                <option value="draft-simple">draft-simple（需要草稿模型）</option>
+                <option value="draft-mtp">draft-mtp</option>
+                <option value="draft-eagle3">draft-eagle3</option>
+              </select>
+            </label>
+          </div>
+
+          <label class="hf-field hf-field-wide">
+            <span>進階：原始參數</span>
+            <textarea id="hfFieldRaw" class="input hf-raw" rows="4" spellcheck="false"
+                      placeholder="一行一個，例如&#10;ubatch-size = 160&#10;override-tensor = blk\.(1[0-9])\.ffn_.*=CPU"></textarea>
+          </label>
+          <p class="setting-hint">
+            這裡寫的會蓋掉上面自動決定的值。key 用 llama-server 的長選項名（不用加 <code>--</code>）。
+          </p>
+
+          <div class="hf-args-preview">
+            <span class="hf-setting-label">實際會送出的參數</span>
+            <pre id="hfParamsPreview" class="hf-args-pre"></pre>
+          </div>
+
+          <div class="hf-tune-row">
+            <button type="button" id="hfFitBtn" class="btn btn-secondary btn-sm">重新自動偵測</button>
+            <button type="button" id="hfTuneBtn" class="btn btn-secondary btn-sm">實測調校</button>
+            <span id="hfTuneStatus" class="setting-hint" role="status"></span>
+          </div>
+          <p class="setting-hint">
+            「自動調參」把下面兩步一次跑完：先用官方 <code>llama-fit-params</code> 實際載一次模型量記憶體，
+            再用 <code>llama-bench</code> 比幾組候選參數挑最快的。要花上幾分鐘，跑完直接套用。
+          </p>
+        </div>
+        <div class="dialog-actions">
+          <button type="button" id="hfParamsResetBtn" class="btn btn-secondary btn-sm">全部還原自動</button>
+          <button type="button" id="hfParamsCancelBtn" class="btn btn-secondary btn-sm">取消</button>
+          <button type="button" id="hfParamsSaveBtn" class="btn btn-primary btn-sm">儲存並套用</button>
         </div>
       </dialog>
 

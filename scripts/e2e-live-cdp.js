@@ -5,10 +5,24 @@
 const { spawn } = require('child_process')
 const fs = require('fs')
 const path = require('path')
+const os = require('os')
 const http = require('http')
 
 const PORT = 9238
-const EXE = path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
+// Windows 偶爾會有別的東西鎖住 dist/win-unpacked（打包失敗、防毒掃描中），
+// 這時可以打包到別的資料夾再用 VOICEINK_EXE 指過去，測試不必等鎖放掉
+const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
+// 暫存 user-data-dir：使用者開著的正式實例佔 single-instance lock，
+// 沒有自己的資料夾會被擋掉（second-instance 轉交後退出，CDP 等不到主視窗）
+const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-cdp-'))
+// 模型放在 `<userData>/models`，換了 user-data-dir 就等於一顆模型都沒裝（即時字幕起不來）。
+// 用 junction 把真正的模型資料夾接進來——只讀不寫，設定仍然各自獨立。
+{
+  const real = path.join(process.env.APPDATA || os.homedir(), 'voiceink', 'models')
+  if (fs.existsSync(real)) {
+    try { fs.symlinkSync(real, path.join(USER_DATA_DIR, 'models'), 'junction') } catch { /* 沒有就當沒裝 */ }
+  }
+}
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 function stopChildTree(child) {
@@ -105,7 +119,7 @@ async function listPages() {
 }
 
 async function main() {
-  const child = spawn(EXE, [`--remote-debugging-port=${PORT}`], {
+  const child = spawn(EXE, [`--remote-debugging-port=${PORT}`, `--user-data-dir=${USER_DATA_DIR}`], {
     stdio: ['ignore', 'pipe', 'pipe']
   })
   let processLog = ''
@@ -130,7 +144,7 @@ async function main() {
     // 等監聽綁好再點「即時字幕」子分頁，否則第一次 click 會落空。
     await mainCdp.eval(`document.querySelector('[data-page="stt"]').click(), 'ok'`)
     await waitFor(
-      () => mainCdp.eval(`!!document.getElementById('sttAsrModel')?.options.length`),
+      () => mainCdp.eval(`!!document.getElementById('liveAsrModel')?.options.length`),
       15000,
       '語音轉文字頁初始化'
     )
@@ -302,18 +316,16 @@ async function main() {
     let configState = null
     try {
       configState = await mainCdp?.eval(`(async () => {
-        const [asrEngine, asrKey, translator, translateKey, models] = await Promise.all([
-          window.electronAPI.store.get('asrEngine', 'local'),
+        const [liveAsr, asrKey, liveLlm, models] = await Promise.all([
+          window.electronAPI.store.get('liveAsr', 'local:qwen3asr'),
           window.electronAPI.store.get('asrApiKey', ''),
-          window.electronAPI.store.get('translator', 'local'),
-          window.electronAPI.store.get('translateModelId', ''),
+          window.electronAPI.store.get('liveLlm', ''),
           window.electronAPI.models.status()
         ])
         return {
-          asrEngine,
+          liveAsr,
           hasAsrKey: !!asrKey,
-          translator,
-          translateModel: translateKey,
+          liveLlm,
           asrDownloaded: !!models.models?.qwen3asr?.downloaded
         }
       })()`)

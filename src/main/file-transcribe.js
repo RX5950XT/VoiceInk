@@ -267,7 +267,7 @@ async function transcribeFile(req, onProgress) {
 
       let text = ''
       try {
-        text = await localAsr.transcribe({
+        text = await localAsr.transcribe('file', {
           samples,
           sampleRate: SAMPLE_RATE,
           lang
@@ -594,7 +594,9 @@ async function transcribeFileCloud(req, onProgress) {
       try {
         text = await cloudAsr.transcribeEncoded(
           { buffer: buf, format: 'mp3', language: lang },
-          store
+          store,
+          // 檔案轉錄用「檔案轉錄」那一頁選的雲端設定與模型
+          'file'
         )
       } catch (e) {
         throw e instanceof Error ? e : new Error(String(e))

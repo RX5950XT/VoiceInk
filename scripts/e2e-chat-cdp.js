@@ -9,10 +9,17 @@
 
 const { spawn } = require('child_process')
 const path = require('path')
+const os = require('os')
+const fs = require('fs')
 const http = require('http')
 
 const PORT = 9245
-const EXE = path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
+// Windows 偶爾會有別的東西鎖住 dist/win-unpacked（打包失敗、防毒掃描中），
+// 這時可以打包到別的資料夾再用 VOICEINK_EXE 指過去，測試不必等鎖放掉
+const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
+// 暫存 user-data-dir：使用者開著的正式實例佔 single-instance lock，
+// 沒有自己的資料夾會被擋掉（second-instance 轉交後退出，CDP 等不到主視窗）
+const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-cdp-'))
 const DEFAULT_CHAT_MODEL = 'google/gemini-3-flash-preview'
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -115,7 +122,7 @@ function startFakeModels() {
 
 async function main() {
   const fake = await startFakeModels()
-  const child = spawn(EXE, [`--remote-debugging-port=${PORT}`], { stdio: ['ignore', 'pipe', 'pipe'] })
+  const child = spawn(EXE, [`--remote-debugging-port=${PORT}`, `--user-data-dir=${USER_DATA_DIR}`], { stdio: ['ignore', 'pipe', 'pipe'] })
   let cdp = null
   let assertions = 0
   const failures = []
@@ -130,7 +137,9 @@ async function main() {
   try {
     const target = await waitFor(async () => {
       const list = await getJson(`http://127.0.0.1:${PORT}/json/list`)
-      return list.find((item) => item.type === 'page' && item.webSocketDebuggerUrl)
+      // 只認主視窗：語音輸入開著時還會有一扇指示器視窗（dictation-hud.html）
+      return list.find((item) => item.type === 'page' && item.webSocketDebuggerUrl
+        && /index\.html/i.test(item.url))
     }, 40_000, '偵錯目標')
 
     cdp = new Cdp(target.webSocketDebuggerUrl)
@@ -141,6 +150,12 @@ async function main() {
     )
 
     console.log('\n設定頁：聊天分區')
+
+    // 暫存 user-data-dir 是全新環境，`chatProviders` 本來是空的（供應商下拉會沒有選項）：
+    // 先種一組，後面的欄位／模型列才有東西可測。
+    await cdp.eval(`window.electronAPI.store.set('chatProviders', [
+      { id: 'e2e_prov', name: 'E2E 測試', apiUrl: 'https://example.invalid/v1', apiKey: 'k', models: ['m-one', 'm-two'] }
+    ])`)
 
     // 分兩段等，而且各自只點一次。
     // 把兩次點擊塞進同一個 waitFor 重試會排隊觸發多次非同步 loadChatSettings()，

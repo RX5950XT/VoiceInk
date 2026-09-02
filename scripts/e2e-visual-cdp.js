@@ -5,9 +5,11 @@ const os = require('os')
 const path = require('path')
 
 const PORT = 9243
-const EXE = path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
+// Windows 偶爾會有別的東西鎖住 dist/win-unpacked（打包失敗、防毒掃描中），
+// 這時可以打包到別的資料夾再用 VOICEINK_EXE 指過去，測試不必等鎖放掉
+const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
 const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-e2e-visual-'))
-const PAGES = ['chat', 'terminal', 'usage', 'agy', 'stt', 'translate', 'settings']
+const PAGES = ['chat', 'ccswitch', 'usage', 'agy', 'stt', 'translate', 'sysmon', 'hfmodels', 'settings']
 const VIEWPORTS = [
   { width: 1440, height: 1000 },
   { width: 900, height: 900 },
@@ -15,7 +17,11 @@ const VIEWPORTS = [
 ]
 const SIGNATURES = {
   chat: ['.chat-sidebar', '.chat-main', '.chat-composer'],
-  terminal: ['.term-sidebar', '.term-host'],
+  // 探索頁的卡片要等搜尋回來才有，所以挑「執行環境」那三塊靜態就在 DOM 裡的面板
+  hfmodels: ['.hf-panel'],
+  ccswitch: ['.cc-panel'],
+  // 卡片是收到第一輪取樣才建出來的，所以 signature 挑靜態就在 DOM 裡的兩個面板
+  sysmon: ['.sysmon-table', '.sysmon-stress-card'],
   usage: ['.usage-card', '.usage-summary-strip'],
   agy: ['.agy-control', '.agy-stats', '.agy-models', '.agy-logs'],
   stt: ['.drop-zone', '.result-panel'],
@@ -233,6 +239,31 @@ async function main() {
       }
     }
 
+    // 沒開的彈窗必須真的看不見。`dialog:not([open]) { display: none }` 只是瀏覽器
+    // 內建樣式，任何作者規則（`.app-dialog { display: flex }`）都壓得過它，症狀是
+    // 六個彈窗一起浮出來疊在頁面上（實際出貨過）。**只斷言 `.open === false` 抓不到**，
+    // 要量 offsetHeight。
+    const closedDialogs = await cdp.eval(`(() => {
+      const dialogs = [...document.querySelectorAll('dialog.app-dialog')]
+      for (const dialog of dialogs) if (dialog.open) dialog.close()
+      const visible = () => dialogs
+        .filter((d) => d.offsetHeight || d.offsetWidth)
+        .map((d) => ({ id: d.id, h: d.offsetHeight, w: d.offsetWidth }))
+      // 先把壞掉的寫法套上去，確認這條斷言真的會失敗——量不到就代表白測了
+      for (const dialog of dialogs) dialog.style.display = 'flex'
+      const broken = visible().length
+      for (const dialog of dialogs) dialog.style.display = ''
+      return { broken, leaked: visible() }
+    })()`)
+    if (!closedDialogs.broken) {
+      throw new Error('這條斷言抓不到 display 被壓過的情況，等於沒驗到')
+    }
+    if (closedDialogs.leaked.length) {
+      throw new Error(`沒開的彈窗還看得見：${JSON.stringify(closedDialogs.leaked)}`)
+    }
+    checks++
+    console.log('PASS  dialog-hidden (未開啟的彈窗量不到尺寸)')
+
     // 彈窗的標題／內容／按鈕列必須同一條左右邊界。`.term-new-body` 少寫 padding
     // 就讓欄位比標題往左突了 24px，只看截圖不一定注意得到。
     const dialogRows = await cdp.eval(`(() => {
@@ -343,10 +374,11 @@ async function main() {
     console.log('PASS  control-states (select / model chip / thinking)')
 
     const customDropdown = await cdp.eval(`(async () => {
-      document.querySelector('[data-page="translate"]')?.click()
+      document.querySelector('[data-page="stt"]')?.click()
+      document.querySelector('#sttSubtabs [data-subtab="live"]')?.click()
       await new Promise((resolve) => setTimeout(resolve, 260))
-      const trigger = document.querySelector('.custom-select-trigger[data-select-id="translateTargetLang"]')
-      const native = document.getElementById('translateTargetLang')
+      const trigger = document.querySelector('.custom-select-trigger[data-select-id="liveLanguage"]')
+      const native = document.getElementById('liveLanguage')
       if (!trigger || !native) return null
       const before = native.value
       let changed = 0
@@ -376,6 +408,8 @@ async function main() {
       trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
       const movedHighlight = reopened?.querySelector('[data-highlighted="true"]')?.dataset.value || ''
       trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      const keyboardClosed = !document.querySelector('.custom-select-menu.is-open')
+      document.querySelector('#sttSubtabs [data-subtab="file"]')?.click()
       return {
         opened: true,
         menuRadius: style.borderRadius,
@@ -386,11 +420,11 @@ async function main() {
         nowrap,
         changed,
         selectedChanged: after !== before,
-        closed: !document.querySelector('.custom-select-menu.is-open'),
+        closed: keyboardClosed,
         triggerExpanded: trigger.getAttribute('aria-expanded'),
         keyboardOpened: !!reopened,
         keyboardMoved: !!initialHighlight && !!movedHighlight && initialHighlight !== movedHighlight,
-        keyboardClosed: !document.querySelector('.custom-select-menu.is-open')
+        keyboardClosed
       }
     })()`)
     if (!customDropdown || !customDropdown.opened || customDropdown.menuRadius !== '10px' ||
@@ -489,7 +523,13 @@ async function main() {
       document.querySelector('[data-page="settings"]')?.click()
       await new Promise((resolve) => setTimeout(resolve, 320))
       document.querySelector('.settings-nav-item[data-section="cloud"]')?.click()
-      await new Promise((resolve) => setTimeout(resolve, 420))
+      // 等「量得到尺寸」而不是睡固定時間：機器忙的時候 420ms 不夠，量到的會是
+      // 一整排 0×0，看起來像對齊壞掉，其實只是還沒畫出來（實際誤判過一次）
+      for (let i = 0; i < 40; i++) {
+        const probe = document.querySelector('#chatModelList .chat-model-row .input')
+        if (probe && probe.getBoundingClientRect().height > 0) break
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
       const row = document.querySelector('#chatModelList .chat-model-row')
       const checkbox = row?.querySelector('.chat-model-flag input')
       const flagText = row?.querySelector('.chat-model-flag > span')
@@ -522,7 +562,7 @@ async function main() {
     console.log('PASS  model-row-layout (same top / 40px controls)')
 
     const dialogDropdown = await cdp.eval(`(async () => {
-      document.querySelector('[data-page="terminal"]')?.click()
+      document.querySelector('[data-page="chat"]')?.click()
       await new Promise((resolve) => setTimeout(resolve, 260))
       document.getElementById('termNewBtn')?.click()
       await new Promise((resolve) => setTimeout(resolve, 120))
@@ -532,22 +572,29 @@ async function main() {
       trigger.click()
       await new Promise((resolve) => setTimeout(resolve, 120))
       const menu = document.querySelector('.custom-select-menu.is-open')
+      // 對齊也要驗：dialog 的 backdrop-filter 會變成 fixed 子孫的定位基準，
+      // 只檢查「在不在 dialog 裡」的話，清單整個位移到 dialog 左上角那麼多也照樣過（實際發生過）
+      const t = trigger.getBoundingClientRect()
+      const m = menu?.getBoundingClientRect()
       const result = {
         opened: !!menu,
         inDialog: menu?.parentElement === dialog,
         overflowOpen: dialog.classList.contains('custom-select-portal-open'),
-        optionCount: menu?.querySelectorAll('.custom-select-option').length || 0
+        optionCount: menu?.querySelectorAll('.custom-select-option').length || 0,
+        alignedX: !!m && Math.abs(m.left - t.left) <= 2,
+        belowTrigger: !!m && m.top > t.top && m.top - t.bottom <= 12
       }
       trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
       document.getElementById('termNewCancelBtn')?.click()
       return result
     })()`)
     if (!dialogDropdown || !dialogDropdown.opened || !dialogDropdown.inDialog ||
-      !dialogDropdown.overflowOpen || dialogDropdown.optionCount < 1) {
+      !dialogDropdown.overflowOpen || dialogDropdown.optionCount < 1 ||
+      !dialogDropdown.alignedX || !dialogDropdown.belowTrigger) {
       throw new Error(`彈窗內自訂下拉不符預期：${JSON.stringify(dialogDropdown)}`)
     }
     checks++
-    console.log('PASS  dialog-dropdown (top-layer portal / close)')
+    console.log('PASS  dialog-dropdown (top-layer portal / align / close)')
 
     await cdp.send('Emulation.setEmulatedMedia', {
       features: [{ name: 'prefers-reduced-motion', value: 'reduce' }]

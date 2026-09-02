@@ -17,7 +17,7 @@ import {
   ASR_MODEL_KEY,
   resolveTranslateModelKey
 } from './app.js'
-import { resolveCloudTranslate } from './model-picker.js'
+import { readScope, parseAsrValue, parseLlmValue, resolveScopedCloud } from './model-picker.js'
 
 // ===== DOM 元素 =====
 let liveLanguage
@@ -34,6 +34,10 @@ let liveTranslatorHint
 let isCapturing = false
 let mediaStream = null
 let settings = null
+/** 這次擷取用的 ASR 是本地還是雲端（狀態列顯示用；來源是 `liveAsr`） */
+let liveAsrEngine = 'local'
+/** 雲端 ASR 時用的是哪一顆模型（顯示用） */
+let liveAsrModelId = ''
 let consecutiveFailures = 0
 let engineAcquired = false
 /** 進入分頁時背景預熱所持有的引擎 owner（與 engineAcquired 互斥：擷取開始即轉交） */
@@ -110,7 +114,7 @@ export function initLiveCaption() {
     // 擷取中改設定也要刷新快照，否則 renderer 判斷與 main 即時讀取的 store 脫鉤
     settings = await getSettings()
     refreshLiveTranslatorHint()
-    // 未擷取且已預熱：重載以套用 localTranslateModel / llmGpu / translator / asrEngine
+    // 未擷取且已預熱：重載以套用這一頁的 liveAsr / liveLlm 與全域的 llmGpu
     if (isCapturing || isStarting || !electronAPI.engine) return
     // 要「頁在前景」而且「停在即時字幕這個子分頁」才重新預熱
     const page = document.getElementById('page-stt')
@@ -134,10 +138,10 @@ export async function prewarmEngine() {
   prewarmInFlight = true
   if (statusText && !isCapturing) statusText.textContent = '準備模型…'
   try {
-    const s = await getSettings()
+    const scope = await readScope('live')
     const r = await electronAPI.engine.acquire('live', {
-      asr: s.asrEngine !== 'cloud',
-      llm: s.translator === 'local'
+      asr: parseAsrValue(scope.asr).engine === 'local',
+      llm: parseLlmValue(scope.llm).mode === 'local'
     })
     // 擷取已接手（或即將接手）同一個 live owner：不可 release
     if (isCapturing || engineAcquired || isStarting) {
@@ -180,9 +184,9 @@ export async function cooldownEngine() {
  * 更新翻譯／ASR 後端提示
  */
 async function refreshLiveTranslatorHint() {
-  const s = await getSettings()
-  const translator = s.translator === 'cloud' ? '雲端 LLM' : '本地 LLM'
-  const asr = s.asrEngine === 'cloud' ? '雲端 ASR' : '本地 ASR'
+  const scope = await readScope('live')
+  const translator = parseLlmValue(scope.llm).mode === 'cloud' ? '雲端 LLM' : '本地 LLM'
+  const asr = parseAsrValue(scope.asr).engine === 'cloud' ? '雲端 ASR' : '本地 ASR'
   if (liveTranslatorHint) {
     liveTranslatorHint.textContent = `語音轉文字：${asr}　翻譯：${translator}（目標語言選「自動偵測」則不翻譯）`
   }
@@ -201,9 +205,16 @@ async function startCapture() {
     targetLanguage = liveLanguage.value
     const needsTranslationBackend = targetLanguage !== 'auto'
 
+    // 這一頁自己的模型選擇（檔案轉錄與語音輸入各有各的）
+    const scope = await readScope('live')
+    const asrChoice = parseAsrValue(scope.asr)
+    const llmChoice = parseLlmValue(scope.llm)
+    liveAsrEngine = asrChoice.engine
+    liveAsrModelId = asrChoice.modelId || ''
+
     const status = await electronAPI.models.status()
-    if (settings.asrEngine !== 'cloud') {
-      const asrKey = settings.asrModelKey || ASR_MODEL_KEY
+    if (asrChoice.engine !== 'cloud') {
+      const asrKey = asrChoice.modelKey || ASR_MODEL_KEY
       const asrDef = status.models[asrKey]
       if (!asrDef?.downloaded) {
         showToast(`本地語音模型（${asrDef?.label || asrKey}）尚未下載，請到設定 → 本地模型下載`, 'error')
@@ -215,19 +226,19 @@ async function startCapture() {
         return
       }
     }
-    if (settings.asrEngine === 'cloud' && !settings.asrApiKey) {
+    if (asrChoice.engine === 'cloud' && !settings.asrApiKey) {
       showToast('雲端語音轉文字需要 API Key，請到設定填寫', 'error')
       return
     }
-    if (needsTranslationBackend && settings.translator === 'local') {
-      const llmKey = resolveTranslateModelKey(settings, status.models)
+    if (needsTranslationBackend && llmChoice.mode === 'local') {
+      const llmKey = resolveTranslateModelKey({ localTranslateModel: llmChoice.modelKey }, status.models)
       if (!status.models[llmKey]?.downloaded) {
         showToast('本地翻譯模型尚未下載，請先到設定下載', 'error')
         return
       }
     }
-    if (needsTranslationBackend && settings.translator === 'cloud' && !resolveCloudTranslate(settings).ready) {
-      showToast('雲端翻譯還沒選好供應商與模型，請在上方選單挑一顆', 'error')
+    if (needsTranslationBackend && llmChoice.mode === 'cloud' && !resolveScopedCloud(settings, scope.llm).ready) {
+      showToast('雲端翻譯還沒選好供應商與模型，請在這一頁的「翻譯模型」挑一顆', 'error')
       return
     }
 
@@ -250,12 +261,12 @@ async function startCapture() {
       }))
 
       // 2) 預熱模型（雲端 ASR 不載 sherpa）
-      statusText.textContent = settings.asrEngine === 'cloud' && settings.translator !== 'local'
+      statusText.textContent = asrChoice.engine === 'cloud' && llmChoice.mode !== 'local'
         ? '準備中…'
         : '載入模型…'
       startLiveBtn.disabled = true
-      const needAsr = settings.asrEngine !== 'cloud'
-      const needLlm = needsTranslationBackend && settings.translator === 'local'
+      const needAsr = asrChoice.engine !== 'cloud'
+      const needLlm = needsTranslationBackend && llmChoice.mode === 'local'
       const warm = await electronAPI.engine.acquire('live', { asr: needAsr, llm: needLlm })
       if (!warm.ok) {
         throw new Error((warm.warnings && warm.warnings[0]) || '模型載入失敗')
@@ -518,7 +529,8 @@ async function pumpTranslate() {
     const translated = (await electronAPI.translate(joinedSource, targetLanguage, {
       previousSource: context.previousSource,
       previousTranslation: context.previousTranslation,
-      mode: 'live'
+      mode: 'live',
+      scope: 'live'
     }) || '').trim()
 
     if (epoch !== sessionEpoch) return
@@ -647,9 +659,9 @@ function updateUI() {
   statusText.textContent = isCapturing ? '擷取中' : isStarting ? '準備中…' : '未啟動'
 
   if (isCapturing) {
-    liveEngine.textContent = settings?.asrEngine === 'cloud'
-      ? `· 雲端 ASR${settings.asrModelId ? `（${settings.asrModelId}）` : ''}`
-      : '· 本地 Qwen3-ASR-0.6B'
+    liveEngine.textContent = liveAsrEngine === 'cloud'
+      ? `· 雲端 ASR${liveAsrModelId ? `（${liveAsrModelId}）` : ''}`
+      : '· 本地 Qwen3-ASR'
   } else {
     liveEngine.textContent = ''
     levelFill.style.width = '0%'

@@ -97,14 +97,16 @@ async function main() {
     )
 
     // ── 模組選擇：只有 store 決定，renderer 說了不算 ─────────────────
-    const cpuStore = makeStore({ asrModelKey: 'qwen3asr' })
-    const gpuStore = makeStore({ asrModelKey: 'qwen3asrgpu' })
+    // 三個子分頁各存各的（fileAsr／liveAsr／dictationAsr），所以要指名 scope
+    const cpuStore = makeStore({ liveAsr: 'local:qwen3asr' })
+    const gpuStore = makeStore({ liveAsr: 'local:qwen3asrgpu', fileAsr: 'local:qwen3asr' })
     asrSelect.setStore(cpuStore)
-    ok('預設走 sherpa（CPU）', asrSelect.currentKey() === 'qwen3asr')
+    ok('預設走 sherpa（CPU）', asrSelect.currentKey('live') === 'qwen3asr')
     asrSelect.setStore(gpuStore)
-    ok('選 GPU 模型時走 llama-server', asrSelect.pick() === llamaAsr)
-    asrSelect.setStore(makeStore({ asrModelKey: '../../evil' }))
-    ok('未知 key 退回 CPU 那顆', asrSelect.currentKey() === 'qwen3asr')
+    ok('選 GPU 模型時走 llama-server', asrSelect.pick('live') === llamaAsr)
+    ok('同一份 store 裡別頁的選擇不受影響', asrSelect.pick('file') !== llamaAsr)
+    asrSelect.setStore(makeStore({ liveAsr: 'local:../../evil' }))
+    ok('未知 key 退回 CPU 那顆', asrSelect.currentKey('live') === 'qwen3asr')
 
     // ── registry：archive 型別的已安裝判定看 check 不看下載檔名 ───────
     const runtime = models.MODELS.llamaruntime
@@ -150,10 +152,10 @@ async function main() {
         }
         if (samples) {
           const t1 = Date.now()
-          const text = await asrSelect.transcribe({ samples, sampleRate: 16000, lang: 'zh-TW' })
+          const text = await asrSelect.transcribe('live', { samples, sampleRate: 16000, lang: 'zh-TW' })
           const first = Date.now() - t1
           const t2 = Date.now()
-          await asrSelect.transcribe({ samples, sampleRate: 16000, lang: 'zh-TW' })
+          await asrSelect.transcribe('live', { samples, sampleRate: 16000, lang: 'zh-TW' })
           const audioSec = samples.length / 16000
           console.log(
             `        ${audioSec.toFixed(2)}s 音訊：首次 ${first}ms、第二次 ${Date.now() - t2}ms → ${text}`
