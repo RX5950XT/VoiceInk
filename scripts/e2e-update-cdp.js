@@ -2,8 +2,15 @@
  * 打包版自動更新 UI 的 CDP 回歸。
  *
  * 驗三件事：設定 → 基本真的有那組控制項（量得到尺寸，不是只有 DOM 在）、
- * 「檢查更新」按下去會真的走到 main 並回一個合法狀態、以及自動更新開關寫得進 store。
- * **會真的連一次 GitHub**（發行版還沒附 latest.yml 時回 error 也算通過——那是正確的降級）。
+ * 「檢查更新」按下去會真的連到 GitHub 讀 latest.yml 並回一個**非 error** 的狀態、
+ * 以及自動更新開關寫得進 store。
+ *
+ * `electron:pack`（`--win dir`）產出的預覽版**不會有 `resources/app-update.yml`**
+ * ——electron-builder 只在 nsis／appx 這類真正的安裝目標才寫那一份（`PublishManager`
+ * 的 `isSuitableWindowsTarget`）。沒有它 electron-updater 一律回 ENOENT，
+ * 於是「檢查更新失敗」，看起來像功能壞掉其實是預覽版少一個檔案。
+ * 所以這支測試自己補一份再跑，跑完把自己補的刪掉；**不要把 error 當成通過**，
+ * 那會讓 publish 設定被拿掉時測試還是綠的。
  *
  * 用暫存 user-data-dir，不碰使用者的設定；收尾只殺自己 spawn 出來的 pid。
  */
@@ -16,6 +23,29 @@ const http = require('http')
 const PORT = 9243
 const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-update-'))
 const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
+const APP_UPDATE_YML = path.join(path.dirname(EXE), 'resources', 'app-update.yml')
+
+/**
+ * 預覽版（dir target）沒有 app-update.yml，補一份才測得到真實的檢查更新路徑。
+ * 內容跟 electron-builder 從 `build.publish` 產的那份一樣。
+ * @returns {boolean} 這一輪是不是我們自己建的（是的話收尾要刪掉）
+ */
+function ensureAppUpdateYml() {
+  if (fs.existsSync(APP_UPDATE_YML)) return false
+  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'))
+  const cfg = (pkg.build.publish || [])[0]
+  if (!cfg) throw new Error('package.json 的 build.publish 不見了 → 打包不會產出 latest.yml，更新永遠檢查不到')
+  fs.writeFileSync(
+    APP_UPDATE_YML,
+    `provider: ${cfg.provider}
+owner: ${cfg.owner}
+repo: ${cfg.repo}
+updaterCacheDirName: ${pkg.name}-updater
+`,
+    'utf8'
+  )
+  return true
+}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -73,6 +103,7 @@ async function waitTargets(timeoutMs = 30000) {
 }
 
 async function main() {
+  const madeYml = ensureAppUpdateYml()
   const child = spawn(EXE, [`--remote-debugging-port=${PORT}`, `--user-data-dir=${USER_DATA_DIR}`], { stdio: 'ignore' })
   const results = []
   const ok = (name, pass, detail = '') => {
@@ -131,8 +162,9 @@ async function main() {
       return { st, msg: document.getElementById('updateStatus')?.textContent || '' }
     })()`)
     const st = checked.st || {}
-    ok('檢查更新回得到合法狀態',
-      ['none', 'available', 'downloading', 'downloaded', 'error'].includes(st.state),
+    // error 不算通過：那代表連不到 GitHub、latest.yml 沒上傳，或 publish 設定被拿掉了
+    ok('檢查更新真的讀到 GitHub 的 latest.yml',
+      ['none', 'available', 'downloading', 'downloaded'].includes(st.state),
       JSON.stringify(st))
     ok('狀態文字有畫到畫面上', checked.msg.length > 0, checked.msg)
     ok('錯誤訊息不夾帶上游原文', !/http(s)?:\/\/|Error:|\bECONN/i.test(checked.msg), checked.msg)
@@ -159,6 +191,8 @@ async function main() {
     // 只殺自己 spawn 的那棵樹，不可以用 /IM（會關掉使用者的安裝版）
     try { spawn('taskkill', ['/F', '/T', '/PID', String(child.pid)], { stdio: 'ignore' }) } catch {}
     await sleep(1500)
+    // 只刪自己補的那份，正式安裝版本來就有的不要動
+    if (madeYml) { try { fs.unlinkSync(APP_UPDATE_YML) } catch {} }
     for (let i = 0; i < 5; i++) {
       try { fs.rmSync(USER_DATA_DIR, { recursive: true, force: true }); break } catch { await sleep(800) }
     }

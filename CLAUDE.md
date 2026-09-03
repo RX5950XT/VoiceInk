@@ -157,6 +157,12 @@ gh release upload vX.Y.Z dist/VoiceInk-Setup-X.Y.Z.exe dist/VoiceInk-Setup-X.Y.Z
   **`nsis.artifactName` 也不能改回預設**：預設帶空白（`VoiceInk Setup 1.11.0.exe`），
   上傳 GitHub 會被改名成 `VoiceInk.Setup.1.11.0.exe`，而 latest.yml 寫的是連字號版 → 下載時 404。
   回歸：`test-updater.js` 的 [E]
+- **`electron:pack`（dir target）產出的預覽版永遠檢查不到更新，那不是 bug**：
+  electron-builder 只在 **nsis／appx** 這種真正的安裝目標才會寫 `resources/app-update.yml`
+  （`PublishManager` 的 `isSuitableWindowsTarget`），而 electron-updater 的 provider 設定就讀那一份，
+  沒有它一律 ENOENT → UI 顯示「檢查更新失敗」。要在預覽版上驗更新，先自己補一份
+  （`e2e-update-cdp.js` 會自動補、跑完刪掉）。**不可以把 error 當成測試通過**，
+  那會讓 `build.publish` 被拿掉時測試還是綠的。
 - **`autoInstallOnAppQuit` 在這個 App 沒有作用**：它掛的是 `app.once('quit')`，而 `before-quit` 收完
   子程序是走 `app.exit(0)`（不發 quit 事件）。所以「結束時裝好」是 main.js 在 `app.exit(0)` **前一行**
   呼叫 `updater.installOnQuit()`，順序不可對調。
