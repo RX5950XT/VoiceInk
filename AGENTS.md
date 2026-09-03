@@ -6,7 +6,7 @@
 
 ## 1. 這是什麼
 
-**VoiceInk**（v1.10.0）：Windows 桌面 AI 工作台，Electron 43.4.1 ＋ Vite ＋ Vanilla JS（無框架）。
+**VoiceInk**（v1.11.0）：Windows 桌面 AI 工作台，Electron 43.4.1 ＋ Vite ＋ Vanilla JS（無框架）。
 九個分頁：聊天（終端機併在同一頁）｜CC代理｜額度（＋用量統計）｜AGY 反代｜語音轉文字｜翻譯與 TTS｜系統監控（含風扇控制）｜HF模型｜設定。
 
 模組職責、資料流與 store key 一覽在 [CONTEXT.md](./CONTEXT.md) 的「架構」一節；
@@ -44,9 +44,29 @@ npm run build:hook       # 語音輸入原生熱鍵 sidecar（需 .NET 8 SDK）
 > 打包前先關掉開著的預覽（`Stop-Process -Name VoiceInk -Force`）。
 > `resources/sensors/`（36MB）與 `resources/hook/`（10MB）**不進版控**，乾淨 clone 要出貨這兩個功能就先自己建；
 > 沒建也打得起來，只是感測器顯示「沒有附帶元件」、右 Alt 退回「只監聽」模式。
-> 發行：bump 版本（不可與既有 tag 重複）→ commit → `git tag vX.Y.Z` → push → `electron:build` → `gh release create`。
 
-## 5. 驗證紀律
+## 5. 發行
+
+App 內有自動更新（設定 → 基本），**它完全靠這條流程產出的檔案**；漏一步不會報錯，
+只會讓所有舊版使用者從此檢查不到更新。地雷細節見 [CLAUDE.md](./CLAUDE.md)「發行流程」。
+
+1. bump `package.json` 的 `version`（不可與既有 tag 重複），順手更新 README 頂端版本行。
+2. commit → `git tag vX.Y.Z` → `git push && git push --tags`。
+3. `npm run electron:build` → `dist/` 產出安裝檔、`.blockmap`、`latest.yml`。
+4. `gh release create vX.Y.Z`（**不可 `--draft`／`--prerelease`**，electron-updater 走
+   `releases/latest`，那兩種它看不到）。
+5. `gh release upload vX.Y.Z` 把**三個檔案都傳上去**：
+   `VoiceInk-Setup-X.Y.Z.exe`、同名 `.blockmap`、`latest.yml`。
+
+| 檔案 | 少了會怎樣 |
+|---|---|
+| 安裝檔 | 下載 404 |
+| `latest.yml` | 舊版永遠顯示「沒有附帶更新資訊」（它只在 `build.publish` 有設定時才產出） |
+| `.blockmap` | 不報錯，但差異更新退回下載完整 360MB |
+
+發完之後舊版開 App 20 秒後就會自己看到；也可以在設定 → 基本手動按「檢查更新」。
+
+## 6. 驗證紀律
 
 - **宣告完成前必附驗證指令與實際輸出**；沒跑過就不算完成。完整指令表在 CLAUDE.md「驗證方式」。
 - 同一修法失敗兩次就停下換方法，不重試第三次。
@@ -58,7 +78,7 @@ npm run build:hook       # 語音輸入原生熱鍵 sidecar（需 .NET 8 SDK）
 - **CDP 測試只可用自己 spawn 的 `child.pid` 搭 `taskkill /PID /T` 收尾**，禁止 `/IM VoiceInk.exe`；
   一律用暫存 `--user-data-dir`，並用 `[data-id="…"]` 指涉自己建的資料（不可用「第一列」或總數）。
 
-## 6. 收尾
+## 7. 收尾
 
 - 規則或架構有實質變動時才維護 CLAUDE.md／AGENTS.md／CONTEXT.md，保持精簡且三份對齊。
 - 收到使用者修正後，把模式寫進 `tasks/lessons.md`（寫「為什麼」，不要只寫「改了什麼」）。

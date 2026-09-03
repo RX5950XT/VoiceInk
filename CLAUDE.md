@@ -47,10 +47,45 @@ npm run build:hook       # 語音輸入原生熱鍵 sidecar（需 .NET 8 SDK）�
 - `resources/sensors/` 與 `resources/hook/` **不進版控**；沒建置也打得起來，只是感測器顯示「沒有附帶元件」、
   右 Alt 退回「只監聽」模式。
 - 打包前先關掉 `dist/win-unpacked/VoiceInk.exe`（否則卡 `d3dcompiler_47.dll: Access is denied`）。
-- 發行：bump `package.json`（不可與既有 tag 重複）→ commit → `git tag vX.Y.Z` → push → `electron:build` →
-  `gh release create` 時**三個檔案都要上傳**：`VoiceInk-Setup-X.Y.Z.exe`、同名 `.blockmap`、`latest.yml`。
-  **少了 `latest.yml` 舊版就永遠檢查不到更新**（UI 只會說「沒有附帶更新資訊」）。
 - 使用者同時在用電腦時，桌面 QA 只能用 CDP／視窗 API 背景操作；不可移動滑鼠、發全域快捷鍵或搶前景焦點。
+
+### 發行流程
+
+App 內自動更新靠這條流程產出的檔案，**少一步舊版就永遠檢查不到更新**。
+
+```bash
+# 1) bump 版本（不可與既有 tag 重複），順手更新 README 頂端的版本行
+#    package.json 的 "version" ← X.Y.Z
+git commit -am "feat: 發行 vX.Y.Z — <一句話>"
+git tag vX.Y.Z && git push && git push --tags
+
+# 2) 完整打包（產出安裝檔、blockmap 與 latest.yml）
+npm run electron:build
+
+# 3) 建立 release（不可加 --draft／--prerelease，那兩種 electron-updater 看不到）
+gh release create vX.Y.Z --title "vX.Y.Z" --notes "<發行說明>"
+
+# 4) 上傳三個檔案（缺一不可）
+gh release upload vX.Y.Z dist/VoiceInk-Setup-X.Y.Z.exe dist/VoiceInk-Setup-X.Y.Z.exe.blockmap dist/latest.yml
+```
+
+三個檔案各自的作用（**任何一個少了都不會報錯，只會靜靜失效**）：
+
+| 檔案 | 少了會怎樣 |
+|---|---|
+| `VoiceInk-Setup-X.Y.Z.exe` | 下載 404 |
+| `latest.yml` | 舊版永遠說「沒有附帶更新資訊」——**它只在 `build.publish` 有設定時才產出** |
+| `.blockmap` | 不報錯，但差異更新退回下載完整 360MB |
+
+另外三條：
+
+- **不可以 `--draft` 或 `--prerelease`**：electron-updater 走的是 `releases/latest`，
+  那條路徑跳過草稿與預覽版（`GitHubProvider.getLatestTagName`），發了等於沒發。
+- **`nsis.artifactName` 不可改回預設**：預設帶空白，上傳 GitHub 會被改名成 `VoiceInk.Setup.X.Y.Z.exe`，
+  而 `latest.yml` 寫的是連字號版 → 下載 404。
+- tag 用 `vX.Y.Z`，且要跟 `package.json` 的 version 一致（`latest.yml` 的 `version` 是從那裡來的）。
+
+發完之後，舊版使用者開 App 20 秒後（或設定 → 基本按「檢查更新」）就會看到。
 
 ## 慣例
 
