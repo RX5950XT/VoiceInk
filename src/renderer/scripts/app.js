@@ -1112,7 +1112,6 @@ function appendAsrModelRow(value, options = {}) {
   input.type = 'text'
   input.className = 'input'
   input.value = value
-  input.setAttribute('list', 'asrModelSuggestions')
   input.placeholder = '轉錄模型 ID'
   input.setAttribute('aria-label', '轉錄模型 ID')
   const remove = document.createElement('button')
