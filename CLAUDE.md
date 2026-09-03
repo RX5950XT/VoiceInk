@@ -16,7 +16,7 @@ CC代理（Claude Code 工作台）｜額度｜AGY反代｜語音轉文字｜翻
 | 模組 | 重點 |
 |---|---|
 | 聊天 | 多組供應商（`chatProviders`＋`chatProviderId`＋`chatModelId`），各帶 url／key／模型清單，可掃 `/models`；**雲端翻譯共用同一份清單**（`translateProviderId`＋`translateModelId`）。系統提示 preset、thinking 開關、圖片附件、生圖模型（`imageModels`）、訊息複製與重新生成、側欄搜尋與拖曳排序。會話存 `<userData>/chats.json` |
-| 終端機 | **與聊天同一頁**（側欄上半對話／下半終端機，主區 `#chatMain` ⇄ `#termMain`）。`@lydell/node-pty`（ConPTY）＋ xterm.js；側欄多開、狀態「運行中／已完成／已結束」＋未讀點。shell 與啟動指令是 main 固定表（renderer 只送 key），cwd 走系統對話框。metadata 存 `<userData>/terminals.json`（**不存畫面內容**） |
+| 終端機 | **與聊天同一頁**（側欄上半對話／下半終端機，主區 `#chatMain` ⇄ `#termMain`）。`@lydell/node-pty`（ConPTY）＋ xterm.js；側欄多開、狀態「運行中／已完成／已結束」＋未讀點。shell 與啟動指令是 main 固定表（renderer 只送 key），cwd 走系統對話框。可勾「以系統管理員身分執行」（`admin`）——ConPTY 開不出提權 shell，改由 `--terminal-admin-host=` 再開一份自己（UAC 一次）代開，見 `admin.js`／`admin-host.js`。metadata 存 `<userData>/terminals.json`（**不存畫面內容**） |
 | HF模型 | `src/main/hfmodels/`：在 Hugging Face 搜 GGUF → 下載 → 一鍵載入 → **直接出現在聊天的模型選單**。探索頁是左清單／右模型卡兩欄（README＋每個量化的大小與「這台跑不跑得動」）。推論走 `llama-server` 的 **router 模式**（`--models-dir`＋`--models-preset`，一顆程序管全部模型），參數由 `plan.js`（估算）＋官方 `llama-fit-params`（實測）決定，每一項都可覆寫、可原始參數直通、可 `llama-bench` 實測調校。模型放 `hfModelsDir`（可自選，預設 `<userData>/hf-models`），一顆一個子資料夾（`mmproj-*.gguf` 同夾＝多模態） |
 | Claude Code 工作台 | `src/main/ccswitch/`：供應商（CC Switch 式 tile，一鍵改 `~/.claude/settings.json` 的 `env`；「Claude 官方訂閱」排第一、內建各家自動播種、「＋」新增自訂；**端點只有自訂能填，六家內建可選上游格式**）／MCP（`~/.claude.json`）／CLI 版本。走閘道那幾家經 `ccswitch/gateway/` 轉協議；Codex／Grok 可 App 內 OAuth 或沿用 CLI 憑證 |
 | 系統監控 | `src/main/sysmon/`：常駐 `probe.ps1` 取樣器＋`nvidia-smi -l`；四個子分頁（總覽／處理程序／壓力測試／風扇控制）。磁碟**按實體碟分開**顯示，S.M.A.R.T. 走免提權 NVMe IOCTL（健康度／通電時數／寫入總量／溫度，CrystalDiskInfo 那半邊）；壓力測試 CPU／GPU 各一排四格（負載／功耗／溫度／轉速）＋磁碟測速（`bench.js`，測試檔跑完刪掉）。感測器走提權 sidecar，預設進頁自動啟用；**風扇控制**（`fans.js`＋`sensors-task.js`）走同一顆 sidecar 的雙向管道，通用機殼示意圖＋可拖點的轉速曲線，開機自啟動時直接接管（排程工作免 UAC） |
@@ -104,8 +104,10 @@ npm run build:hook       # 語音輸入原生熱鍵 sidecar（需 .NET 8 SDK）�
   ——`app.asar` 寫完立刻被即時掃描抓住，electron-builder 在自己那一步 `EBUSY: unlink app.asar`，
   排掉之後 437MB 一次就過）。
 - **`app.asar` 被別的程式抓著 → 產出的 asar 會安靜錯位**（每個檔案拿到前一個的內容，整頁 SyntaxError，**不報錯**）。
-  兇手可能是完全無關的 Electron 工具（實測 `Orca.exe` 會監看工作區）；`Get-Process | Where Path` 抓不到，
-  要用 `Get-CimInstance Win32_Process` 或 `handle64 app.asar`。
+  兇手可能是完全無關的 Electron 工具（實測 `Orca.exe` 會監看工作區，**連 `%TEMP%` 也監看**——
+  2026-09-03 兩次都被它抓住，改打包到 `C:\vi-pack` 才過）；`Get-Process | Where Path` 抓不到，
+  要用 `handle64 app.asar`，或用 Restart Manager 的 P/Invoke（`RmStartSession`＋`RmGetList`，免提權）
+  直接問「誰鎖著這個檔案」——`Get-CimInstance Win32_Process` 只看得到命令列，看不到 handle。
   解法：打包到**工作區外**（`--config.directories.output="$TEMP/vi-pack"`）→ `cp -rf` 或
   `robocopy /MIR /XF app.asar` 覆寫回 `dist/win-unpacked`（那個 handle 擋 delete 不擋 write），
   asar 用 `[IO.File]::Open(dst,'Open','Write','Read')` 就地覆寫＋`SetLength`。
@@ -357,6 +359,18 @@ npm run build:hook       # 語音輸入原生熱鍵 sidecar（需 .NET 8 SDK）�
   看起來像 pty 沒起來。
 - **shell 與啟動指令只收 key**（執行檔路徑與指令字串在 `terminal/store.js` 的固定表）；
   cwd 走 `terminal:pickDirectory` 對話框再由 main `statSync().isDirectory()` 驗過。
+- **管理員終端機開不成 ConPTY，只能另開一顆提權程序代開**：CreateProcess 一律繼承呼叫者的
+  token，唯一拿得到管理員 token 的 `ShellExecute runas`（UAC）又交接不了 pty handle。
+  做法是把**自己**用 `Start-Process -Verb RunAs` 再開一份、帶 `--terminal-admin-host=<管道>`
+  （`main.js` 最前面就攔下來，**要擋在 single instance lock 之前**，否則第二份會被自己 quit 掉），
+  提權那份開 pty 再用具名管道把位元組轉回來。三件事缺一不可：
+  ① host 的 socket 一 `close` 就把管理員 shell 全部 kill 掉再自己結束（沒人看的提權 shell 最糟）；
+  ② 一顆 host 服務所有管理員階段，UAC 只跳第一次；
+  ③ host 模式要 `app.setPath('userData', …temp…)`，提權程序寫進主 userData 會讓檔案擁有者變管理員。
+  對面送來的東西一律重新收斂（shell 只認 key、cwd 要真的存在），host 不照著執行任意路徑。
+  `-ArgumentList` 的元素含空白時 PowerShell 不會自己加引號，而那段字串又不准有雙引號 →
+  用 `[char]34` 兜（`admin.psArgList`）。回歸：`probe-terminal-admin.js`（不需 UAC）＋
+  `probe-terminal-admin-elevate.js`（**會跳一次 UAC**）
 - 初始 snapshot 與後續 PTY 事件走同一條序列佇列；視窗背景時用 xterm 的同步 write buffer。
 
 ### HF模型（本機 LLM）
@@ -944,7 +958,7 @@ npm run build:hook       # 語音輸入原生熱鍵 sidecar（需 .NET 8 SDK）�
 | 轉換閘道 | `node scripts/test-ccswitch-gateway.js`＋`node scripts/e2e-ccswitch-gateway.js`（自開 mock 上游） |
 | 用量統計 | `node scripts/test-code-usage.js`＋`npx electron scripts/e2e-code-usage.js`（**真的讀本機記錄**，實測 5.4GB）＋`npx electron scripts/probe-code-usage-audit.js`（**不經 codeusage 自己重算一次**再對帳；動 `parsers.js`／`pricing.js` 前後都要跑） |
 | AGY | `node scripts/test-agy-mappers.js`＋`npx electron scripts/e2e-agy.js`（mock cloudcode-pa）＋`node scripts/e2e-agy-cdp.js`；動映射表／端點順序前先跑 `npx electron scripts/probe-agy-upstream.js`，動 `runAgyCli` 前跑 `probe-agy-nudge.js` |
-| 終端機 | `node scripts/test-terminal.js`＋`npx electron scripts/e2e-terminal.js`（真 ConPTY）＋`node scripts/e2e-terminal-cdp.js` |
+| 終端機 | `node scripts/test-terminal.js`＋`npx electron scripts/e2e-terminal.js`（真 ConPTY）＋`node scripts/e2e-terminal-cdp.js`；管理員終端機 `node scripts/probe-terminal-admin.js`（宿主協定，**不需 UAC**）＋`node_modules/electron/dist/electron.exe scripts/probe-terminal-admin-elevate.js`（**會跳一次 UAC**，驗 shell 真的是 High） |
 | 系統監控 | `node scripts/test-sysmon.js`＋`npx electron scripts/e2e-sysmon.js`＋`node scripts/e2e-sysmon-cdp.js`＋`node scripts/probe-sysmon-stress.js`（**實機量有沒有真的壓到**）＋`node scripts/e2e-sysmon-sensors.js`（**會跳一次 UAC**） |
 | 風扇控制 | `node scripts/test-sysmon-fans.js`（內插／遲滯／斜率／下限／panic／sanitize）＋`node scripts/e2e-sysmon-fans-cdp.js`（打包版 UI，**不接管真風扇**）＋`node scripts/probe-sysmon-fans.js`（**實機轉你的風扇**，100%/40% 各量一次 RPM，會跳 UAC）＋`node scripts/probe-sensors-task.js`（免 UAC 啟動那條路，**會跳兩次 UAC**：建立與移除工作） |
 | 額度 | `node scripts/test-usage.js`＋`npx electron scripts/e2e-usage.js`（真實來源）＋`node scripts/e2e-usage-cdp.js`；動 OpenCode Go／Ollama／Command Code 端點或解析前後跑 `node scripts/probe-usage-endpoints.js`（**打真上游**） |

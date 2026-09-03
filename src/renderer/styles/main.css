@@ -1871,6 +1871,16 @@ option:disabled {
   background-color: color-mix(in srgb, var(--danger) 14%, transparent);
 }
 
+.term-admin {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent-warm);
+  background-color: color-mix(in srgb, var(--accent-warm) 16%, transparent);
+}
+
 .term-cwd {
   overflow: hidden;
   text-overflow: ellipsis;

@@ -173,6 +173,7 @@ function sanitizeAll(raw) {
       shell,
       preset,
       cwd,
+      admin: item.admin === true,
       createdAt: Number.isFinite(item.createdAt) ? item.createdAt : Date.now()
     })
     if (out.length >= MAX_SESSIONS) break
@@ -248,6 +249,8 @@ function create(req) {
       shell,
       preset,
       cwd,
+      // 提權要走另一顆 host 程序（見 admin.js），renderer 只送這個布林
+      admin: req?.admin === true,
       createdAt: Date.now()
     }
     await writeAll([...items, session])

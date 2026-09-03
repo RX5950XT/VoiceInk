@@ -433,3 +433,14 @@ renderer，preload 直接 `window.electronAPI = 假的`。不碰真硬體、不�
 OpenCode Go 與 Command Code 的官方文件都同時列出多種 API 路徑，而且會依模型分流。
 因此「上游格式」與「驗證格式」要分開存：前者決定 Claude Code 是否經閘道，後者只決定測試鈕送哪種最小請求；
 不可用一個全域協議假設蓋掉模型差異。測試鈕只回 HTTP 狀態與固定摘要，避免把上游錯誤本文或金鑰帶進 UI。
+
+## 2026-09-03 — Orca 連 %TEMP% 都監看，打包要落在它看不到的碟
+
+`electron:pack` 兩次都在 `EBUSY: unlink app.asar` 掛掉，連照 SOP 換到 `%TEMP%\vi-pack`
+也一樣。用 **Restart Manager**（`RmStartSession` + `RmGetList`，不需提權）一問就知道兩份
+`app.asar` 都被同一顆 `Orca.exe` 抓著——之前只記「Orca 會監看工作區」，實際上它連使用者的
+`%TEMP%` 也監看。改打包到 `C:\vi-pack` 一次就過（437MB），再照舊 `robocopy /MIR /XF app.asar`
+＋`[IO.File]::Open` 就地覆寫 asar 搬回 `dist\win-unpacked`，兩邊 sha256 一致。
+
+**教訓**：`Get-CimInstance Win32_Process` 找不到「誰鎖住這個檔案」，那是 handle 不是命令列；
+沒有 handle64 時就用 Restart Manager 的 P/Invoke，比猜快得多。

@@ -1681,6 +1681,13 @@
             <select id="termShellSelect" class="select"></select>
           </div>
           <div class="setting-group">
+            <label class="setting-check">
+              <input type="checkbox" id="termAdminInput" />
+              <span>以系統管理員身分執行</span>
+            </label>
+            <p class="setting-hint">會跳一次 UAC；同一次啟動之後開的管理員終端機不用再按。</p>
+          </div>
+          <div class="setting-group">
             <label for="termPresetSelect">啟動指令</label>
             <select id="termPresetSelect" class="select"></select>
             <p class="setting-hint">開好之後自動送出這一行；選「純 shell」就什麼都不送。</p>

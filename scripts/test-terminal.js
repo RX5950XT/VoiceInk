@@ -193,6 +193,36 @@ console.log('\n[pty 參數]')
   ok('$? 是第一句（否則抓不到上一條的成敗）',
     pty.PS_INTEGRATION.indexOf('$ok = $?') < pty.PS_INTEGRATION.indexOf('Get-History'))
   ok('單次 write 上限存在', pty.MAX_WRITE_CHARS === 8192)
+
+  // 提權的 host 程序共用同一份 shell 解析，兩邊各寫一份遲早會不一致
+  ok('shellCommand 的 PowerShell 帶注入字串', pty.shellCommand('pwsh').args.includes(pty.PS_INTEGRATION))
+  ok('shellCommand 的 cmd 不帶參數', pty.shellCommand('cmd').args.length === 0)
+  ok('shellCommand 認不得的 key 退回 cmd', pty.shellCommand('../../evil.exe').args.length === 0)
+}
+
+// ===== 管理員終端機 =====
+console.log('\n[管理員終端機]')
+{
+  const admin = require(path.join(ROOT, 'src/main/terminal/admin.js'))
+  // -ArgumentList 這段會變成 -Command 的一部分：含雙引號字面值就踩到 Windows 的跳脫規則
+  const list = admin.psArgList(['C:\\Program Files\\a b\\app', "--x=it's"])
+  ok('psArgList 不含雙引號字面值', !list.includes('"'))
+  ok('psArgList 用 [char]34 兜引號', list.includes('[char]34'))
+  ok('psArgList 把單引號跳脫成兩個', list.includes("it''s"))
+  ok('psArgList 用空白接起來', list.includes("+ ' ' +"))
+}
+
+// ===== admin 欄位 =====
+console.log('\n[admin 欄位]')
+{
+  const items = store.sanitizeAll([
+    { id: 'a', shell: 'cmd', preset: 'shell', cwd: os.homedir(), admin: true },
+    { id: 'b', shell: 'cmd', preset: 'shell', cwd: os.homedir(), admin: 'yes' },
+    { id: 'c', shell: 'cmd', preset: 'shell', cwd: os.homedir() }
+  ])
+  ok('admin: true 留著', items[0].admin === true)
+  ok('非布林的 admin 收斂成 false', items[1].admin === false)
+  ok('沒有 admin 欄位的舊資料是 false', items[2].admin === false)
 }
 
 console.log(`\n${passed} passed, ${failed} failed`)

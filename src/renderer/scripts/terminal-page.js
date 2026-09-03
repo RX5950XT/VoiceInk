@@ -35,6 +35,7 @@ let dialogEl = null
 let shellSelect = null
 let presetSelect = null
 let cwdInput = null
+let adminInput = null
 
 /** @type {Array<{ id: string, title: string, shell: string, preset: string, cwd: string, state: string, exitCode: number | null }>} */
 let items = []
@@ -221,6 +222,13 @@ function buildListItem(item) {
   meta.className = 'chat-list-meta term-meta'
   const badge = document.createElement('span')
   paintBadge(badge, item)
+  if (item.admin) {
+    const admin = document.createElement('span')
+    admin.className = 'term-admin'
+    admin.textContent = '管理員'
+    admin.title = '以系統管理員身分執行'
+    meta.appendChild(admin)
+  }
   const cwd = document.createElement('span')
   cwd.className = 'term-cwd'
   cwd.textContent = shortenPath(item.cwd)
@@ -520,6 +528,7 @@ function openNewDialog() {
     return
   }
   fillCatalogSelects()
+  if (adminInput) adminInput.checked = false
   dialogEl.showModal()
 }
 
@@ -528,7 +537,8 @@ async function createSession() {
     const created = await call(electronAPI.terminal.create({
       shell: shellSelect.value,
       preset: presetSelect.value,
-      cwd: cwdInput.value
+      cwd: cwdInput.value,
+      admin: Boolean(adminInput?.checked)
     }), '建立終端機失敗')
     dialogEl.close()
     await reloadList()
@@ -630,6 +640,7 @@ export function initTerminalPage() {
   shellSelect = document.getElementById('termShellSelect')
   presetSelect = document.getElementById('termPresetSelect')
   cwdInput = document.getElementById('termCwdInput')
+  adminInput = /** @type {HTMLInputElement | null} */ (document.getElementById('termAdminInput'))
 
   newBtn?.addEventListener('click', openNewDialog)
   document.getElementById('termNewCancelBtn')?.addEventListener('click', () => dialogEl.close())

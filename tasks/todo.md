@@ -1275,3 +1275,24 @@ CDP（打包版）：`e2e-cdp-smoke` 22／`e2e-terminal-cdp` 30／`e2e-chat-cdp`
 1M 那邊的重點是「兩個鍵一起改」：只加 `[1m]` 後綴的話視窗確實變 1M，但 Codex preset 釘住的
 `CLAUDE_CODE_AUTO_COMPACT_WINDOW = 372000` 會把自動壓縮門檻夾在 372K，使用者會覺得
 「開了 1M 但還是很早就壓縮」，而且完全看不出原因。
+
+## 2026-09-03 — 終端機可以用系統管理員身分開
+
+- [x] 讀懂終端機資料流（store／pty／status／ipc／renderer）與 ConPTY 的提權限制
+- [x] `admin-host.js`：提權那一端（同一支執行檔帶 `--terminal-admin-host=`，管道協定＋看門狗）
+- [x] `admin.js`：主程序端（起 host、偽裝成 IPty、UAC 只跳一次、斷線收乾淨）
+- [x] `main.js` 在 single instance lock 之前攔下 host 旗標；`pty.js` 只加一個分支
+- [x] store 加 `admin` 布林；新終端機彈窗加核取方塊；側欄加「管理員」pill
+- [x] 回歸：`test-terminal.js` 60/60、`probe-terminal-admin.js` 6/6、
+      `probe-terminal-admin-elevate.js` 4/4（實測 shell 是管理員）、
+      `e2e-terminal-cdp.js` 34/34、`e2e-cdp-smoke.js` 22/22
+- [x] 文件：CLAUDE.md（模組表／地雷／驗證表）、CONTEXT.md、lessons.md
+
+### 回顧
+
+Windows 沒有「把現有 pty 提權」這回事，所以真正的設計決定只有一個：要不要為此多開一顆程序。
+多開的代價是 UAC 與一顆常駐的提權程序，換來的是終端機在 App 裡就長得跟一般的一樣。
+把它做成「一顆 host 服務所有管理員階段」之後，UAC 只在第一次跳，代價降到可以接受。
+
+最花時間的反而不是功能，是打包：`Orca.exe` 連 `%TEMP%` 都監看，`app.asar` 一寫完就被抓住，
+`EBUSY` 連兩次。用 Restart Manager 問出兇手、改打包到 `C:i-pack` 才過。

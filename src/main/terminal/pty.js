@@ -155,28 +155,41 @@ function ensureTick() {
 }
 
 /**
+ * shell key → 執行檔與參數。提權的 host 程序也用同一份（`admin-host.js`），
+ * 兩邊各寫一份遲早會不一致。
+ * @param {string} shellKey
+ * @returns {{ exe: string, args: string[], integrated: boolean }}
+ */
+function shellCommand(shellKey) {
+  const shell = store.SHELLS[shellKey] || store.SHELLS.cmd
+  const integrated = shellKey === 'pwsh' || shellKey === 'powershell'
+  return {
+    exe: store.resolveExe(shell.exe) || shell.exe,
+    args: integrated ? ['-NoLogo', '-NoExit', '-Command', PS_INTEGRATION] : [],
+    integrated
+  }
+}
+
+/**
  * 真的開一顆 pty。
- * @param {{ id: string, shell: string, preset: string, cwd: string }} meta
+ * @param {{ id: string, shell: string, preset: string, cwd: string, admin?: boolean }} meta
  * @param {number} cols
  * @param {number} rows
  * @returns {LiveSession}
  */
 function spawnSession(meta, cols, rows) {
-  const pty = loadPty()
-  const shell = store.SHELLS[meta.shell] || store.SHELLS.cmd
-  const exe = store.resolveExe(shell.exe) || shell.exe
-  const integrated = meta.shell === 'pwsh' || meta.shell === 'powershell'
-  const args = integrated
-    ? ['-NoLogo', '-NoExit', '-Command', PS_INTEGRATION]
-    : []
+  const { exe, args, integrated } = shellCommand(meta.shell)
 
-  const term = pty.spawn(exe, args, {
-    name: 'xterm-256color',
-    cols,
-    rows,
-    cwd: meta.cwd,
-    env: { ...process.env, TERM: 'xterm-256color' }
-  })
+  // 管理員：ConPTY 開不出提權的 shell，交給提權的 host 程序去開（admin.js）
+  const term = meta.admin
+    ? require('./admin').spawnAdmin(meta, cols, rows)
+    : loadPty().spawn(exe, args, {
+      name: 'xterm-256color',
+      cols,
+      rows,
+      cwd: meta.cwd,
+      env: { ...process.env, TERM: 'xterm-256color' }
+    })
 
   /** @type {LiveSession} */
   const session = {
@@ -358,6 +371,8 @@ function killSession(id) {
 /** `before-quit` 要呼叫，否則殘留 conhost／OpenConsole 程序 */
 function killAll() {
   for (const id of [...live.keys()]) killSession(id)
+  // 提權 host 是獨立程序，斷線它才會把管理員 shell 收乾淨再自己結束
+  require('./admin').shutdown()
   if (tickTimer) {
     clearInterval(tickTimer)
     tickTimer = null
@@ -380,6 +395,7 @@ module.exports = {
   SCROLLBACK_CHARS,
   MAX_WRITE_CHARS,
   setEmitter,
+  shellCommand,
   catalog,
   listSessions,
   createSession,

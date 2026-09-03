@@ -4,6 +4,24 @@ const {
 } = require('electron')
 const path = require('path')
 const fs = require('fs')
+
+/**
+ * 管理員終端機的提權宿主模式。
+ *
+ * 這支執行檔被自己以 `Start-Process -Verb RunAs` 再開一份時會帶這個旗標：
+ * 不建視窗、不搶 single instance lock、不註冊任何 IPC，只負責在管理員權限下
+ * 開 pty 並透過具名管道轉發（見 `terminal/admin.js`）。所以要擋在所有東西之前。
+ */
+const ADMIN_HOST_FLAG = '--terminal-admin-host='
+const adminHostArg = process.argv.find((a) => a.startsWith(ADMIN_HOST_FLAG))
+if (adminHostArg) {
+  app.disableHardwareAcceleration()
+  // 提權程序寫進去的檔案擁有者會變成管理員，不要碰主程序那份 userData
+  app.setPath('userData', path.join(app.getPath('temp'), 'voiceink-admin-host'))
+  require('./terminal/admin-host').run(adminHostArg.slice(ADMIN_HOST_FLAG.length))
+  return
+}
+
 const models = require('./models')
 const chat = require('./chat')
 const modelScope = require('./model-scope')

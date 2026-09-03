@@ -24,7 +24,8 @@ src/main/
   ipc-invoke.js       八組模組 IPC 的共用外殼 makeInvoke()：主視窗守衛 ＋ { ok, data|error }
                       ＋ userMessage 白名單（handler 仍由各模組自己逐一列舉）
   terminal/           ConPTY 工作階段：pty.js、status.js（OSC 133 ＋ 靜默雙軌，純函式）、
-                      store.js（shell／preset／cwd 固定表）、ipc.js
+                      store.js（shell／preset／cwd 固定表）、ipc.js、
+                      admin.js（管理員終端機：起提權 host、偽裝成 IPty）、admin-host.js（提權那一端）
   ccswitch/           Claude Code 工作台：claude-settings.js（外科式改 env）、presets.js、
                       providers.js（路由推導）、models-scan.js、mcp.js、versions.js、credential.js、
                       gateway/（server.js 路由與轉換、oauth.js device code／PKCE）
@@ -99,6 +100,22 @@ native/  dictation-hook/（WH_KEYBOARD_LL，→ resources/hook/）  sysmon-senso
 
 值格式：ASR＝`local:<key>`／`cloud:<設定 id>:<模型 id>`；LLM＝`local:<key>`／`cloud:<供應商 id>:<模型 id>`／`''`。
 翻譯與 TTS 頁**不在這組**，維持全域 `translator`／`localTranslateModel`／`translateProviderId`／`translateModelId`。
+
+## 最近變更（2026-09-03，分支 `feat/voice-input`）— 終端機可以用系統管理員身分開
+
+- **新終端機對話框多了「以系統管理員身分執行」**（`admin` 布林，跟 shell／preset 一樣存在
+  `terminals.json`）；側欄那一列會多一顆「管理員」pill。
+- **為什麼要多一顆程序**：ConPTY／CreateProcess 一律繼承呼叫者的 token，而唯一拿得到管理員
+  token 的 `ShellExecute runas`（UAC）交接不了 pty handle。所以把**自己**用
+  `Start-Process -Verb RunAs` 再開一份、帶 `--terminal-admin-host=<具名管道>`，
+  提權那份開 pty、把位元組透過管道轉回來。`main.js` 最前面就攔下這個旗標（**在 single
+  instance lock 之前**，否則第二份會被自己 quit 掉），不建視窗、不註冊 IPC、userData 指到 temp。
+- **一顆 host 服務所有管理員階段**：UAC 只在第一個管理員終端機時跳一次；socket 一斷，
+  host 就把管理員 shell 全部 kill 再自己結束（`before-quit` 會走到 `killAll` → `admin.shutdown()`）。
+- `pty.js` 只多一個分支：admin 時 `term` 換成 `admin.spawnAdmin()` 回的 IPty-like 物件，
+  scrollback／忙碌判定／flush 一行沒動。shell 解析抽成 `pty.shellCommand()`，提權那端共用同一份。
+- 回歸：`node scripts/test-terminal.js` 60/60、`node scripts/probe-terminal-admin.js` 6/6（不需 UAC）、
+  `probe-terminal-admin-elevate.js` 4/4（**跳一次 UAC**，實測 shell 的 `IsInRole('Administrators')` 是 True）。
 
 ## 最近變更（2026-09-03）— 發行 v1.10.0 ＋ 八組模組 IPC 收成共用外殼
 

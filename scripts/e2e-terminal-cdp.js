@@ -131,6 +131,8 @@ async function main() {
   /** 測試自己建立的工作階段 id，收尾要刪掉（兩個都要，中途失敗才不會留下垃圾） */
   let createdId = ''
   let secondId = ''
+  /** 管理員那一列（只建立不開啟，不會跳 UAC） */
+  let adminId = ''
   let cdp = null
 
   try {
@@ -162,8 +164,8 @@ async function main() {
       termNewBtn: !!document.getElementById('termNewBtn')
     }))()`)
     // 終端機已併入聊天頁：nav 不再有 terminal 分頁，側欄上半對話、下半終端機
-    ok('nav 八個分頁、聊天排第一、沒有 terminal 分頁',
-      nav.order.length === 8 && nav.order[0] === 'chat' && !nav.order.includes('terminal'), JSON.stringify(nav.order))
+    ok('nav 九個分頁、聊天排第一、沒有 terminal 分頁',
+      nav.order.length === 9 && nav.order[0] === 'chat' && !nav.order.includes('terminal'), JSON.stringify(nav.order))
     ok('側欄有「＋新終端機」按鈕', nav.termNewBtn)
 
     await cdp.eval(`document.querySelector('.nav-tab[data-page="chat"]').click()`)
@@ -426,6 +428,50 @@ async function main() {
     ok('renderer 指定的啟動指令被收斂', boundary.preset === 'shell', boundary.preset)
     ok('不存在的工作目錄退回家目錄', !boundary.cwd.startsWith('Z:'), boundary.cwd)
 
+    // ===== 管理員終端機 =====
+    // 只建立、不開啟：真的開會跳 UAC，自動化測試等不到人按（提權那段走
+    // scripts/probe-terminal-admin-elevate.js）
+    const adminBox = await cdp.eval(`(async () => {
+      document.getElementById('termNewBtn').click()
+      await new Promise((r) => setTimeout(r, 400))
+      const input = document.getElementById('termAdminInput')
+      const label = input ? input.closest('label') : null
+      const rect = label ? label.getBoundingClientRect() : { width: 0, height: 0 }
+      const created = await window.electronAPI.terminal.create({
+        shell: document.getElementById('termShellSelect').value,
+        preset: 'shell',
+        cwd: document.getElementById('termCwdInput').value,
+        admin: true
+      })
+      document.getElementById('termNewCancelBtn').click()
+      return {
+        w: rect.width,
+        h: rect.height,
+        checkedByDefault: input ? input.checked : null,
+        id: created.data.id,
+        admin: created.data.admin
+      }
+    })()`)
+    adminId = adminBox.id || ''
+    ok('新終端機彈窗有「以系統管理員身分執行」且量得到尺寸',
+      adminBox.w > 0 && adminBox.h > 0, JSON.stringify(adminBox))
+    ok('管理員預設不勾', adminBox.checkedByDefault === false)
+    ok('admin 有存進 terminals.json', adminBox.admin === true)
+
+    // 切走再切回來會重讀清單，管理員那一列才畫得出來
+    const adminPill = await cdp.eval(`(async () => {
+      document.querySelector('.nav-tab[data-page="settings"]').click()
+      await new Promise((r) => setTimeout(r, 400))
+      document.querySelector('.nav-tab[data-page="chat"]').click()
+      await new Promise((r) => setTimeout(r, 1200))
+      const pill = document.querySelector('#termList .term-list-item[data-id="${adminId}"] .term-admin')
+      if (!pill) return { found: false }
+      return { found: true, text: pill.textContent, w: pill.offsetWidth, h: pill.offsetHeight }
+    })()`)
+    ok('側欄那一列有「管理員」標記且量得到尺寸',
+      adminPill.found && adminPill.text === '管理員' && adminPill.w > 0 && adminPill.h > 0,
+      JSON.stringify(adminPill))
+
     // ===== RWD =====
     for (const width of [1440, 900, 560]) {
       await cdp.send('Emulation.setDeviceMetricsOverride', {
@@ -441,7 +487,7 @@ async function main() {
   } catch (error) {
     ok('測試流程未拋例外', false, error.message)
   } finally {
-    for (const id of [createdId, secondId].filter(Boolean)) {
+    for (const id of [createdId, secondId, adminId].filter(Boolean)) {
       if (!cdp) break
       try {
         await cdp.eval(`window.electronAPI.terminal.delete(${JSON.stringify(id)})`)
