@@ -1,5 +1,26 @@
 # VoiceInk UI & Design Token Polish Todo
 
+## 完成（2026-09-03）— 發行 v1.10.0
+
+- [x] 1. 跑單元測試確認工作區乾淨（test-ipc-invoke／test-ccswitch／test-ccswitch-gateway／test-error-hygiene）
+- [x] 2. `package.json` 1.9.0 → 1.10.0（v1.10.0 尚未存在，不與既有 tag 重複）
+- [x] 3. README 改寫版本區塊、補上缺的「系統監控」章節與「用量統計」說明、CC 代理補 1M 上下文
+- [x] 4. CLAUDE.md 補 `ipc-invoke.js` 慣例與驗證列；CONTEXT.md 補 v1.10.0 變更紀錄；AGENTS.md 版本同步
+- [x] 5. commit → push `feat/voice-input` → 快轉合併進 `master` → push
+- [x] 6. GitHub 倉庫 About：description 改寫、補 6 個 topic
+- [x] 7. `npm run electron:build`（輸出到工作區外 `%TEMP%/vi-rel`，避開 app.asar 被鎖）
+- [x] 8. 打包版冒煙測試 → 安裝檔與免安裝預覽複製回 `dist/` → `gh release create v1.10.0`
+
+### 回顧
+
+- 驗證：`test-ipc-invoke` 11/11、`test-ccswitch` 255/255、`test-ccswitch-gateway` 53/53、
+  `test-error-hygiene` 82/82、打包版 `e2e-cdp-smoke` 22/22。
+- 打包一律輸出到工作區外再 robocopy 回 `dist/`：直接打進工作區踩過「app.asar 被別的程式抓著 →
+  產出的 asar 安靜錯位」那條。打包前先用 `Invoke-CimMethod Terminate` 收掉 `VoiceInk.exe`
+  （提權跑的 sidecar 一般 taskkill 殺不掉）。
+- README 原本漏了「系統監控」整章與「用量統計」子分頁——功能出貨了但文件沒跟上，
+  發行前逐條對 nav 九頁比一次才發現。
+
 ## 完成（2026-09-03）— CC 代理編輯彈窗清理多餘驗證格式，僅保留上游格式
 
 - [x] 1. 檢視並更新 `scripts/test-ccswitch.js`，將 validationFormat 斷言改為直接以 apiFormat 測試
