@@ -103,6 +103,9 @@ native/  dictation-hook/（WH_KEYBOARD_LL，→ resources/hook/）  sysmon-senso
 
 ## 最近變更（2026-09-03，分支 `feat/voice-input`）— 終端機可以用系統管理員身分開
 
+**已發行 v1.11.0**（tag `v1.11.0`、master 與 feat/voice-input 同步、GitHub Release 帶
+`VoiceInk-Setup-1.11.0.exe`）。
+
 - **新終端機對話框多了「以系統管理員身分執行」**（`admin` 布林，跟 shell／preset 一樣存在
   `terminals.json`）；側欄那一列會多一顆「管理員」pill。
 - **為什麼要多一顆程序**：ConPTY／CreateProcess 一律繼承呼叫者的 token，而唯一拿得到管理員
