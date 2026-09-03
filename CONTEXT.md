@@ -7,7 +7,7 @@
 ## 專案概況
 
 VoiceInk：Windows Electron AI 工作台。Vanilla JS + Vite，無前端框架；Electron 43.4.1 ＋ Node.js 22。
-已發行 **v1.10.0**（全域語音輸入、系統監控、HF模型、CC 代理工作台）。
+已發行 **v1.12.0**（應用程式內自動更新；前幾版為管理員終端機、全域語音輸入、系統監控、HF模型、CC 代理工作台）。
 
 nav 九頁：聊天（預設，**終端機在同一頁**）｜CC代理（原「Claude Code」，data-page 仍是 `ccswitch`）｜額度｜AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型（本機 LLM）｜設定。
 
@@ -104,7 +104,27 @@ native/  dictation-hook/（WH_KEYBOARD_LL，→ resources/hook/）  sysmon-senso
 值格式：ASR＝`local:<key>`／`cloud:<設定 id>:<模型 id>`；LLM＝`local:<key>`／`cloud:<供應商 id>:<模型 id>`／`''`。
 翻譯與 TTS 頁**不在這組**，維持全域 `translator`／`localTranslateModel`／`translateProviderId`／`translateModelId`。
 
-## 最近變更（2026-09-03，分支 `feat/voice-input`）— 終端機可以用系統管理員身分開
+## 最近變更（2026-09-04，分支 `feat/voice-input`）— 應用程式內自動更新
+
+**已發行 v1.12.0**（tag `v1.12.0`、master 與 feat/voice-input 同步、GitHub Release 帶
+`VoiceInk-Setup-1.12.0.exe` ＋ `.blockmap` ＋ `latest.yml`）。
+
+- **`src/main/updater.js`**：electron-updater ＋ GitHub Releases。開機後 20 秒與每 6 小時
+  靜靜檢查一次，狀態推播給設定頁；設定 → 基本有「自動下載新版本」開關、「檢查更新」、
+  下載完才出現的「重新啟動並安裝」。
+- **`autoInstallOnAppQuit` 對這個 App 無效**：它掛的是 `app.once('quit')`，而 `before-quit`
+  收完子程序走的是 `app.exit(0)`（不發 quit 事件）。所以「結束時裝好」是 main.js 在
+  `app.exit(0)` **前一行**呼叫 `updater.installOnQuit()`，順序不可對調。
+- **`build.publish` ＋ `nsis.artifactName` 兩個設定缺一不可**：前者不設就不會產出 `latest.yml`
+  （舊版永遠檢查不到更新），後者改回預設會讓檔名帶空白、上傳 GitHub 後跟 `latest.yml` 對不上而 404。
+  發行時三個檔案都要上傳，流程見 CLAUDE.md「發行流程」。
+- **更新不留殘留**：新安裝檔會先跑舊版的解除安裝程式（`/S /KEEP_APP_DATA --updated`），
+  `RMDir /r $INSTDIR` 把安裝目錄清空再解壓新版；`%APPDATA%\voiceink\` 完全不碰
+  （我們沒設 `deleteAppDataOnUninstall`），開機自啟動的 HKCU Run 機碼與風扇排程工作也都不受影響。
+- 順手移除雲端語音轉文字「轉錄模型 ID」欄位上那份寫死四顆的 datalist（會蓋住輸入框）。
+- 回歸：`node scripts/test-updater.js`、`node scripts/e2e-update-cdp.js`（打包版，會真的連一次 GitHub）。
+
+## 前一次變更（2026-09-03，分支 `feat/voice-input`）— 終端機可以用系統管理員身分開
 
 **已發行 v1.11.0**（tag `v1.11.0`、master 與 feat/voice-input 同步、GitHub Release 帶
 `VoiceInk-Setup-1.11.0.exe`）。
