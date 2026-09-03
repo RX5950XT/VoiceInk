@@ -45,6 +45,7 @@ const { registerCcSwitchIpc } = require('./ccswitch/ipc')
 const { registerCodeUsageIpc } = require('./codeusage/ipc')
 const { registerDictationIpc } = require('./dictation/ipc')
 const dictationHud = require('./dictation/hud')
+const updater = require('./updater')
 
 const bootStartedAt = Date.now()
 function bootLog(step) {
@@ -139,6 +140,7 @@ const STORE_ALLOWLIST = new Set([
   'asrCloudId',
   'theme',
   'closeToTray',
+  'autoUpdate',
   'subtitleFontScale',
   'subtitleOpacity',
   'subtitleWindowBounds',
@@ -899,6 +901,9 @@ ipcMain.handle('store:get', async (event, key, defaultValue) => {
   if (key === 'llmGpu') {
     return val === true
   }
+  if (key === 'autoUpdate') {
+    return val !== false
+  }
   if (key === 'theme') {
     return THEME_VALUES.has(val) ? val : (THEME_VALUES.has(defaultValue) ? defaultValue : 'dark')
   }
@@ -1001,6 +1006,12 @@ ipcMain.handle('store:set', async (event, key, value) => {
   }
   if (key === 'asrModelId') {
     store.set(key, typeof value === 'string' ? value.trim() : value)
+    return true
+  }
+  if (key === 'autoUpdate') {
+    const on = value === true
+    store.set(key, on)
+    updater.configure({ autoUpdate: on })
     return true
   }
   if (key === 'asrClouds') {
@@ -1148,6 +1159,23 @@ ipcMain.handle('system:setStartup', (event, enabled) => {
   if (isDev) return { openAtLogin: false, supported: false }
   app.setLoginItemSettings({ ...LOGIN_ITEM_OPTIONS, openAtLogin: enabled === true })
   return { openAtLogin: app.getLoginItemSettings(LOGIN_ITEM_OPTIONS).openAtLogin === true, supported: true }
+})
+
+// ===== 應用程式內更新 =====
+// 只有主視窗能碰；狀態一律由 main 推給 renderer（renderer 不指定任何網址）
+ipcMain.handle('update:status', (event) => {
+  if (!assertMainWindowSender(event)) return null
+  return updater.status()
+})
+
+ipcMain.handle('update:check', async (event) => {
+  if (!assertMainWindowSender(event)) return null
+  return updater.check()
+})
+
+ipcMain.handle('update:install', (event) => {
+  if (!assertMainWindowSender(event)) return false
+  return updater.quitAndInstall()
 })
 
 // GPU 能力（設定頁）
@@ -1664,6 +1692,18 @@ app.whenReady().then(() => {
   bootLog('window created')
   initStore()
     .then(() => {
+      // 更新檢查要等 store（自動更新開關存在裡面）；延後 20 秒讓開機那陣忙完再說
+      updater.configure({
+        autoUpdate: store.get('autoUpdate', true) !== false,
+        onStatus: (s) => {
+          if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update:status', s)
+        }
+      })
+      setTimeout(() => updater.checkQuietly(), 20000)
+      // 常駐好幾天的話光靠開機那一次不夠，六小時再看一次
+      setInterval(() => updater.checkQuietly(), 6 * 60 * 60 * 1000)
+    })
+    .then(() => {
       // 風扇接管：使用者上次開著就在開機自啟動時直接接手，**不必等他點開系統監控頁**。
       // 這之前的幾秒由 BIOS 曲線負責，那是安全的預設值。
       if (store?.get('fanControl')?.enabled !== true) return undefined
@@ -1716,6 +1756,8 @@ app.on('before-quit', (e) => {
     })
     .catch((err) => console.error('[engine] unloadAll on quit failed:', err))
     .finally(() => {
+      // 已下載好的更新在這裡靜默安裝（autoInstallOnAppQuit 對這個 App 無效，見 updater.js）
+      updater.installOnQuit()
       app.exit(0)
     })
 })

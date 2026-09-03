@@ -546,6 +546,64 @@ async function loadStartupSettings() {
   })
 }
 
+// ===== 應用程式內更新（設定 → 基本）=====
+
+/** 只綁一次；狀態由 main 主動推播，這裡只負責畫 */
+let updateBound = false
+
+/**
+ * @param {{state: string, version: string, percent: number, message: string, currentVersion: string, autoUpdate: boolean}|null} st
+ */
+function renderUpdateStatus(st) {
+  const versionEl = document.getElementById('updateVersion')
+  const statusEl = document.getElementById('updateStatus')
+  const checkBtn = document.getElementById('updateCheckBtn')
+  const installBtn = document.getElementById('updateInstallBtn')
+  const autoInput = /** @type {HTMLInputElement|null} */ (document.getElementById('autoUpdateInput'))
+  if (!versionEl || !statusEl || !checkBtn || !installBtn) return
+
+  if (versionEl && st?.currentVersion) versionEl.textContent = `目前版本 v${st.currentVersion}`
+  if (autoInput && typeof st?.autoUpdate === 'boolean') autoInput.checked = st.autoUpdate
+  statusEl.textContent = st?.message || ''
+  const busy = st?.state === 'checking' || st?.state === 'downloading'
+  checkBtn.disabled = busy || st?.state === 'unsupported'
+  checkBtn.textContent = st?.state === 'checking' ? '檢查中…' : '檢查更新'
+  installBtn.classList.toggle('hidden', st?.state !== 'downloaded')
+  if (autoInput) autoInput.disabled = st?.state === 'unsupported'
+}
+
+async function loadUpdateSettings() {
+  const checkBtn = document.getElementById('updateCheckBtn')
+  const installBtn = document.getElementById('updateInstallBtn')
+  const autoInput = /** @type {HTMLInputElement|null} */ (document.getElementById('autoUpdateInput'))
+  if (!checkBtn || !installBtn || !autoInput) return
+
+  renderUpdateStatus(await electronAPI.update?.status?.().catch(() => null))
+
+  if (updateBound) return
+  updateBound = true
+
+  electronAPI.update?.onStatus?.(renderUpdateStatus)
+
+  autoInput.addEventListener('change', async () => {
+    await electronAPI.store.set('autoUpdate', autoInput.checked)
+    showToast(autoInput.checked ? '有新版本會自動下載' : '已改為手動檢查更新')
+  })
+
+  checkBtn.addEventListener('click', async () => {
+    renderUpdateStatus(await electronAPI.update?.check?.().catch(() => null))
+  })
+
+  installBtn.addEventListener('click', async () => {
+    installBtn.disabled = true
+    const ok = await electronAPI.update?.install?.().catch(() => false)
+    if (!ok) {
+      installBtn.disabled = false
+      showToast('安裝失敗，請重新檢查更新', 'error')
+    }
+  })
+}
+
 // ===== 視窗控制（frameless）=====
 
 function initWindowControls() {
@@ -1206,6 +1264,7 @@ async function loadSettingsForm() {
   applyTtsVoicesToForm(settings.ttsVoices || DEFAULT_TTS_VOICES)
   syncCustomSelects()
   await loadStartupSettings()
+  await loadUpdateSettings()
   await loadChatSettings()
 }
 

@@ -8,7 +8,7 @@
     "build": "vite build",
     "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "electron:pack": "vite build && electron-builder --win dir",
-    "electron:build": "vite build && electron-builder",
+    "electron:build": "vite build && electron-builder --publish never",
     "start": "electron .",
     "test:sysmon": "node scripts/test-sysmon.js",
     "build:sensors": "dotnet publish native/sysmon-sensors -c Release -o resources/sensors",
@@ -28,6 +28,7 @@
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "electron-store": "^10.0.0",
+    "electron-updater": "^6.8.9",
     "ffmpeg-static": "^5.3.0",
     "node-edge-tts": "^1.2.10",
     "node-llama-cpp": "^3.19.0",
@@ -64,13 +65,21 @@
       "!tasks/**",
       "!native/**"
     ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "RX5950XT",
+        "repo": "VoiceInk"
+      }
+    ],
     "win": {
       "target": "nsis",
       "icon": "assets/icon.ico"
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "${productName}-Setup-${version}.${ext}"
     },
     "extraResources": [
       {

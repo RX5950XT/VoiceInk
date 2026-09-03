@@ -430,6 +430,25 @@ body.is-maximized .win-btn#winMax {
   gap: 8px;
 }
 
+/* 設定 → 基本 → 更新 */
+.update-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.update-version {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-right: auto;
+}
+
+.update-row .btn.hidden {
+  display: none;
+}
+
 .tts-voice-row .select {
   flex: 1;
   min-width: 0;

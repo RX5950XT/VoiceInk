@@ -16,6 +16,9 @@ nav 九頁：聊天（預設，**終端機在同一頁**）｜CC代理（原「C
 ```
 src/main/
   main.js             frameless 主窗、IPC 註冊、store allowlist 與一次性遷移、單一實例鎖與系統匣
+  updater.js          應用程式內自動更新（electron-updater ＋ GitHub Releases 的 latest.yml）：
+                      開機後 20 秒與每 6 小時靜靜檢查一次、狀態推播給設定頁、
+                      結束前在 app.exit(0) 之前靜默安裝（autoInstallOnAppQuit 對本 App 無效）
   chat.js             雲端聊天 SSE；單一 in-flight、雙逾時、上下文裁切、model allowlist、
                       提示 preset、reasoning 分流、圖片多模態、生圖、重新生成
   chat-store.js       會話持久化（獨立 store → <userData>/chats.json）
@@ -586,6 +589,7 @@ static 框約 6 秒。
 | 2026-08-30~31 | 新分頁「系統監控」（取樣器／處理程序／壓力測試／提權感測器）；語音輸入上線 |
 | 2026-08-28~29 | 終端機分頁、常駐系統匣與開機自啟動、AGY token 自動續期、共用自訂下拉（`custom-select.js`） |
 | 2026-08-30 | v1.9.0 發行（NSIS 安裝檔已上傳 GitHub Release） |
+| 2026-09-04 | 應用程式內自動更新（設定 → 基本）：`src/main/updater.js`、`update:*` IPC、`build.publish` ＋ `nsis.artifactName`；發行時要一併上傳 `latest.yml` 與 `.blockmap` |
 
 ## 已知取捨與未做
 

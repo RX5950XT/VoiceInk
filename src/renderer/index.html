@@ -1550,6 +1550,19 @@
                         </p>
                         <p id="startupHint" class="setting-hint hidden"></p>
                       </div>
+                      <div class="setting-group">
+                        <label>更新</label>
+                        <label class="setting-check">
+                          <input id="autoUpdateInput" type="checkbox" />
+                          <span>自動下載新版本（結束 VoiceInk 時安裝）</span>
+                        </label>
+                        <div class="update-row">
+                          <span id="updateVersion" class="update-version">目前版本 …</span>
+                          <button type="button" id="updateCheckBtn" class="btn btn-secondary btn-sm">檢查更新</button>
+                          <button type="button" id="updateInstallBtn" class="btn btn-primary btn-sm hidden">重新啟動並安裝</button>
+                        </div>
+                        <p id="updateStatus" class="setting-hint"></p>
+                      </div>
                     </div>
                   </section>
 

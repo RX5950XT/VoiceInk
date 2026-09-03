@@ -28,6 +28,7 @@ CC代理（Claude Code 工作台）｜額度｜AGY反代｜語音轉文字｜翻
 | 語音輸入 | 全域右 Alt（原生 sidecar 吞鍵）→ 錄音（上限 20 分鐘）→ ASR → 個人字典 → LLM 整理 → 剪貼簿＋Ctrl+V；滑鼠所在螢幕底部浮藥丸指示器；紀錄與字典存 `<userData>/dictations.json` |
 | 設定 | 最後一個 nav tab；左側分類 rail（本地模型／雲端模型／語音朗讀／基本）＋底部 sticky 儲存列。**只管「裝了什麼、怎麼推論、雲端端點」，用哪一顆模型在功能頁選** |
 | 常駐 | 關視窗預設縮到系統匣讓 AGY 續命（`closeToTray`）；開機自啟動走 `app.setLoginItemSettings`（真相在 OS，不進 store），帶 `--hidden` |
+| 自動更新 | `src/main/updater.js`：electron-updater ＋ GitHub Releases 的 `latest.yml`。設定→基本可開關「自動下載」、手動「檢查更新」、下載完可「重新啟動並安裝」；沒按的話結束 App 時靜默裝好 |
 | 視覺 | Token Anxiety Aurora glass；深／淺主題共用 12px surface、blur、冷藍／暖金光暈；RWD 900／640px；本機字體（不拉 Google Fonts） |
 
 模型 registry `src/main/models.js`，下載至 `%APPDATA%/voiceink/models/`；
@@ -46,7 +47,9 @@ npm run build:hook       # 語音輸入原生熱鍵 sidecar（需 .NET 8 SDK）�
 - `resources/sensors/` 與 `resources/hook/` **不進版控**；沒建置也打得起來，只是感測器顯示「沒有附帶元件」、
   右 Alt 退回「只監聽」模式。
 - 打包前先關掉 `dist/win-unpacked/VoiceInk.exe`（否則卡 `d3dcompiler_47.dll: Access is denied`）。
-- 發行：bump `package.json`（不可與既有 tag 重複）→ commit → `git tag vX.Y.Z` → push → `electron:build` → `gh release create`。
+- 發行：bump `package.json`（不可與既有 tag 重複）→ commit → `git tag vX.Y.Z` → push → `electron:build` →
+  `gh release create` 時**三個檔案都要上傳**：`VoiceInk-Setup-X.Y.Z.exe`、同名 `.blockmap`、`latest.yml`。
+  **少了 `latest.yml` 舊版就永遠檢查不到更新**（UI 只會說「沒有附帶更新資訊」）。
 - 使用者同時在用電腦時，桌面 QA 只能用 CDP／視窗 API 背景操作；不可移動滑鼠、發全域快捷鍵或搶前景焦點。
 
 ## 慣例
@@ -114,6 +117,14 @@ npm run build:hook       # 語音輸入原生熱鍵 sidecar（需 .NET 8 SDK）�
   **`VoiceInk.exe` 一定要一起換**（asar 完整性雜湊嵌在它的資源裡）。收尾 `sha256sum` 對兩邊＋跑一次 CDP。
 - **`electron:pack` 中途 EPERM 失敗會留下壞掉的 `dist/win-unpacked`**：症狀是啟動無 log、CDP 埠連不上，
   `--version` 卻回 0，實際是 `icudtl.dat` 沒更新完。**整個刪掉重打**，不要原地重試。
+- **自動更新靠 `latest.yml`，而它只在 `build.publish` 有設定時才產出**：拿掉那段設定不會有任何錯誤，
+  只是 `dist/` 少一個檔案 → 所有已安裝的版本從此檢查不到更新。
+  **`nsis.artifactName` 也不能改回預設**：預設帶空白（`VoiceInk Setup 1.11.0.exe`），
+  上傳 GitHub 會被改名成 `VoiceInk.Setup.1.11.0.exe`，而 latest.yml 寫的是連字號版 → 下載時 404。
+  回歸：`test-updater.js` 的 [E]
+- **`autoInstallOnAppQuit` 在這個 App 沒有作用**：它掛的是 `app.once('quit')`，而 `before-quit` 收完
+  子程序是走 `app.exit(0)`（不發 quit 事件）。所以「結束時裝好」是 main.js 在 `app.exit(0)` **前一行**
+  呼叫 `updater.installOnQuit()`，順序不可對調。
 - CDP 腳本都吃 `VOICEINK_EXE` 環境變數，要驗別的路徑的建置版時指過去。
 
 ### 啟動與常駐
@@ -970,5 +981,6 @@ npm run build:hook       # 語音輸入原生熱鍵 sidecar（需 .NET 8 SDK）�
 | 錯誤衛生 | `node scripts/test-error-hygiene.js` |
 | IPC 共用外殼 | `node scripts/test-ipc-invoke.js` |
 | 常駐／自啟動 | `node scripts/e2e-tray-cdp.js` |
+| 自動更新 | `node scripts/test-updater.js`（狀態機／開關／結束時安裝／接線）＋`node scripts/e2e-update-cdp.js`（打包版 UI，**會真的連一次 GitHub**） |
 | 視覺／RWD | `node scripts/e2e-visual-cdp.js`（七頁 × dark/light × 三尺寸）＋`node scripts/test-usage-reorder.js` |
 | 冒煙 | `node scripts/e2e-cdp-smoke.js` |

@@ -134,6 +134,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     loadInfo: () => ipcRenderer.invoke('llm:loadInfo')
   },
 
+  // ===== 應用程式內更新 =====
+  // 版本來源（GitHub Releases）固定在 main，renderer 只能問狀態、按檢查與安裝
+  update: {
+    status: () => ipcRenderer.invoke('update:status'),
+    check: () => ipcRenderer.invoke('update:check'),
+    install: () => ipcRenderer.invoke('update:install'),
+    onStatus: (callback) => {
+      const handler = (_event, status) => callback(status)
+      ipcRenderer.on('update:status', handler)
+      return () => ipcRenderer.removeListener('update:status', handler)
+    }
+  },
+
   // ===== 額度儀錶板 =====
   // 所有憑證、URL、SQL 與 provider 選擇都固定在 main；此處不接受任意來源參數。
   usage: {
