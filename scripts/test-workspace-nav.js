@@ -22,7 +22,7 @@ const ROOT = path.join(__dirname, '..')
  */
 function load(relFile, context, tail, head = '') {
   const source = fs.readFileSync(path.join(ROOT, relFile), 'utf8')
-    .replace(/^import[\s\S]*?from '[^']+'\n/gm, '')
+    .replace(/^import[\s\S]*?from '[^']+'\r?\n/gm, '')
     .replace(/^export /gm, '')
   vm.createContext(context)
   vm.runInContext(`${head}\n${source}\n;${tail}`, context)

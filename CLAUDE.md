@@ -11,14 +11,14 @@ Windows Electron AI 工作台：聊天＋終端機＋本機 LLM（HF模型）＋
 Vanilla JS + Vite，無前端框架；Electron 43.4.1（固定版本）＋ Node.js 22。
 
 nav 順序：聊天（預設，**工作區與終端機併在同一頁**：側欄頂部兩顆鈕切專案／對話，
-終端機清單併在專案面板下半）｜
+側欄只列專案，終端機開在主區的分頁列上）｜
 CC代理（Claude Code 工作台）｜額度｜AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型（本機 LLM）｜設定。
 
 | 模組 | 重點 |
 |---|---|
 | 聊天 | 多組供應商（`chatProviders`＋`chatProviderId`＋`chatModelId`），各帶 url／key／模型清單，可掃 `/models`；**雲端翻譯共用同一份清單**（`translateProviderId`＋`translateModelId`）。系統提示 preset、thinking 開關、圖片附件、生圖模型（`imageModels`）、訊息複製與重新生成、側欄搜尋與拖曳排序。會話存 `<userData>/chats.json` |
 | 終端機 | **與聊天同一頁**（清單在側欄「專案」面板的下半，主區 `#chatMain` ⇄ `#termMain`）。`@lydell/node-pty`（ConPTY）＋ xterm.js；多開、狀態「運行中／已完成／已結束」＋未讀點。選取自動複製、右鍵貼上、窄邊框；聊天側欄寬度可拖（`--chat-sidebar-w`）。shell 與啟動指令是 main 固定表（renderer 只送 key），cwd 走系統對話框。可勾「以系統管理員身分執行」（`admin`）——ConPTY 開不出提權 shell，改由 `--terminal-admin-host=` 再開一份自己（UAC 一次）代開，見 `admin.js`／`admin-host.js`。metadata 存 `<userData>/terminals.json`（**不存畫面內容**） |
-| 專案工作區 | `src/main/workspace/`：**與聊天同一頁**，借 Orca 的三欄版面。左側欄兩顆鈕切專案／對話，「專案」面板上半列本機資料夾（`workspaces.json`，**不做 git worktree**，可拖資料夾進來加入）、下半是終端機清單（**三個清單容器 id 都不動**：`#projList`／`#chatList`／`#termList`）；中間 `#termMain` 裡多一條分頁列（終端機／編輯器／瀏覽器，「＋」貼著分頁尾端可一鍵開 Claude Code／Codex／OpenCode／Antigravity／Grok，可勾管理員）；右側欄四面板＝檔案總管（含搜尋、右鍵新增／改名／刪除）／Git 狀態（暫存區／變更／未追蹤三組，逐檔暫存／取消／捨棄（3 秒二次確認）、全部暫存、提交（staged）、推送、拉取、最近提交 10 筆）／這個資料夾跑過的 AI 對話（點一下在新終端機 resume）／本機正在監聽的埠（點一下用內建瀏覽器開）。分頁拖曳是 **pointer 跟手＋FLIP 平滑讓位**（不是 HTML5 DnD）、中鍵關閉、右鍵「關閉其他／右邊」。鍵盤：**Ctrl+P 快速開檔**（模糊比對整條相對路徑）、Ctrl+W 關分頁、Ctrl+Tab 切分頁、檔案樹 ↑↓←→／Home／End 走位（照 VS Code），開著的檔案在樹上標出來、藏起來會自動展開。檔案樹可 Ctrl／Shift 多選、拖曳搬檔。Git 面板下面有 **worktree** 一區（列出／新增／移除，新的會自動加進側欄）。編輯器是 **Monaco**（語法高亮、內建尋找取代、真正的並排 diff；載不起來退回 `<textarea>`），`.md`／`.html` 有預覽，圖片與 PDF 直接顯示；瀏覽器是 **`<webview>`**（`partition="persist:wsbrowser"`＋`allowpopups`，**只有主視窗開 `webviewTag`**） |
+| 專案工作區 | `src/main/workspace/`：**與聊天同一頁**，借 Orca 的三欄版面。左側欄兩顆鈕切專案／對話，「專案」面板**只列本機資料夾**（`workspaces.json`，**不做 git worktree**，可拖資料夾進來加入；**兩個清單容器 id 都不動**：`#projList`／`#chatList`）；中間 `#termMain` 裡多一條分頁列（終端機／編輯器／瀏覽器，「＋」貼著分頁尾端可一鍵開終端機／Claude Code／Codex／OpenCode／Antigravity／Grok／瀏覽器，可勾管理員，「終端機（自訂…）」才選 shell 與工作目錄）。**分頁狀態跟著專案走**（含終端機分頁，存 `workspaces.json` 的 `tabsState`），切專案只摘畫面、pty 留在 main；終端機的狀態燈、未讀點、改名（右鍵）與關閉（×，二次確認後真的收掉工作階段）都在分頁上；右側欄四面板＝檔案總管（含搜尋、右鍵新增／改名／刪除）／Git 狀態（暫存區／變更／未追蹤三組，逐檔暫存／取消／捨棄（3 秒二次確認）、全部暫存、提交（staged）、推送、拉取、最近提交 10 筆）／這個資料夾跑過的 AI 對話（點一下在新終端機 resume）／本機正在監聽的埠（點一下用內建瀏覽器開）。分頁拖曳是 **pointer 跟手＋FLIP 平滑讓位**（不是 HTML5 DnD）、中鍵關閉、右鍵「關閉其他／右邊」。鍵盤：**Ctrl+P 快速開檔**（模糊比對整條相對路徑）、Ctrl+W 關分頁、Ctrl+Tab 切分頁、檔案樹 ↑↓←→／Home／End 走位（照 VS Code），開著的檔案在樹上標出來、藏起來會自動展開。檔案樹可 Ctrl／Shift 多選、拖曳搬檔。Git 面板下面有 **worktree** 一區（列出／新增／移除，新的會自動加進側欄）。編輯器是 **Monaco**（語法高亮、內建尋找取代、真正的並排 diff；載不起來退回 `<textarea>`），`.md`／`.html` 有預覽，圖片與 PDF 直接顯示；瀏覽器是 **`<webview>`**（`partition="persist:wsbrowser"`＋`allowpopups`，**只有主視窗開 `webviewTag`**） |
 | HF模型 | `src/main/hfmodels/`：在 Hugging Face 搜 GGUF → 下載 → 一鍵載入 → **直接出現在聊天的模型選單**。探索頁是左清單／右模型卡兩欄（README＋每個量化的大小與「這台跑不跑得動」）。推論走 `llama-server` 的 **router 模式**（`--models-dir`＋`--models-preset`，一顆程序管全部模型），參數由 `plan.js`（估算）＋官方 `llama-fit-params`（實測）決定，每一項都可覆寫、可原始參數直通、可 `llama-bench` 實測調校。模型放 `hfModelsDir`（可自選，預設 `<userData>/hf-models`），一顆一個子資料夾（`mmproj-*.gguf` 同夾＝多模態） |
 | Claude Code 工作台 | `src/main/ccswitch/`：供應商（CC Switch 式 tile，一鍵改 `~/.claude/settings.json` 的 `env`；「Claude 官方訂閱」排第一、內建各家自動播種、「＋」新增自訂；**端點只有自訂能填，六家內建可選上游格式**）／MCP（`~/.claude.json`）／CLI 版本。走閘道那幾家經 `ccswitch/gateway/` 轉協議；Codex／Grok 可 App 內 OAuth 或沿用 CLI 憑證 |
 | 系統監控 | `src/main/sysmon/`：常駐 `probe.ps1` 取樣器＋`nvidia-smi -l`；六個子分頁（總覽／使用時長／處理程序／壓力測試／風扇控制／效能調整）。磁碟**按實體碟分開**顯示，S.M.A.R.T. 走免提權 NVMe IOCTL（健康度／通電時數／寫入總量／溫度，CrystalDiskInfo 那半邊）；壓力測試 CPU／GPU 各一排四格（負載／功耗／溫度／轉速）＋磁碟測速（`bench.js`，測試檔跑完刪掉）。感測器走提權 sidecar（WinExe、無主控台視窗），**即開即用**：開 App 靜默拉起（有排程工作就不跳 UAC），沒有排程工作時一進系統監控頁就自動啟用，**第一次順手把排程工作裝起來（一次 UAC），之後永遠靜默**；sidecar 中途死掉會自己重拉（上限 5 次）；**風扇控制**（`fans.js`＋`sensors-task.js`）走同一顆 sidecar 的雙向管道，通用機殼示意圖＋可拖點的轉速曲線，開機自啟動時直接接管（排程工作免 UAC）；**效能調整**（`oc.js`）同顆 sidecar 另走 `G`／`C`／`X` 寫 NVIDIA 功耗牆／時脈偏移與 Ryzen PBO 牆，不能沿用風扇的 `S`／`D`／`R` |
@@ -412,6 +412,96 @@ gh release upload vX.Y.Z dist/VoiceInk-Setup-X.Y.Z.exe dist/VoiceInk-Setup-X.Y.Z
   才 require 得起來，測試載的是各個子模組。實測踩過：第七輪把 resume 從 UI 拿掉時，
   順手刪了 `agentResumeCommand` 的定義卻留著那一行 export（renderer 其實還在用）。
   回歸：`test-workspace.js` 的 [Q]（比對 exports 清單與檔案裡的定義）
+- **`main.js` 的 `registerWorkspaceIpc({ service })` 是逐一列舉的白名單**（跟 AGY／系統監控同一條）：
+  `ipc.js` 加了 handler、`index.js` 也匯出了，但 `main.js` 那份清單漏一行，
+  `service.X` 就是 `undefined` → TypeError → renderer 只看得到通用的「工作區操作失敗」。
+  **IPC 層、preload、單元測試全綠**，只有真的按下去才發現（這一輪的 `gitBranches` 就漏過一次）。
+  回歸：`test-workspace.js` 的 [Q2]（ipc.js 用到的每個 `service.X` 都要在 main.js 那份清單裡，
+  而且每一支 `workspace:*` 在 preload 都要接得到）
+- **AI 記錄的家目錄不是只有 `~/.claude`／`~/.codex`**：CLI 認 `CLAUDE_CONFIG_DIR`／`CODEX_HOME`，
+  而且被別的工作台（Orca）代跑時整份記錄會落在它自己的 runtime home
+  （實測這台機器的 `CODEX_HOME=%APPDATA%\orca\codex-runtime-home\home`，
+  `~/.codex/sessions` 底下一筆都沒有）。只看預設家目錄的症狀是「剛跑完的對話面板上完全不出現」。
+  同一個 session 可能同時躺在好幾個家目錄（備份／回填）或 `sessions` 與 `archived_sessions`
+  兩邊，最後要照 `agent + id` 去重、留最新的那一份。
+  `codeusage/index.js` 的 `jsonlSources()` 是另一組事實（游標與桶子），**維持只掃預設家目錄**——
+  它的游標鍵是檔名，多掃一份同名檔會共用游標而算錯。回歸：`test-workspace.js` 的 [W]
+- **「讀過」跟「改過」要分開回**（`sessionDetail` 的 `readFiles`／`editedFiles`）：
+  以前一個 `modifiedFiles` 把 `Read`／`Grep` 也算進去，使用者以為 agent 動過三十個檔案，
+  其實只是看過。工具名不認得時算「讀過」——**不可以憑空說人家改過**。
+  回歸：`test-workspace-ui.js` 的 [C]
+- **接續一段對話要先確認它屬於這個專案**（`agents.resume` → `findSessionFile`）：
+  只驗 id 格式的話，renderer 送別的專案的 session id 進來照樣接得起來，
+  而那個字串會被直接打進終端機。回歸：`e2e-workspace-cdp.js` 的 [AA]
+- **`for-each-ref` 不吃 `%x1f`**（那是 `git log` 的 pretty-format）：寫了不會報錯，
+  只會原樣留在字串裡，分支名整條變成 `name%x1frefs/heads/name`。要多個欄位就分幾次跑，
+  或只取 `%(refname)` 自己剝前綴。
+- **跟分支比要比「合併基準點」，不是那條分支的頂端**（`git merge-base <ref> HEAD`）：
+  直接跟頂端比的話，對方後來的提交會被算成「我刪掉的」。右邊是**工作區**（含未提交），
+  因為要審的就是手上這一份。`--numstat` 一定要配 `--no-renames`——帶改名偵測時
+  那一筆會變成三格（`add\0from\0to`），欄位一錯位後面每一筆檔名都跟著錯。
+  回歸：`test-workspace.js` 的 [X]＋`e2e-workspace-cdp.js` 的 [Y]
+- **切到「不是 git 儲存庫」的專案時，Git 面板的每一塊都要清乾淨**：`renderGit` 在
+  `!status.repo` 那條會提早 return，忘了清的區塊會留著**上一個專案**的資料
+  （實測審閱的分支下拉留著舊分支，按「比較」得到「這兩條分支沒有共同的起點」，
+  看起來像 git 壞了）。工作樹、分支下拉、審閱清單三塊都要一起收。
+- **衝突檔案（porcelain 的 `u` 記錄）要自己一組**：`index`／`worktree` 兩欄都是 `U`，
+  用「不是 . 也不是 ?」去分組的話同一個檔案會同時出現在「暫存區」與「變更」兩組，
+  而且看不出它其實是合併沒解完。那一組只給「解決了」（`git add`），不給捨棄。
+- **工作樹移除前要自己先問一次**（`worktree.check`）：git 擋下來時只回一個非 0，
+  UI 只能說「移不掉」——講不出是**哪幾個檔案**還沒提交。先跑一次 `status --porcelain`
+  數出來、講出前幾個檔名，使用者才知道要去哪裡收。順便：`worktree list` 列得到、
+  但側欄沒有的那幾棵要給一顆「加入」（`worktree.adopt`，路徑一樣走列舉當白名單），
+  不然只看得到卻切不過去。
+- **資料夾監看一次只看一個專案**（`workspace/watch.js`）：每個專案各留一個 recursive
+  watcher 等於在背景掛住好幾棵樹。`.git` 底下的變動**只當成「Git 狀態變了」**、不進檔案清單
+  （那裡的 index／lock 每跑一次 git 都在動），其餘 `SKIP_DIRS` 整段丟掉。
+  事件要合併（npm install 一秒幾千個），監看不起來（網路磁碟）回 `{ watching: false }`
+  安靜退回手動重新整理，**不要跳錯誤**。重畫檔案樹時要自己記住捲動位置，
+  否則別人一存檔畫面就跳回最上面。回歸：`test-workspace.js` 的 [Z]＋`e2e-workspace-cdp.js` 的 [AB]
+- **對話與終端機的 `projectId` 是可選欄位**（`chats.json`／`terminals.json`）：舊檔沒有這個欄位，
+  缺值一律當「未分類」，**不可以拿它當必填**（那會讓既有的對話全部消失）。
+  格式卡 `^[A-Za-z0-9_-]{1,64}$`——那個字串會被拿去過濾與比對，renderer 送什麼都不能信。
+  回歸：`test-workspace.js` 的 [Y]＋`e2e-workspace-cdp.js` 的 [AC]
+- **字面比對擋不住資料夾連結**：在專案裡建一個指向 `C:\` 的 junction，`path.resolve` 看到的
+  仍然是專案內的路徑，實際讀到的卻是整台電腦（實測讀得到專案外的檔案）。
+  `resolveIn` 通過字面檢查之後還要 `assertInsideReal`：兩邊都 `fs.realpathSync.native` 再比。
+  **專案根目錄自己住在連結底下是合法的**（使用者把 junction 拖進側欄），所以基準也要解開；
+  還不存在的路徑（新增檔案）往上找到第一個存在的祖先，把剩下那段接回去比。
+  `git.js` 讀工作區檔案（`fileVersions`、未追蹤檔案的假 diff）也要走 `files.resolveIn`，
+  不可以自己 `path.resolve`。回歸：`test-workspace.js` 的 [U]＋`e2e-workspace-cdp.js` 的 [G]
+- **存檔一定要帶「開檔當下的版本」**（`writeFile(..., expectedMtimeMs)`）：不帶等於每次存檔都
+  無條件蓋掉磁碟上那一版——外部改過、被別的編輯器寫過、甚至**原檔已經被刪掉**都照樣寫下去
+  （刪掉的那種會把舊檔重新建出來）。對不上時 main 回 `STALE`，UI 開提示條給
+  比較／重新載入／覆寫／保留編輯四條路，**草稿一個字都不能動**。
+  「保留編輯」要去讀磁碟的真 mtime，不可以隨手填 `Date.now()`（那等於下次存檔又硬蓋一次）。
+  回歸：`test-workspace.js` 的 [V]＋`test-workspace-state.js`＋`e2e-workspace-cdp.js` 的 [R]
+- **同一個檔案的寫入要排隊**（`files.js` 的 `queueWrite`）：暫存檔取成不同名字還不夠，
+  **Windows 上兩個 rename 同時指向同一個目的地會直接失敗**（實測併發存檔拿到 EPERM，
+  UI 顯示「存檔失敗」，而使用者只是連按了兩次儲存）。暫存檔名要帶 pid＋流水號。
+- **開分頁的每一次 await 之後都要對 `projectSwitch` 核對一次**（`ws-tabs.js` 的 `staleOpen`）：
+  開一個分頁至少要等一次 IPC，那段時間使用者可能已經切到別的專案，回來照樣 `tabs.push`
+  的話 B 專案的分頁列上會冒出 A 的檔案。`restoreProjectTabs` 早就有這道守衛，
+  `openEditorTab`／`openDiffTab`／`openAiSessionTab` 三條漏了。**回來還要再 `findTab` 一次**
+  （連點兩下會開出兩份）。右側欄的 `renderGit`／`renderGitLog`／`renderWorktrees`／
+  `openAllChanged` 同理（AI 記錄那條本來就有）。回歸：`test-workspace-state.js`
+- **改名／搬檔之後要 `retargetTabs`**：分頁 id 內嵌相對路徑（`e:<專案>:<相對路徑>`），
+  不接的話那個分頁還指著舊路徑，**存檔會把舊檔重新建出來**，而畫面上完全看不出來。
+  資料夾改名要連底下每一個開著的檔案一起換；id 照長度換尾巴，不要用 `replace` 找 `:${relPath}`。
+  刪除那條靠 main 的 `STALE` 擋住，外部變更檢查看到 `exists === false` 要把提示條打開
+  （不然畫面看起來完全正常）。
+- **結束時的草稿要由 main 等**：`beforeunload` 裡的非同步儲存跑不完，視窗一關就沒了。
+  `before-quit` 先送 `workspace:flushDrafts` 等 renderer 回報（逾時 3 秒照樣往下走，
+  不能讓 App 因為存草稿關不掉），**這一步要排在 `terminalMod.killAll()` 之前**——
+  存不起來時是要「取消這次結束」的，終端機已經被砍掉就回不去了。
+  第二次按結束一律放行（`draftFlush === 'done'`）。回歸：`e2e-tray-cdp.js`
+- **草稿上限要跟 `files.MAX_WRITE_CHARS` 同一個數字**（4MB）：`store.js` 以前寫 500KiB，
+  症狀是「編輯器讓你打、存檔也存得下，但關掉分頁草稿就沒了」而且沒有任何訊息。
+  超過上限時 renderer 要當場講一次。
+- **`gitFileVersions` 的「讀不到」不可以畫成空檔**：截斷（>2MB）與非 `ENOENT` 的錯誤都會讓
+  並排 diff 把後面整段標成「刪光」。截斷回 `truncated: true`、其他錯誤往上丟，
+  renderer 收到就把 `versions` 設 null 退回逐行檢視。`ENOENT` 才是「這個版本沒有這個檔案」。
+  **暫存／取消暫存之後兩份完整內容也要重讀**（只換 `diffData` 的話統計是新的、畫面是舊的）。
 - **`workspace/files.js` 的 `resolveIn` 是唯一的檔案系統入口**：renderer 一律只送
   `{ projectId, relPath }`，絕對路徑由 main 從 store 取。收 renderer 給的路徑等於把
   「讀寫任意檔案」變成一個 API。比對**必須帶路徑分隔符號**（`full.startsWith(base + path.sep)`）——
@@ -444,8 +534,11 @@ gh release upload vX.Y.Z dist/VoiceInk-Setup-X.Y.Z.exe dist/VoiceInk-Setup-X.Y.Z
   （`javascript:alert(1)` 補成 `http://javascript:alert(1)` 會因為 port 不合法而失敗，照樣擋得住）。
 - **本機 HTML 的預覽用 `srcdoc` ＋ `sandbox="allow-scripts"`，不給 `allow-same-origin`**：
   給了等於讓那份 HTML 拿到我們這個 origin 的一切。
-- **側欄兩顆模式鈕（專案／對話），三個清單各自是獨立容器**（`#projList`／`#chatList`／`#termList`），
-  切換只 toggle `hidden`；終端機清單併在專案面板下半，**容器 id 不可以改**（terminal-page.js 與測試都認）。
+- **側欄兩顆模式鈕（專案／對話），兩個清單各自是獨立容器**（`#projList`／`#chatList`），
+  切換只 toggle `hidden`。**側欄沒有終端機清單**（2026-09-06 移掉）：終端機是分頁列上的一顆分頁，
+  新增走分頁列的「＋」。因此**關掉終端機分頁＝刪掉那個工作階段**（沒有別的地方接得住它，
+  留著就再也叫不出來），要二次確認；狀態燈（`.ws-tab-state`）、未讀點（`.ws-tab-unread`）
+  與就地改名（`.ws-tab-rename`，右鍵選單）都在分頁上，由 `terminal-page.js` 推給 `paintTerminalTab`。
   `.chat-list-item` 三邊共用，合併成一個容器的話所有選擇器都會互相打到。
   用 `hidden` 收合的 `.sidebar-panel` **必須自己補 `[hidden] { display: none }`**（作者規則的 `display: flex` 壓得過瀏覽器內建樣式）。
 - **`#termMain`／`.term-main` 這兩個名字不可以改**：終端機的「人在不在看」判定與
@@ -571,7 +664,7 @@ gh release upload vX.Y.Z dist/VoiceInk-Setup-X.Y.Z.exe dist/VoiceInk-Setup-X.Y.Z
   （第二次點到的是已脫離 DOM 的節點，畫面上完全看不出來）。走 `refreshItemView()`。
 - **「人在不在看終端機」要看 `#termMain` 有沒有被藏起來**：合頁後切到對話藏的是 `termMain`，
   `termHost` 自己不會變，只看 `termHost` 的話背景階段跑完永遠不亮未讀點。
-- **`.chat-list-item` 同時是終端機列的 class**：選擇器一定要限定 `#chatList` 或 `#termList`。
+- **`.chat-list-item` 同時是專案列的 class**：選擇器一定要限定 `#chatList` 或 `#projList`。
 - **`term.open()` 前要先讓那一格可見**：掛在 `display:none` 上會開出 0×0 終端機，第一段輸出（提示字元）消失，
   看起來像 pty 沒起來。
 - **shell 與啟動指令只收 key**（執行檔路徑與指令字串在 `terminal/store.js` 的固定表）；

@@ -16,7 +16,9 @@
  */
 
 const { spawn } = require('child_process')
+const fsp = require('fs/promises')
 const store = require('./store')
+const files = require('./files')
 
 /** 單次 git 指令的逾時（push 會走網路，給寬一點） */
 const TIMEOUT_MS = 60000
@@ -399,8 +401,9 @@ async function diff(projectId, relPath, staged = false) {
     const entry = parseStatus(stat.stdout).files.find((f) => f.path.replace(/\\/g, '/') === wanted)
     if (entry && entry.index === '?' && entry.worktree === '?') {
       try {
-        const full = require('path').resolve(cwd, path)
-        const content = await require('fs/promises').readFile(full, 'utf8')
+        // 讀磁碟一律走 files.resolveIn（它會連資料夾連結一起解開再比）
+        const full = files.resolveIn(cwd, path)
+        const content = await fsp.readFile(full, 'utf8')
         const lines = content.split('\n')
         diffText = `--- /dev/null\n+++ b/${path}\n@@ -0,0 +1,${lines.length} @@\n` +
           lines.map((l) => `+${l}`).join('\n')
@@ -432,8 +435,10 @@ const MAX_DIFF_BYTES = 2 * 1024 * 1024
  */
 async function showAt(cwd, rev, relPath) {
   const res = await run(cwd, ['show', `${rev}:${relPath.replace(/\\/g, '/')}`])
-  if (res.code !== 0) return ''
-  return res.stdout.length > MAX_DIFF_BYTES ? res.stdout.slice(0, MAX_DIFF_BYTES) : res.stdout
+  if (res.code !== 0) return { text: '', truncated: false }
+  // 截斷過的內容不可以直接拿去並排：後面那一大段會被畫成「整段刪掉」
+  if (res.stdout.length > MAX_DIFF_BYTES) return { text: '', truncated: true }
+  return { text: res.stdout, truncated: false }
 }
 
 /**
@@ -453,29 +458,189 @@ async function showAt(cwd, rev, relPath) {
 async function fileVersions(projectId, relPath, staged = false) {
   const rel = relPathOf(relPath)
   const cwd = await rootOf(projectId)
-  const original = await showAt(cwd, staged ? 'HEAD' : '', rel)
-  let modified
+  const left = await showAt(cwd, staged ? 'HEAD' : '', rel)
+  let right
   if (staged) {
-    modified = await showAt(cwd, '', rel)
+    right = await showAt(cwd, '', rel)
   } else {
     try {
-      const full = require('path').resolve(cwd, rel)
-      const buf = await require('fs/promises').readFile(full)
-      modified = buf.subarray(0, MAX_DIFF_BYTES).toString('utf8')
-    } catch {
-      // 刪掉的檔案：工作區那一邊就是空的
-      modified = ''
+      // 走 files.resolveIn，不自己 path.resolve（資料夾連結那條也要擋）
+      const buf = await fsp.readFile(files.resolveIn(cwd, rel))
+      right = buf.length > MAX_DIFF_BYTES
+        ? { text: '', truncated: true }
+        : { text: buf.toString('utf8'), truncated: false }
+    } catch (error) {
+      // 檔案不在了（刪除／改名）＝工作區那一邊是空的，這是正常的一種 diff。
+      // 其他錯誤（權限、路徑被擋）不可以畫成空檔——那會看起來像「整份被刪光」，
+      // 一律往上丟，讓 UI 退回逐行檢視並講出錯誤。
+      if (error?.code !== 'ENOENT') throw error
+      right = { text: '', truncated: false }
     }
   }
-  const binary = original.includes('\u0000') || modified.includes('\u0000')
-  return binary
-    ? { original: '', modified: '', binary: true }
-    : { original, modified, binary: false }
+  const truncated = left.truncated || right.truncated
+  const binary = left.text.includes('\u0000') || right.text.includes('\u0000')
+  return (binary || truncated)
+    ? { original: '', modified: '', binary, truncated }
+    : { original: left.text, modified: right.text, binary: false, truncated: false }
+}
+
+// ===== 跟某個分支整體比較（審閱）=====
+
+/** 分支清單最多幾筆 */
+const MAX_BRANCHES = 100
+
+/**
+ * ref 的白名單。那個字串會變成 `git merge-base <ref> HEAD` 的參數——走陣列不會被 shell
+ * 吃掉，但 `-` 開頭會被 git 當成選項，`..` 會變成範圍語法。
+ * @param {unknown} raw
+ * @returns {string}
+ */
+function checkRef(raw) {
+  const ref = typeof raw === 'string' ? raw.trim() : ''
+  if (!ref || ref.length > 200) throw fail('BAD_REF', '分支名稱不合法')
+  if (ref.startsWith('-') || ref.endsWith('/') || ref.includes('..')) {
+    throw fail('BAD_REF', '分支名稱不合法')
+  }
+  if (!/^[A-Za-z0-9._/-]+$/.test(ref)) throw fail('BAD_REF', '分支名稱只能用英數字與 . _ / -')
+  return ref
+}
+
+/**
+ * 本機與遠端分支清單（給「跟哪個分支比」的下拉）。依最後提交時間排，
+ * 常用的那幾個會在最前面。
+ * @param {string} projectId
+ * @returns {Promise<{ current: string, branches: Array<{ name: string, remote: boolean }> }>}
+ */
+async function branches(projectId) {
+  const cwd = await rootOf(projectId)
+  // **`for-each-ref` 不吃 `%x1f`**（那是 `git log` 的 pretty-format）——寫了只會
+  // 原樣留在字串裡，分支名整條變成「name%x1frefs/heads/name」。只要 refname，
+  // 短名自己剝前綴就好。
+  const res = await run(cwd, [
+    'for-each-ref',
+    '--sort=-committerdate',
+    `--count=${MAX_BRANCHES}`,
+    '--format=%(refname)',
+    'refs/heads',
+    'refs/remotes'
+  ])
+  if (res.code !== 0) return { current: '', branches: [] }
+  const head = await run(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'])
+  const out = []
+  for (const line of res.stdout.split('\n')) {
+    const full = line.trim()
+    if (!full) continue
+    const remote = full.startsWith('refs/remotes/')
+    const name = full.replace(/^refs\/(heads|remotes)\//, '')
+    // `origin/HEAD` 只是個指標，列出來按下去會很困惑
+    if (!name || name.endsWith('/HEAD')) continue
+    out.push({ name, remote })
+  }
+  return {
+    current: head.code === 0 ? head.stdout.trim() : '',
+    branches: out
+  }
+}
+
+/**
+ * 解析 `git diff --numstat -z --no-renames`：每筆是 `新增\t刪除\t路徑\0`。
+ * 二進位檔的兩個數字是 `-`。純函式，可直接 node 測。
+ *
+ * **一定要 `--no-renames`**：帶改名偵測時那一筆會變成三格（`add\0from\0to`），
+ * 欄位一錯位後面每一筆檔名都跟著錯。
+ *
+ * @param {string} raw
+ * @returns {Array<{ path: string, additions: number, deletions: number, binary: boolean }>}
+ */
+function parseNumstat(raw) {
+  const out = []
+  for (const record of String(raw || '').split('\0')) {
+    if (!record) continue
+    const parts = record.split('\t')
+    if (parts.length < 3) continue
+    const binary = parts[0] === '-' || parts[1] === '-'
+    out.push({
+      path: parts.slice(2).join('\t'),
+      additions: binary ? 0 : Number(parts[0]) || 0,
+      deletions: binary ? 0 : Number(parts[1]) || 0,
+      binary
+    })
+    if (out.length >= MAX_FILES) break
+  }
+  return out
+}
+
+/**
+ * 「我這條分支跟 <ref> 差在哪」——審閱整包變更用的。
+ *
+ * 比的基準是**合併基準點**（`merge-base`），不是那個分支的最新一筆：
+ * 直接跟分支頂端比的話，對方後來的提交會被算成「我刪掉的」。
+ * 右邊是**工作區**（含還沒提交的改動），因為要審的就是手上這份。
+ *
+ * @param {string} projectId
+ * @param {string} ref
+ * @returns {Promise<{ base: string, ref: string, files: Array<object>, truncated: boolean }>}
+ */
+async function compareBranch(projectId, ref) {
+  const target = checkRef(ref)
+  const cwd = await rootOf(projectId)
+  const merge = await run(cwd, ['merge-base', target, 'HEAD'])
+  if (merge.code !== 0) throw fail('NO_BASE', '這兩條分支沒有共同的起點（或分支不存在）')
+  const base = merge.stdout.trim()
+  const res = await run(cwd, ['diff', '--numstat', '-z', '--no-renames', base, '--'])
+  if (res.code !== 0) throw fail('DIFF_FAILED', '比較失敗')
+  const files = parseNumstat(res.stdout)
+  return {
+    base: base.slice(0, 12),
+    ref: target,
+    files,
+    truncated: files.length >= MAX_FILES
+  }
+}
+
+/**
+ * 審閱用的兩份完整內容：左邊是合併基準點那一版，右邊是工作區現在的樣子。
+ * 跟 `fileVersions` 的差別只在左邊是哪一版，其餘規則（二進位、截斷）完全一樣。
+ *
+ * @param {string} projectId
+ * @param {string} relPath
+ * @param {string} ref
+ * @returns {Promise<{ original: string, modified: string, binary: boolean, truncated: boolean }>}
+ */
+async function fileVersionsAgainst(projectId, relPath, ref) {
+  const rel = relPathOf(relPath)
+  const target = checkRef(ref)
+  const cwd = await rootOf(projectId)
+  const merge = await run(cwd, ['merge-base', target, 'HEAD'])
+  if (merge.code !== 0) throw fail('NO_BASE', '這兩條分支沒有共同的起點（或分支不存在）')
+  const left = await showAt(cwd, merge.stdout.trim(), rel)
+  let right
+  try {
+    const buf = await fsp.readFile(files.resolveIn(cwd, rel))
+    right = buf.length > MAX_DIFF_BYTES
+      ? { text: '', truncated: true }
+      : { text: buf.toString('utf8'), truncated: false }
+  } catch (error) {
+    // 檔案在這條分支上被刪掉了＝右邊是空的；其他錯誤不可以畫成空檔
+    if (error?.code !== 'ENOENT') throw error
+    right = { text: '', truncated: false }
+  }
+  const truncated = left.truncated || right.truncated
+  const binary = left.text.includes('\u0000') || right.text.includes('\u0000')
+  return (binary || truncated)
+    ? { original: '', modified: '', binary, truncated }
+    : { original: left.text, modified: right.text, binary: false, truncated: false }
 }
 
 module.exports = {
   MAX_FILES,
+  MAX_BRANCHES,
   TIMEOUT_MS,
+  checkRef,
+  parseNumstat,
+  branches,
+  compareBranch,
+  fileVersionsAgainst,
   fileVersions,
   parseStatus,
   parseLog,

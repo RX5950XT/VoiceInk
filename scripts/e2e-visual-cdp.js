@@ -565,8 +565,10 @@ async function main() {
     const dialogDropdown = await cdp.eval(`(async () => {
       document.querySelector('[data-page="chat"]')?.click()
       await new Promise((resolve) => setTimeout(resolve, 260))
-      document.getElementById('termNewBtn')?.click()
-      await new Promise((resolve) => setTimeout(resolve, 120))
+      document.getElementById('wsNewBtn')?.click()
+      await new Promise((resolve) => setTimeout(resolve, 160))
+      document.getElementById('wsNewCustomTerm')?.click()
+      await new Promise((resolve) => setTimeout(resolve, 160))
       const dialog = document.getElementById('termNewDialog')
       const trigger = document.querySelector('.custom-select-trigger[data-select-id="termShellSelect"]')
       if (!dialog || !trigger || !dialog.open) return null

@@ -2093,6 +2093,45 @@ option:disabled {
   background-color: var(--accent-warm);
 }
 
+/* 終端機分頁的狀態燈。側欄清單收掉之後，「還在跑嗎」只剩這一顆看得出來 */
+.ws-tab-state {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: var(--text-tertiary);
+}
+
+.ws-tab-state-running {
+  background-color: var(--success);
+}
+
+.ws-tab-state-exited {
+  background-color: var(--danger);
+}
+
+/* 跑完了但當時不在看它 */
+.ws-tab-unread {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: var(--accent-warm);
+}
+
+/* 分頁上就地改名 */
+.ws-tab-rename {
+  min-width: 90px;
+  max-width: 160px;
+  padding: 1px 4px;
+  border: 1px solid var(--accent-primary);
+  border-radius: var(--radius-sm);
+  background-color: var(--surface-solid);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: inherit;
+}
+
 .ws-tab-close {
   flex: none;
   padding: 0 8px 0 4px;
@@ -2309,6 +2348,13 @@ option:disabled {
 /* Monaco 自己畫的浮動小工具（尋找、快速選單）要蓋在編輯區上面 */
 .ws-monaco .monaco-editor .overflow-guard {
   border-radius: var(--radius-md);
+}
+
+/* 尋找列開啟時，說明 tooltip 沒有可操作內容，不應蓋住頂端按鈕。
+   fixedOverflowWidgets 會把 tooltip 的 context-view 放到 ws-monaco 外面。 */
+body:has(.ws-monaco .find-widget.visible) .context-view:has(.workbench-hover-container),
+body:has(.ws-monaco .find-widget.visible) .workbench-hover-container {
+  pointer-events: none;
 }
 
 .ws-ide-gutter {
@@ -3228,6 +3274,50 @@ option:disabled {
   overflow-wrap: anywhere;
 }
 
+.ws-tree-status {
+  flex: none;
+  min-width: 16px;
+  margin-left: auto;
+  padding: 0 4px;
+  border: 1px solid color-mix(in srgb, var(--warning) 55%, var(--border-color));
+  border-radius: var(--radius-sm);
+  color: var(--warning);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.ws-tree-status.is-new {
+  border-color: color-mix(in srgb, var(--success) 55%, var(--border-color));
+  color: var(--success);
+}
+
+.ws-tree-status.is-conflict {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--border-color));
+  color: var(--danger);
+}
+
+.ws-tree-status.is-folder {
+  border-color: var(--border-color);
+  color: var(--text-tertiary);
+  cursor: default;
+}
+
+.ws-tree-status[role='button'] {
+  cursor: pointer;
+}
+
+.ws-tree-status[role='button']:hover {
+  background-color: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.ws-tree-status[role='button']:focus-visible {
+  outline: 2px solid var(--focus-ring-color);
+  outline-offset: 1px;
+}
+
 /* 編輯器現在開著的那一個檔案：跟 hover 分得開，所以用底色 tint ＋ 主色文字 */
 /* 多選：底色比「開著的檔案」淡一階，兩者可以同時成立 */
 .ws-tree-row.is-selected {
@@ -3339,10 +3429,81 @@ option:disabled {
 }
 
 /* ── Git ── */
-.ws-git-files {
+/* 四段可收合的區塊；捲軸只有這一條（以前每一區各自 overflow，四條疊在一起） */
+.ws-git-scroll {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ws-git-sec {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.ws-git-sec-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ws-git-sec-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background-color: transparent;
+  color: var(--text-tertiary);
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ws-git-sec-toggle:hover {
+  color: var(--text-primary);
+  background-color: var(--surface-hover);
+}
+
+.ws-git-sec-toggle::before {
+  content: '▸';
+  display: inline-block;
+  flex: none;
+  font-size: 9px;
+  transition: transform 0.12s ease;
+}
+
+.ws-git-sec-toggle[aria-expanded='true']::before {
+  transform: rotate(90deg);
+}
+
+.ws-git-sec-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 4px;
+}
+
+/* [hidden] 只是瀏覽器內建樣式，上面的 display: flex 壓得過它 */
+.ws-git-sec-body[hidden] {
+  display: none;
+}
+
+.ws-git-files {
+  flex: none;
+  display: flex;
+  flex-direction: column;
 }
 
 .ws-git-row {
@@ -3350,7 +3511,7 @@ option:disabled {
   align-items: center;
   gap: 6px;
   width: 100%;
-  padding: 4px 8px;
+  padding: 2px 8px;
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -3367,7 +3528,7 @@ option:disabled {
 
 /* 分組小標（暫存區／變更／未追蹤） */
 .ws-git-group {
-  margin: 6px 0 2px;
+  margin: 4px 0 1px;
   padding: 0 8px;
   font-size: 10px;
   font-weight: 600;
@@ -3402,24 +3563,8 @@ option:disabled {
   margin-left: 4px;
 }
 
-/* 最近提交 */
-.ws-git-log-head {
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  margin-top: 8px;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--text-tertiary);
-  letter-spacing: 0.04em;
-}
-
 .ws-worktrees {
   flex: none;
-  max-height: 132px;
-  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -3470,8 +3615,6 @@ option:disabled {
 
 .ws-git-log {
   flex: none;
-  max-height: 130px;
-  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -3622,6 +3765,253 @@ option:disabled {
   overflow: hidden;
 }
 
+/* ── 對話歸屬（哪一段對話屬於哪個專案）── */
+.chat-list-proj {
+  color: var(--accent-primary);
+}
+
+.chat-list-btn.is-on {
+  color: var(--accent-primary);
+}
+
+/* ── AI 記錄：來源標籤與直接接續 ── */
+.ws-agent-row-wrap {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+}
+
+.ws-agent-row-wrap .ws-agent-row {
+  flex: 1;
+  min-width: 0;
+}
+
+.ws-agent-source {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+.ws-agent-resume {
+  flex: none;
+  align-self: center;
+  margin-left: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.ws-agent-resume:hover {
+  color: var(--accent-primary);
+  border-color: var(--accent-primary);
+}
+
+/* ── AI 會話卡片裡的可收合區塊 ── */
+.ws-ai-fold {
+  margin-top: 8px;
+}
+
+.ws-ai-fold-head {
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  list-style: none;
+}
+
+.ws-ai-fold-head::-webkit-details-marker {
+  display: none;
+}
+
+.ws-ai-fold-head::before {
+  content: '▸ ';
+}
+
+.ws-ai-fold[open] > .ws-ai-fold-head::before {
+  content: '▾ ';
+}
+
+.ws-ai-fold-body {
+  padding: 6px 0 2px;
+}
+
+.ws-ai-note {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.ws-ai-turns {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ws-ai-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+}
+
+.ws-ai-turn.is-user {
+  background-color: var(--surface-subtle);
+}
+
+.ws-ai-turn-role {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-tertiary);
+}
+
+.ws-ai-turn-text {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ws-ai-turn-tool {
+  display: flex;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.ws-ai-turn-tool-detail {
+  overflow-wrap: anywhere;
+}
+
+/* ── 審閱：跟某條分支比 ── */
+.ws-git-group.is-conflict {
+  color: var(--danger);
+}
+
+.ws-review-bar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 0 8px;
+}
+
+.ws-review-bar .select {
+  flex: 1;
+  min-width: 0;
+}
+
+.ws-review-files {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ws-review-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ws-review-file:hover {
+  color: var(--text-primary);
+  background-color: var(--surface-hover);
+}
+
+/* ── 逐行意見 ── */
+.ws-review-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 40%;
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--border-color);
+}
+
+.ws-review-panel[hidden] {
+  display: none;
+}
+
+.ws-review-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.ws-review-head .btn {
+  margin-left: 0;
+}
+
+.ws-review-head > span {
+  margin-right: auto;
+}
+
+.ws-review-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow: auto;
+}
+
+.ws-review-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 6px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+}
+
+.ws-review-where {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-primary);
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.ws-review-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.ws-review-del {
+  flex: none;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+.ws-review-del:hover {
+  color: var(--danger);
+}
+
 /* ── 專案側欄 ── */
 .proj-meta {
   display: flex;
@@ -3630,9 +4020,21 @@ option:disabled {
   min-width: 0;
 }
 
+/* 路徑只佔一行（以前 overflow-wrap: anywhere 會折成三行，整塊變得很高） */
 .proj-path {
   min-width: 0;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.proj-list-item .chat-list-open {
+  gap: 1px;
+  padding: 6px 10px;
+}
+
+.proj-list-item .proj-meta {
+  font-size: 10px;
 }
 
 .proj-missing {
@@ -10071,5 +10473,61 @@ h6.md-h { font-size: 14px; }
 
   .hf-token-row .input {
     width: 100%;
+  }
+}
+
+/* 工作區是高密度工具：只收外框與內容間距，聊天頁維持原本的呼吸感。 */
+.chat-layout.is-workspace {
+  gap: 2px;
+  padding: 2px;
+}
+
+.chat-layout.is-workspace .chat-sidebar,
+.chat-layout.is-workspace .ws-right {
+  gap: 6px;
+  padding: 4px;
+}
+
+.chat-layout.is-workspace .term-main {
+  gap: 2px;
+  padding: 0;
+}
+
+.chat-layout.is-workspace .term-host {
+  padding: 2px;
+}
+
+.chat-layout.is-workspace .term-pane {
+  inset: 2px;
+}
+
+.chat-layout.is-workspace .ws-tabs,
+.chat-layout.is-workspace .ws-tabs-strip,
+.chat-layout.is-workspace .ws-editor,
+.chat-layout.is-workspace .ws-diff,
+.chat-layout.is-workspace .ws-browser {
+  gap: 2px;
+}
+
+.chat-layout.is-workspace .ws-editor,
+.chat-layout.is-workspace .ws-diff,
+.chat-layout.is-workspace .ws-browser {
+  padding: 2px;
+}
+
+@media (max-width: 640px) {
+  .chat-layout.is-workspace {
+    gap: 8px;
+    padding: 8px;
+  }
+
+  .chat-layout.is-workspace .chat-sidebar {
+    gap: 10px;
+    padding: 10px;
+  }
+
+  .chat-layout.is-workspace .term-main {
+    gap: 6px;
+    padding: 4px;
   }
 }

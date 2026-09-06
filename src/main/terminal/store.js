@@ -42,6 +42,16 @@ const PRESETS = {
 const DEFAULT_SHELL = 'pwsh'
 const DEFAULT_PRESET = 'shell'
 
+/**
+ * 這個工作階段屬於哪個專案（`workspaces.json` 的 `w_...`）。**可選**——
+ * 舊的 terminals.json 沒有這個欄位，缺值一律視為「未分類」。
+ * @param {unknown} value
+ * @returns {string}
+ */
+function normalizeProjectId(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value) ? value : ''
+}
+
 /** @type {Map<string, string>} */
 const exeCache = new Map()
 
@@ -177,6 +187,7 @@ function sanitizeAll(raw) {
       preset,
       cwd,
       admin: item.admin === true,
+      projectId: normalizeProjectId(item.projectId),
       createdAt: Number.isFinite(item.createdAt) ? item.createdAt : Date.now()
     })
     if (out.length >= MAX_SESSIONS) break
@@ -254,6 +265,7 @@ function create(req) {
       cwd,
       // 提權要走另一顆 host 程序（見 admin.js），renderer 只送這個布林
       admin: req?.admin === true,
+      projectId: normalizeProjectId(req?.projectId),
       createdAt: Date.now()
     }
     await writeAll([...items, session])
@@ -290,28 +302,6 @@ function remove(id) {
 }
 
 /**
- * 側欄拖曳後的完整順序；只接受既有 id，漏掉的接在後面（不讓 renderer 有機會刪東西）。
- * @param {string[]} ids
- */
-function reorder(ids) {
-  return withStore(async () => {
-    const items = await readAll()
-    if (!Array.isArray(ids)) return items
-    const byId = new Map(items.map((item) => [item.id, item]))
-    const next = []
-    for (const id of ids) {
-      const item = byId.get(id)
-      if (!item) continue
-      byId.delete(id)
-      next.push(item)
-    }
-    next.push(...byId.values())
-    await writeAll(next)
-    return next
-  })
-}
-
-/**
  * @param {string} id
  */
 function get(id) {
@@ -331,6 +321,7 @@ module.exports = {
   resolveExe,
   normalizeShell,
   normalizePreset,
+  normalizeProjectId,
   normalizeCwd,
   normalizeTitle,
   defaultTitle,
@@ -339,6 +330,5 @@ module.exports = {
   get,
   create,
   rename,
-  remove,
-  reorder
+  remove
 }

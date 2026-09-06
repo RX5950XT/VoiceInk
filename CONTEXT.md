@@ -117,6 +117,95 @@ native/  dictation-hook/（WH_KEYBOARD_LL，→ resources/hook/）  sysmon-senso
 值格式：ASR＝`local:<key>`／`cloud:<設定 id>:<模型 id>`；LLM＝`local:<key>`／`cloud:<供應商 id>:<模型 id>`／`''`。
 翻譯與 TTS 頁**不在這組**，維持全域 `translator`／`localTranslateModel`／`translateProviderId`／`translateModelId`。
 
+## 最近變更（2026-09-07）— 工作區變更入口與滿版佈局
+
+- 編輯器打開有 Git 變更的檔案時，工具列顯示「看未提交變更」，沿用既有 `openDiffTab`；
+  狀態會在開檔、檔案監看通知與按鈕點擊時重讀，並依暫存／工作區選正確比較面。
+- 檔案樹的變更父資料夾顯示 `改 N`，提示列出最多四個變更檔名，不再只有裸數字。
+- `setChatPaneMode` 在工作區加 `is-workspace` 緊湊版面；切回聊天時隱藏右側欄與拖曳把手，
+  初始 DOM 也直接隱藏右側欄避免閃一下。
+- 回歸：先讓新增契約失敗（`test-workspace-ui` 68/5），完成後 `test-workspace-ui` 73、
+  `test-workspace` 219、`test-workspace-state`／`test-workspace-nav`／`test-workspace-editor` PASS，
+  打包版 `e2e-workspace-cdp` 162/162；`npm run electron:pack` 成功。
+
+## 最近變更（2026-09-06）— 專案真的管住工作內容、日常開發流程補齊（第十二輪）
+
+「聊天專案工作台改善計畫」的**第二、三階段**（第一階段見下一節）。
+
+- **對話與終端機歸專案**：`chats.json`／`terminals.json` 各多一個可選的 `projectId`
+  （缺值＝未分類）。在專案裡開的新對話與新終端機自動掛上去；聊天側欄多一顆
+  「只看這個專案」，每一列標出歸屬，hover 的資料夾鈕可以改掛／取消。
+  專案切換由 `workspace-page` 發 `ws:project` 事件推給聊天頁（不互相 import）。
+- **AI 記錄修好三件事**：① 家目錄改成「環境變數 → 預設 → Orca runtime home」三處都掃
+  （實測這台機器的 Codex 記錄全在 Orca 那邊，面板以前一筆都列不出來）；
+  ② 同一個 session 照 `agent + id` 去重；③ **讀過與改過的檔案分開**回傳。
+  卡片改由 `ws-ai-session.js` 畫：工具細節收合、標出記錄來源與「只讀了前面一段」，
+  並提供兩個接續入口——開新終端機，或**送進已經開著的那個終端機**。
+  接續由 main 先確認「這段對話真的屬於這個專案」才組指令。
+- **選取內容帶入聊天**：編輯器工具列多一顆「帶入聊天」，把選取那幾行連同
+  `檔案:行號` 包成程式碼區塊丟進聊天輸入框（`chat:insert` 事件，沿用既有訊息格式）。
+- **畫面自己更新**：`workspace/watch.js` 用 recursive `fs.watch` 監看目前這個專案，
+  事件合併後送 `workspace:changed`；右側欄與開著的檔案跟著重讀，
+  回到視窗與終端機指令跑完時也重讀 Git。
+- **worktree 補齊**：`list` 會標出「這棵樹在側欄裡是哪個專案」，沒有的給一顆「加入」
+  （`adopt`）；`add` 回傳新專案 id 直接切過去；`remove` 前先 `check`，
+  講得出是哪幾個檔案擋著。
+- **Git 審閱流程**：Git 面板多一區「跟哪條分支比」（`gitBranches`／`gitCompareBranch`，
+  基準是 merge-base、右邊是工作區），點檔案開審閱分頁；diff 工具列多「上一個／下一個變更」
+  （Alt+↑／↓）與**逐行意見**——意見存 localStorage、可整包「交給 AI」帶進聊天輸入框
+  （借 Orca 的 diff-comments 流程，格式是純文字，不動上游 API 契約）。
+  衝突檔案在 Git 面板自成一組。
+- 回歸：`test-workspace.js` **214**（新增 [W] 家目錄與去重、[X] 審閱解析與 ref 白名單、
+  [Y] 專案歸屬、[Z] 監看分類、[Q2] 三份 IPC 清單對照）、`test-workspace-ui.js` **64**、
+  `e2e-workspace-cdp.js` **131**（新增 [Y][Z][AA][AB][AC][AD]）。
+
+## 最近變更（2026-09-06）— 工作區的資料安全與專案切換（第十一輪）
+
+「聊天專案工作台改善計畫」的**第一階段**：先擋住會弄丟東西與操作到別的專案的四個 P0，
+功能面（專案對話歸屬、AI 記錄接續、自動更新畫面、Git 審閱流程）還沒開始。
+
+- **檔案邊界改成解開連結再比**：`files.resolveIn` 通過字面檢查之後再走 `assertInsideReal`
+  （兩邊 `realpathSync.native`）。專案裡指向專案外的 junction 一律拒絕，指回專案內的照樣能用，
+  專案根目錄自己住在連結底下也照常運作。`git.js` 讀工作區檔案改走同一道門。
+- **存檔要帶版本**：`workspace.writeFile(id, rel, content, expectedMtimeMs)`，對不上回 `STALE`。
+  提示條四顆鈕：比較（借 diff 版面並排「磁碟 ⇄ 未存草稿」，`conflict` 旗標，不進 `tabsState`）／
+  重新載入／覆寫（不帶版本硬寫）／保留編輯。原檔被刪掉也算 `STALE`，普通存檔不會把它重建出來。
+  同一個檔案的寫入在 main 排隊（Windows 併發 rename 會 EPERM）。
+- **開分頁的慢回應會作廢**：`ws-tabs.js` 的 `staleOpen(gen, projectId)`，
+  `openEditorTab`／`openDiffTab`／`openAiSessionTab` 各自守一次，回來還會再 `findTab` 去重。
+  右側欄的 Git／提交紀錄／worktree／「開啟全部變更」補上 `isCurrentProject`。
+- **改名與搬檔會 `retargetTabs`**（分頁 id 內嵌相對路徑，資料夾底下的子檔案一起換）。
+- **草稿**：上限 4MB（對齊 `files.MAX_WRITE_CHARS`），超限當場提示；
+  結束時由 `before-quit` 送 `workspace:flushDrafts` 等 renderer 真的寫完（逾時 3 秒放行，
+  存不起來就取消這次結束），**排在 `terminalMod.killAll()` 之前**。
+- **Diff**：暫存／取消暫存之後兩份完整內容一起重讀；`gitFileVersions` 的截斷與非 ENOENT 錯誤
+  不再畫成空檔（回 `truncated`／往上丟，renderer 退回逐行檢視）。
+- 回歸：`test-workspace.js` **170**（新增 [U] 連結逃逸、[V] 存檔版本守衛）、
+  `test-workspace-state.js`（慢回應作廢／改名接軌／存檔守衛）、
+  `e2e-workspace-cdp.js` **111**（[G] 連結、[R] 存檔守衛三條）。
+
+## 最近變更（2026-09-06）— 側欄只放專案，分頁狀態跟著專案走（第十輪）
+
+使用者要求：「專案那邊可以管理多個專案、各自獨立的分頁狀態；側邊放專案，新增的分頁不要放在側邊，
+放在上面的分頁列就可以；把側邊欄上方的『＋ 終端機』整合進分頁列的『＋』。」
+
+- **側欄的終端機清單與「＋ 終端機」按鈕整個移除**（`#termList`／`#termNewBtn` 不再存在）。
+  終端機從此只以分頁的形式存在，新增走分頁列的「＋」；那顆選單多了一項
+  **「終端機（自訂…）」**（`#wsNewCustomTerm`），是選 shell 與工作目錄的唯一入口，
+  沿用原本的 `#termNewDialog`。
+- **分頁狀態跟著專案走**：`tabsState` 的 kind 白名單加入 `terminal`，切專案時
+  `detachAllTerminals()` 只摘畫面（pty 與 scrollback 留在 main），切回來從
+  `terminal.list()` 核對「工作階段還活著」再接回去。**還沒選過專案時開的終端機會跟著
+  進第一個選中的專案**——丟掉的話它就再也叫不出來了。
+- **終端機的管理全部搬上分頁**：狀態燈 `.ws-tab-state`（運行中／已結束）、未讀點
+  `.ws-tab-unread`、右鍵「重新命名」就地編輯 `.ws-tab-rename`；**×＝真的收掉那個工作階段**
+  （分頁是它唯一的入口），所以要 3 秒二次確認。`terminal-page.js` 只負責把 main 的狀態
+  推給 `ws-tabs.js` 的 `paintTerminalTab()`，不再自己畫清單。
+- 側欄專案列的終端機捷徑會**先切到那個專案**再開，否則終端機會落在別的專案那組分頁裡。
+- 回歸：`test-workspace.js` 155（[L] 改成「terminal 分頁要存」）、
+  `e2e-workspace-cdp.js` 新增 [X]（第二個暫存專案：切走看不到、切回接得回來、
+  離開期間 pty 還活著）、`e2e-terminal-cdp.js` 全面改用分頁列的選擇器。
+
 ## 最近變更（2026-09-06）— Monaco、worktree、拖曳搬檔、多選、分頁滑動（第九輪）
 
 第八輪只搬了 Orca 的互動、刻意跳過的四件重量級功能，這一輪全部補上。

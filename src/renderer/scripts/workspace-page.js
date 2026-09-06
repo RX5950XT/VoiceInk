@@ -9,9 +9,12 @@ import {
   setActiveProject,
   newTerminalWithCommand,
   closeActiveTab,
-  cycleTab
+  cycleTab,
+  retargetTabs,
+  openReviewTab
 } from './ws-tabs.js'
 import { showMenu } from './ws-menu.js'
+import { gitStatusShared, invalidateGitStatus } from './ws-git-status.js'
 import { openQuickOpen, isOpen as isQuickOpenOpen } from './ws-quickopen.js'
 
 /**
@@ -24,16 +27,6 @@ import { openQuickOpen, isOpen as isQuickOpenOpen } from './ws-quickopen.js'
  * 這裡從頭到尾只送 `projectId` 與專案內的相對路徑，絕對路徑全部在 main
  * （`src/main/workspace/files.js` 的 `resolveIn` 會擋掉爬出專案範圍的寫法）。
  */
-
-/** 刪除鈕的二次確認逾時（與聊天／終端機側欄一致） */
-const DELETE_ARM_MS = 3000
-
-// ===== 圖示（與聊天側欄同一套線條，不用 emoji）=====
-const SVG_NS = 'http://www.w3.org/2000/svg'
-const ICON_PENCIL = ['M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3Z', 'M14.5 6.5l3 3']
-const ICON_TRASH = ['M5 7h14', 'M10 5h4', 'M7 7l1 12h8l1-12', 'M10.5 10.5v6', 'M13.5 10.5v6']
-const ICON_CHECK = ['M5 12.5l4.5 4.5L19 7.5']
-const ICON_TERMINAL = ['M4 17l6-5-6-5', 'M12 19h8']
 
 let initialized = false
 
@@ -62,10 +55,18 @@ let searchTimer = 0
 let searchSeq = 0
 /** 檔案樹的世代編號：重新整理後舊的遞迴結果不可以蓋掉新的 */
 let treeSeq = 0
+/** 檔案樹目前的 Git 狀態；key 是專案內相對路徑 */
+let treeGitFiles = new Map()
+/** 檔案樹目前各資料夾底下的變更檔案 */
+let treeGitDirs = new Map()
+/** 樹上現在畫的是哪個專案（換專案才需要先清空，同專案重畫留著舊樹避免閃爍） */
+let treeProjectId = ''
 /** 編輯器現在開著的那個檔案（相對路徑），用來在樹上標出來 */
 let openRel = ''
-/** @type {HTMLButtonElement | null} */
-let armedDeleteBtn = null
+/** 審閱：現在跟哪條分支比，以及那一輪的檔案清單 */
+let reviewRef = ''
+/** 監看事件的合併計時器（npm install 一秒幾千個事件，不能每個都重畫） */
+let watchTimer = 0
 
 /** @type {Record<string, HTMLElement | null>} */
 const el = {}
@@ -83,43 +84,6 @@ async function call(promise, fallbackMessage) {
   if (result && result.ok) return result.data
   showToast(result?.error?.message || fallbackMessage, 'error')
   throw new Error(result?.error?.message || fallbackMessage)
-}
-
-/**
- * @param {HTMLElement} btn
- * @param {string[]} paths
- */
-function setIconPaths(btn, paths) {
-  const svg = document.createElementNS(SVG_NS, 'svg')
-  svg.setAttribute('viewBox', '0 0 24 24')
-  svg.setAttribute('aria-hidden', 'true')
-  for (const d of paths) {
-    const node = document.createElementNS(SVG_NS, 'path')
-    node.setAttribute('d', d)
-    svg.appendChild(node)
-  }
-  btn.querySelector('svg')?.remove()
-  btn.appendChild(svg)
-}
-
-/**
- * @param {string[]} paths
- * @param {string} label
- * @param {() => void} onClick
- * @returns {HTMLButtonElement}
- */
-function listActionButton(paths, label, onClick) {
-  const btn = document.createElement('button')
-  btn.type = 'button'
-  btn.className = 'chat-list-btn'
-  btn.title = label
-  btn.setAttribute('aria-label', label)
-  setIconPaths(btn, paths)
-  btn.addEventListener('click', (event) => {
-    event.stopPropagation()
-    onClick(event)
-  })
-  return btn
 }
 
 /** @returns {{ id: string, name: string, path: string } | null} */
@@ -140,7 +104,6 @@ function isCurrentProject(project, seq = projectSeq) {
 
 function renderList() {
   if (!el.list) return
-  disarmDelete()
   el.list.replaceChildren()
   if (!projects.length) {
     const empty = document.createElement('p')
@@ -190,23 +153,11 @@ function buildListItem(item) {
   open.append(title, meta)
   open.addEventListener('click', () => void selectProject(item.id))
 
-  const actions = document.createElement('span')
-  actions.className = 'chat-list-actions'
-  const termBtn = listActionButton(ICON_TERMINAL, '在此專案開啟終端機（Shift+點擊以管理員開啟）', (e) => {
-    void launchProjectTerminal(item, Boolean(e?.shiftKey))
-  })
-  termBtn.addEventListener('contextmenu', (event) => {
-    event.stopPropagation()
+  row.append(open)
+  row.addEventListener('contextmenu', (event) => {
     event.preventDefault()
-    showMenu({ x: event.clientX, y: event.clientY }, [
-      { label: '在此開啟終端機', onSelect: () => void launchProjectTerminal(item, false) },
-      { label: '以管理員身分開啟終端機', onSelect: () => void launchProjectTerminal(item, true) }
-    ])
+    showProjectMenu({ x: event.clientX, y: event.clientY }, row, item)
   })
-  const trash = listActionButton(ICON_TRASH, '從清單移除', () => armDelete(trash, item))
-  actions.append(termBtn, listActionButton(ICON_PENCIL, '重新命名', () => startRename(row, item)), trash)
-
-  row.append(open, actions)
   row.addEventListener('pointerdown', reorder.onPointerDown)
   row.addEventListener('keydown', reorder.onKeydown)
   return row
@@ -219,6 +170,8 @@ function buildListItem(item) {
  */
 async function launchProjectTerminal(item, admin = false) {
   try {
+    // 分頁是跟著專案走的：先切過去，不然終端機會落在別的專案那一組分頁裡
+    if (currentId !== item.id) await selectProject(item.id)
     const created = await call(electronAPI.terminal.create({
       preset: 'shell',
       cwd: item.path,
@@ -283,37 +236,28 @@ function startRename(row, item) {
 }
 
 /**
- * 移除的二次確認：按鈕就地變紅勾，再按一次才真的移除，逾時自動復原。
- * @param {HTMLButtonElement} btn
- * @param {{ id: string, name: string }} item
+ * 專案列的右鍵選單（取代以前 hover 才出現的三顆小鈕——hover 在觸控裝置上等於沒有）。
+ *
+ * 移除仍然是兩步：選了之後再開一次選單問「確定移除」，
+ * 免得右鍵手滑就把專案從側欄弄不見。
+ *
+ * @param {{ x: number, y: number }} at
+ * @param {HTMLElement} row
+ * @param {{ id: string, name: string, path: string }} item
  */
-function armDelete(btn, item) {
-  if (btn.dataset.armed === '1') {
-    clearTimeout(Number(btn.dataset.timer))
-    void removeProject(item)
-    return
-  }
-  disarmDelete()
-  btn.dataset.armed = '1'
-  btn.classList.add('is-armed')
-  btn.title = '再按一次確認移除'
-  btn.setAttribute('aria-label', `再按一次把「${item.name}」從清單移除`)
-  setIconPaths(btn, ICON_CHECK)
-  btn.dataset.timer = String(setTimeout(disarmDelete, DELETE_ARM_MS))
-  armedDeleteBtn = btn
-}
-
-function disarmDelete() {
-  const btn = armedDeleteBtn
-  armedDeleteBtn = null
-  if (!btn) return
-  clearTimeout(Number(btn.dataset.timer))
-  delete btn.dataset.armed
-  delete btn.dataset.timer
-  btn.classList.remove('is-armed')
-  btn.title = '從清單移除'
-  btn.setAttribute('aria-label', '從清單移除')
-  setIconPaths(btn, ICON_TRASH)
+function showProjectMenu(at, row, item) {
+  showMenu(at, [
+    { label: '在此開啟終端機', onSelect: () => void launchProjectTerminal(item, false) },
+    { label: '以管理員身分開啟終端機', onSelect: () => void launchProjectTerminal(item, true) },
+    { label: '重新命名', onSelect: () => startRename(row, item) },
+    {
+      label: '從清單移除…',
+      danger: true,
+      onSelect: () => showMenu(at, [
+        { label: `確定移除「${item.name}」`, danger: true, onSelect: () => void removeProject(item) }
+      ])
+    }
+  ])
 }
 
 /**
@@ -321,7 +265,6 @@ function disarmDelete() {
  * @param {{ id: string }} item
  */
 async function removeProject(item) {
-  disarmDelete()
   try {
     await call(electronAPI.workspace.removeProject(item.id), '移除失敗')
   } catch {
@@ -360,7 +303,12 @@ async function persistOrder() {
 
 async function reloadList() {
   projects = await call(electronAPI.workspace.listProjects(), '讀不到專案清單')
-  if (currentId && !projects.some((item) => item.id === currentId)) currentId = ''
+  if (currentId && !projects.some((item) => item.id === currentId)) {
+    currentId = ''
+    announceProject()
+    // 沒有專案了就把監看收掉（那個 watcher 掛在一個已經不在清單裡的資料夾上）
+    void electronAPI.workspace.unwatch?.().catch(() => {})
+  }
   renderList()
 }
 
@@ -447,10 +395,62 @@ async function selectProject(id) {
   expanded = new Set()
   selected = new Set()
   anchorRel = ''
+  reviewRef = ''
   setChatPaneMode('workspace')
+  announceProject()
+  startWatching(project.id)
   renderList()
   await renderPanel(project, seq)
   return seq === projectSeq
+}
+
+/**
+ * 告訴別的模組「現在選著哪個專案」（聊天側欄靠它決定新對話掛在哪）。
+ * 用事件而不是互相 import：兩邊都是 lazy load 的，載入順序不固定。
+ */
+function announceProject() {
+  const project = currentProject()
+  document.dispatchEvent(new CustomEvent('ws:project', {
+    detail: { id: project?.id || '', name: project?.name || '' }
+  }))
+}
+
+/**
+ * 監看目前這個專案的資料夾。一次只看一個——切過去就換成新的那個。
+ * 監看不起來（網路磁碟）不是錯誤，安靜退回手動重新整理。
+ * @param {string} projectId
+ */
+function startWatching(projectId) {
+  void electronAPI.workspace.watch?.(projectId).catch(() => {})
+}
+
+/**
+ * 資料夾有東西變了（AI 跑完、git 換分支、另一個編輯器存檔）。
+ *
+ * 事件已經在 main 合併過一輪，這裡再合併一次：連續的變動只重畫最後一次。
+ * @param {{ projectId: string, paths: string[], git: boolean, overflow: boolean }} payload
+ */
+function onProjectChanged(payload) {
+  if (!payload || payload.projectId !== currentId) return
+  window.clearTimeout(watchTimer)
+  watchTimer = window.setTimeout(() => {
+    const project = currentProject()
+    if (!project) return
+    if (panel === 'git') void renderGit()
+    else if (panel === 'files' && filesView === 'tree') void refreshTreeKeepingScroll()
+    // 編輯器那邊自己決定要不要跳提示條（它知道哪個檔案開著、草稿動過沒有）
+    document.dispatchEvent(new CustomEvent('ws:files-changed', { detail: payload }))
+  }, 350)
+}
+
+/**
+ * 重讀檔案樹但**留在原地**：展開狀態本來就在 `expanded` 裡，
+ * 捲動位置要自己記一下，不然每次別人存檔畫面就跳回最上面。
+ */
+async function refreshTreeKeepingScroll() {
+  const top = el.tree?.scrollTop || 0
+  await renderTree()
+  if (el.tree) el.tree.scrollTop = top
 }
 
 // ===== 右側欄 =====
@@ -505,17 +505,118 @@ async function renderFilesPanel(project = currentProject(), seq = projectSeq) {
 
 // ===== 檔案總管 =====
 
+/** 資料夾提示最多列幾個檔名 */
+const DIR_SAMPLES = 4
+
+/** Git 回傳的路徑統一成檔案樹使用的 `/`，並去掉未追蹤資料夾的尾斜線。 */
+function normalizeGitPath(value) {
+  return String(value || '').replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '')
+}
+
+/**
+ * 讀檔案樹需要的 Git 狀態。非 Git 資料夾或 git 暫時讀不到時，檔案樹照常顯示。
+ * @param {{ id: string }} project
+ * @param {number} seq
+ * @param {number} request
+ * @returns {Promise<boolean>}
+ */
+async function loadTreeGitStatus(project, seq, request) {
+  let result = null
+  try {
+    // 跟編輯器的「未提交變更」鈕共用同一趟（`ws-git-status.js`）
+    result = await gitStatusShared(project.id)
+  } catch {
+    // 沒有 git 的普通資料夾仍然可以使用檔案總管
+  }
+  if (!isCurrentProject(project, seq) || request !== treeSeq) return false
+
+  const rows = result?.ok && result.data?.repo && Array.isArray(result.data.files)
+    ? result.data.files
+    : []
+  const files = new Map()
+  const dirs = new Map()
+  for (const row of rows) {
+    if (!row || typeof row.path !== 'string') continue
+    const rel = normalizeGitPath(row.path)
+    if (!rel) continue
+    files.set(rel, { ...row, path: rel })
+    const parts = rel.split('/')
+    for (let i = 1; i < parts.length; i += 1) {
+      const dir = parts.slice(0, i).join('/')
+      const previous = dirs.get(dir) || { count: 0, files: [] }
+      // 提示只印得下前 DIR_SAMPLES 個，所以不留整份清單——
+      // `[...previous.files, rel]` 每個檔案每一層都複製一次成長中的陣列（O(n²)）。
+      previous.count += 1
+      if (previous.files.length < DIR_SAMPLES) previous.files.push(rel)
+      dirs.set(dir, previous)
+    }
+  }
+  treeGitFiles = files
+  treeGitDirs = dirs
+  return true
+}
+
+/**
+ * 取得檔案樹一列的 Git 標記；資料夾顯示底下變更檔案數，檔案標記可開 Diff。
+ * @param {{ name: string, rel: string, dir: boolean }} entry
+ * @returns {{ label: string, className: string, title: string, staged?: boolean } | null}
+ */
+function treeStatusInfo(entry) {
+  const rel = normalizeGitPath(entry.rel)
+  const file = treeGitFiles.get(rel)
+  if (!entry.dir && file) {
+    const index = typeof file.index === 'string' ? file.index : '.'
+    const worktree = typeof file.worktree === 'string' ? file.worktree : '.'
+    const code = worktree !== '.' && worktree !== '?' ? worktree : index
+    if (code === '.' || !code) return null
+    const staged = worktree === '.' && index !== '.' && index !== '?'
+    const label = GIT_LABELS[code] || '改'
+    return {
+      label,
+      className: code === '?' || code === 'A' ? 'is-new' : code === 'U' ? 'is-conflict' : 'is-changed',
+      title: `${label}（${staged ? '已暫存，尚未提交' : '尚未提交'}）`,
+      staged
+    }
+  }
+  if (entry.dir) {
+    // 整個資料夾都是新的時候，git 只回**一筆** `? newdir/`（沒有底下的檔案），
+    // 所以它落在 files 而不是 dirs。只查 dirs 的話，新增一整個資料夾在樹上
+    // 完全看不出來——連裡面的檔案也不會有標記。
+    if (file) {
+      return { label: GIT_LABELS['?'] || '新', className: 'is-new', title: '整個資料夾都還沒加入版控' }
+    }
+    const info = treeGitDirs.get(rel)
+    if (info?.count) {
+      const paths = info.files.join('、')
+      const more = info.count > info.files.length ? '…' : ''
+      return {
+        label: `改 ${info.count}`,
+        className: 'is-folder',
+        title: `底下有變更：${paths}${more}`
+      }
+    }
+  }
+  return null
+}
+
 /**
  * 一次只展開一層：真的去 `listDir` 那一層，不預先遞迴（大 repo 會卡好幾秒）。
  */
 async function renderTree(project = currentProject(), seq = projectSeq) {
   const request = ++treeSeq
   if (!isCurrentProject(project, seq) || !el.tree) return
+  // **同一個專案重畫時不先清空**：監看最快每秒觸發一次，先清再等 `git status`
+  // 等於整棵樹每秒閃一次空白（大 repo 的 status 要幾百毫秒）。舊樹的每一列都還指著
+  // 同一個專案的同一條路徑，點下去仍然是對的。
+  // 換專案就一定要先清——不然使用者會點到**上一個專案**的列。
+  if (treeProjectId !== project.id) el.tree.replaceChildren()
+  treeProjectId = project.id
+  if (!await loadTreeGitStatus(project, seq, request)) return
+  el.tree.replaceChildren()
   if (el.filesProject) {
     el.filesProject.textContent = project.name
     el.filesProject.title = project.path
   }
-  el.tree.replaceChildren()
   await appendLevel(project, '', el.tree, 0, seq, request)
   if (isCurrentProject(project, seq) && request === treeSeq) resetTreeCursor()
 }
@@ -561,8 +662,7 @@ async function appendLevel(project, relPath, host, depth, seq, request) {
  * @returns {HTMLElement}
  */
 function buildTreeRow(project, entry, depth) {
-  const row = document.createElement('button')
-  row.type = 'button'
+  const row = document.createElement('div')
   row.className = entry.dir ? 'ws-tree-row is-dir' : 'ws-tree-row'
   row.style.paddingLeft = `${8 + depth * 12}px`
   row.title = entry.rel
@@ -589,6 +689,31 @@ function buildTreeRow(project, entry, depth) {
   name.className = 'ws-tree-name'
   name.textContent = entry.name
   row.append(caret, name)
+
+  const status = treeStatusInfo(entry)
+  if (status) {
+    const statusEl = document.createElement('span')
+    statusEl.className = `ws-tree-status ${status.className}`
+    statusEl.textContent = status.label
+    statusEl.title = status.title
+    statusEl.setAttribute('aria-label', `${entry.rel}：${status.title}`)
+    if (!entry.dir) {
+      statusEl.setAttribute('role', 'button')
+      statusEl.tabIndex = 0
+      const openDiff = () => void openDiffTab(project, entry.rel, status.staged)
+      statusEl.addEventListener('click', (event) => {
+        event.stopPropagation()
+        openDiff()
+      })
+      statusEl.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return
+        event.preventDefault()
+        event.stopPropagation()
+        openDiff()
+      })
+    }
+    row.appendChild(statusEl)
+  }
 
   row.addEventListener('contextmenu', (event) => openTreeMenu(project, entry, event))
   row.addEventListener('focus', () => setTreeCursor(row))
@@ -787,7 +912,8 @@ async function onTreeDrop(event, project, entry) {
   for (const rel of list) {
     try {
       // eslint-disable-next-line no-await-in-loop
-      await call(electronAPI.workspace.moveEntry(project.id, rel, toDir), '搬不過去')
+      const to = await call(electronAPI.workspace.moveEntry(project.id, rel, toDir), '搬不過去')
+      retargetTabs(project.id, rel, to.rel)
       moved += 1
     } catch {
       break
@@ -888,6 +1014,14 @@ function onTreeKeydown(event) {
       }
       return
     }
+    // 列是 `<div role="treeitem">` 不是 `<button>`（button 撐不出樹的縮排與拖曳），
+    // 所以 Enter／Space 要自己補：少了它，鍵盤走得到那一列卻打不開檔案。
+    case 'Enter':
+    case ' ':
+      if (!current) return
+      event.preventDefault()
+      current.click()
+      return
     default:
   }
 }
@@ -997,7 +1131,9 @@ async function renameEntry(project, entry) {
   if (name === null || name === entry.name) return
   const seq = projectSeq
   try {
-    await call(electronAPI.workspace.renameEntry(project.id, entry.rel, name), '改名失敗')
+    const renamed = await call(electronAPI.workspace.renameEntry(project.id, entry.rel, name), '改名失敗')
+    // 開著的分頁要跟著換到新路徑，不然存檔會把舊名字重新建出來
+    retargetTabs(project.id, entry.rel, renamed.rel)
     if (!isCurrentProject(project, seq)) return
     expanded.delete(entry.rel)
     await renderTree(project, seq)
@@ -1282,7 +1418,14 @@ function gitRow(project, file, side) {
   const git = electronAPI.workspace
   const refresh = () => void renderGit()
   const untracked = side === 'untracked'
-  if (side === 'staged') {
+  if (side === 'conflict') {
+    // 衝突檔案只給一顆「解決了」＝`git add`。捨棄不放在這裡：
+    // 合併到一半按下去救不回來，而且那不是這一列該做的事
+    row.append(act('解決了', '把這個檔案標成已解決（git add）', (btn) => {
+      btn.disabled = true
+      void git.gitStage(project.id, file.path).then(refresh)
+    }))
+  } else if (side === 'staged') {
     row.append(act('取消', '取消暫存', (btn) => {
       btn.disabled = true
       void git.gitUnstage(project.id, file.path).then(refresh)
@@ -1307,12 +1450,18 @@ function gitRow(project, file, side) {
 async function renderGit() {
   const project = currentProject()
   if (!project || !el.gitFiles) return
+  // 每一個會動到 git 的操作（暫存／取消／捨棄／全部暫存／提交／推送／拉取）
+  // 最後都會回到這裡重畫，所以共用快取的失效點放這一個就夠。
+  invalidateGitStatus()
+  const seq = projectSeq
   let status
   try {
     status = await call(electronAPI.workspace.gitStatus(project.id), '讀不到 Git 狀態')
   } catch {
     return
   }
+  // 讀取期間可能已經換過專案：畫下去等於把 A 的變更清單掛在 B 上
+  if (!isCurrentProject(project, seq)) return
   if (!status.repo) {
     if (el.gitBranch) el.gitBranch.textContent = '不是 git 儲存庫'
     el.gitFiles.replaceChildren()
@@ -1321,6 +1470,11 @@ async function renderGit() {
     note.textContent = '不是 git 儲存庫'
     el.gitFiles.appendChild(note)
     el.worktrees?.replaceChildren()
+    // 審閱那一區也要跟著清掉：留著的話上一個專案的分支還列在那裡，
+    // 按「比較」會拿別的 repo 的分支名去比，錯誤訊息是「沒有共同的起點」
+    el.reviewRef?.replaceChildren()
+    el.reviewFiles?.replaceChildren()
+    reviewRef = ''
     void renderGitLog()
     return
   }
@@ -1332,9 +1486,13 @@ async function renderGit() {
     el.gitBranch.title = status.upstream ? `上游：${status.upstream}` : '沒有設定上游'
   }
 
-  const staged = status.files.filter((file) => file.index !== '.' && file.index !== '?')
-  const changed = status.files.filter((file) => file.worktree !== '.' && file.worktree !== '?')
-  const untracked = status.files.filter((file) => file.index === '?' && file.worktree === '?')
+  // 衝突（porcelain 的 `u` 記錄）要自己一組排最上面：混在「暫存區」與「變更」
+  // 兩組裡的話，同一個檔案會出現兩次，而且看不出它其實是合併沒解完
+  const conflicts = status.files.filter((file) => file.index === 'U' || file.worktree === 'U')
+  const rest = status.files.filter((file) => !conflicts.includes(file))
+  const staged = rest.filter((file) => file.index !== '.' && file.index !== '?')
+  const changed = rest.filter((file) => file.worktree !== '.' && file.worktree !== '?')
+  const untracked = rest.filter((file) => file.index === '?' && file.worktree === '?')
 
   el.gitFiles.replaceChildren()
   if (!status.files.length) {
@@ -1343,6 +1501,7 @@ async function renderGit() {
     note.textContent = '沒有變更'
     el.gitFiles.appendChild(note)
   } else {
+    gitGroup(conflicts, 'conflict', project, el.gitFiles)
     gitGroup(staged, 'staged', project, el.gitFiles)
     gitGroup(changed, 'worktree', project, el.gitFiles)
     gitGroup(untracked, 'untracked', project, el.gitFiles)
@@ -1355,6 +1514,102 @@ async function renderGit() {
   }
   void renderWorktrees()
   void renderGitLog()
+  void renderBranches()
+}
+
+/**
+ * 「跟哪條分支比」的下拉。分支清單由 main 給（`for-each-ref`，依最後提交時間排），
+ * renderer 只把選到的名字送回去——那個字串會變成 git 的參數，main 還會再驗一次。
+ */
+async function renderBranches() {
+  const project = currentProject()
+  const select = /** @type {HTMLSelectElement | null} */ (el.reviewRef)
+  if (!project || !select) return
+  const seq = projectSeq
+  let data
+  try {
+    data = await call(electronAPI.workspace.gitBranches(project.id), '讀不到分支清單')
+  } catch {
+    return
+  }
+  if (!isCurrentProject(project, seq)) return
+  const list = data?.branches || []
+  select.replaceChildren()
+  if (!list.length) {
+    const opt = document.createElement('option')
+    opt.value = ''
+    opt.textContent = '（沒有其他分支）'
+    select.appendChild(opt)
+    return
+  }
+  for (const branch of list) {
+    // 自己那條不必列（跟自己比沒有東西）
+    if (branch.name === data.current) continue
+    const opt = document.createElement('option')
+    opt.value = branch.name
+    opt.textContent = branch.remote ? `${branch.name}（遠端）` : branch.name
+    select.appendChild(opt)
+  }
+  // `custom-select.js` 自己掛了 MutationObserver，選項換掉它會自己跟上
+  if (reviewRef && list.some((one) => one.name === reviewRef)) select.value = reviewRef
+}
+
+/**
+ * 跟選定的分支整體比一次。比的基準是**合併基準點**，右邊是工作區
+ * （含還沒提交的），因為要審的就是手上這一份。
+ */
+async function runCompare() {
+  const project = currentProject()
+  const select = /** @type {HTMLSelectElement | null} */ (el.reviewRef)
+  if (!project || !select || !el.reviewFiles) return
+  const ref = select.value
+  if (!ref) {
+    showToast('先選一條要比的分支', 'error')
+    return
+  }
+  const seq = projectSeq
+  let data
+  try {
+    data = await call(electronAPI.workspace.gitCompareBranch(project.id, ref), '比較失敗')
+  } catch {
+    return
+  }
+  if (!isCurrentProject(project, seq)) return
+  reviewRef = ref
+  el.reviewFiles.replaceChildren()
+  const files = data?.files || []
+  if (!files.length) {
+    const note = document.createElement('p')
+    note.className = 'ws-tree-note'
+    note.textContent = `跟 ${ref} 相比沒有差異`
+    el.reviewFiles.appendChild(note)
+    return
+  }
+  const head = document.createElement('p')
+  head.className = 'ws-tree-note'
+  head.textContent = `跟 ${ref}（基準 ${data.base}）相比：${files.length} 個檔案`
+  el.reviewFiles.appendChild(head)
+  for (const file of files) {
+    const row = document.createElement('button')
+    row.type = 'button'
+    row.className = 'ws-review-file'
+    row.title = file.path
+    const name = document.createElement('span')
+    name.className = 'ws-git-name'
+    name.textContent = file.path
+    const stat = document.createElement('span')
+    stat.className = 'ws-diff-stat'
+    stat.textContent = file.binary ? '二進位' : `+${file.additions} -${file.deletions}`
+    row.append(name, stat)
+    row.addEventListener('click', () => void openReviewTab(project, file.path, ref, file))
+    el.reviewFiles.appendChild(row)
+  }
+  if (data.truncated) {
+    const note = document.createElement('p')
+    note.className = 'ws-tree-note'
+    note.textContent = '只列出前面一部分'
+    el.reviewFiles.appendChild(note)
+  }
 }
 
 /**
@@ -1364,12 +1619,14 @@ async function renderGit() {
 async function renderWorktrees() {
   const project = currentProject()
   if (!project || !el.worktrees) return
+  const seq = projectSeq
   let data
   try {
     data = await call(electronAPI.workspace.worktreeList(project.id), '讀不到工作樹')
   } catch {
     return
   }
+  if (!isCurrentProject(project, seq)) return
   el.worktrees.replaceChildren()
   const trees = data?.trees || []
   if (trees.length <= 1) {
@@ -1394,15 +1651,27 @@ async function renderWorktrees() {
 
     row.append(branch, tag)
 
-    if (!tree.current) {
+    if (!tree.current && tree.projectId) {
       const open = document.createElement('button')
       open.type = 'button'
       open.className = 'ws-worktree-open'
       open.title = '切到這個工作樹'
       open.setAttribute('aria-label', `切到 ${tree.branch || tree.path}`)
       open.textContent = '⇗'
-      open.addEventListener('click', () => void openWorktree(tree.path))
+      open.addEventListener('click', () => void selectProject(tree.projectId))
       row.appendChild(open)
+    }
+    if (!tree.current && !tree.projectId) {
+      // 已經存在但側欄沒有它（別的地方建的、或上次移除專案時拿掉了）：
+      // 只看得到卻切不過去很奇怪，給一顆「加入」
+      const adopt = document.createElement('button')
+      adopt.type = 'button'
+      adopt.className = 'ws-worktree-open'
+      adopt.title = '加進側欄的專案清單'
+      adopt.setAttribute('aria-label', `加入 ${tree.branch || tree.path}`)
+      adopt.textContent = '＋'
+      adopt.addEventListener('click', () => void adoptWorktree(project, tree))
+      row.appendChild(adopt)
     }
     if (!tree.main) {
       const del = document.createElement('button')
@@ -1419,25 +1688,6 @@ async function renderWorktrees() {
 }
 
 /**
- * 切到某個工作樹＝切到側欄裡那個專案（`worktreeAdd` 建立時已經加進去了）。
- * @param {string} treePath
- */
-async function openWorktree(treePath) {
-  const target = projects.find((one) => samePath(one.path, treePath))
-  if (!target) {
-    showToast('那個工作樹不在專案清單裡，把資料夾拖進來就好', 'error')
-    return
-  }
-  await selectProject(target.id)
-}
-
-/** Windows 的路徑比對不分大小寫，分隔符號也可能混用 */
-const samePath = (a, b) => (
-  String(a || '').replace(/[\\/]+$/, '').toLowerCase()
-  === String(b || '').replace(/[\\/]+$/, '').toLowerCase()
-)
-
-/**
  * 開一個新工作樹。**只問名字**——資料夾位置由 main 決定（repo 的兄弟資料夾），
  * renderer 送得了路徑就等於能在任意位置建東西。
  */
@@ -1451,7 +1701,9 @@ async function addWorktree() {
     const made = await call(electronAPI.workspace.worktreeAdd(project.id, name, base.trim()), '建不出工作樹')
     showToast(`已建立 ${made.branch}`)
     await reloadList()
-    await renderWorktrees()
+    // main 會把新專案的 id 一起回來，直接切過去（不必再重載一次去猜是哪一個）
+    if (made?.projectId) await selectProject(made.projectId)
+    else await renderWorktrees()
   } catch {
     // call() 已經提示過了
   }
@@ -1462,7 +1714,19 @@ async function addWorktree() {
  * @param {{ path: string, branch: string }} tree
  */
 async function removeWorktree(project, tree) {
-  if (!window.confirm(`確定要移除工作樹 ${tree.branch || tree.path} 嗎？${NEWLINE}裡面還有沒提交的變更時 git 會擋下來。`)) return
+  // 先問「有沒有東西擋著」：git 只會回一個非 0，講不出是哪幾個檔案還沒提交
+  let state
+  try {
+    state = await call(electronAPI.workspace.worktreeCheck(project.id, tree.path), '看不出這棵樹的狀態')
+  } catch {
+    return
+  }
+  if (!state.removable) {
+    const detail = state.samples?.length ? `${NEWLINE}${state.samples.join(NEWLINE)}` : ''
+    window.alert(`移不掉：${state.reason}${detail}`)
+    return
+  }
+  if (!window.confirm(`確定要移除工作樹 ${tree.branch || tree.path} 嗎？${NEWLINE}裡面沒有未提交的變更，移掉之後那個資料夾就不見了。`)) return
   try {
     await call(electronAPI.workspace.worktreeRemove(project.id, tree.path), '移不掉')
     showToast('已移除工作樹')
@@ -1473,12 +1737,31 @@ async function removeWorktree(project, tree) {
   }
 }
 
+/**
+ * 把一棵已經存在的工作樹加進側欄。
+ * @param {{ id: string }} project
+ * @param {{ path: string, branch: string }} tree
+ */
+async function adoptWorktree(project, tree) {
+  try {
+    const added = await call(electronAPI.workspace.worktreeAdopt(project.id, tree.path), '加不進來')
+    await reloadList()
+    showToast(`已加入 ${tree.branch || tree.path}`)
+    if (added?.projectId) await selectProject(added.projectId)
+  } catch {
+    // call() 已經提示過了
+  }
+}
+
 /** 三組清單的共用殼（標題由 side 決定） */
 function gitGroup(files, side, project, host) {
   if (!files.length) return
   const titleEl = document.createElement('p')
   titleEl.className = 'ws-git-group'
-  titleEl.textContent = side === 'staged' ? '暫存區' : side === 'worktree' ? '變更' : '未追蹤'
+  titleEl.textContent = side === 'conflict'
+    ? `衝突（${files.length}）`
+    : side === 'staged' ? '暫存區' : side === 'worktree' ? '變更' : '未追蹤'
+  if (side === 'conflict') titleEl.classList.add('is-conflict')
   host.appendChild(titleEl)
   for (const file of files) host.appendChild(gitRow(project, file, side))
 }
@@ -1486,12 +1769,14 @@ function gitGroup(files, side, project, host) {
 async function renderGitLog() {
   const project = currentProject()
   if (!project || !el.gitLog) return
+  const seq = projectSeq
   let log
   try {
     log = await call(electronAPI.workspace.gitLog(project.id), '讀不到提交紀錄')
   } catch {
     return
   }
+  if (!isCurrentProject(project, seq)) return
   el.gitLog.replaceChildren()
   if (!log.length) {
     const note = document.createElement('p')
@@ -1533,12 +1818,14 @@ async function stageAll() {
 async function openAllChanged() {
   const project = currentProject()
   if (!project) return
+  const seq = projectSeq
   let status
   try {
     status = await call(electronAPI.workspace.gitStatus(project.id), '讀不到 Git 狀態')
   } catch {
     return
   }
+  if (!isCurrentProject(project, seq)) return
   if (!status?.files?.length) {
     showToast('目前沒有變更的檔案')
     return
@@ -1630,6 +1917,13 @@ async function renderAgents() {
     when.className = 'ws-agent-when'
     when.textContent = formatWhen(row.mtime)
     head.append(agent, when)
+    // 記錄可能是別的工作台代跑的（Orca 有自己的 runtime home），標一下才知道從哪來
+    if (row.source) {
+      const src = document.createElement('span')
+      src.className = 'ws-agent-source'
+      src.textContent = row.source
+      head.appendChild(src)
+    }
 
     const title = document.createElement('span')
     title.className = 'ws-agent-title'
@@ -1637,7 +1931,20 @@ async function renderAgents() {
 
     item.append(head, title)
     item.addEventListener('click', () => void openAiSessionTab(project, row))
-    el.agentList.appendChild(item)
+
+    const wrap = document.createElement('div')
+    wrap.className = 'ws-agent-row-wrap'
+    const resume = document.createElement('button')
+    resume.type = 'button'
+    resume.className = 'ws-agent-resume'
+    resume.textContent = '接續'
+    resume.title = '在新的終端機接續這一段'
+    resume.addEventListener('click', (event) => {
+      event.stopPropagation()
+      void resumeSession(project, row)
+    })
+    wrap.append(item, resume)
+    el.agentList.appendChild(wrap)
   }
 }
 
@@ -1655,20 +1962,22 @@ function formatWhen(ms) {
 }
 
 /**
- * 接續一段對話：指令字串由 main 的固定表組（renderer 不准自己拼）。
+ * 接續一段對話。指令由 main 組，而且 main 會**先確認這段對話真的屬於這個專案**
+ * （只驗 id 格式的話，別的專案的 session id 送進來照樣接得起來）。
+ * @param {{ id: string }} project
  * @param {{ agent: string, id: string, title: string, agentLabel: string }} row
  */
-async function resumeSession(row) {
-  let command
+async function resumeSession(project, row) {
+  let info
   try {
-    command = await call(
-      electronAPI.workspace.agentResumeCommand(row.agent, row.id),
-      '組不出恢復指令'
+    info = await call(
+      electronAPI.workspace.agentResume(project.id, row.agent, row.id),
+      '接續不了這段對話'
     )
   } catch {
     return
   }
-  await newTerminalWithCommand(`${row.agentLabel} · ${row.title || '接續'}`, command)
+  await newTerminalWithCommand(`${info.agentLabel} · ${row.title || '接續'}`, info.command)
 }
 
 // ===== 對外 =====
@@ -1707,6 +2016,52 @@ function onGlobalKeydown(event) {
   void openQuickOpen(project, (rel) => void openEditorTab(project, rel))
 }
 
+/** Git 面板的收合狀態存這裡（每一段一個布林；預設變更與審閱展開） */
+const GIT_SECTIONS_KEY = 'wsGitSections'
+
+/**
+ * 四段各自可展開收起。狀態存 localStorage，切專案／重畫都不會被洗掉
+ * （收合走 `hidden`，而 `.ws-git-sec-body` 有作者的 `display: flex`，
+ * 所以 CSS 那邊要自己補 `[hidden] { display: none }`）。
+ */
+function initGitSections() {
+  /** @type {Record<string, boolean>} */
+  let saved = {}
+  try {
+    saved = JSON.parse(localStorage.getItem(GIT_SECTIONS_KEY) || '{}') || {}
+  } catch {
+    saved = {}
+  }
+  const toggles = document.querySelectorAll('.ws-git-sec-toggle')
+  for (const node of toggles) {
+    const btn = /** @type {HTMLButtonElement} */ (node)
+    const key = btn.closest('.ws-git-sec')?.getAttribute('data-sec') || ''
+    const body = document.getElementById(btn.getAttribute('aria-controls') || '')
+    if (!key || !body) continue
+    if (typeof saved[key] === 'boolean') setGitSection(btn, body, saved[key])
+    btn.addEventListener('click', () => {
+      const next = btn.getAttribute('aria-expanded') !== 'true'
+      setGitSection(btn, body, next)
+      saved[key] = next
+      try {
+        localStorage.setItem(GIT_SECTIONS_KEY, JSON.stringify(saved))
+      } catch {
+        /* 隱私模式寫不進去就算了，這一輪照樣展得開 */
+      }
+    })
+  }
+}
+
+/**
+ * @param {HTMLButtonElement} btn
+ * @param {HTMLElement} body
+ * @param {boolean} open
+ */
+function setGitSection(btn, body, open) {
+  btn.setAttribute('aria-expanded', String(open))
+  body.hidden = !open
+}
+
 export function initWorkspacePage() {
   if (initialized) return
   initialized = true
@@ -1726,12 +2081,15 @@ export function initWorkspacePage() {
   el.gitLog = document.getElementById('wsGitLog')
   el.worktrees = document.getElementById('wsWorktrees')
   el.agentList = document.getElementById('wsAgentList')
+  el.reviewRef = document.getElementById('wsReviewRef')
+  el.reviewFiles = document.getElementById('wsReviewFiles')
   el.panelPorts = document.getElementById('wsPanelPorts')
   el.portList = document.getElementById('wsPortList')
   el.search = document.getElementById('wsSearch')
   el.searchInput = document.getElementById('wsSearchInput')
   el.searchResults = document.getElementById('wsSearchResults')
 
+  initGitSections()
   el.newBtn?.addEventListener('click', () => void addProject())
   initProjectDrop()
   document.querySelectorAll('.ws-right-tab').forEach((btn) => {
@@ -1748,6 +2106,8 @@ export function initWorkspacePage() {
   document.getElementById('wsGitPushBtn')?.addEventListener('click', () => void pushCurrent())
   document.getElementById('wsGitPullBtn')?.addEventListener('click', () => void pullCurrent())
   document.getElementById('wsPortsRefreshBtn')?.addEventListener('click', () => void renderPorts())
+  document.getElementById('wsReviewCompareBtn')?.addEventListener('click', () => void runCompare())
+  document.getElementById('wsReviewRefreshBtn')?.addEventListener('click', () => void renderBranches())
   document.querySelectorAll('.ws-files-mode').forEach((btn) => {
     btn.addEventListener('click', () => {
       setFilesView(/** @type {HTMLElement} */ (btn).dataset.view)
@@ -1775,6 +2135,16 @@ export function initWorkspacePage() {
     void markOpenFile(detail.projectId, detail.rel)
   })
   document.addEventListener('keydown', onGlobalKeydown)
+  // 資料夾被別人改了（AI 跑完、git 換分支、另一個編輯器存檔）→ 自己更新
+  electronAPI.workspace.onChanged?.(onProjectChanged)
+  // 回到視窗時 Git 狀態多半已經不一樣了（剛在別的地方 commit 過）
+  window.addEventListener('focus', () => {
+    if (panel === 'git' && currentProject()) void renderGit()
+  })
+  // 終端機裡那一行指令跑完了（多半是 agent 收工）→ 重讀一次 Git
+  document.addEventListener('ws:terminal-idle', () => {
+    if (panel === 'git' && currentProject()) void renderGit()
+  })
   el.searchInput?.addEventListener('input', queueSearch)
   el.searchInput?.addEventListener('keydown', (event) => {
     if (/** @type {KeyboardEvent} */ (event).key === 'Enter') {
@@ -1786,5 +2156,6 @@ export function initWorkspacePage() {
 
 export function refreshWorkspacePage() {
   initWorkspacePage()
+  announceProject()
   void reloadList().then(() => renderPanel()).catch(() => {})
 }

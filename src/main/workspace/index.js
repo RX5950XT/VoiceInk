@@ -15,6 +15,7 @@ const worktree = require('./worktree')
 const agents = require('./agents')
 const search = require('./search')
 const ports = require('./ports')
+const watch = require('./watch')
 
 /**
  * @param {string} code
@@ -65,8 +66,8 @@ async function readFile(projectId, relPath) {
   return files.readFile(await rootOf(projectId), relPath)
 }
 
-async function writeFile(projectId, relPath, content) {
-  return files.writeFile(await rootOf(projectId), relPath, content)
+async function writeFile(projectId, relPath, content, expectedMtimeMs) {
+  return files.writeFile(await rootOf(projectId), relPath, content, expectedMtimeMs)
 }
 
 async function createEntry(projectId, relDir, name, dir) {
@@ -153,7 +154,17 @@ const gitDiff = (projectId, relPath, staged) => git.diff(projectId, relPath, sta
 /** git worktree：一個 repo 同時攤開好幾個分支 */
 const worktreeList = (projectId) => worktree.list(projectId)
 const worktreeAdd = (projectId, name, base) => worktree.add(projectId, name, base)
+/** 已經存在但不在側欄的工作樹：直接加進來（路徑走 git 自己列出來的白名單） */
+const worktreeAdopt = (projectId, treePath) => worktree.adopt(projectId, treePath)
+/** 移除前先問「有沒有東西擋著」，講得出是哪幾個檔案 */
+const worktreeCheck = (projectId, treePath) => worktree.check(projectId, treePath)
 const worktreeRemove = (projectId, treePath) => worktree.remove(projectId, treePath)
+/** 審閱：分支清單／跟某條分支的整體比較／單一檔案對基準點的兩份內容 */
+const gitBranches = (projectId) => git.branches(projectId)
+const gitCompareBranch = (projectId, ref) => git.compareBranch(projectId, ref)
+const gitFileVersionsAgainst = (projectId, relPath, ref) => (
+  git.fileVersionsAgainst(projectId, relPath, ref)
+)
 /** diff 編輯器要的兩份完整內容（unified diff 只夠畫舊的那種逐行檢視） */
 const gitFileVersions = (projectId, relPath, staged) => git.fileVersions(projectId, relPath, staged)
 
@@ -161,6 +172,21 @@ const gitFileVersions = (projectId, relPath, staged) => git.fileVersions(project
 
 async function agentSessions(projectId) {
   return agents.sessions(await rootOf(projectId))
+}
+
+/**
+ * 監看專案資料夾。一次只看一個（就是使用者正在看的那個），
+ * 事件由 `ipc.js` 轉成 `workspace:changed` 送給主視窗。
+ * @param {string} projectId
+ * @param {(payload: object) => void} send
+ */
+async function watchProject(projectId, send) {
+  return watch.start(projectId, await rootOf(projectId), send)
+}
+
+const unwatchProject = () => {
+  watch.stop()
+  return true
 }
 
 const saveTabsState = (id, tabsState) => store.saveTabsState(id, tabsState)
@@ -174,13 +200,15 @@ const gitStageAll = (projectId) => git.stageAll(projectId)
 const gitUnstageAll = (projectId) => git.unstageAll(projectId)
 
 /**
- * 接續指令：`agent` 與 `sessionId` 都由 `agents.js` 的固定表與 `ID_RE` 驗過，
- * 那個字串會被直接送進終端機，renderer 不准自己拼。
+ * 接續：**先確認這段對話真的屬於這個專案**再組指令。只驗 id 格式的話，
+ * renderer 送別的專案的 session id 進來照樣接得起來。
+ * @param {string} projectId
  * @param {string} agent
  * @param {string} sessionId
- * @returns {string}
  */
-const agentResumeCommand = (agent, sessionId) => agents.resumeCommand(agent, sessionId)
+async function agentResume(projectId, agent, sessionId) {
+  return agents.resume(await rootOf(projectId), agent, sessionId)
+}
 
 async function agentSessionDetail(projectId, agent, sessionId) {
   return agents.sessionDetail(await rootOf(projectId), agent, sessionId)
@@ -223,8 +251,15 @@ module.exports = {
   gitFileVersions,
   worktreeList,
   worktreeAdd,
+  worktreeAdopt,
+  worktreeCheck,
   worktreeRemove,
+  gitBranches,
+  gitCompareBranch,
+  gitFileVersionsAgainst,
+  watchProject,
+  unwatchProject,
   agentSessions,
-  agentResumeCommand,
+  agentResume,
   agentSessionDetail
 }

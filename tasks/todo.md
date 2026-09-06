@@ -1,3 +1,122 @@
+## 規劃 — 第十二輪：專案真的管住工作內容 ＋ 日常開發流程（2026-09-06）
+
+「聊天專案工作台改善計畫」的第二、三階段（第一階段見下一節）。
+
+### 第二階段 — 讓專案真正管住工作內容
+
+- [x] A. 對話與終端機的專案歸屬：`chats.json`／`terminals.json` 各多一個**可選**的
+      `projectId`（缺值＝未分類、舊檔照樣讀得起來）；聊天側欄的「只看這個專案」、
+      列上的歸屬標籤與改掛按鈕；專案切換走 `ws:project` 事件推給聊天頁
+- [x] B. 接續現有終端機：AI 會話分頁上兩個入口——開新的，或送進已經開著的那一顆
+- [x] C. AI 記錄可閱讀可接續：工具細節收合、標出來源與截斷、改過／讀過分開；
+      接續由 main 驗「這段對話屬不屬於這個專案」才組指令
+- [x] D. 修正記錄來源：`CODEX_HOME`／`CLAUDE_CONFIG_DIR`／Orca runtime home 三處都掃、
+      照 `agent + id` 去重、讀過與改過分成兩個欄位
+- [x] E. 選取內容帶入聊天：編輯器工具列的「帶入聊天」（`檔案:行號` ＋ 程式碼區塊）
+
+### 第三階段 — 補齊日常開發流程
+
+- [x] F. 自動更新畫面：`workspace/watch.js`（一次看一個專案、事件合併、`.git` 只當成
+      「Git 狀態變了」、監看不起來安靜退回手動）；回到視窗與終端機指令跑完也重讀 Git
+- [x] G. 完整 worktree 操作：既有的可直接「加入」（`adopt`）、建立後回傳 projectId
+      直接切過去、移除前 `check` 講得出是哪幾個檔案擋著
+- [x] H. Git 審閱流程：跟指定分支的整體比較（基準 merge-base、右邊工作區）、
+      上一個／下一個變更（Alt+↑／↓）、衝突檔案自成一組、逐行意見與「交給 AI」
+- [x] I. 整理既有介面：AI 卡片拆成 `ws-ai-session.js`（ws-tabs 2379 → 2308 行）、
+      審閱相關拆成 `ws-review.js`、Git 面板分組重排
+
+### 回顧
+
+三件「不做會出事」的：
+
+1. **`main.js` 的 service 白名單是第三份清單**：`ipc.js` 與 `index.js` 都加好了、
+   preload 也接了、單元測試全綠，但 `main.js` 那份逐一列舉的清單漏一行，
+   按下去只回「工作區操作失敗」。這一輪的 `gitBranches` 就這樣紅了一輪 CDP 才發現。
+   已補 [Q2] 把三份清單對起來。
+2. **`CODEX_HOME` 真的被別的工作台改掉了**：這台機器指到
+   `%APPDATA%\orca\codex-runtime-home\home`，`~/.codex/sessions` 底下一筆都沒有——
+   AI 記錄面板列不出 Codex 對話「不是解析壞了，是根本沒去那裡找」。
+3. **非 git 專案要把每一塊都清乾淨**：`renderGit` 的 `!status.repo` 那條提早 return，
+   審閱的分支下拉留著上一個專案的分支，按「比較」得到「這兩條分支沒有共同的起點」，
+   看起來像 git 壞了。CDP 測試就是這樣抓到的。
+
+紅燈驗證：把 `codexHomes` 改回「只看 `~/.codex`」→ [W] 三條失敗；
+把 `main.js` 的 `gitBranches` 那行刪掉 → [Q2] 失敗並指名是哪一個；
+把 `EDIT_TOOLS` 改成 `/.*/` → `test-workspace-ui` 的「Read 只算讀過」失敗。三條都還原成綠。
+
+驗證：`test-workspace` **214**（原 172）、`test-workspace-ui` **64**（原 39）、
+`test-workspace-state`／`-nav`／`-editor` PASS、`test-terminal` 60、`test-ipc-invoke` 11、
+`test-error-hygiene` 82；打包版 `e2e-workspace-cdp` **131**（原 111）、`e2e-cdp-smoke` 22、
+`e2e-chat-cdp` 44、`e2e-terminal-cdp` 34、`e2e-visual-cdp` 71、`e2e-tray-cdp` 12、
+`e2e-ux-tweaks-cdp` 18。
+
+## 規劃 — 第十一輪：工作區的資料安全與專案切換（2026-09-06）
+
+計畫的第一階段：先擋住「會弄丟東西」與「操作到別的專案」，功能面（第二、三階段）還沒動。
+
+- [x] A. 統一檔案邊界：`resolveIn` 加 realpath 檢查（資料夾連結指到專案外一律拒絕，
+      指回專案內照樣可用、專案根目錄自己是連結也可用）；`git.js` 讀工作區檔案改走同一道門
+- [x] B. 存檔前比對磁碟版本：`writeFile(..., expectedMtimeMs)` → `STALE`；
+      提示條給比較／重新載入／覆寫／保留編輯；同一檔案的寫入排隊、暫存檔名帶 pid＋流水號
+- [x] C. 切換保護：`staleOpen` 守住開編輯器／Diff／AI 會話三條，連點同檔去重；
+      `renderGit`／`renderGitLog`／`renderWorktrees`／`openAllChanged` 補 `isCurrentProject`
+- [x] D. 檔案與分頁同步：改名／搬檔 `retargetTabs`（含資料夾底下的子檔案）；
+      刪除後草稿留著、提示條講明白，普通存檔被 main 擋住不會重建舊檔
+- [x] E. 草稿：上限對齊 `MAX_WRITE_CHARS`（4MB）並在超限時當場講；
+      結束前由 `before-quit` 送 `workspace:flushDrafts` 等 renderer 寫完（逾時 3 秒放行，
+      存不起來就取消這次結束）
+- [x] F. Diff：暫存／取消暫存之後重讀兩份完整內容；截斷與非 ENOENT 錯誤不畫成空檔
+
+### 回顧
+
+三件「不做會出事」的：
+
+1. **junction 是真的走得出去**（不是理論）：暫存專案裡建一個連結，`readFile` 直接讀到專案外的檔案。
+   字面比對永遠擋不住它，只能兩邊 realpath 再比。
+2. **併發存檔在 Windows 上會直接失敗**：暫存檔取不同名字還不夠，兩個 rename 指到同一個目的地
+   就是 EPERM。第一版只做了唯一暫存檔名，測試立刻紅（`WRITE_FAILED`），才補上排隊。
+3. **`beforeunload` 存不完草稿**：那裡的儲存是非同步的。改成 main 等一輪，
+   而且**要排在 `killAll()` 之前**——存不起來時是要取消這次結束的，終端機砍掉就回不去了。
+
+紅燈驗證：把 `files.js` 換回 HEAD → `[U]`／`[V]` 共 6 條失敗；
+把 `staleOpen` 改成恆回 false → `test-workspace-state.js` 在「慢回應不可以塞進別的專案」斷掉。
+
+驗證：`test-workspace` **170**（原 155，新增 [U] 連結逃逸、[V] 存檔版本守衛）、
+`test-workspace-state`（新增慢回應作廢／改名接軌／存檔守衛）、`test-workspace-ui` 39、
+`test-workspace-nav`／`-editor` PASS、`test-terminal` 60、`test-ipc-invoke` 11、`test-error-hygiene` 82；
+打包版 `e2e-workspace-cdp` **111**（原 107）、`e2e-tray-cdp` 12、`e2e-terminal-cdp` 34、
+`e2e-chat-cdp` 44、`e2e-visual-cdp` 71、`e2e-ux-tweaks-cdp` 18、`e2e-cdp-smoke` 22。
+**`dist/win-unpacked` 這次沒更新**：使用者的 VoiceInk 正開著鎖住 `app.asar`，
+改打包到 `C:\vi-pack2` 並用 `VOICEINK_EXE` 指過去測。
+
+## 規劃 — 第十輪：側欄只放專案，分頁狀態跟著專案走（2026-09-06）
+
+使用者要求：「專案那邊可以管理多個專案、各自獨立的分頁狀態；側邊放專案，
+新增的分頁不要放在側邊，放在上面的分頁列就可以；把側邊欄上方的『＋ 終端機』整合進分頁列的『＋』。」
+
+- [x] A. 側欄移除 `#termList` 與 `#termNewBtn`，專案面板只列專案
+- [x] B. 分頁列的「＋」多一項「終端機（自訂…）」（`#wsNewCustomTerm`），沿用 `#termNewDialog` 選 shell／cwd
+- [x] C. 終端機的狀態燈／未讀點／右鍵改名／關閉搬上分頁（`paintTerminalTab`）
+- [x] D. `tabsState` 收 `terminal` kind，切專案只摘畫面（pty 留在 main），切回來核對還活著再接上
+- [x] E. 側欄專案列的終端機捷徑先切專案再開
+
+### 回顧
+
+三件不做會出事的：
+
+1. **關掉終端機分頁必須真的收掉工作階段**——側欄清單沒了之後，分頁是它唯一的入口，
+   只 detach 的話那個還在跑的 pty 就永遠叫不出來（而且會吃掉 20 個上限）。所以要二次確認。
+2. **「關閉其他／右邊」不收終端機**：那兩顆走的是不確認的批次關閉，
+   混進終端機只會每顆都停在「再按一次」然後什麼都沒關。
+3. **改名時不可以重畫分頁列**：提示字元標記三秒重送九次，
+   重畫會把輸入框整顆換掉——跟以前側欄 `renderList()` 那條完全一樣的坑。
+
+還沒選過專案時開的終端機會**跟著進第一個選中的專案**（它沒有地方存，丟掉就叫不出來了）。
+
+驗證：`test-workspace` 155（[L] 改成「terminal 分頁要存進 tabsState」）、`test-terminal` 60；
+打包版 `e2e-workspace-cdp` 107（新增 [X]：切走看不到、離開期間 pty 還活著、切回接得回來）、
+`e2e-terminal-cdp`（全面改用分頁列的選擇器）。
+
 ## 規劃 — 第九輪：分頁滑動、Monaco、worktree、拖曳搬檔、多選（2026-09-06）
 
 - [x] A. 分頁滑動體驗：X 軸限制、讓位距離用實際 gap、跟著 strip 捲動修正、邊緣自動捲、切分頁自動捲進畫面、滾輪橫捲、藏捲軸
@@ -3114,3 +3233,58 @@ Windows 沒有「把現有 pty 提權」這回事，所以真正的設計決定�
 ### 回顧
 
 進行中；保留原有 staged/unstaged 修改，不提交、不推送。
+
+### 本次交接回顧（2026-09-06）
+
+- [x] Git 面板改成四段可展開／收起，預設只展開變更，內容共用一條捲軸並收緊列高。
+- [x] 專案列移除 hover 操作鈕，改用右鍵選單；路徑單行省略，卡片高度縮小。
+- [x] 修正收合箭頭 CSS 字元，補上右鍵選單與收合互動的 CDP 斷言。
+- [x] 驗證：`test-workspace-ui` 64/64、`test-workspace` 214/214、`e2e-workspace-cdp` 135/135；
+      三支相關 renderer JS `node --check` 通過。
+- [x] `npm run electron:pack` 的 Vite build 通過；原 `dist/win-unpacked` 的 `app.asar` 被鎖，
+      改用 `C:\vi-pack-ui-20260906\win-unpacked` 打包並完成 CDP 驗收。
+
+### 本次回顧（2026-09-06 尋找列）
+
+- [x] 預覽中的「尋找」會切回編輯器；圖片預覽隱藏無效的尋找鈕。
+- [x] Monaco 尋找列補上輸入、條件切換、選取範圍、取代展開與關閉的打包版互動驗證。
+- [x] hover 位置與畫面連續取樣穩定，未重現閃爍；未改動 Monaco 原生 hover。
+- [x] `npm run electron:pack`、`e2e-workspace-cdp.js`：150/150 通過；已重開 `dist/win-unpacked` 預覽。
+
+### 本次回顧（2026-09-07 尋找列 tooltip）
+
+- [x] 根因：`fixedOverflowWidgets` 會把 Monaco tooltip 的 `.context-view` 放在 `.ws-monaco` 外，
+      只鎖 host 內的 tooltip 仍會讓外層攔截關閉鈕 hover／click。
+- [x] 修正：尋找列開啟時，透過 `body:has(...)` 讓對應 `.context-view` 與
+      `.workbench-hover-container` 穿透滑鼠；範圍只在 Monaco 尋找列顯示期間。
+- [x] 驗證：`npm run electron:pack`、`e2e-workspace-cdp.js` 154/154、
+      `test-workspace-ui` 64/64、`test-workspace-editor` PASS、兩支 `node --check`、
+      `git diff --check` 通過；已移除暫時 DEBUG 輸出。
+
+## 規劃（2026-09-07）— 檔案樹顯示未提交變更
+
+- [x] 檔案樹重畫時沿用 `gitStatus`，標出修改／新增檔案與資料夾內的變更數量。
+- [x] 點狀態標記開既有 Diff；一般點檔名仍開編輯器。
+- [x] 回歸：先讓 UI 契約在修復前失敗（65 passed, 3 failed），再跑純測試、打包版工作區 E2E 與 `electron:pack`。
+
+### 回顧
+
+檔案樹現在會跟 Git 面板使用同一個 `gitStatus`，檔案列顯示「改／新／衝突」，資料夾顯示底下變更數；
+狀態標記可開既有 Diff，未追蹤新檔也能顯示整檔新增。驗證：`test-workspace` 214、
+`test-workspace-ui` 68、`test-workspace-nav`、`test-workspace-editor`、`node --check`、
+`git diff --check`，以及打包版 `e2e-workspace-cdp` 157 passed, 0 failed；`npm run electron:pack` 成功。
+
+## 規劃（2026-09-07）— 工作區變更入口與滿版佈局
+
+- [x] 先補回歸條件：變更檔編輯器的未提交變更按鈕、資料夾語意狀態、滿版間距、切聊天收起右欄。
+- [x] 沿用既有 Git／Diff／分頁資料流，完成按鈕、資料夾狀態、工作區緊湊佈局與聊天切換。
+- [x] 跑靜態檢查、相關單元測試、`electron:pack` 與打包版工作區 CDP；補回顧與實際結果。
+
+### 回顧
+
+編輯器按鈕沿用 `gitStatus` 與 `openDiffTab`，資料夾狀態改成 `改 N` 並在提示中列出變更檔；
+工作區只在 `is-workspace` 模式收緊間距，聊天模式保留原本佈局並自動收起右欄。
+先讓新增契約在修復前失敗：`test-workspace-ui` 為 68 passed、5 failed；完成後為 73 passed、0 failed。
+驗證：`test-workspace` 219、`test-workspace-state` PASS、`test-workspace-nav` PASS、
+`test-workspace-editor` PASS、`e2e-workspace-cdp` 162 passed, 0 failed、`npm run electron:pack` 成功；
+三支 renderer `node --check` 與 `git diff --check` 通過。

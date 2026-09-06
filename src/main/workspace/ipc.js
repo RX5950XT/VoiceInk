@@ -56,8 +56,8 @@ function registerWorkspaceIpc({ ipcMain, service, isMainSender, dialog, getWindo
   ipcMain.handle('workspace:readFile', (event, id, relPath) => (
     invoke(event, () => service.readFile(id, relPath))
   ))
-  ipcMain.handle('workspace:writeFile', (event, id, relPath, content) => (
-    invoke(event, () => service.writeFile(id, relPath, content))
+  ipcMain.handle('workspace:writeFile', (event, id, relPath, content, expectedMtimeMs) => (
+    invoke(event, () => service.writeFile(id, relPath, content, expectedMtimeMs))
   ))
   ipcMain.handle('workspace:createEntry', (event, id, relDir, name, dir) => (
     invoke(event, () => service.createEntry(id, relDir, name, dir))
@@ -133,8 +133,23 @@ function registerWorkspaceIpc({ ipcMain, service, isMainSender, dialog, getWindo
   ipcMain.handle('workspace:worktreeAdd', (event, id, name, base) => (
     invoke(event, () => service.worktreeAdd(id, name, base))
   ))
+  ipcMain.handle('workspace:worktreeAdopt', (event, id, treePath) => (
+    invoke(event, () => service.worktreeAdopt(id, treePath))
+  ))
+  ipcMain.handle('workspace:worktreeCheck', (event, id, treePath) => (
+    invoke(event, () => service.worktreeCheck(id, treePath))
+  ))
   ipcMain.handle('workspace:worktreeRemove', (event, id, treePath) => (
     invoke(event, () => service.worktreeRemove(id, treePath))
+  ))
+  ipcMain.handle('workspace:gitBranches', (event, id) => (
+    invoke(event, () => service.gitBranches(id))
+  ))
+  ipcMain.handle('workspace:gitCompareBranch', (event, id, ref) => (
+    invoke(event, () => service.gitCompareBranch(id, ref))
+  ))
+  ipcMain.handle('workspace:gitFileVersionsAgainst', (event, id, relPath, ref) => (
+    invoke(event, () => service.gitFileVersionsAgainst(id, relPath, ref))
   ))
   ipcMain.handle('workspace:gitFileVersions', (event, id, relPath, staged) => (
     invoke(event, () => service.gitFileVersions(id, relPath, staged))
@@ -147,11 +162,22 @@ function registerWorkspaceIpc({ ipcMain, service, isMainSender, dialog, getWindo
   ipcMain.handle('workspace:agentSessions', (event, id) => (
     invoke(event, () => service.agentSessions(id))
   ))
-  ipcMain.handle('workspace:agentResumeCommand', (event, agent, sessionId) => (
-    invoke(event, () => service.agentResumeCommand(agent, sessionId))
-  ))
   ipcMain.handle('workspace:agentSessionDetail', (event, id, agent, sessionId) => (
     invoke(event, () => service.agentSessionDetail(id, agent, sessionId))
+  ))
+  ipcMain.handle('workspace:agentResume', (event, id, agent, sessionId) => (
+    invoke(event, () => service.agentResume(id, agent, sessionId))
+  ))
+
+  // ── 資料夾監看（別人改了檔案，畫面自己更新）──
+  ipcMain.handle('workspace:watch', (event, id) => invoke(event, () => (
+    service.watchProject(id, (payload) => {
+      const win = getWindow()
+      if (win && !win.isDestroyed()) win.webContents.send('workspace:changed', payload)
+    })
+  )))
+  ipcMain.handle('workspace:unwatch', (event) => (
+    invoke(event, () => service.unwatchProject())
   ))
 }
 

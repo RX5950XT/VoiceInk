@@ -153,13 +153,116 @@ async function list(projectId) {
   if (res.code !== 0) return { supported: false, trees: [] }
   const trees = parseList(res.stdout)
   const here = path.resolve(cwd)
+  // 側欄裡已經有哪幾棵：沒有的那幾棵 UI 要給一顆「加入」，不然只看得到卻切不過去
+  const known = new Map()
+  try {
+    for (const project of await store.list()) known.set(keyOf(project.path), project.id)
+  } catch {
+    // 讀不到清單就當成都沒加過
+  }
   return {
     supported: true,
     trees: trees.map((tree, index) => ({
       ...tree,
       main: index === 0,
-      current: path.resolve(tree.path) === here
+      current: path.resolve(tree.path) === here,
+      projectId: known.get(keyOf(tree.path)) || ''
     }))
+  }
+}
+
+/**
+ * 路徑比對的鍵（Windows 不分大小寫，尾巴的分隔符號也要收掉）。
+ * @param {string} value
+ * @returns {string}
+ */
+function keyOf(value) {
+  const full = path.resolve(String(value || ''))
+  return process.platform === 'win32' ? full.toLowerCase() : full
+}
+
+/**
+ * 用列舉出來的清單當白名單，把 renderer 給的路徑對回一棵真的工作樹。
+ * @param {string} projectId
+ * @param {unknown} treePath
+ * @returns {Promise<{ tree: object, index: number, trees: Array<object> }>}
+ */
+async function locate(projectId, treePath) {
+  const { trees } = await list(projectId)
+  const wanted = keyOf(String(treePath || ''))
+  const index = trees.findIndex((tree) => keyOf(tree.path) === wanted)
+  if (index < 0) throw fail('NOT_FOUND', '找不到這個工作樹')
+  return { tree: trees[index], index, trees }
+}
+
+/**
+ * 把一棵**已經存在**的工作樹加進側欄（`git worktree add` 是別的地方跑的、
+ * 或是上一次移除專案時被拿掉了）。路徑一樣走「列舉當白名單」，
+ * renderer 給的字串只能對應到 git 自己列得出來的那幾棵。
+ * @param {string} projectId
+ * @param {unknown} treePath
+ * @returns {Promise<{ projectId: string, path: string, branch: string }>}
+ */
+async function adopt(projectId, treePath) {
+  const { tree } = await locate(projectId, treePath)
+  const project = await store.create({ path: tree.path })
+  return { projectId: project.id, path: tree.path, branch: tree.branch }
+}
+
+/**
+ * 數 `git status --porcelain -z` 有幾個檔案擋著，順便挑幾個檔名講出來。
+ *
+ * **改名／複製是兩格**（`R  <新檔>\0<原檔>\0`）：把每一格都當成一個檔案的話，
+ * 一次改名會被算成兩個，而且原檔名那一格沒有 `XY ` 前綴，`slice(3)` 會把它砍掉三個字，
+ * 使用者看到的是一個被切了頭的檔名。
+ *
+ * @param {string} stdout
+ * @returns {{ dirty: number, samples: string[] }}
+ */
+function parseDirty(stdout) {
+  let dirty = 0
+  /** @type {string[]} */
+  const samples = []
+  const records = String(stdout || '').split('\0')
+  for (let i = 0; i < records.length; i += 1) {
+    const record = records[i]
+    if (!record.trim()) continue
+    dirty += 1
+    if (samples.length < 5) samples.push(record.slice(3))
+    if (record[0] === 'R' || record[0] === 'C') i += 1
+  }
+  return { dirty, samples }
+}
+
+/**
+ * 移除前先問「有沒有東西擋著」。git 自己會擋，但那時只回一個非 0，
+ * 使用者看到的是「移不掉」——講不出是**哪幾個檔案**還沒提交。
+ *
+ * @param {string} projectId
+ * @param {unknown} treePath
+ * @returns {Promise<{ path: string, branch: string, main: boolean, locked: boolean, dirty: number, samples: string[], removable: boolean, reason: string }>}
+ */
+async function check(projectId, treePath) {
+  const { tree, index } = await locate(projectId, treePath)
+  const res = await run(tree.path, ['status', '--porcelain', '-z'])
+  const { dirty, samples } = parseDirty(res.code === 0 ? res.stdout : '')
+  const main = index === 0
+  const reason = main
+    ? '這是主工作樹，不能從這裡移除'
+    : tree.locked
+      ? '這棵樹被 git 鎖住了（先 git worktree unlock）'
+      : dirty
+        ? `裡面有 ${dirty} 個還沒提交的變更，移掉就沒了`
+        : ''
+  return {
+    path: tree.path,
+    branch: tree.branch,
+    main,
+    locked: Boolean(tree.locked),
+    dirty,
+    samples,
+    removable: !main && !tree.locked && dirty === 0,
+    reason
   }
 }
 
@@ -208,13 +311,15 @@ async function add(projectId, rawName, base = '') {
   if (res.code !== 0) {
     throw fail('ADD_FAILED', '建不出工作樹（名字重複，或這個資料夾已經有東西了）')
   }
-  // 順手加進側欄，不然使用者還要自己再拖一次資料夾進來
+  // 順手加進側欄，不然使用者還要自己再拖一次資料夾進來。
+  // **id 要回給 renderer**：建完馬上切過去，不必再重載一次清單去猜是哪一個。
+  let addedId = ''
   try {
-    await store.create({ path: target })
+    addedId = (await store.create({ path: target })).id
   } catch {
-    // 已經在清單裡、或超過上限：工作樹本身建好了就算成功
+    // 超過上限：工作樹本身建好了就算成功，只是側欄裡沒有
   }
-  return { path: target, branch }
+  return { path: target, branch, projectId: addedId }
 }
 
 /**
@@ -229,31 +334,34 @@ async function add(projectId, rawName, base = '') {
  */
 async function remove(projectId, treePath) {
   const cwd = await rootOf(projectId)
-  const { trees } = await list(projectId)
-  const wanted = path.resolve(String(treePath || ''))
-  const at = trees.findIndex((tree) => path.resolve(tree.path) === wanted)
-  if (at < 0) throw fail('NOT_FOUND', '找不到這個工作樹')
-  if (at === 0) throw fail('BAD_TARGET', '這是主工作樹，不能從這裡移除')
+  const state = await check(projectId, treePath)
+  // 先講清楚是什麼擋著（git 只會回一個非 0，使用者看到的是「移不掉」三個字）
+  if (!state.removable) throw fail('BLOCKED', state.reason || '這個工作樹現在移不掉')
 
-  const res = await run(cwd, ['worktree', 'remove', trees[at].path])
+  const res = await run(cwd, ['worktree', 'remove', state.path])
   if (res.code !== 0) {
-    throw fail('REMOVE_FAILED', '移不掉（裡面可能還有沒提交的變更）')
+    throw fail('REMOVE_FAILED', '移不掉（git 拒絕了，細節看終端機）')
   }
   try {
-    const project = (await store.list()).find((one) => path.resolve(one.path) === wanted)
+    const wanted = keyOf(state.path)
+    const project = (await store.list()).find((one) => keyOf(one.path) === wanted)
     if (project) await store.remove(project.id)
   } catch {
     // 側欄沒清掉不影響工作樹本身已經移除
   }
-  return { path: trees[at].path }
+  return { path: state.path }
 }
 
 module.exports = {
   TIMEOUT_MS,
   MAX_TREES,
   parseList,
+  parseDirty,
   checkBranch,
+  keyOf,
   list,
+  adopt,
+  check,
   add,
   remove
 }

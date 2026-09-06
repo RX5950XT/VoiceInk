@@ -1459,7 +1459,9 @@ ipcMain.handle('engine:status', () => loadEngine().status())
 // 會話內容與 model 都由 main 擁有；renderer 只給 conversationId 與文字
 ipcMain.handle('chat:list', () => chatStore.list())
 ipcMain.handle('chat:get', (event, id) => chatStore.get(id))
-ipcMain.handle('chat:create', () => chatStore.create())
+ipcMain.handle('chat:create', (event, projectId) => chatStore.create(projectId))
+// 對話歸屬的專案：renderer 只送 id，格式由 chat-store 的 sanitizeProjectId 卡死
+ipcMain.handle('chat:setProject', (event, id, projectId) => chatStore.setProject(id, projectId))
 ipcMain.handle('chat:delete', (event, id) => chatStore.remove(id))
 ipcMain.handle('chat:rename', (event, id, title) => chatStore.rename(id, title))
 ipcMain.handle('chat:reorder', (event, ids) => chatStore.reorder(ids))
@@ -1551,7 +1553,6 @@ registerTerminalIpc({
     createSession: (...args) => loadTerminal().createSession(...args),
     renameSession: (...args) => loadTerminal().renameSession(...args),
     deleteSession: (...args) => loadTerminal().deleteSession(...args),
-    reorderSessions: (...args) => loadTerminal().reorderSessions(...args),
     openSession: (...args) => loadTerminal().openSession(...args),
     writeSession: (...args) => loadTerminal().writeSession(...args),
     resizeSession: (...args) => loadTerminal().resizeSession(...args),
@@ -1602,11 +1603,18 @@ registerWorkspaceIpc({
     gitPull: (...args) => loadWorkspace().gitPull(...args),
     gitDiff: (...args) => loadWorkspace().gitDiff(...args),
     gitFileVersions: (...args) => loadWorkspace().gitFileVersions(...args),
+    gitBranches: (...args) => loadWorkspace().gitBranches(...args),
+    gitCompareBranch: (...args) => loadWorkspace().gitCompareBranch(...args),
+    gitFileVersionsAgainst: (...args) => loadWorkspace().gitFileVersionsAgainst(...args),
     worktreeList: (...args) => loadWorkspace().worktreeList(...args),
     worktreeAdd: (...args) => loadWorkspace().worktreeAdd(...args),
+    worktreeAdopt: (...args) => loadWorkspace().worktreeAdopt(...args),
+    worktreeCheck: (...args) => loadWorkspace().worktreeCheck(...args),
     worktreeRemove: (...args) => loadWorkspace().worktreeRemove(...args),
+    watchProject: (...args) => loadWorkspace().watchProject(...args),
+    unwatchProject: (...args) => loadWorkspace().unwatchProject(...args),
     agentSessions: (...args) => loadWorkspace().agentSessions(...args),
-    agentResumeCommand: (...args) => loadWorkspace().agentResumeCommand(...args),
+    agentResume: (...args) => loadWorkspace().agentResume(...args),
     agentSessionDetail: (...args) => loadWorkspace().agentSessionDetail(...args)
   },
   isMainSender: assertMainWindowSender,
@@ -1863,10 +1871,60 @@ app.whenReady().then(() => {
 })
 
 // 關閉前同步卸載模型，再真正退出
+/**
+ * 結束前先讓工作區把未存草稿寫完。
+ *
+ * renderer 的 `beforeunload` 攔不住這件事——那裡的儲存是非同步的，視窗一關就沒了，
+ * 所以由這裡送一次請求、等它回報。逾時（renderer 卡住）就照樣往下走，
+ * 不能讓 App 因為存草稿而關不掉。
+ *
+ * @returns {Promise<boolean>} false＝真的存不進去
+ */
+function flushWorkspaceDrafts() {
+  return new Promise((resolve) => {
+    const win = mainWindow
+    if (!win || win.isDestroyed()) {
+      resolve(true)
+      return
+    }
+    const done = (ok) => {
+      clearTimeout(timer)
+      ipcMain.removeListener('workspace:draftsFlushed', onDone)
+      resolve(ok)
+    }
+    const onDone = (event, ok) => {
+      if (event.sender !== win.webContents) return
+      done(ok !== false)
+    }
+    const timer = setTimeout(() => done(true), 3000)
+    ipcMain.on('workspace:draftsFlushed', onDone)
+    win.webContents.send('workspace:flushDrafts')
+  })
+}
+
+/** 草稿沖洗狀態：pending → flushing → done。done 之後不再攔（不可以讓 App 關不掉） */
+let draftFlush = 'pending'
+
 app.on('before-quit', (e) => {
   if (isQuitting) {
     // 卸載進行中再次 quit：繼續擋，只允許 app.exit 那條路結束
     e.preventDefault()
+    return
+  }
+  if (draftFlush !== 'done') {
+    // 未存草稿是這台機器上唯一一份，寫完之前一步都不能拆
+    e.preventDefault()
+    if (draftFlush === 'flushing') return
+    draftFlush = 'flushing'
+    flushWorkspaceDrafts().then((ok) => {
+      draftFlush = 'done'
+      if (ok) {
+        app.quit()
+        return
+      }
+      // 存不起來就先不要結束，讓使用者看得到那份草稿（再按一次結束就會直接走）
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.show()
+    })
     return
   }
   e.preventDefault()

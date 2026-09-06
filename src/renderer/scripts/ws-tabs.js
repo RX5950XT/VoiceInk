@@ -1,12 +1,19 @@
 import { electronAPI, showToast, setChatPaneMode } from './app.js'
 import { renderMarkdown } from './markdown.js'
 import { showMenu } from './ws-menu.js'
+import { gitStatusShared, invalidateGitStatus } from './ws-git-status.js'
 import { updateGutter, updateIdeStatus, handleEditorKeydown, initFindWidget } from './ws-ide.js'
 import { parseUnifiedDiff, renderDiffLines } from './ws-diff.js'
 import {
   loadMonaco, ensureEditor, showTab as showMonacoTab, runAction,
-  disposeModel, revealLine, cursorInfo, currentValue, pushValue, showDiff
+  disposeModel, retargetModel, revealLine, cursorInfo, currentValue, pushValue, showDiff,
+  selectionInfo, diffGoTo, diffChangeCount, diffCursor
 } from './ws-monaco.js'
+import { paintAiSession } from './ws-ai-session.js'
+import {
+  addComment, listComments, removeComment, clearComments, countComments,
+  formatComments, sendToChat
+} from './ws-review.js'
 
 /**
  * 工作區的分頁列與五種內容（終端機／編輯器／瀏覽器／Git Diff／AI 會話）。
@@ -43,6 +50,11 @@ const MAX_TAB_TITLE = 28
  *   fileExt?: string,
  *   mtimeMs?: number,
  *   staged?: boolean,
+ *   state?: string,
+ *   stateLabel?: string,
+ *   admin?: boolean,
+ *   cwd?: string,
+ *   unread?: boolean,
  *   diffData?: { diff: string, additions: number, deletions: number },
   versions?: { original: string, modified: string } | null,
  *   sessionRow?: any,
@@ -138,12 +150,29 @@ function schedulePersistTabs() {
 /**
  * 立即儲存分頁與草稿狀態至 workspaces.json
  */
+/**
+ * 草稿存進 `workspaces.json` 的長度上限。**跟 main 的 `files.MAX_WRITE_CHARS` 同一個數字**：
+ * 兩邊不一致的話，會出現「編輯器讓你打、存檔也存得下，但關掉分頁草稿就沒了」——
+ * 而且完全沒有訊息。超過就當場講，不要安靜丟掉。
+ */
+const MAX_DRAFT_CHARS = 4 * 1024 * 1024
+/** 同一個分頁只嘮叨一次 */
+const warnedDrafts = new Set()
+
 async function persistTabsNow() {
   if (!project?.id) return
   stash()
+  for (const t of tabs) {
+    if (!t.dirty || (t.content || '').length <= MAX_DRAFT_CHARS) continue
+    if (warnedDrafts.has(t.id)) continue
+    warnedDrafts.add(t.id)
+    showToast(`${t.title} 太大，草稿存不起來，關掉分頁前請先儲存`, 'error')
+  }
   const payload = {
     activeId,
-    tabs: tabs.filter((t) => t.kind !== 'terminal').map((t) => ({
+    // 「比較」與「審閱」分頁都是臨時視角（磁碟 ⇄ 草稿、跟某條分支比），
+    // 存了的話下次開專案會被當成一般的 Git diff 去打 `gitDiff`
+    tabs: tabs.filter((t) => !t.conflict && !t.reviewRef).map((t) => ({
       id: t.id,
       kind: t.kind,
       title: t.title,
@@ -167,7 +196,13 @@ async function persistTabsNow() {
 
 // ===== 外部檔案變更偵測 =====
 
-function showExtBanner() {
+/**
+ * 磁碟上的版本跟手上這份對不起來時的提示條。訊息會換：外部改過是一種，
+ * 存檔被擋下來是另一種（後者使用者剛按過儲存，不講清楚會以為按了沒反應）。
+ * @param {string} [message]
+ */
+function showExtBanner(message) {
+  if (el.editorExtBannerMsg) el.editorExtBannerMsg.textContent = message || '檔案已在外部修改'
   if (el.editorExtBanner) el.editorExtBanner.hidden = false
 }
 
@@ -188,6 +223,12 @@ async function checkActiveFileExternalChange() {
     const res = await electronAPI.workspace.getFileMtime(tab.projectId, tab.relPath)
     if (!res || !res.ok || !res.data) return
     if (findTab(activeId) !== tab) return
+    if (!res.data.exists && tab.mtimeMs) {
+      // 原檔被刪掉了。內容留著（那是這裡唯一一份），但要講明白——
+      // 不講的話畫面看起來完全正常，而普通存檔已經被 main 擋住（STALE）
+      showExtBanner('原檔已被刪除，這裡是最後編輯的內容')
+      return
+    }
     const diskMtime = res.data.mtimeMs
     if (diskMtime && tab.mtimeMs && diskMtime !== tab.mtimeMs) {
       if (!tab.dirty) {
@@ -201,6 +242,45 @@ async function checkActiveFileExternalChange() {
   } catch {
     // 靜默
   }
+}
+
+/**
+ * 依目前檔案的 Git 狀態顯示「看未提交變更」按鈕。
+ * @param {WsTab} tab
+ */
+async function refreshEditorDiffButton(tab) {
+  const button = /** @type {HTMLButtonElement | null} */ (el.editorDiffBtn)
+  if (!button) return
+  button.hidden = true
+  delete button.dataset.staged
+  if (tab.kind !== 'editor' || !tab.projectId || !tab.relPath) return
+
+  let result
+  try {
+    // 跟檔案樹共用同一趟（`ws-git-status.js`）：切分頁與監看事件會讓兩邊同時要同一份答案
+    result = await gitStatusShared(tab.projectId)
+  } catch {
+    return
+  }
+  if (findTab(activeId) !== tab) return
+  const rows = result?.ok && result.data?.repo && Array.isArray(result.data.files)
+    ? result.data.files
+    : []
+  const wanted = String(tab.relPath).replace(/\\/g, '/').replace(/^\.\//, '')
+  const file = rows.find((row) => (
+    row && typeof row.path === 'string'
+      && row.path.replace(/\\/g, '/').replace(/^\.\//, '') === wanted
+  ))
+  if (!file) return
+  const index = typeof file.index === 'string' ? file.index : '.'
+  const worktree = typeof file.worktree === 'string' ? file.worktree : '.'
+  const code = worktree !== '.' && worktree !== '?' ? worktree : index
+  if (!code || code === '.') return
+  const staged = worktree === '.' && index !== '.' && index !== '?'
+  button.dataset.staged = staged ? '1' : '0'
+  button.hidden = false
+  button.title = staged ? '查看未提交變更（已暫存）' : '查看未提交變更'
+  button.setAttribute('aria-label', button.title)
 }
 
 /**
@@ -253,9 +333,16 @@ function renderTabs() {
     const open = document.createElement('button')
     open.type = 'button'
     open.className = 'ws-tab-open'
-    open.title = tab.kind === 'editor' ? (tab.relPath || tab.title) : tab.title
+    open.title = tabTooltip(tab)
     open.setAttribute('role', 'tab')
     open.setAttribute('aria-selected', tab.id === activeId ? 'true' : 'false')
+    // 終端機的狀態燈：側欄清單收掉之後，「還在跑嗎」只剩這一顆看得出來
+    if (tab.kind === 'terminal') {
+      const led = document.createElement('span')
+      led.className = `ws-tab-state ws-tab-state-${tab.state || 'stopped'}`
+      led.setAttribute('aria-hidden', 'true')
+      open.appendChild(led)
+    }
     const label = document.createElement('span')
     label.className = 'ws-tab-label'
     label.textContent = shortTitle(tab.title)
@@ -264,6 +351,13 @@ function renderTabs() {
       const dot = document.createElement('span')
       dot.className = 'ws-tab-dirty'
       dot.setAttribute('aria-label', '尚未儲存')
+      open.appendChild(dot)
+    }
+    if (tab.unread) {
+      const dot = document.createElement('span')
+      dot.className = 'ws-tab-unread'
+      dot.title = '跑完了，還沒看過'
+      dot.setAttribute('aria-label', '有新輸出')
       open.appendChild(dot)
     }
     open.addEventListener('click', () => void activate(tab.id))
@@ -293,6 +387,20 @@ function renderTabs() {
     item.append(open, close)
     el.newBtn ? el.strip.insertBefore(item, el.newBtn) : el.strip.appendChild(item)
   }
+}
+
+/**
+ * @param {WsTab} tab
+ * @returns {string}
+ */
+function tabTooltip(tab) {
+  if (tab.kind === 'editor') return tab.relPath || tab.title
+  if (tab.kind !== 'terminal') return tab.title
+  const parts = [tab.title]
+  if (tab.stateLabel) parts.push(tab.stateLabel)
+  if (tab.admin) parts.push('管理員')
+  if (tab.cwd) parts.push(tab.cwd)
+  return parts.join(' · ')
 }
 
 /**
@@ -540,12 +648,17 @@ function onTabDragEnd() {
 function openTabMenu(tab, event) {
   event.preventDefault()
   const at = tabs.findIndex((item) => item.id === tab.id)
-  const others = tabs.filter((item) => item.id !== tab.id)
-  const right = tabs.slice(at + 1)
+  // 終端機不進「關閉其他／右邊」：關掉它等於收掉工作階段，一定要一顆一顆確認
+  const bulk = (list) => list.filter((item) => item.kind !== 'terminal')
+  const others = bulk(tabs.filter((item) => item.id !== tab.id))
+  const right = bulk(tabs.slice(at + 1))
   /** @type {Array<{ label: string, danger?: boolean, onSelect: () => void }>} */
   const items = [
     { label: '關閉', onSelect: () => void closeTab(tab.id) }
   ]
+  if (tab.kind === 'terminal') {
+    items.push({ label: '重新命名', onSelect: () => startTabRename(tab.id) })
+  }
   if (others.length) {
     items.push({ label: `關閉其他 ${others.length} 個`, onSelect: () => void closeMany(others) })
   }
@@ -630,12 +743,13 @@ async function activate(id) {
   } else if (tab.kind === 'editor') {
     paintEditor(tab)
     showSurface('editor')
+    void refreshEditorDiffButton(tab)
     void checkActiveFileExternalChange()
   } else if (tab.kind === 'diff') {
     paintDiff(tab)
     showSurface('diff')
   } else if (tab.kind === 'ai-session') {
-    paintAiSession(tab)
+    paintAiSessionTab(tab)
     showSurface('ai-session')
   } else {
     paintBrowser(tab)
@@ -650,6 +764,44 @@ async function activate(id) {
   }))
   renderTabs()
   revealActiveTab()
+  schedulePersistTabs()
+}
+
+/**
+ * 檔案改名或搬家之後，把開著的分頁接到新路徑上。
+ *
+ * 不接的話那個分頁還指著舊路徑：存檔會**把舊檔重新建出來**（草稿等於寫到一個
+ * 已經不存在的名字上），而畫面上完全看不出來。資料夾同理——底下每一個開著的檔案都要跟著換。
+ *
+ * 分頁 id 內嵌相對路徑，所以 id 與 activeId 也要一起換。
+ *
+ * @param {string} projectId
+ * @param {string} fromRel 舊的相對路徑（檔案或資料夾）
+ * @param {string} toRel 新的相對路徑
+ */
+export function retargetTabs(projectId, fromRel, toRel) {
+  if (!projectId || !fromRel || !toRel || fromRel === toRel) return
+  let changed = false
+  for (const tab of tabs) {
+    if (tab.projectId !== projectId || !tab.relPath) continue
+    const isSelf = tab.relPath === fromRel
+    const isChild = tab.relPath.startsWith(`${fromRel}/`)
+    if (!isSelf && !isChild) continue
+    const nextRel = isSelf ? toRel : `${toRel}${tab.relPath.slice(fromRel.length)}`
+    const oldId = tab.id
+    // 五種分頁 id 都是「前綴 + 相對路徑」，所以照長度換尾巴就好
+    // （用 replace 找 `:${relPath}` 的話，前綴裡剛好有同一段字就會換錯地方）
+    tab.id = oldId.endsWith(tab.relPath)
+      ? oldId.slice(0, oldId.length - tab.relPath.length) + nextRel
+      : oldId
+    retargetModel(oldId, tab.id)
+    tab.relPath = nextRel
+    if (tab.kind === 'editor') tab.title = nextRel.split('/').pop() || nextRel
+    if (activeId === oldId) activeId = tab.id
+    changed = true
+  }
+  if (!changed) return
+  renderTabs()
   schedulePersistTabs()
 }
 
@@ -679,11 +831,13 @@ export async function closeTab(id) {
   if (!tab) return
   if (tab.kind === 'editor' && tab.dirty) {
     // 就地二次確認：關掉有未存內容的分頁是不可逆的
-    if (!confirmDiscard(id)) return
+    if (!confirmDiscard(id, '還沒儲存，再按一次×才會關掉')) return
   }
   if (tab.kind === 'terminal') {
+    // 終端機分頁是那個工作階段唯一的入口，關掉＝真的收掉它（裡面常常跑著 AI 代理）
+    if (!confirmDiscard(id, '關掉會結束這個終端機，再按一次×')) return
     const mod = await import('./terminal-page.js')
-    mod.detachTerminalPane(id)
+    await mod.deleteTerminalSession(id).catch(() => {})
   }
   tabs = tabs.filter((item) => item.id !== id)
   disposeModel(id)
@@ -705,19 +859,20 @@ export async function closeTab(id) {
 let discardArm = null
 
 /**
- * 有未儲存內容時的二次確認：第一次按只是「再按一次」，3 秒後自動解除。
- * 不用 `window.confirm`（會擋住整個 App，樣式也不搭）。
+ * 不可逆的關閉（未存草稿／收掉終端機）的二次確認：第一次按只是「再按一次」，
+ * 3 秒後自動解除。不用 `window.confirm`（會擋住整個 App，樣式也不搭）。
  * @param {string} id
+ * @param {string} message
  * @returns {boolean} 這一次要不要真的關掉
  */
-function confirmDiscard(id) {
+function confirmDiscard(id, message) {
   if (discardArm && discardArm.id === id) {
     clearTimeout(discardArm.timer)
     discardArm = null
     return true
   }
   if (discardArm) clearTimeout(discardArm.timer)
-  showToast('還沒儲存，再按一次×才會關掉', 'error')
+  showToast(message, 'error')
   discardArm = {
     id,
     timer: setTimeout(() => { discardArm = null }, 3000)
@@ -728,7 +883,7 @@ function confirmDiscard(id) {
 // ===== 終端機分頁 =====
 
 /**
- * 終端機被打開了（來自側欄或這裡的「＋」）：沒有分頁就補一個，有就設成作用中。
+ * 終端機被打開了（「＋」新開的，或還原專案分頁時接回來的）：沒有分頁就補一個，有就設成作用中。
  * @param {string} id
  * @param {string} title
  */
@@ -739,36 +894,77 @@ export function trackTerminal(id, title) {
   if (activeId !== id) stash()
   activeId = id
   renderTabs()
+  revealActiveTab()
+  schedulePersistTabs()
 }
 
 /**
+ * 把終端機現在的樣子畫到分頁上（`terminal-page.js` 每次狀態變動都會推過來）。
  * @param {string} id
- * @param {string} title
+ * @param {{ title: string, state: string, stateLabel: string, admin: boolean, cwd: string, unread: boolean }} meta
  */
-export function renameTerminalTab(id, title) {
+export function paintTerminalTab(id, meta) {
   const tab = findTab(id)
-  if (!tab || tab.title === title) return
-  tab.title = title
+  if (!tab) return
+  const before = `${tab.title}|${tab.state}|${tab.unread}|${tab.stateLabel}`
+  tab.title = meta.title || tab.title
+  tab.state = meta.state
+  tab.stateLabel = meta.stateLabel
+  tab.admin = meta.admin
+  tab.cwd = meta.cwd
+  tab.unread = meta.unread
+  if (before === `${tab.title}|${tab.state}|${tab.unread}|${tab.stateLabel}`) return
+  // 改名中不重畫：提示字元標記三秒會重送九次，重畫會把輸入框整顆換掉
+  // （側欄那條「不可以 renderList()」的教訓，在分頁上一模一樣）
+  if (renamingId) return
   renderTabs()
+  schedulePersistTabs()
 }
 
+/** 正在改名的那個分頁（改名期間不重畫分頁列） */
+let renamingId = ''
+
 /**
- * 終端機工作階段被刪掉了 → 分頁也要跟著消失。
+ * 分頁上就地改名：Enter／失焦送出，Esc 取消（跟以前側欄那顆鉛筆同一套手感）。
  * @param {string} id
  */
-export function removeTerminalTab(id) {
-  if (!findTab(id)) return
-  tabs = tabs.filter((tab) => tab.id !== id)
-  if (activeId === id) {
-    activeId = ''
-    const next = tabs[tabs.length - 1]
-    if (next) {
-      void activate(next.id)
-      return
+function startTabRename(id) {
+  const tab = findTab(id)
+  const label = el.strip?.querySelector(`.ws-tab[data-id="${CSS.escape(id)}"] .ws-tab-label`)
+  if (!tab || !label) return
+  const input = document.createElement('input')
+  input.type = 'text'
+  input.className = 'ws-tab-rename'
+  input.value = tab.title
+  input.maxLength = 60
+  input.setAttribute('aria-label', '分頁名稱')
+  renamingId = id
+  let done = false
+  const finish = async (commit) => {
+    if (done) return
+    done = true
+    renamingId = ''
+    const next = input.value.trim()
+    if (commit && next && next !== tab.title) {
+      if (tab.kind === 'terminal') {
+        const mod = await import('./terminal-page.js')
+        await mod.renameTerminalSession(id, next).catch(() => {})
+      }
+      tab.title = next
     }
-    showSurface('empty')
+    renderTabs()
+    schedulePersistTabs()
   }
-  renderTabs()
+  input.addEventListener('keydown', (event) => {
+    event.stopPropagation()
+    if (event.key === 'Enter') { event.preventDefault(); void finish(true) }
+    else if (event.key === 'Escape') { event.preventDefault(); void finish(false) }
+  })
+  input.addEventListener('blur', () => void finish(true))
+  input.addEventListener('pointerdown', (event) => event.stopPropagation())
+  label.replaceWith(input)
+  input.focus()
+  input.select()
 }
 
 // ===== 編輯器分頁 =====
@@ -796,6 +992,21 @@ function formatBytes(bytes) {
 }
 
 /**
+ * 開分頁途中專案被切走了嗎？
+ *
+ * 開一個分頁至少要等一次 IPC，那段時間使用者可能已經切到別的專案——
+ * 回來照樣 `tabs.push` 的話，B 專案的分頁列上就會冒出一個 A 專案的檔案
+ * （`restoreProjectTabs` 早就有這道守衛，開分頁那幾條漏了）。
+ *
+ * @param {number} gen 呼叫當下的 `projectSwitch`
+ * @param {string} projectId
+ * @returns {boolean} true＝這份結果已經作廢
+ */
+function staleOpen(gen, projectId) {
+  return gen !== projectSwitch || (project?.id || '') !== projectId
+}
+
+/**
  * 點檔案總管的一個檔案。同一個檔案已經開過就切回去，不重開一份。
  * @param {{ id: string, name: string }} proj
  * @param {string} relPath
@@ -809,6 +1020,7 @@ export async function openEditorTab(proj, relPath, line = 0) {
     if (line > 0) goToLine(line)
     return
   }
+  const gen = projectSwitch
   let file
   try {
     file = await call(
@@ -816,6 +1028,13 @@ export async function openEditorTab(proj, relPath, line = 0) {
       '讀不到這個檔案'
     )
   } catch {
+    return
+  }
+  if (staleOpen(gen, proj.id)) return
+  // 連點兩下：第二趟讀檔回來時第一趟已經把分頁建好了，不可以再推一份
+  if (findTab(id)) {
+    await activate(id)
+    if (line > 0) goToLine(line)
     return
   }
 
@@ -942,6 +1161,7 @@ function paintEditor(tab) {
     if (el.unsupportedType) el.unsupportedType.textContent = (tab.fileExt || 'BIN').toUpperCase()
     if (el.editorPreviewBtn) el.editorPreviewBtn.hidden = true
     if (el.editorSaveBtn) el.editorSaveBtn.hidden = true
+    if (el.editorFindBtn) el.editorFindBtn.hidden = true
     if (el.editorNote) {
       el.editorNote.textContent = tab.readonly || ''
       el.editorNote.hidden = !tab.readonly
@@ -994,6 +1214,12 @@ function paintPreview(tab) {
   if (!container || !box) return
 
   const on = Boolean(tab.preview)
+  const ext = extOf(tab.relPath || '')
+  const previewOnly = Boolean((tab.image || tab.pdf || tab.audio || tab.video) && ext !== 'svg')
+  if (el.editorFindBtn) {
+    el.editorFindBtn.hidden = previewOnly
+    el.editorFindBtn.title = on ? '切到編輯並尋找 (Ctrl+F)' : '尋找與取代 (Ctrl+F)'
+  }
   container.hidden = on
   box.hidden = !on
   if (!on) {
@@ -1029,7 +1255,6 @@ function paintPreview(tab) {
     box.replaceChildren(img)
     return
   }
-  const ext = extOf(tab.relPath || '')
   if (ext === 'html' || ext === 'htm') {
     const frame = document.createElement('iframe')
     frame.className = 'ws-editor-frame'
@@ -1124,7 +1349,13 @@ function hint(text) {
   return p
 }
 
-async function saveActiveFile() {
+/**
+ * 存檔。預設帶著「開檔當下磁碟的版本」，對不上時 main 會回 STALE 把這次存檔擋下來——
+ * 直接蓋掉等於把別人（或另一個編輯器）剛寫進去的東西無聲弄丟。
+ *
+ * @param {boolean} [force] true＝使用者按過「覆寫」，不帶版本硬寫
+ */
+async function saveActiveFile(force = false) {
   const tab = findTab(activeId)
   const text = /** @type {HTMLTextAreaElement | null} */ (el.editorText)
   if (!tab || tab.kind !== 'editor' || !text || tab.readonly) return
@@ -1132,14 +1363,22 @@ async function saveActiveFile() {
   const content = typeof live === 'string' ? live : text.value
   text.value = content
   let saved
-  try {
-    saved = await call(
-      electronAPI.workspace.writeFile(tab.projectId, tab.relPath, content),
-      '存檔失敗'
-    )
-  } catch {
+  const result = await electronAPI.workspace.writeFile(
+    tab.projectId, tab.relPath, content, force ? undefined : (tab.mtimeMs || 0)
+  )
+  if (!result || !result.ok) {
+    if (result?.error?.code === 'STALE') {
+      // 草稿一個字都不能動：它是這裡唯一還活著的那一份
+      tab.dirty = true
+      renderTabs()
+      schedulePersistTabs()
+      if (findTab(activeId) === tab) showExtBanner(`存不進去：${result.error.message}`)
+      return
+    }
+    showToast(result?.error?.message || '存檔失敗', 'error')
     return
   }
+  saved = result.data
   if (findTab(activeId) === tab) tab.content = text.value
   tab.savedContent = content
   tab.dirty = tab.content !== content
@@ -1151,6 +1390,32 @@ async function saveActiveFile() {
 }
 
 // ===== Git Diff 分頁 =====
+
+/**
+ * 「比較」：把磁碟上那一版跟手上的草稿並排。借 diff 分頁的版面，但它跟 Git 無關——
+ * `conflict` 旗標讓 `paintDiff` 收掉暫存鈕與 +/- 統計，也不會被存進 `tabsState`
+ * （存了的話下次開專案會拿去打 `gitDiff`，那是另一件事）。
+ */
+async function openConflictTab() {
+  const tab = findTab(activeId)
+  if (!tab || tab.kind !== 'editor' || !tab.projectId || !tab.relPath) return
+  const gen = projectSwitch
+  let file
+  try {
+    file = await call(electronAPI.workspace.readFile(tab.projectId, tab.relPath), '讀不到磁碟上的版本')
+  } catch {
+    return
+  }
+  if (gen !== projectSwitch) return
+  stash()
+  const id = `x:${tab.projectId}:${tab.relPath}`
+  const existing = findTab(id)
+  const next = existing || /** @type {WsTab} */ ({ id, kind: 'diff', projectId: tab.projectId, relPath: tab.relPath, conflict: true })
+  next.title = `比較 ${tab.title}`
+  next.versions = { original: file.content || '', modified: tab.content || '' }
+  if (!existing) tabs.push(next)
+  await activate(id)
+}
 
 /**
  * 開啟 Git Diff 檢視分頁
@@ -1165,6 +1430,7 @@ export async function openDiffTab(proj, relPath, staged = false) {
     await activate(id)
     return
   }
+  const gen = projectSwitch
   let diffData
   try {
     diffData = await call(
@@ -1180,9 +1446,14 @@ export async function openDiffTab(proj, relPath, staged = false) {
   let versions = null
   try {
     const res = await electronAPI.workspace.gitFileVersions(proj.id, relPath, staged)
-    if (res?.ok && res.data && !res.data.binary) versions = res.data
+    if (res?.ok && res.data && !res.data.binary && !res.data.truncated) versions = res.data
   } catch {
     versions = null
+  }
+  if (staleOpen(gen, proj.id)) return
+  if (findTab(id)) {
+    await activate(id)
+    return
   }
 
   /** @type {WsTab} */
@@ -1201,13 +1472,67 @@ export async function openDiffTab(proj, relPath, staged = false) {
 }
 
 /**
+ * 審閱分頁：跟**某條分支的合併基準點**比（不是跟那條分支的最新一筆——
+ * 那樣對方後來的提交會被算成「我刪掉的」）。
+ *
+ * 借 diff 分頁的版面，但它跟暫存區無關：`reviewRef` 一設，暫存鈕就收起來。
+ *
+ * @param {{ id: string, name: string }} proj
+ * @param {string} relPath
+ * @param {string} ref 要比的分支
+ * @param {{ additions?: number, deletions?: number }} [stat] 從整體比較那一份清單帶過來的 +/-
+ */
+export async function openReviewTab(proj, relPath, ref, stat) {
+  const id = `v:${proj.id}:${ref}:${relPath}`
+  const existing = findTab(id)
+  if (existing) {
+    await activate(id)
+    return
+  }
+  const gen = projectSwitch
+  let versions = null
+  try {
+    const res = await electronAPI.workspace.gitFileVersionsAgainst(proj.id, relPath, ref)
+    if (res?.ok && res.data && !res.data.binary && !res.data.truncated) versions = res.data
+  } catch {
+    versions = null
+  }
+  if (staleOpen(gen, proj.id)) return
+  if (findTab(id)) {
+    await activate(id)
+    return
+  }
+  /** @type {WsTab} */
+  const tab = {
+    id,
+    kind: 'diff',
+    title: `[審閱] ${relPath.split('/').pop() || relPath}`,
+    projectId: proj.id,
+    relPath,
+    reviewRef: ref,
+    diffData: stat ? { diff: '', additions: stat.additions || 0, deletions: stat.deletions || 0 } : null,
+    versions
+  }
+  tabs.push(tab)
+  await activate(id)
+}
+
+/**
  * 繪製 Git Diff 內容
  * @param {WsTab} tab
  */
 function paintDiff(tab) {
   if (el.diffTitle) {
-    el.diffTitle.textContent = `${tab.staged ? '[暫存區] ' : '[工作區] '}${tab.relPath}`
+    el.diffTitle.textContent = tab.conflict
+      ? `[磁碟 ⇄ 未存草稿] ${tab.relPath}`
+      : tab.reviewRef
+        ? `[跟 ${tab.reviewRef} 比] ${tab.relPath}`
+        : `${tab.staged ? '[暫存區] ' : '[工作區] '}${tab.relPath}`
   }
+  // 暫存鈕只對「工作區 ⇄ 暫存區」那種 diff 有意義
+  if (el.diffStageBtn) el.diffStageBtn.hidden = Boolean(tab.conflict || tab.reviewRef)
+  paintReviewCount(tab)
+  if (el.diffStats && tab.conflict) el.diffStats.replaceChildren()
   if (el.diffStats && tab.diffData) {
     el.diffStats.replaceChildren()
     const add = document.createElement('span')
@@ -1233,8 +1558,11 @@ async function paintDiffBody(tab) {
   const fallback = () => {
     if (el.diffMonaco) el.diffMonaco.hidden = true
     if (el.diffContent) el.diffContent.hidden = false
-    if (el.diffContent && tab.diffData) {
+    if (!el.diffContent) return
+    if (tab.diffData) {
       renderDiffLines(el.diffContent, parseUnifiedDiff(tab.diffData.diff))
+    } else if (tab.conflict) {
+      el.diffContent.replaceChildren(hint('並排比較需要 Monaco 編輯器，這次沒載起來。'))
     }
   }
   if (!tab.versions || !el.diffMonaco) {
@@ -1256,6 +1584,145 @@ async function paintDiffBody(tab) {
     modified: tab.versions.modified,
     relPath: tab.relPath || ''
   })
+  // diff 是非同步算出來的，等它一輪再把「幾塊變更」寫上去
+  window.setTimeout(() => {
+    if (findTab(activeId) !== tab) return
+    const count = diffChangeCount()
+    if (el.diffNextBtn) el.diffNextBtn.title = count ? `下一個變更（共 ${count} 塊）` : '這一份沒有變更'
+  }, 400)
+}
+
+// ===== 審閱：上一個／下一個變更、逐行意見 =====
+
+/**
+ * 意見數量畫在工具列上。**沒有意見時「交給 AI」不能按**——
+ * 送一段空的過去只會讓 AI 問「你是不是漏貼了」。
+ * @param {WsTab} [tab]
+ */
+function paintReviewCount(tab) {
+  const active = tab || findTab(activeId)
+  const projectId = active?.projectId || project?.id || ''
+  const total = projectId ? countComments(projectId) : 0
+  if (el.diffCommentsBtn) {
+    el.diffCommentsBtn.textContent = `意見 ${total}`
+    el.diffCommentsBtn.classList.toggle('is-on', total > 0)
+  }
+  if (el.reviewCount) el.reviewCount.textContent = `${total} 則意見`
+  const empty = total === 0
+  if (el.reviewToAiBtn) /** @type {HTMLButtonElement} */ (el.reviewToAiBtn).disabled = empty
+  if (el.reviewClearBtn) /** @type {HTMLButtonElement} */ (el.reviewClearBtn).disabled = empty
+}
+
+/**
+ * 對游標所在（或選取）的那幾行寫一則意見。
+ *
+ * 釘的是**右邊那一側**的行號（改完之後的樣子）——AI 手上那份就是這一版。
+ */
+function addReviewComment() {
+  const tab = findTab(activeId)
+  if (!tab || tab.kind !== 'diff' || !tab.projectId || !tab.relPath) return
+  const at = diffCursor()
+  if (!at) {
+    showToast('先在右邊那一側點一下要講的那幾行', 'error')
+    return
+  }
+  const text = window.prompt(`對 ${tab.relPath} 第 ${at.line} 行的意見`, '')
+  if (text === null) return
+  if (!addComment(tab.projectId, {
+    relPath: tab.relPath,
+    line: at.line,
+    endLine: at.endLine,
+    snippet: at.text,
+    text
+  })) {
+    showToast('意見沒有加進去（空白，或這個專案的意見已經太多）', 'error')
+    return
+  }
+  paintReviewCount(tab)
+  if (el.reviewPanel && !el.reviewPanel.hidden) renderReviewList()
+}
+
+/** 意見清單（diff 底下那一塊） */
+function renderReviewList() {
+  const tab = findTab(activeId)
+  const projectId = tab?.projectId || project?.id || ''
+  if (!el.reviewList || !projectId) return
+  el.reviewList.replaceChildren()
+  const rows = listComments(projectId)
+  if (!rows.length) {
+    const note = document.createElement('p')
+    note.className = 'ws-editor-note'
+    note.textContent = '還沒有意見。在右邊選幾行，按「加意見」。'
+    el.reviewList.appendChild(note)
+    return
+  }
+  for (const row of rows) {
+    const item = document.createElement('div')
+    item.className = 'ws-review-item'
+    const where = document.createElement('button')
+    where.type = 'button'
+    where.className = 'ws-review-where'
+    where.textContent = `${row.relPath}:${row.line}`
+    where.title = '跳到那一行'
+    where.addEventListener('click', () => {
+      if (projectId) void openEditorTab({ id: projectId, name: '' }, row.relPath, row.line)
+    })
+    const text = document.createElement('div')
+    text.className = 'ws-review-text'
+    text.textContent = row.text
+    const del = document.createElement('button')
+    del.type = 'button'
+    del.className = 'ws-review-del'
+    del.textContent = '×'
+    del.title = '刪掉這一則'
+    del.addEventListener('click', () => {
+      removeComment(projectId, row.id)
+      renderReviewList()
+      paintReviewCount()
+    })
+    item.append(where, text, del)
+    el.reviewList.appendChild(item)
+  }
+}
+
+/** 把整包意見丟進聊天輸入框（格式在 `ws-review.js`，不改上游 API 契約） */
+function reviewToAi() {
+  const tab = findTab(activeId)
+  const projectId = tab?.projectId || project?.id || ''
+  if (!projectId) return
+  const text = formatComments(projectId, tab?.reviewRef || '')
+  if (!text) {
+    showToast('還沒有任何意見', 'error')
+    return
+  }
+  sendToChat(text)
+  showToast('意見已經帶進聊天輸入框')
+}
+
+/** 把編輯器裡選取的那幾行帶進聊天 */
+function selectionToChat() {
+  const tab = findTab(activeId)
+  if (!tab || tab.kind !== 'editor') return
+  const text = /** @type {HTMLTextAreaElement | null} */ (el.editorText)
+  const picked = selectionInfo()
+  let body = ''
+  let where = tab.relPath || tab.title
+  if (picked) {
+    body = picked.text
+    where = `${tab.relPath}:${picked.startLine}${picked.endLine > picked.startLine ? `-${picked.endLine}` : ''}`
+  } else if (text && text.selectionEnd > text.selectionStart) {
+    // 沒有 Monaco 時退回那份影子 textarea
+    body = text.value.slice(text.selectionStart, text.selectionEnd)
+    const before = text.value.slice(0, text.selectionStart).split('\n').length
+    where = `${tab.relPath}:${before}`
+  }
+  if (!body.trim()) {
+    showToast('先選一段文字再按', 'error')
+    return
+  }
+  const fence = body.includes('```') ? '~~~' : '```'
+  sendToChat(`\`${where}\`\n${fence}\n${body}\n${fence}\n`)
+  showToast('已經帶進聊天輸入框')
 }
 
 // ===== 瀏覽器分頁 =====
@@ -1411,6 +1878,7 @@ export async function openAiSessionTab(proj, row) {
     await activate(id)
     return
   }
+  const gen = projectSwitch
   let sessionData
   try {
     sessionData = await call(
@@ -1418,6 +1886,11 @@ export async function openAiSessionTab(proj, row) {
       '讀取 AI 對話記錄失敗'
     )
   } catch {
+    return
+  }
+  if (staleOpen(gen, proj.id)) return
+  if (findTab(id)) {
+    await activate(id)
     return
   }
 
@@ -1435,139 +1908,59 @@ export async function openAiSessionTab(proj, row) {
 }
 
 /**
- * 繪製 AI 會話結構化卡片
+ * AI 會話分頁的畫面（實作在 `ws-ai-session.js`，這裡只餵資料與回呼）。
  * @param {WsTab} tab
  */
-function paintAiSession(tab) {
-  const data = tab.sessionData
-  const row = tab.sessionRow
-  if (el.aiSessionTitle) {
-    el.aiSessionTitle.textContent = tab.title
-  }
-  if (el.aiSessionMeta) {
-    const metaParts = []
-    if (data?.totalTokens) metaParts.push(`Tokens: ${data.totalTokens.toLocaleString()}`)
-    if (row?.mtime) metaParts.push(new Date(row.mtime).toLocaleString('zh-TW'))
-    el.aiSessionMeta.textContent = metaParts.join(' · ')
-  }
-  if (!el.aiSessionBody) return
-  el.aiSessionBody.replaceChildren()
+function paintAiSessionTab(tab) {
+  paintAiSession({
+    tab,
+    els: {
+      title: el.aiSessionTitle,
+      meta: el.aiSessionMeta,
+      body: el.aiSessionBody,
+      resumeBtn: /** @type {HTMLButtonElement | null} */ (el.aiResumeBtn),
+      resumeIntoBtn: /** @type {HTMLButtonElement | null} */ (el.aiResumeIntoBtn)
+    },
+    onOpenFile: (rel) => {
+      if (tab.projectId) void openEditorTab({ id: tab.projectId, name: '' }, rel)
+    },
+    // 「送進現有終端機」只列**這個專案分頁列上**開著的那些
+    terminals: () => tabs
+      .filter((one) => one.kind === 'terminal')
+      .map((one) => ({ id: one.id, title: one.title })),
+    onResume: (terminalId) => void resumeSession(tab, terminalId)
+  })
+}
 
-  if (!data || data.error) {
-    const errCard = document.createElement('div')
-    errCard.className = 'ws-ai-card'
-    errCard.textContent = data?.error ? `解析失敗：${data.error}` : '無法解析此對話記錄'
-    el.aiSessionBody.appendChild(errCard)
+/**
+ * 接續一段對話。
+ *
+ * 指令字串由 main 組，而且 main 會**先確認這段對話真的屬於這個專案**——
+ * renderer 這邊連 session id 都只是原樣轉交。
+ *
+ * @param {WsTab} tab
+ * @param {string} terminalId 空字串＝開一個新的終端機
+ */
+async function resumeSession(tab, terminalId) {
+  const row = tab.sessionRow
+  if (!tab.projectId || !row) return
+  let info
+  try {
+    info = await call(
+      electronAPI.workspace.agentResume(tab.projectId, row.agent, row.id),
+      '接續不了這段對話'
+    )
+  } catch {
     return
   }
-
-  // 1. 會話摘要卡片
-  const summaryCard = document.createElement('div')
-  summaryCard.className = 'ws-ai-card'
-  const summaryTitle = document.createElement('h3')
-  summaryTitle.className = 'ws-ai-card-title'
-  summaryTitle.textContent = '會話概況'
-  summaryCard.appendChild(summaryTitle)
-
-  const metaList = document.createElement('div')
-  metaList.className = 'ws-ai-meta-grid'
-
-  const addMeta = (label, val) => {
-    const item = document.createElement('div')
-    item.className = 'ws-ai-meta-item'
-    const l = document.createElement('span')
-    l.className = 'ws-ai-meta-label'
-    l.textContent = label
-    const v = document.createElement('span')
-    v.className = 'ws-ai-meta-value'
-    v.textContent = val
-    item.append(l, v)
-    metaList.appendChild(item)
+  const title = `${info.agentLabel} · ${shortTitle(row.title || row.id)}`
+  if (!terminalId) {
+    await newTerminalWithCommand(title, info.command)
+    return
   }
-
-  addMeta('代理類型', row?.agentLabel || data.agent)
-  addMeta('會話識別碼', data.sessionId)
-  addMeta('提問輪數', `${data.prompts?.length || 0} 輪`)
-  addMeta('工具呼叫次數', `${data.toolCallsCount || 0} 次`)
-  summaryCard.appendChild(metaList)
-
-  // 涉及的檔案清單
-  if (Array.isArray(data.modifiedFiles) && data.modifiedFiles.length) {
-    const filesTitle = document.createElement('div')
-    filesTitle.className = 'ws-ai-sub-title'
-    filesTitle.textContent = '變更或讀取的檔案（點擊在編輯器開啟）：'
-    summaryCard.appendChild(filesTitle)
-
-    const fileList = document.createElement('div')
-    fileList.className = 'ws-ai-files-list'
-    for (const filePath of data.modifiedFiles) {
-      const fileBtn = document.createElement('button')
-      fileBtn.type = 'button'
-      fileBtn.className = 'ws-ai-file-pill'
-      fileBtn.textContent = filePath
-      fileBtn.title = `開啟 ${filePath}`
-      fileBtn.addEventListener('click', () => {
-        if (tab.projectId) void openEditorTab({ id: tab.projectId, name: '' }, filePath)
-      })
-      fileList.appendChild(fileBtn)
-    }
-    summaryCard.appendChild(fileList)
-  }
-  el.aiSessionBody.appendChild(summaryCard)
-
-  // 2. 工具呼叫分佈卡片
-  if (data.toolCallsBreakdown && Object.keys(data.toolCallsBreakdown).length) {
-    const toolsCard = document.createElement('div')
-    toolsCard.className = 'ws-ai-card'
-    const toolsTitle = document.createElement('h3')
-    toolsTitle.className = 'ws-ai-card-title'
-    toolsTitle.textContent = '工具呼叫統計'
-    toolsCard.appendChild(toolsTitle)
-
-    const toolsGrid = document.createElement('div')
-    toolsGrid.className = 'ws-ai-tools-grid'
-    for (const [toolName, count] of Object.entries(data.toolCallsBreakdown)) {
-      const toolBadge = document.createElement('span')
-      toolBadge.className = 'ws-ai-tool-badge'
-      const toolLabel = document.createElement('span')
-      toolLabel.className = 'ws-ai-tool-name'
-      toolLabel.textContent = toolName
-      const toolCount = document.createElement('span')
-      toolCount.className = 'ws-ai-tool-count'
-      toolCount.textContent = String(count)
-      toolBadge.append(toolLabel, document.createTextNode(' '), toolCount)
-      toolsGrid.appendChild(toolBadge)
-    }
-    toolsCard.appendChild(toolsGrid)
-    el.aiSessionBody.appendChild(toolsCard)
-  }
-
-  // 3. 使用者提問時間軸
-  if (Array.isArray(data.prompts) && data.prompts.length) {
-    const promptCard = document.createElement('div')
-    promptCard.className = 'ws-ai-card'
-    const promptTitle = document.createElement('h3')
-    promptTitle.className = 'ws-ai-card-title'
-    promptTitle.textContent = '使用者提問記錄'
-    promptCard.appendChild(promptTitle)
-
-    const promptList = document.createElement('div')
-    promptList.className = 'ws-ai-prompts-timeline'
-    data.prompts.forEach((p, idx) => {
-      const pItem = document.createElement('div')
-      pItem.className = 'ws-ai-prompt-item'
-      const pIndex = document.createElement('span')
-      pIndex.className = 'ws-ai-prompt-idx'
-      pIndex.textContent = `#${idx + 1}`
-      const pText = document.createElement('div')
-      pText.className = 'ws-ai-prompt-text'
-      pText.textContent = p.text
-      pItem.append(pIndex, pText)
-      promptList.appendChild(pItem)
-    })
-    promptCard.appendChild(promptList)
-    el.aiSessionBody.appendChild(promptCard)
-  }
+  // 送進現有的那一顆：先切過去，讓人看得到指令真的被打進去了
+  await activate(terminalId)
+  await electronAPI.terminal.write(terminalId, `${info.command}\r`)
 }
 
 // ===== 新增分頁的選單 =====
@@ -1639,6 +2032,18 @@ function toggleMenu() {
   sep.className = 'ws-new-sep'
   menuEl.appendChild(sep)
 
+  // 「自訂…」是選 shell 與工作目錄的唯一入口（側欄那顆「＋ 終端機」收掉之後）
+  const customBtn = document.createElement('button')
+  customBtn.type = 'button'
+  customBtn.className = 'ws-new-item'
+  customBtn.id = 'wsNewCustomTerm'
+  customBtn.setAttribute('role', 'menuitem')
+  customBtn.textContent = '終端機（自訂…）'
+  customBtn.addEventListener('click', () => {
+    closeMenu()
+    void import('./terminal-page.js').then((mod) => mod.openNewTerminalDialog(project?.path || ''))
+  })
+
   const browserBtn = document.createElement('button')
   browserBtn.type = 'button'
   browserBtn.className = 'ws-new-item'
@@ -1648,7 +2053,7 @@ function toggleMenu() {
     closeMenu()
     void openBrowserTab()
   })
-  menuEl.append(browserBtn, admin)
+  menuEl.append(customBtn, browserBtn, admin)
 
   const rect = anchor.getBoundingClientRect()
   menuEl.style.top = `${Math.round(rect.bottom + 4)}px`
@@ -1668,6 +2073,8 @@ async function newTerminal(preset, admin) {
       preset,
       // 有選專案就在專案裡開；沒有的話 main 會退回家目錄
       cwd: project?.path || '',
+      // 工作階段也記在專案底下（缺值＝未分類，舊的 terminals.json 就是這樣）
+      projectId: project?.id || '',
       admin
     }), '建立終端機失敗')
     const mod = await import('./terminal-page.js')
@@ -1687,6 +2094,7 @@ export async function newTerminalWithCommand(title, command) {
     const created = await call(electronAPI.terminal.create({
       preset: 'shell',
       cwd: project?.path || '',
+      projectId: project?.id || '',
       title
     }), '建立終端機失敗')
     const mod = await import('./terminal-page.js')
@@ -1709,17 +2117,30 @@ async function restoreProjectTabs(proj, generation) {
     if (generation !== projectSwitch) return
     const saved = res?.ok ? res.data : null
     if (!saved || !Array.isArray(saved.tabs) || !saved.tabs.length) {
-      const termTab = tabs.find((t) => t.kind === 'terminal')
-      if (termTab) void activate(termTab.id)
+      tabs = tabs.filter((t) => t.kind === 'terminal')
+      renderTabs()
+      const carried = tabs[0]
+      if (carried) void activate(carried.id)
       else showSurface('empty')
       return
     }
 
-    // 保留 terminal 分頁，清空其他舊專案的分頁
+    // 只留「跟著進來」的終端機（沒選專案時開的那些），其餘舊分頁全部清掉
     tabs = tabs.filter((t) => t.kind === 'terminal')
+    // 存檔裡的終端機分頁可能指向已經被刪掉的工作階段（另一扇視窗刪的、上次沒收乾淨的）
+    const liveTerminals = new Set()
+    if (saved.tabs.some((item) => item.kind === 'terminal')) {
+      const res2 = await electronAPI.terminal.list()
+      if (generation !== projectSwitch) return
+      for (const row of (res2?.ok && Array.isArray(res2.data) ? res2.data : [])) liveTerminals.add(row.id)
+    }
 
     for (const item of saved.tabs) {
-      if (item.kind === 'editor' && item.relPath) {
+      if (item.kind === 'terminal') {
+        if (liveTerminals.has(item.id) && !findTab(item.id)) {
+          tabs.push({ id: item.id, kind: 'terminal', title: item.title || '終端機' })
+        }
+      } else if (item.kind === 'editor' && item.relPath) {
         try {
           const file = await call(electronAPI.workspace.readFile(proj.id, item.relPath), '')
           if (generation !== projectSwitch) return
@@ -1823,23 +2244,41 @@ export async function setActiveProject(next) {
     if (await persistTabsNow() === false) return false
   }
   if (generation !== projectSwitch) return false
+  const hadProject = Boolean(project?.id)
   project = next
-  tabs = tabs.filter((t) => t.kind === 'terminal')
-  activeId = tabs.find((t) => t.id === activeId)?.id || ''
+  if (hadProject) {
+    // 每個專案有自己一組分頁：離開時把終端機那幾格從畫面上摘掉
+    // （**只摘畫面**，pty 與 scrollback 都還在 main，切回來會原樣接上）
+    await detachAllTerminals()
+    if (generation !== projectSwitch) return false
+    tabs = []
+  } else {
+    // 還沒選過專案時開的終端機沒有地方存，跟著進第一個選中的專案——
+    // 丟掉的話那個工作階段就再也叫不出來了（側欄已經沒有清單接住它）
+    tabs = tabs.filter((t) => t.kind === 'terminal')
+  }
+  activeId = ''
   renderTabs()
   showSurface('empty')
-  if (!next) {
-    tabs = tabs.filter((t) => t.kind === 'terminal')
-    if (activeId && !findTab(activeId)) {
-      activeId = tabs[0]?.id || ''
-    }
-    renderTabs()
-    if (activeId) void activate(activeId)
-    else showSurface('empty')
-    return true
-  }
+  if (!next) return true
   await restoreProjectTabs(next, generation)
   return generation === projectSwitch
+}
+
+/**
+ * 現在是哪個專案（終端機那邊要把工作階段掛在同一個專案底下）。
+ * @returns {string}
+ */
+export function currentProjectId() {
+  return project?.id || ''
+}
+
+/** 把目前這組終端機分頁的畫面收掉（工作階段本身不動） */
+async function detachAllTerminals() {
+  const ids = tabs.filter((t) => t.kind === 'terminal').map((t) => t.id)
+  if (!ids.length) return
+  const mod = await import('./terminal-page.js')
+  for (const id of ids) mod.detachTerminalPane(id)
 }
 
 export function initWsTabs() {
@@ -1865,9 +2304,13 @@ export function initWsTabs() {
   el.editorPreview = document.getElementById('wsEditorPreview')
   el.editorPreviewBtn = document.getElementById('wsEditorPreviewBtn')
   el.editorSaveBtn = document.getElementById('wsEditorSaveBtn')
+  el.editorDiffBtn = document.getElementById('wsEditorDiffBtn')
   el.editorFindBtn = document.getElementById('wsEditorFindBtn')
   el.editorExtBanner = document.getElementById('wsEditorExtBanner')
+  el.editorExtBannerMsg = document.querySelector('#wsEditorExtBanner .ws-ext-banner-msg')
   el.editorReloadDiskBtn = document.getElementById('wsEditorReloadDiskBtn')
+  el.editorCompareDiskBtn = document.getElementById('wsEditorCompareDiskBtn')
+  el.editorOverwriteDiskBtn = document.getElementById('wsEditorOverwriteDiskBtn')
   el.editorIgnoreDiskBtn = document.getElementById('wsEditorIgnoreDiskBtn')
   el.editorNote = document.getElementById('wsEditorNote')
   el.browser = document.getElementById('wsBrowser')
@@ -1879,6 +2322,9 @@ export function initWsTabs() {
   el.aiSessionTitle = document.getElementById('wsAiSessionTitle')
   el.aiSessionMeta = document.getElementById('wsAiSessionMeta')
   el.aiSessionBody = document.getElementById('wsAiSessionBody')
+  el.aiResumeBtn = document.getElementById('wsAiResumeBtn')
+  el.aiResumeIntoBtn = document.getElementById('wsAiResumeIntoBtn')
+  el.editorToChatBtn = document.getElementById('wsEditorToChatBtn')
 
   // IDE 元素
   el.ideContainer = document.querySelector('.ws-ide-container')
@@ -1919,6 +2365,16 @@ export function initWsTabs() {
   el.diffContent = document.getElementById('wsDiffContent')
   el.monacoHost = document.getElementById('wsMonacoHost')
   el.diffMonaco = document.getElementById('wsDiffMonaco')
+  el.diffPrevBtn = document.getElementById('wsDiffPrevBtn')
+  el.diffNextBtn = document.getElementById('wsDiffNextBtn')
+  el.diffCommentBtn = document.getElementById('wsDiffCommentBtn')
+  el.diffCommentsBtn = document.getElementById('wsDiffCommentsBtn')
+  el.reviewPanel = document.getElementById('wsReviewPanel')
+  el.reviewList = document.getElementById('wsReviewList')
+  el.reviewCount = document.getElementById('wsReviewCount')
+  el.reviewToAiBtn = document.getElementById('wsReviewToAiBtn')
+  el.reviewClearBtn = document.getElementById('wsReviewClearBtn')
+  el.reviewCloseBtn = document.getElementById('wsReviewCloseBtn')
 
   el.newBtn?.addEventListener('click', toggleMenu)
 
@@ -1975,6 +2431,17 @@ export function initWsTabs() {
   })
 
   el.editorFindBtn?.addEventListener('click', () => {
+    const tab = findTab(activeId)
+    if (!tab || tab.kind !== 'editor' || tab.unsupported) return
+    const ext = extOf(tab.relPath || '')
+    const previewOnly = Boolean((tab.image || tab.pdf || tab.audio || tab.video) && ext !== 'svg')
+    if (previewOnly) return
+    if (tab.preview) {
+      tab.preview = false
+      if (el.editorPreviewBtn) el.editorPreviewBtn.textContent = '預覽'
+      paintPreview(tab)
+      schedulePersistTabs()
+    }
     if (monaco) {
       // Monaco 的尋找列收起來時**高度還在**（只是 visibility: hidden），
       // 所以要看 `.visible` 這個 class，量高度會一直判成「開著」。
@@ -1990,10 +2457,18 @@ export function initWsTabs() {
   })
 
   el.editorReloadDiskBtn?.addEventListener('click', () => void reloadActiveFileFromDisk(true))
+  el.editorCompareDiskBtn?.addEventListener('click', () => void openConflictTab())
+  el.editorOverwriteDiskBtn?.addEventListener('click', () => void saveActiveFile(true))
   el.editorIgnoreDiskBtn?.addEventListener('click', () => {
     hideExtBanner()
     const tab = findTab(activeId)
-    if (tab) tab.mtimeMs = Date.now()
+    // 「保留編輯」只是把提示收起來，磁碟上那一版仍然比較新——
+    // 版本要換成磁碟的真值，不是 `Date.now()`（隨手寫一個時間等於下次存檔又硬蓋一次）
+    if (tab?.projectId && tab.relPath) {
+      void electronAPI.workspace.getFileMtime(tab.projectId, tab.relPath).then((res) => {
+        if (res?.ok && res.data?.mtimeMs) tab.mtimeMs = res.data.mtimeMs
+      })
+    }
   })
 
   // 有人直接改了那份影子 textarea（存檔後重載、尋找取代、自動化測試）→ 推回 Monaco。
@@ -2023,6 +2498,14 @@ export function initWsTabs() {
   })
 
   el.editorSaveBtn?.addEventListener('click', () => void saveActiveFile())
+  el.editorDiffBtn?.addEventListener('click', async () => {
+    const tab = findTab(activeId)
+    if (!tab || tab.kind !== 'editor' || !tab.projectId || !tab.relPath) return
+    await refreshEditorDiffButton(tab)
+    if (findTab(activeId) !== tab || el.editorDiffBtn?.hidden) return
+    void openDiffTab({ id: tab.projectId, name: '' }, tab.relPath,
+      el.editorDiffBtn.dataset.staged === '1')
+  })
   el.editorPreviewBtn?.addEventListener('click', () => {
     const tab = findTab(activeId)
     if (!tab || tab.kind !== 'editor') return
@@ -2036,6 +2519,46 @@ export function initWsTabs() {
     const tab = findTab(activeId)
     if (!tab || tab.kind !== 'editor' || !tab.projectId || !tab.relPath) return
     void electronAPI.workspace.reveal(tab.projectId, tab.relPath)
+  })
+
+  el.editorToChatBtn?.addEventListener('click', selectionToChat)
+
+  // 上一個／下一個變更：Monaco 的 diff 編輯器自己知道變更在哪，不要自己算
+  const goDiff = (dir) => {
+    if (!diffGoTo(dir)) showToast('這一份沒有可以跳的變更', 'error')
+  }
+  el.diffPrevBtn?.addEventListener('click', () => goDiff('previous'))
+  el.diffNextBtn?.addEventListener('click', () => goDiff('next'))
+  el.diffCommentBtn?.addEventListener('click', addReviewComment)
+  el.diffCommentsBtn?.addEventListener('click', () => {
+    if (!el.reviewPanel) return
+    el.reviewPanel.hidden = !el.reviewPanel.hidden
+    if (!el.reviewPanel.hidden) renderReviewList()
+  })
+  el.reviewCloseBtn?.addEventListener('click', () => {
+    if (el.reviewPanel) el.reviewPanel.hidden = true
+  })
+  el.reviewToAiBtn?.addEventListener('click', reviewToAi)
+  el.reviewClearBtn?.addEventListener('click', () => {
+    const tab = findTab(activeId)
+    const projectId = tab?.projectId || project?.id || ''
+    if (!projectId) return
+    clearComments(projectId)
+    renderReviewList()
+    paintReviewCount()
+  })
+
+  // Alt+↑／↓ 在 diff 分頁上＝跳變更（跟 VS Code 一樣）。
+  // 只在 diff 分頁、而且工作區真的看得見時才收，不然會把別頁的方向鍵吃掉。
+  document.addEventListener('keydown', (event) => {
+    if (!event.altKey || event.ctrlKey || event.metaKey) return
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+    const tab = findTab(activeId)
+    if (!tab || tab.kind !== 'diff') return
+    const main = document.getElementById('termMain')
+    if (!main || main.offsetParent === null) return
+    event.preventDefault()
+    goDiff(event.key === 'ArrowUp' ? 'previous' : 'next')
   })
 
   el.diffOpenEditorBtn?.addEventListener('click', () => {
@@ -2055,7 +2578,13 @@ export function initWsTabs() {
         await call(electronAPI.workspace.gitStage(tab.projectId, tab.relPath), '暫存失敗')
         tab.staged = true
       }
+      // 剛動過暫存區：檔案樹與「未提交變更」鈕不可以再拿快取那份
+      invalidateGitStatus()
       tab.diffData = await call(electronAPI.workspace.gitDiff(tab.projectId, tab.relPath, tab.staged), '更新 Diff 失敗')
+      // 並排 diff 的兩份完整內容也要重讀：暫存前後比的是不同的基準
+      // （只換 diffData 的話統計是新的、畫面上那兩欄還是舊的）
+      const res = await electronAPI.workspace.gitFileVersions(tab.projectId, tab.relPath, tab.staged)
+      tab.versions = (res?.ok && res.data && !res.data.binary && !res.data.truncated) ? res.data : null
       tab.title = `${tab.staged ? '[暫存] ' : ''}${tab.relPath.split('/').pop() || tab.relPath}`
       renderTabs()
       paintDiff(tab)
@@ -2083,7 +2612,25 @@ export function initWsTabs() {
   })
 
   window.addEventListener('focus', () => void checkActiveFileExternalChange())
+  // 監看說資料夾動過了 → 開著的那個檔案重新對一次版本
+  // （提示條該不該跳由 `checkActiveFileExternalChange` 自己判斷）
+  document.addEventListener('ws:files-changed', () => {
+    void checkActiveFileExternalChange()
+    const tab = findTab(activeId)
+    if (tab?.kind === 'editor') void refreshEditorDiffButton(tab)
+  })
+  // `beforeunload` 只夠應付「當掉」那種情況：非同步儲存跑不完視窗就沒了。
+  // 正常結束走 main 的 before-quit，它會等這一輪真的寫完。
   window.addEventListener('beforeunload', () => void persistTabsNow())
+  electronAPI.workspace.onFlushDrafts?.(async () => {
+    let ok = true
+    try {
+      ok = await persistTabsNow() !== false
+    } catch {
+      ok = false
+    }
+    electronAPI.workspace.draftsFlushed(ok)
+  })
 
   renderTabs()
 }

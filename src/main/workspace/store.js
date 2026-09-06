@@ -99,7 +99,10 @@ function sanitizeAll(raw) {
   return out
 }
 
-const ALLOWED_TAB_KINDS = new Set(['editor', 'diff', 'browser', 'ai-session'])
+const ALLOWED_TAB_KINDS = new Set(['terminal', 'editor', 'diff', 'browser', 'ai-session'])
+
+/** 單一草稿的長度上限（＝`files.MAX_WRITE_CHARS`，renderer 那邊也用同一個數字） */
+const MAX_DRAFT_CHARS = 4 * 1024 * 1024
 
 /**
  * @param {unknown} raw
@@ -129,7 +132,9 @@ function sanitizeTabsState(raw) {
     if (typeof t.sessionId === 'string') tab.sessionId = t.sessionId
     if (typeof t.agent === 'string') tab.agent = t.agent
     if (t.sessionRow && typeof t.sessionRow === 'object') tab.sessionRow = t.sessionRow
-    if (typeof t.draftContent === 'string' && t.draftContent.length <= 500 * 1024) {
+    // 上限跟 `files.MAX_WRITE_CHARS` 同一條線：比編輯器能存的還小的話，
+    // 會出現「打得下、存得了，但關掉分頁草稿就沒了」而且完全沒有訊息
+    if (typeof t.draftContent === 'string' && t.draftContent.length <= MAX_DRAFT_CHARS) {
       tab.draftContent = t.draftContent
     }
     tabs.push(tab)
@@ -355,6 +360,7 @@ function getTabsState(id) {
 module.exports = {
   MAX_PROJECTS,
   MAX_NAME,
+  MAX_DRAFT_CHARS,
   normalizePath,
   normalizeName,
   pathExists,

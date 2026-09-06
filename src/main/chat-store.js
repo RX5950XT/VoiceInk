@@ -20,6 +20,17 @@ const MAX_REASONING = 16000
 
 const VALID_ROLES = new Set(['user', 'assistant'])
 
+/**
+ * 對話歸屬的專案 id（`workspaces.json` 的 `w_...`）。**可選**——沒有值就是「未分類」，
+ * 舊檔一律沒有這個欄位，所以不能拿它當必填。字元集卡死是因為它會被拿去比對與過濾，
+ * 而 renderer 送什麼進來都不能信。
+ * @param {unknown} value
+ * @returns {string}
+ */
+function sanitizeProjectId(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value) ? value : ''
+}
+
 const chatImages = require('./chat-images')
 
 /** @type {import('electron-store') | null} */
@@ -78,6 +89,7 @@ function sanitizeAll(raw) {
       title: sanitizeTitle(item.title),
       createdAt: Number.isFinite(item.createdAt) ? item.createdAt : Date.now(),
       updatedAt: Number.isFinite(item.updatedAt) ? item.updatedAt : Date.now(),
+      projectId: sanitizeProjectId(item.projectId),
       messages: sanitizeMessages(item.messages)
     })
   }
@@ -154,6 +166,7 @@ async function list() {
       id: c.id,
       title: c.title,
       updatedAt: c.updatedAt,
+      projectId: c.projectId || '',
       messageCount: c.messages.length
     }))
   })
@@ -198,10 +211,20 @@ async function get(id) {
   })
 }
 
-async function create() {
+/**
+ * @param {unknown} [projectId] 建立當下選著的專案（沒有就是未分類）
+ */
+async function create(projectId) {
   return withStore(async () => {
     const now = Date.now()
-    const conversation = { id: newId(), title: '新對話', createdAt: now, updatedAt: now, messages: [] }
+    const conversation = {
+      id: newId(),
+      title: '新對話',
+      createdAt: now,
+      updatedAt: now,
+      projectId: sanitizeProjectId(projectId),
+      messages: []
+    }
     const all = await readAll()
     all.unshift(conversation)
     await writeAll(all)
@@ -265,6 +288,23 @@ async function dropTrailingAssistant(id) {
 }
 
 /**
+ * 改掛到別的專案（空字串＝收回未分類）。
+ * @param {string} id
+ * @param {unknown} projectId
+ * @returns {Promise<boolean>}
+ */
+async function setProject(id, projectId) {
+  return withStore(async () => {
+    const all = await readAll()
+    const target = all.find((c) => c.id === id)
+    if (!target) return false
+    target.projectId = sanitizeProjectId(projectId)
+    await writeAll(all)
+    return true
+  })
+}
+
+/**
  * @param {string} id
  * @param {string} title
  */
@@ -318,6 +358,8 @@ async function appendMessage(id, role, content, extra) {
 }
 
 module.exports = {
+  sanitizeProjectId,
+  setProject,
   list,
   get,
   create,

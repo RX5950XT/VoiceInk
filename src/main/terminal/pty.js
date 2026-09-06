@@ -274,13 +274,6 @@ async function deleteSession(id) {
 }
 
 /**
- * @param {string[]} ids
- */
-function reorderSessions(ids) {
-  return store.reorder(Array.isArray(ids) ? ids.map(String) : [])
-}
-
-/**
  * 掛上分頁：沒開過就開一顆，已經在跑就把目前畫面整份給回去。
  *
  * `seq` 讓 renderer 丟掉「快照已經含進去、但監聽器也收到一次」的重複片段。
@@ -401,7 +394,6 @@ module.exports = {
   createSession,
   renameSession,
   deleteSession,
-  reorderSessions,
   openSession,
   writeSession,
   resizeSession,

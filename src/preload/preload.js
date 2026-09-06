@@ -186,7 +186,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     rename: (id, title) => ipcRenderer.invoke('terminal:rename', id, title),
     delete: (id) => ipcRenderer.invoke('terminal:delete', id),
     /** @param {string[]} ids 側欄拖曳後的完整順序 */
-    reorder: (ids) => ipcRenderer.invoke('terminal:reorder', ids),
     /** 掛上分頁；回傳目前畫面快照與 seq（早於 seq 的 data 事件要丟掉） */
     open: (id, cols, rows) => ipcRenderer.invoke('terminal:open', id, cols, rows),
     write: (id, data) => ipcRenderer.invoke('terminal:write', id, data),
@@ -239,8 +238,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** @param {string} relPath 專案內的相對路徑，一律用 `/` */
     listDir: (id, relPath) => ipcRenderer.invoke('workspace:listDir', id, relPath),
     readFile: (id, relPath) => ipcRenderer.invoke('workspace:readFile', id, relPath),
-    writeFile: (id, relPath, content) => (
-      ipcRenderer.invoke('workspace:writeFile', id, relPath, content)
+    /** @param {number} [expectedMtimeMs] 開檔當下磁碟的版本；對不上 main 回 STALE。不帶＝強制覆寫 */
+    writeFile: (id, relPath, content, expectedMtimeMs) => (
+      ipcRenderer.invoke('workspace:writeFile', id, relPath, content, expectedMtimeMs)
     ),
     /** 新增檔案／資料夾；名稱由 main 的 `checkName` 收斂（不准含分隔符號） */
     createEntry: (id, relDir, name, dir) => (
@@ -282,17 +282,48 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** git worktree：renderer 只送名字，實際路徑由 main 組 */
     worktreeList: (id) => ipcRenderer.invoke('workspace:worktreeList', id),
     worktreeAdd: (id, name, base) => ipcRenderer.invoke('workspace:worktreeAdd', id, name, base),
+    worktreeAdopt: (id, treePath) => ipcRenderer.invoke('workspace:worktreeAdopt', id, treePath),
+    worktreeCheck: (id, treePath) => ipcRenderer.invoke('workspace:worktreeCheck', id, treePath),
     worktreeRemove: (id, treePath) => ipcRenderer.invoke('workspace:worktreeRemove', id, treePath),
+    gitBranches: (id) => ipcRenderer.invoke('workspace:gitBranches', id),
+    gitCompareBranch: (id, ref) => ipcRenderer.invoke('workspace:gitCompareBranch', id, ref),
+    gitFileVersionsAgainst: (id, relPath, ref) => (
+      ipcRenderer.invoke('workspace:gitFileVersionsAgainst', id, relPath, ref)
+    ),
     /** diff 編輯器要的 original／modified 兩份完整內容 */
     gitFileVersions: (id, relPath, staged) => ipcRenderer.invoke('workspace:gitFileVersions', id, relPath, staged),
     agentSessions: (id) => ipcRenderer.invoke('workspace:agentSessions', id),
-    /** @param {string} agent 只認 main 固定表裡的 key */
-    agentResumeCommand: (agent, sessionId) => (
-      ipcRenderer.invoke('workspace:agentResumeCommand', agent, sessionId)
+    agentResume: (id, agent, sessionId) => (
+      ipcRenderer.invoke('workspace:agentResume', id, agent, sessionId)
     ),
+    /** @param {string} agent 只認 main 固定表裡的 key */
     agentSessionDetail: (id, agent, sessionId) => (
       ipcRenderer.invoke('workspace:agentSessionDetail', id, agent, sessionId)
-    )
+    ),
+    /**
+     * 結束前 main 會來要一次「把草稿寫完」。`beforeunload` 那條救不了非同步儲存
+     * （視窗一關就沒了），所以由 main 等這一輪跑完再往下拆。
+     * @param {() => void} callback
+     */
+    onFlushDrafts: (callback) => {
+      const handler = () => callback()
+      ipcRenderer.on('workspace:flushDrafts', handler)
+      return () => ipcRenderer.removeListener('workspace:flushDrafts', handler)
+    },
+    /** @param {boolean} ok false＝草稿沒存成功，main 會取消這次結束 */
+    draftsFlushed: (ok) => ipcRenderer.send('workspace:draftsFlushed', ok === true),
+    /** 監看目前這個專案的資料夾（一次只看一個） */
+    watch: (id) => ipcRenderer.invoke('workspace:watch', id),
+    unwatch: () => ipcRenderer.invoke('workspace:unwatch'),
+    /**
+     * 專案資料夾有東西變了。payload：`{ projectId, paths, git, overflow }`
+     * @param {(payload: object) => void} callback
+     */
+    onChanged: (callback) => {
+      const handler = (_event, payload) => callback(payload)
+      ipcRenderer.on('workspace:changed', handler)
+      return () => ipcRenderer.removeListener('workspace:changed', handler)
+    }
   },
 
   // ===== Claude Code 工作台 =====
@@ -522,7 +553,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** @returns {Promise<Array<{ id: string, title: string, updatedAt: number, messageCount: number }>>} */
     list: () => ipcRenderer.invoke('chat:list'),
     get: (id) => ipcRenderer.invoke('chat:get', id),
-    create: () => ipcRenderer.invoke('chat:create'),
+    create: (projectId) => ipcRenderer.invoke('chat:create', projectId),
+    setProject: (id, projectId) => ipcRenderer.invoke('chat:setProject', id, projectId),
     delete: (id) => ipcRenderer.invoke('chat:delete', id),
     rename: (id, title) => ipcRenderer.invoke('chat:rename', id, title),
     /** @param {string[]} ids 側欄拖曳後的完整順序；main 只接受既有 id */

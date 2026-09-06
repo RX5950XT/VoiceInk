@@ -1,6 +1,6 @@
 {
   "name": "voiceink",
-  "version": "1.12.0",
+  "version": "1.13.0",
   "description": "VoiceInk - Windows Desktop Speech-to-Text Application",
   "main": "src/main/main.js",
   "scripts": {

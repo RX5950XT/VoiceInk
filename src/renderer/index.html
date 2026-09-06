@@ -77,13 +77,13 @@
 
         <!-- 內容頁面 -->
         <main class="content">
-          <!-- 聊天＋終端機頁面：側欄上半是對話、下半是終端機，主區跟著選中的項目切換 -->
+          <!-- 聊天＋工作區頁面：側欄列對話或專案，終端機在主區的分頁列上 -->
           <section id="page-chat" class="page active">
             <div class="chat-layout">
               <aside class="chat-sidebar">
                 <!--
-                  側欄只有一塊，上面兩顆鈕決定下面列什麼。清單各自是獨立容器
-                  （`.chat-list-item` 三邊共用，選擇器一定要限定 #projList / #chatList / #termList）
+                  側欄只有一塊，上面兩顆鈕決定下面列什麼。兩份清單各自是獨立容器
+                  （`.chat-list-item` 兩邊共用，選擇器一定要限定 #projList / #chatList）
                 -->
                 <div class="sidebar-modes" role="tablist" aria-label="側欄內容">
                   <button
@@ -115,13 +115,9 @@
                     <button type="button" id="projNewBtn" class="btn btn-primary btn-sm proj-action-btn">
                       ＋ 加入專案
                     </button>
-                    <button type="button" id="termNewBtn" class="btn btn-secondary btn-sm proj-action-btn" title="新終端機（可選系統管理員身分）" aria-label="新終端機">
-                      ＋ 終端機
-                    </button>
                   </div>
                   <div class="proj-unified-list">
                     <div id="projList" class="chat-list proj-list" aria-label="專案清單"></div>
-                    <div id="termList" class="chat-list term-list" aria-label="終端機清單"></div>
                   </div>
                 </section>
 
@@ -256,6 +252,19 @@
                     <div class="ws-editor-bar">
                       <span class="ws-editor-name" id="wsEditorName"></span>
                       <span class="ws-editor-spacer"></span>
+                      <button
+                        type="button"
+                        id="wsEditorDiffBtn"
+                        class="btn btn-secondary btn-sm"
+                        title="查看未提交變更"
+                        hidden
+                      >看未提交變更</button>
+                      <button
+                        type="button"
+                        id="wsEditorToChatBtn"
+                        class="btn btn-secondary btn-sm"
+                        title="把選取的那幾行帶進聊天輸入框"
+                      >帶入聊天</button>
                       <button type="button" id="wsEditorFindBtn" class="btn btn-secondary btn-sm" title="尋找與取代 (Ctrl+F)">
                         尋找
                       </button>
@@ -269,7 +278,9 @@
                     <div id="wsEditorExtBanner" class="ws-ext-banner" hidden>
                       <span class="ws-ext-banner-msg">檔案已在外部修改</span>
                       <div class="ws-ext-banner-actions">
+                        <button type="button" id="wsEditorCompareDiskBtn" class="btn btn-secondary btn-sm">比較</button>
                         <button type="button" id="wsEditorReloadDiskBtn" class="btn btn-primary btn-sm">重新載入</button>
+                        <button type="button" id="wsEditorOverwriteDiskBtn" class="btn btn-secondary btn-sm">覆寫</button>
                         <button type="button" id="wsEditorIgnoreDiskBtn" class="btn btn-secondary btn-sm">保留編輯</button>
                       </div>
                     </div>
@@ -333,12 +344,26 @@
                       <span class="ws-diff-title" id="wsDiffTitle">Diff</span>
                       <span class="ws-diff-stat" id="wsDiffStats"></span>
                       <span class="ws-editor-spacer"></span>
+                      <button type="button" id="wsDiffPrevBtn" class="btn btn-secondary btn-sm" title="上一個變更 (Alt+↑)">上一個</button>
+                      <button type="button" id="wsDiffNextBtn" class="btn btn-secondary btn-sm" title="下一個變更 (Alt+↓)">下一個</button>
+                      <button type="button" id="wsDiffCommentBtn" class="btn btn-secondary btn-sm" title="對游標所在那幾行寫一則意見">加意見</button>
+                      <button type="button" id="wsDiffCommentsBtn" class="btn btn-secondary btn-sm" title="看這一輪累積的意見">意見 0</button>
                       <button type="button" id="wsDiffStageBtn" class="btn btn-secondary btn-sm">暫存</button>
                       <button type="button" id="wsDiffOpenEditorBtn" class="btn btn-secondary btn-sm">在編輯器開啟</button>
                     </div>
                     <!-- Monaco 的並排 diff；載不起來才退回下面那份自繪的逐行檢視 -->
                     <div class="ws-monaco ws-diff-monaco" id="wsDiffMonaco" hidden></div>
                     <div class="ws-diff-body" id="wsDiffContent"></div>
+                    <!-- 逐行意見：審完可以整包交回 AI（借 Orca 的 diff-comments 流程） -->
+                    <div class="ws-review-panel" id="wsReviewPanel" hidden>
+                      <div class="ws-review-head">
+                        <span id="wsReviewCount">0 則意見</span>
+                        <button type="button" id="wsReviewToAiBtn" class="btn btn-primary btn-sm">交給 AI</button>
+                        <button type="button" id="wsReviewClearBtn" class="btn btn-secondary btn-sm">全部清掉</button>
+                        <button type="button" id="wsReviewCloseBtn" class="btn btn-secondary btn-sm">收起來</button>
+                      </div>
+                      <div class="ws-review-list" id="wsReviewList" aria-label="逐行意見"></div>
+                    </div>
                   </div>
 
                   <!--
@@ -371,6 +396,8 @@
                   <div id="wsAiSession" class="ws-ai-session" hidden>
                     <div class="ws-ai-session-bar" id="wsAiSessionBar">
                       <span class="ws-ai-session-title" id="wsAiSessionTitle">對話記錄</span>
+                      <button type="button" id="wsAiResumeBtn" class="btn btn-primary btn-sm">在新終端機接續</button>
+                      <button type="button" id="wsAiResumeIntoBtn" class="btn btn-secondary btn-sm" hidden>送進現有終端機</button>
                       <span class="ws-editor-spacer"></span>
                       <span class="ws-ai-session-meta" id="wsAiSessionMeta"></span>
                     </div>
@@ -381,7 +408,7 @@
 
               <div
                 id="wsRightResizer"
-                class="sidebar-resizer sidebar-resizer-right"
+                class="sidebar-resizer sidebar-resizer-right hidden"
                 role="separator"
                 aria-orientation="vertical"
                 aria-label="調整右側欄寬度"
@@ -389,7 +416,7 @@
               ></div>
 
               <!-- 右側欄：檔案總管／Git／AI 對話記錄，全部繫在「目前選定的專案」上 -->
-              <aside class="ws-right" id="wsRight">
+              <aside class="ws-right hidden" id="wsRight">
                 <div class="ws-right-tabs" role="tablist" aria-label="右側欄面板">
                   <button
                     type="button"
@@ -453,28 +480,64 @@
                       ⟳
                     </button>
                   </div>
-                  <div class="ws-git-files" id="wsGitFiles" aria-label="變更的檔案"></div>
-                  <div class="ws-git-commit">
-                    <textarea
-                      id="wsGitMessage"
-                      class="input ws-git-message"
-                      rows="2"
-                      placeholder="提交訊息…"
-                      aria-label="提交訊息"
-                    ></textarea>
-                    <div class="ws-git-actions">
-                      <button type="button" id="wsGitStageAllBtn" class="btn btn-secondary btn-sm">全部暫存</button>
-                      <button type="button" id="wsGitCommitBtn" class="btn btn-primary btn-sm">提交</button>
-                      <button type="button" id="wsGitPushBtn" class="btn btn-secondary btn-sm">推送</button>
-                    </div>
+                  <!-- 四段各自可展開收起（狀態存 localStorage），整個面板只有一條捲軸 -->
+                  <div class="ws-git-scroll">
+                    <section class="ws-git-sec" data-sec="changes">
+                      <div class="ws-git-sec-head">
+                        <button type="button" class="ws-git-sec-toggle" aria-expanded="true" aria-controls="wsGitSecChanges">變更</button>
+                      </div>
+                      <div class="ws-git-sec-body" id="wsGitSecChanges">
+                        <div class="ws-git-commit">
+                          <textarea
+                            id="wsGitMessage"
+                            class="input ws-git-message"
+                            rows="2"
+                            placeholder="提交訊息…"
+                            aria-label="提交訊息"
+                          ></textarea>
+                          <div class="ws-git-actions">
+                            <button type="button" id="wsGitStageAllBtn" class="btn btn-secondary btn-sm">全部暫存</button>
+                            <button type="button" id="wsGitCommitBtn" class="btn btn-primary btn-sm">提交</button>
+                            <button type="button" id="wsGitPushBtn" class="btn btn-secondary btn-sm">推送</button>
+                          </div>
+                        </div>
+                        <div class="ws-git-files" id="wsGitFiles" aria-label="變更的檔案"></div>
+                      </div>
+                    </section>
+
+                    <section class="ws-git-sec" data-sec="review">
+                      <div class="ws-git-sec-head">
+                        <button type="button" class="ws-git-sec-toggle" aria-expanded="false" aria-controls="wsGitSecReview">跟哪條分支比</button>
+                        <button type="button" id="wsReviewRefreshBtn" class="btn-icon" title="重新讀分支清單" aria-label="重新讀分支清單">⟳</button>
+                      </div>
+                      <div class="ws-git-sec-body" id="wsGitSecReview" hidden>
+                        <div class="ws-review-bar">
+                          <select id="wsReviewRef" class="select" aria-label="要比較的分支"></select>
+                          <button type="button" id="wsReviewCompareBtn" class="btn btn-secondary btn-sm">比較</button>
+                        </div>
+                        <div class="ws-review-files" id="wsReviewFiles" aria-label="跟分支相比的變更"></div>
+                      </div>
+                    </section>
+
+                    <section class="ws-git-sec" data-sec="worktree">
+                      <div class="ws-git-sec-head">
+                        <button type="button" class="ws-git-sec-toggle" aria-expanded="false" aria-controls="wsGitSecWorktree">工作樹</button>
+                        <button type="button" id="wsWorktreeAddBtn" class="btn-icon" title="新增工作樹" aria-label="新增工作樹">＋</button>
+                      </div>
+                      <div class="ws-git-sec-body" id="wsGitSecWorktree" hidden>
+                        <div class="ws-worktrees" id="wsWorktrees" aria-label="git 工作樹"></div>
+                      </div>
+                    </section>
+
+                    <section class="ws-git-sec" data-sec="log">
+                      <div class="ws-git-sec-head">
+                        <button type="button" class="ws-git-sec-toggle" aria-expanded="false" aria-controls="wsGitSecLog">最近提交</button>
+                      </div>
+                      <div class="ws-git-sec-body" id="wsGitSecLog" hidden>
+                        <div class="ws-git-log" id="wsGitLog" aria-label="最近提交"></div>
+                      </div>
+                    </section>
                   </div>
-                  <div class="ws-git-log-head">
-                    <span>工作樹</span>
-                    <button type="button" id="wsWorktreeAddBtn" class="btn-icon" title="新增工作樹" aria-label="新增工作樹">＋</button>
-                  </div>
-                  <div class="ws-worktrees" id="wsWorktrees" aria-label="git 工作樹"></div>
-                  <div class="ws-git-log-head">最近提交</div>
-                  <div class="ws-git-log" id="wsGitLog" aria-label="最近提交"></div>
                 </div>
 
                 <div class="ws-right-body" id="wsPanelAgents" role="tabpanel" hidden>

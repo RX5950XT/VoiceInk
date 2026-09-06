@@ -91,10 +91,17 @@ let promptNameInput = null
 let promptContentInput = null
 
 // ===== 狀態 =====
-/** @type {Array<{ id: string, title: string, updatedAt: number, messageCount: number }>} */
+/** @type {Array<{ id: string, title: string, updatedAt: number, messageCount: number, projectId?: string }>} */
 let conversations = []
 let currentId = ''
 let searchTerm = ''
+/**
+ * 側欄現在選著哪個專案（由 workspace-page 發 `ws:project` 事件推過來，
+ * 用事件而不是互相 import——兩個模組誰先載入不固定）。
+ */
+let activeProject = { id: '', name: '' }
+/** projectId → 專案名稱，只為了在列上標一下歸屬 */
+let projectNames = new Map()
 /** @type {{ reqId: string, raw: string, reasoning: string, contentEl: HTMLElement, bodyEl: HTMLElement, thinkBody: HTMLElement | null, dirty: boolean, timer: number } | null} */
 let streaming = null
 /** 待送出的圖片 @type {Array<{ id: string, dataUrl: string }>} */
@@ -175,6 +182,13 @@ export function initChatPage() {
 
   initComposer()
   initPromptDialog()
+  initProjectScope()
+
+  // 工作區把「選取的那幾行」或「整包審閱意見」丟過來（`ws-review.js` 發的事件）
+  document.addEventListener('chat:insert', (event) => {
+    const detail = /** @type {CustomEvent<{ text: string }>} */ (event).detail
+    insertIntoComposer(detail?.text || '')
+  })
 
   document.addEventListener('settings-changed', () => {
     refreshModelSelect()
@@ -187,10 +201,33 @@ export function initChatPage() {
 /**
  * 切到聊天頁時呼叫
  */
+/**
+ * 對話歸屬：接側欄的專案切換（新對話要記到哪個專案、列上標誰的）。
+ * **不做「只看這個專案」的過濾**——清單本來就短，多一顆開關只是雜訊。
+ */
+function initProjectScope() {
+  document.addEventListener('ws:project', (event) => {
+    const detail = /** @type {CustomEvent<{ id: string, name: string }>} */ (event).detail
+    activeProject = { id: detail?.id || '', name: detail?.name || '' }
+    renderList()
+  })
+}
+
+async function reloadProjectNames() {
+  try {
+    const res = await electronAPI.workspace.listProjects()
+    const list = res?.ok ? res.data : []
+    projectNames = new Map((list || []).map((one) => [one.id, one.name]))
+  } catch {
+    // 讀不到就不標歸屬，不是錯誤
+  }
+}
+
 export async function refreshChatPage() {
   initChatPage()
   if (!inited) return
   await Promise.all([refreshModelSelect(), refreshPromptSelect(), refreshThinkToggle(), refreshBanner()])
+  await reloadProjectNames()
   await reloadList()
   if (!currentId || !conversations.some((c) => c.id === currentId)) {
     if (conversations.length) await openConversation(conversations[0].id)
@@ -253,6 +290,13 @@ function buildListItem(conv) {
   const meta = document.createElement('span')
   meta.className = 'chat-list-meta'
   meta.textContent = `${conv.messageCount} 則`
+  const owner = conv.projectId ? projectNames.get(conv.projectId) : ''
+  if (owner) {
+    const tag = document.createElement('span')
+    tag.className = 'chat-list-proj'
+    tag.textContent = owner
+    meta.append(document.createTextNode(' · '), tag)
+  }
   open.append(title, meta)
   open.addEventListener('click', () => openConversation(conv.id))
 
@@ -260,6 +304,17 @@ function buildListItem(conv) {
   actions.className = 'chat-list-actions'
   const trash = listActionButton(ICON_TRASH, '刪除對話', () => armDelete(trash, conv))
   actions.append(listActionButton(ICON_PENCIL, '重新命名', () => startRename(item, conv)), trash)
+  // 選著專案時多一顆「歸到這個專案／取消歸屬」
+  if (activeProject.id) {
+    const owned = conv.projectId === activeProject.id
+    const btn = listActionButton(
+      ICON_FOLDER,
+      owned ? `取消歸屬（目前屬於 ${activeProject.name}）` : `歸到 ${activeProject.name}`,
+      () => void assignProject(conv, owned ? '' : activeProject.id)
+    )
+    if (owned) btn.classList.add('is-on')
+    actions.insertBefore(btn, actions.firstChild)
+  }
 
   item.append(open, actions)
   // 拖曳與 Alt+方向鍵排序；搜尋中不排序，否則存回去的順序會缺少被過濾掉的那些
@@ -272,6 +327,8 @@ function buildListItem(conv) {
 const ICON_PENCIL = ['M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3Z', 'M14.5 6.5l3 3']
 const ICON_TRASH = ['M5 7h14', 'M10 5h4', 'M7 7l1 12h8l1-12', 'M10.5 10.5v6', 'M13.5 10.5v6']
 const ICON_CHECK = ['M5 12.5l4.5 4.5L19 7.5']
+/** 資料夾：對話歸屬用 */
+const ICON_FOLDER = ['M4 7.5h5l1.6 2H20v8.5H4Z']
 
 const SVG_NS = 'http://www.w3.org/2000/svg'
 
@@ -406,10 +463,14 @@ async function deleteConversation(conv) {
 
 // ===== 側欄排序 =====
 
-/** 目前 DOM 上的完整順序（被搜尋過濾掉的維持原相對位置，不會被拖曳順序洗掉） */
+/**
+ * 目前 DOM 上的完整順序（被搜尋藏起來的維持原相對位置，不會被拖曳順序洗掉）。
+ *
+ * 只回 `shown` 的話 `persistOrder` 會把沒顯示的對話從記憶體與 `chats.json` 的
+ * 順序裡整批擠到後面。沒有過濾時 `mergeVisibleOrder` 的結果就等於 `shown`，所以一律走它。
+ */
 function currentOrder() {
   const shown = [...listEl.querySelectorAll('.chat-list-item')].map((el) => el.dataset.id)
-  if (!searchTerm) return shown
   return mergeVisibleOrder(conversations.map((c) => c.id), shown)
 }
 
@@ -449,10 +510,26 @@ async function openConversation(id) {
   hideError()
 }
 
+/**
+ * 把一段對話掛到某個專案（空字串＝收回未分類）。
+ * @param {{ id: string }} conv
+ * @param {string} projectId
+ */
+async function assignProject(conv, projectId) {
+  try {
+    await electronAPI.chat.setProject(conv.id, projectId)
+  } catch (e) {
+    showError(cleanIpcError(e))
+    return
+  }
+  await reloadList()
+}
+
 async function handleNew() {
   if (streaming) return
   setChatPaneMode('chat')
-  const conv = await electronAPI.chat.create()
+  // 在專案裡開的新對話就掛在那個專案底下（沒選專案就是未分類）
+  const conv = await electronAPI.chat.create(activeProject.id)
   currentId = conv.id
   renderMessages([])
   await reloadList()
@@ -712,6 +789,22 @@ function initComposer() {
  * textarea 依內容長高，超過視窗 40% 才內部捲動。
  * 原本 rows=3 + resize:vertical 的拉桿在 flex 版面裡會跟訊息串搶高度。
  */
+/**
+ * 把一段文字塞進輸入框（不送出——要不要送、要補什麼話由使用者決定）。
+ * 已經打了一半的內容不會被蓋掉，接在後面。
+ * @param {string} text
+ */
+function insertIntoComposer(text) {
+  if (!inputEl || !text) return
+  setChatPaneMode('chat')
+  const current = inputEl.value.replace(/\s+$/, '')
+  inputEl.value = current ? `${current}\n\n${text}` : text
+  autoGrowInput()
+  inputEl.focus()
+  inputEl.selectionStart = inputEl.value.length
+  inputEl.selectionEnd = inputEl.value.length
+}
+
 function autoGrowInput() {
   if (!inputEl) return
   inputEl.style.height = 'auto'

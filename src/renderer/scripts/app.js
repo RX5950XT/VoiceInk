@@ -806,12 +806,17 @@ function initSidebarModes() {
 
 export function setChatPaneMode(mode) {
   if (mode !== 'chat' && mode !== 'workspace') return
-  if (mode === chatPaneMode && mode === 'chat') return
   chatPaneMode = mode
   const chatMain = document.getElementById('chatMain')
   const termMain = document.getElementById('termMain')
+  const layout = document.querySelector('#page-chat .chat-layout')
+  const wsRight = document.getElementById('wsRight')
+  const wsRightResizer = document.getElementById('wsRightResizer')
   if (chatMain) chatMain.classList.toggle('hidden', mode !== 'chat')
   if (termMain) termMain.classList.toggle('hidden', mode !== 'workspace')
+  if (layout) layout.classList.toggle('is-workspace', mode === 'workspace')
+  if (wsRight) wsRight.classList.toggle('hidden', mode !== 'workspace')
+  if (wsRightResizer) wsRightResizer.classList.toggle('hidden', mode !== 'workspace')
   // 工作區主區剛從 display:none 顯現，xterm 要等這一幀才 fit 得準
   if (mode === 'workspace') {
     loadTerminalPage().then((m) => m.refreshTerminalPage())

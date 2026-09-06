@@ -176,6 +176,23 @@ export function showTab(monaco, tab) {
 }
 
 /**
+ * 分頁 id 換了（檔案改名／搬家）→ model 也要跟著換鍵。
+ *
+ * 不換的話舊 model 永遠留在 map 裡沒人收（每改一次名漏一份），而分頁再點回來時
+ * 會用新 id 重建一份新的——**復原歷程就這樣安靜消失**。
+ *
+ * @param {string} oldId
+ * @param {string} newId
+ */
+export function retargetModel(oldId, newId) {
+  if (oldId === newId) return
+  const model = models.get(oldId)
+  if (!model) return
+  models.delete(oldId)
+  models.set(newId, model)
+}
+
+/**
  * 分頁關掉了 → 把它的 model 收掉（不收的話開一整天會愈積愈多）。
  * @param {string} tabId
  */
@@ -209,6 +226,22 @@ export function cursorInfo() {
     column: pos?.column || 1,
     selected: sel && !sel.isEmpty() ? model.getValueInRange(sel).length : 0,
     lines: model.getLineCount()
+  }
+}
+
+/**
+ * 現在選了哪一段（「把這段帶進聊天」用）。沒有選取時回 `null`——
+ * 沒選就把整份檔案塞進聊天不是使用者要的。
+ * @returns {{ text: string, startLine: number, endLine: number } | null}
+ */
+export function selectionInfo() {
+  const model = editor?.getModel()
+  const sel = editor?.getSelection()
+  if (!model || !sel || sel.isEmpty()) return null
+  return {
+    text: model.getValueInRange(sel),
+    startLine: sel.startLineNumber,
+    endLine: sel.endLineNumber
   }
 }
 
@@ -259,6 +292,58 @@ export function showDiff(monaco, host, data) {
   old?.modified?.dispose()
 }
 
+
+/**
+ * 並排 diff 的「上一個／下一個變更」。0.55 的 standalone diff editor 有
+ * `goToDiff`，用不了時退回自己算（`getLineChanges` 仍在，只是標了 deprecated）。
+ *
+ * @param {'next' | 'previous'} dir
+ * @returns {boolean} 有沒有真的跳
+ */
+export function diffGoTo(dir) {
+  if (!diffEditor) return false
+  const target = dir === 'previous' ? 'previous' : 'next'
+  if (typeof diffEditor.goToDiff === 'function') {
+    diffEditor.goToDiff(target)
+    diffEditor.getModifiedEditor?.()?.focus()
+    return true
+  }
+  const changes = diffEditor.getLineChanges?.() || []
+  if (!changes.length) return false
+  const modified = diffEditor.getModifiedEditor?.()
+  if (!modified) return false
+  const here = modified.getPosition()?.lineNumber || 1
+  const lines = changes.map((c) => c.modifiedStartLineNumber || 1)
+  const next = target === 'next'
+    ? lines.find((line) => line > here) ?? lines[0]
+    : [...lines].reverse().find((line) => line < here) ?? lines[lines.length - 1]
+  modified.revealLineInCenter(next)
+  modified.setPosition({ lineNumber: next, column: 1 })
+  modified.focus()
+  return true
+}
+
+/** 這份 diff 有幾塊變更（畫在標題列上，讓人知道還有沒有下一個） */
+export function diffChangeCount() {
+  return diffEditor?.getLineChanges?.()?.length || 0
+}
+
+/**
+ * 並排 diff 右邊（修改後那一側）現在的游標與選取——「逐行意見」要釘在哪一行。
+ * @returns {{ line: number, endLine: number, text: string } | null}
+ */
+export function diffCursor() {
+  const modified = diffEditor?.getModifiedEditor?.()
+  const model = modified?.getModel?.()
+  if (!modified || !model) return null
+  const sel = modified.getSelection()
+  const line = sel?.startLineNumber || modified.getPosition()?.lineNumber || 1
+  const endLine = sel?.endLineNumber || line
+  const text = sel && !sel.isEmpty()
+    ? model.getValueInRange(sel)
+    : model.getLineContent(line)
+  return { line, endLine, text }
+}
 
 /**
  * 跑一個 Monaco 內建動作（尋找、取代…）。編輯器還沒起來就回 false，

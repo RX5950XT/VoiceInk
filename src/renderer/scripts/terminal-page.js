@@ -1,6 +1,7 @@
 import { electronAPI, showToast, setChatPaneMode } from './app.js'
-import { createListReorder } from './list-reorder.js'
-import { initWsTabs, showSurface, trackTerminal, removeTerminalTab, renameTerminalTab } from './ws-tabs.js'
+import {
+  initWsTabs, showSurface, trackTerminal, paintTerminalTab, currentProjectId
+} from './ws-tabs.js'
 // renderer 沒有 bundler，但 xterm 有現成的 ESM 產物，相對路徑直接載就好：
 // vendoring 只會多一份得跟著升級的複本（markdown.js 那條慣例同理）。
 import { Terminal } from '../../../node_modules/@xterm/xterm/lib/xterm.mjs'
@@ -14,10 +15,10 @@ import { FitAddon } from '../../../node_modules/@xterm/addon-fit/lib/addon-fit.m
  *
  * 每個工作階段留一份自己的 Terminal 實例（切分頁只換顯示，畫面不重畫），
  * 實例活著的期間 main 送來的資料照收，所以切走再切回來不會漏字。
+ *
+ * **側欄沒有終端機清單**（那裡只列專案）：狀態徽章、未讀點、改名與刪除
+ * 全在 `ws-tabs.js` 的分頁上，這裡只把 main 的狀態推過去。
  */
-
-/** 刪除鈕的二次確認逾時（與聊天側欄一致） */
-const DELETE_ARM_MS = 3000
 
 const STATE_LABELS = {
   running: '運行中',
@@ -27,11 +28,9 @@ const STATE_LABELS = {
 }
 
 let initialized = false
-let listEl = null
 let hostEl = null
 let emptyEl = null
 let errorEl = null
-let newBtn = null
 let dialogEl = null
 let shellSelect = null
 let presetSelect = null
@@ -55,53 +54,8 @@ const panes = new Map()
 /** 跑完但使用者不在看的階段 */
 const unread = new Set()
 
-/** @type {HTMLButtonElement | null} */
-let armedDeleteBtn = null
 /** @type {ResizeObserver | null} */
 let resizeObserver = null
-
-// ===== 圖示（與聊天側欄同一套線條，不用 emoji）=====
-const SVG_NS = 'http://www.w3.org/2000/svg'
-const ICON_PENCIL = ['M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3Z', 'M14.5 6.5l3 3']
-const ICON_TRASH = ['M5 7h14', 'M10 5h4', 'M7 7l1 12h8l1-12', 'M10.5 10.5v6', 'M13.5 10.5v6']
-const ICON_CHECK = ['M5 12.5l4.5 4.5L19 7.5']
-
-/**
- * @param {HTMLElement} btn
- * @param {string[]} paths
- */
-function setIconPaths(btn, paths) {
-  const svg = document.createElementNS(SVG_NS, 'svg')
-  svg.setAttribute('viewBox', '0 0 24 24')
-  svg.setAttribute('aria-hidden', 'true')
-  for (const d of paths) {
-    const node = document.createElementNS(SVG_NS, 'path')
-    node.setAttribute('d', d)
-    svg.appendChild(node)
-  }
-  btn.querySelector('svg')?.remove()
-  btn.appendChild(svg)
-}
-
-/**
- * @param {string[]} paths
- * @param {string} label
- * @param {() => void} onClick
- * @returns {HTMLButtonElement}
- */
-function listActionButton(paths, label, onClick) {
-  const btn = document.createElement('button')
-  btn.type = 'button'
-  btn.className = 'chat-list-btn'
-  btn.title = label
-  btn.setAttribute('aria-label', label)
-  setIconPaths(btn, paths)
-  btn.addEventListener('click', (event) => {
-    event.stopPropagation()
-    onClick()
-  })
-  return btn
-}
 
 /**
  * main 的回覆一律是 { ok, data } / { ok, error }。
@@ -129,243 +83,67 @@ function showError(message) {
   errorEl.classList.toggle('hidden', !message)
 }
 
-// ===== 側欄 =====
+// ===== 分頁上的狀態 =====
 
 /**
- * 狀態徽章的內容（新建與就地更新共用）。
- * @param {HTMLElement} badge
+ * 狀態徽章的文字。分頁上只有一顆點，滑過去才看得到這一行。
  * @param {{ state: string, exitCode?: number }} item
- */
-function paintBadge(badge, item) {
-  badge.className = `term-state term-state-${item.state}`
-  badge.textContent = STATE_LABELS[item.state] || item.state
-  if (item.state === 'idle' && Number.isFinite(item.exitCode) && item.exitCode !== 0) {
-    badge.textContent = `${STATE_LABELS.idle} · 離開碼 ${item.exitCode}`
-    badge.classList.add('term-state-bad')
-  }
-}
-
-/**
- * 未讀點的有無（新建與就地更新共用）。
- * @param {HTMLElement} titleRow
- * @param {string} id
- */
-function paintUnread(titleRow, id) {
-  const dot = titleRow.querySelector('.term-unread')
-  if (!unread.has(id)) {
-    dot?.remove()
-    return
-  }
-  if (dot) return
-  const next = document.createElement('span')
-  next.className = 'term-unread'
-  next.title = '跑完了，還沒看過'
-  next.setAttribute('aria-label', '有新輸出')
-  titleRow.appendChild(next)
-}
-
-/**
- * 狀態變動只改那一列的徽章與未讀點，**不重建整份清單**。
- * PowerShell 的提示字元標記會連續重送（實測三秒 9 次），重畫會把待確認的刪除鈕
- * 與就地改名的輸入框整顆換掉 → 跑著的終端機刪不掉、也改不了名。
- * @param {{ id: string, state: string, exitCode?: number }} item
- */
-function refreshItemView(item) {
-  const el = listEl?.querySelector(`.term-list-item[data-id="${CSS.escape(item.id)}"]`)
-  if (!el) {
-    renderList()
-    return
-  }
-  const badge = el.querySelector('.term-state')
-  if (badge) paintBadge(/** @type {HTMLElement} */ (badge), item)
-  const titleRow = el.querySelector('.term-title-row')
-  if (titleRow) paintUnread(/** @type {HTMLElement} */ (titleRow), item.id)
-}
-
-function renderList() {
-  if (!listEl) return
-  // 重畫會把待確認的刪除鈕整顆換掉，計時器得先收乾淨
-  disarmDelete()
-  listEl.replaceChildren()
-  if (!items.length) {
-    const empty = document.createElement('p')
-    empty.className = 'prompt-list-empty'
-    empty.textContent = '還沒有終端機'
-    listEl.appendChild(empty)
-    return
-  }
-  for (const item of items) listEl.appendChild(buildListItem(item))
-}
-
-/**
- * @param {object} item
- * @returns {HTMLElement}
- */
-function buildListItem(item) {
-  const el = document.createElement('div')
-  el.className = item.id === currentId ? 'chat-list-item term-list-item active' : 'chat-list-item term-list-item'
-  el.dataset.id = item.id
-  el.tabIndex = 0
-
-  const open = document.createElement('button')
-  open.type = 'button'
-  open.className = 'chat-list-open'
-
-  const titleRow = document.createElement('span')
-  titleRow.className = 'term-title-row'
-  const title = document.createElement('span')
-  title.className = 'chat-list-title'
-  title.textContent = item.title
-  titleRow.appendChild(title)
-  paintUnread(titleRow, item.id)
-
-  const meta = document.createElement('span')
-  meta.className = 'chat-list-meta term-meta'
-  const badge = document.createElement('span')
-  paintBadge(badge, item)
-  if (item.admin) {
-    const admin = document.createElement('span')
-    admin.className = 'term-admin'
-    admin.textContent = '管理員'
-    admin.title = '以系統管理員身分執行'
-    meta.appendChild(admin)
-  }
-  const cwd = document.createElement('span')
-  cwd.className = 'term-cwd'
-  cwd.textContent = shortenPath(item.cwd)
-  cwd.title = item.cwd
-  meta.append(badge, cwd)
-
-  open.append(titleRow, meta)
-  open.addEventListener('click', () => void openSession(item.id))
-
-  const actions = document.createElement('span')
-  actions.className = 'chat-list-actions'
-  const trash = listActionButton(ICON_TRASH, '刪除終端機', () => armDelete(trash, item))
-  actions.append(listActionButton(ICON_PENCIL, '重新命名', () => startRename(el, item)), trash)
-
-  el.append(open, actions)
-  el.addEventListener('pointerdown', reorder.onPointerDown)
-  el.addEventListener('keydown', reorder.onKeydown)
-  return el
-}
-
-/**
- * 只留最後兩層，側欄放不下整條路徑。
- * @param {string} value
  * @returns {string}
  */
-function shortenPath(value) {
-  const parts = String(value || '').split(/[\\/]/).filter(Boolean)
-  return parts.length <= 2 ? String(value || '') : `…\\${parts.slice(-2).join('\\')}`
+function stateLabel(item) {
+  const base = STATE_LABELS[item.state] || item.state
+  if (item.state === 'idle' && Number.isFinite(item.exitCode) && item.exitCode !== 0) {
+    return `${base} · 離開碼 ${item.exitCode}`
+  }
+  return base
 }
 
 /**
- * 就地改名：Enter／失焦送出，Esc 取消。
- * @param {HTMLElement} el
- * @param {{ id: string, title: string }} item
+ * 把一個工作階段現在的樣子推給分頁列。找不到（清單還沒同步）就不動。
+ * @param {string} id
  */
-function startRename(el, item) {
-  const title = el.querySelector('.chat-list-title')
-  if (!title || el.querySelector('.chat-list-rename')) return
-  const input = document.createElement('input')
-  input.type = 'text'
-  input.className = 'chat-list-rename'
-  input.value = item.title
-  input.maxLength = 60
-  input.setAttribute('aria-label', '終端機名稱')
-  let done = false
-  const finish = async (commit) => {
-    if (done) return
-    done = true
-    const next = input.value.trim()
-    if (commit && next && next !== item.title) {
-      await call(electronAPI.terminal.rename(item.id, next), '改名失敗')
-      await reloadList()
-      renameTerminalTab(item.id, next)
-    } else {
-      input.replaceWith(title)
-    }
-  }
-  input.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') { event.preventDefault(); void finish(true) }
-    else if (event.key === 'Escape') { event.preventDefault(); void finish(false) }
+function pushTabState(id) {
+  const item = items.find((entry) => entry.id === id)
+  if (!item) return
+  paintTerminalTab(id, {
+    title: item.title,
+    state: item.state,
+    stateLabel: stateLabel(item),
+    admin: Boolean(item.admin),
+    cwd: item.cwd || '',
+    unread: unread.has(id)
   })
-  input.addEventListener('blur', () => void finish(true))
-  input.addEventListener('pointerdown', (event) => event.stopPropagation())
-  title.replaceWith(input)
-  input.focus()
-  input.select()
+}
+
+/** 全部推一次（清單重讀之後） */
+function pushAllTabStates() {
+  for (const item of items) pushTabState(item.id)
 }
 
 /**
- * 刪除的二次確認：按鈕就地變紅勾，再按一次才真的刪，逾時自動復原。
- * 不用 `window.confirm`——原生彈窗會擋住整個 App，樣式也跟 Aurora 不搭。
- * @param {HTMLButtonElement} btn
- * @param {{ id: string, title: string }} item
+ * 分頁的右鍵選單按「重新命名」時走這裡。
+ * @param {string} id
+ * @param {string} title
  */
-function armDelete(btn, item) {
-  if (btn.dataset.armed === '1') {
-    clearTimeout(Number(btn.dataset.timer))
-    void deleteSession(item)
-    return
-  }
-  disarmDelete()
-  btn.dataset.armed = '1'
-  btn.classList.add('is-armed')
-  btn.title = '再按一次確認刪除'
-  btn.setAttribute('aria-label', `再按一次確認刪除「${item.title}」`)
-  setIconPaths(btn, ICON_CHECK)
-  btn.dataset.timer = String(setTimeout(disarmDelete, DELETE_ARM_MS))
-  armedDeleteBtn = btn
-}
-
-function disarmDelete() {
-  const btn = armedDeleteBtn
-  armedDeleteBtn = null
-  if (!btn) return
-  clearTimeout(Number(btn.dataset.timer))
-  delete btn.dataset.armed
-  delete btn.dataset.timer
-  btn.classList.remove('is-armed')
-  btn.title = '刪除終端機'
-  btn.setAttribute('aria-label', '刪除終端機')
-  setIconPaths(btn, ICON_TRASH)
-}
-
-/**
- * @param {{ id: string }} item
- */
-async function deleteSession(item) {
-  disarmDelete()
-  await call(electronAPI.terminal.delete(item.id), '刪除失敗')
-  disposePane(item.id)
-  unread.delete(item.id)
-  if (currentId === item.id) currentId = ''
+export async function renameTerminalSession(id, title) {
+  const next = String(title || '').trim()
+  const item = items.find((entry) => entry.id === id)
+  if (!next || !item || next === item.title) return
+  await call(electronAPI.terminal.rename(id, next), '改名失敗')
   await reloadList()
-  removeTerminalTab(item.id)
 }
 
 /**
- * 拖曳／Alt+↑↓ 排序。實作與聊天側欄共用（`list-reorder.js`）——DOM 結構與 class 都一樣，
- * 差別只在存哪一份順序。
+ * 關掉終端機分頁＝真的把工作階段刪掉（側欄已經沒有清單接住它了）。
+ * 二次確認與分頁本身的移除都在 `ws-tabs.js` 的 `closeTab`。
+ * @param {string} id
  */
-const reorder = createListReorder({
-  getList: () => listEl,
-  itemSelector: '.term-list-item',
-  ignoreSelector: '.chat-list-btn, .chat-list-rename',
-  onCommit: () => void persistOrder()
-})
-
-/** DOM 上的順序才是真相（剛拖完還沒重畫），記憶體的 items 跟著它排 */
-async function persistOrder() {
-  const ids = [...listEl.querySelectorAll('.term-list-item')].map((el) => el.dataset.id)
-  items = ids.map((id) => items.find((item) => item.id === id)).filter(Boolean)
-  try {
-    await call(electronAPI.terminal.reorder(ids), '排序儲存失敗')
-  } catch {
-    // 訊息已顯示；畫面順序先留著，下次 reloadList 會以 main 為準
-  }
+export async function deleteTerminalSession(id) {
+  await call(electronAPI.terminal.delete(id), '刪除失敗')
+  disposePane(id)
+  unread.delete(id)
+  if (currentId === id) currentId = ''
+  await reloadList()
 }
 
 // ===== 終端機本體 =====
@@ -491,9 +269,9 @@ async function openSession(id) {
   }
 
   entry.term.focus()
-  await reloadList()
-  // 分頁列要有這一格（從側欄點進來的也算）
+  // 分頁列要有這一格（還原專案分頁時也走這裡）
   trackTerminal(id, items.find((item) => item.id === id)?.title || '終端機')
+  await reloadList()
 }
 
 /**
@@ -537,13 +315,19 @@ function fillCatalogSelects() {
   }
 }
 
-function openNewDialog() {
+/**
+ * 「自訂…」：分頁列的「＋」選單裡唯一還要選 shell 與工作目錄的入口。
+ * @param {string} [cwd] 預設工作目錄（工作區傳專案路徑進來）
+ */
+export function openNewTerminalDialog(cwd = '') {
+  initTerminalPage()
   if (items.length >= catalog.maxSessions) {
     showToast(`最多 ${catalog.maxSessions} 個終端機，請先刪掉一些`, 'error')
     return
   }
   fillCatalogSelects()
   if (adminInput) adminInput.checked = false
+  if (cwd && cwdInput) cwdInput.value = cwd
   dialogEl.showModal()
 }
 
@@ -553,6 +337,8 @@ async function createSession() {
       shell: shellSelect.value,
       preset: presetSelect.value,
       cwd: cwdInput.value,
+      // 工作階段跟著專案走（缺值＝未分類）
+      projectId: currentProjectId(),
       admin: Boolean(adminInput?.checked)
     }), '建立終端機失敗')
     dialogEl.close()
@@ -568,7 +354,7 @@ async function createSession() {
 async function reloadList() {
   const next = await call(electronAPI.terminal.list(), '讀取終端機清單失敗')
   items = Array.isArray(next) ? next : []
-  renderList()
+  pushAllTabStates()
 }
 
 /**
@@ -639,7 +425,12 @@ function onStatus(payload) {
     && !document.getElementById('termMain')?.classList.contains('hidden')
     && !hostEl?.classList.contains('hidden')
   if (wasRunning && payload.state !== 'running' && !watching) unread.add(payload.id)
-  refreshItemView(item)
+  // 指令跑完了（多半是 agent 收工）→ 讓工作區重讀一次 Git 狀態。
+  // 用事件不用 import：terminal-page 不該知道右側欄長什麼樣子。
+  if (wasRunning && payload.state !== 'running') {
+    document.dispatchEvent(new CustomEvent('ws:terminal-idle', { detail: { id: payload.id } }))
+  }
+  pushTabState(payload.id)
 }
 
 export function initTerminalPage() {
@@ -647,18 +438,15 @@ export function initTerminalPage() {
   initialized = true
   initWsTabs()
 
-  listEl = document.getElementById('termList')
   hostEl = document.getElementById('termHost')
   emptyEl = document.getElementById('termEmpty')
   errorEl = document.getElementById('termError')
-  newBtn = document.getElementById('termNewBtn')
   dialogEl = document.getElementById('termNewDialog')
   shellSelect = document.getElementById('termShellSelect')
   presetSelect = document.getElementById('termPresetSelect')
   cwdInput = document.getElementById('termCwdInput')
   adminInput = /** @type {HTMLInputElement | null} */ (document.getElementById('termAdminInput'))
 
-  newBtn?.addEventListener('click', openNewDialog)
   document.getElementById('termNewCancelBtn')?.addEventListener('click', () => dialogEl.close())
   document.getElementById('termNewCreateBtn')?.addEventListener('click', () => void createSession())
   document.getElementById('termCwdBtn')?.addEventListener('click', async () => {
@@ -701,6 +489,7 @@ export async function runInNewTerminal(title, command) {
     shell: shellSelect?.value || '',
     preset: 'shell',
     cwd: cwdInput?.value || '',
+    projectId: currentProjectId(),
     title
   }), '建立終端機失敗')
   await reloadList()

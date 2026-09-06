@@ -140,10 +140,12 @@ async function main() {
     ok('沒有多餘的 chat-main 外框（窄邊框的根因）',
       await cdp.eval(`document.querySelectorAll('.chat-layout > .chat-main').length === 1`),
       String(await cdp.eval(`document.querySelectorAll('.chat-main').length`)))
-    await waitInPage(cdp, `document.getElementById('termNewBtn')`)
+    await waitInPage(cdp, `document.getElementById('wsNewBtn')`)
 
     createdId = await cdp.eval(`(async () => {
-      document.getElementById('termNewBtn').click()
+      document.getElementById('wsNewBtn').click()
+      await new Promise((r) => setTimeout(r, 300))
+      document.getElementById('wsNewCustomTerm').click()
       await new Promise((r) => setTimeout(r, 400))
       document.getElementById('termNewCreateBtn').click()
       await new Promise((r) => setTimeout(r, 4000))

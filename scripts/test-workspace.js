@@ -18,6 +18,7 @@
 const path = require('path')
 const os = require('os')
 const fs = require('fs')
+const fsp = require('fs/promises')
 
 const ROOT = path.join(__dirname, '..')
 const files = require(path.join(ROOT, 'src/main/workspace/files.js'))
@@ -230,8 +231,338 @@ async function fileRoundTrip() {
   }
 }
 
+/**
+ * [U] 資料夾連結不可以當成後門。
+ *
+ * `path.resolve` 只做字面運算：在專案裡建一個指向專案外的 junction／symlink，
+ * 組出來的路徑看起來完全在專案內，實際讀到的卻是別的地方。
+ */
+async function linkEscape() {
+  console.log('\n[U] 連結逃逸守衛')
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'vi-link-'))
+  const proj = path.join(base, 'proj')
+  const outside = path.join(base, 'outside')
+  fs.mkdirSync(proj)
+  fs.mkdirSync(outside)
+  fs.writeFileSync(path.join(outside, 'secret.txt'), 'TOP SECRET')
+  fs.writeFileSync(path.join(proj, 'inside.txt'), 'ok')
+  fs.mkdirSync(path.join(proj, 'real'))
+  fs.writeFileSync(path.join(proj, 'real', 'deep.txt'), 'deep')
+
+  let madeLink = false
+  try {
+    fs.symlinkSync(outside, path.join(proj, 'out'), 'junction')
+    madeLink = true
+  } catch {
+    // 沒有建立連結的權限（非 Windows 的某些環境）：這一段跳過
+  }
+  try {
+    ok('專案內的一般檔案照樣讀得到', (await files.readFile(proj, 'inside.txt')).content === 'ok')
+
+    if (madeLink) {
+      let escaped = false
+      try {
+        await files.readFile(proj, 'out/secret.txt')
+      } catch (error) {
+        escaped = error.code === 'BAD_PATH'
+      }
+      ok('連到專案外的資料夾連結被擋下來', escaped)
+
+      let wrote = false
+      try {
+        await files.writeFile(proj, 'out/planted.txt', 'x')
+      } catch (error) {
+        wrote = error.code === 'BAD_PATH'
+      }
+      ok('也不准經由連結寫出去', wrote)
+      ok('沒有真的寫出去', !fs.existsSync(path.join(outside, 'planted.txt')))
+    }
+
+    // 專案內部的連結（指回專案自己）仍然可用——擋的是「連到外面」，不是「有連結」
+    let inLink = false
+    try {
+      fs.symlinkSync(path.join(proj, 'real'), path.join(proj, 'alias'), 'junction')
+      inLink = true
+    } catch {
+      // 同上
+    }
+    if (inLink) {
+      const read = await files.readFile(proj, 'alias/deep.txt')
+      ok('專案內部的連結還是能用', read.content === 'deep')
+    }
+
+    // 專案根目錄自己住在連結底下也合法（使用者把 junction 拖進側欄）
+    let rootLink = ''
+    try {
+      rootLink = path.join(base, 'projlink')
+      fs.symlinkSync(proj, rootLink, 'junction')
+    } catch {
+      rootLink = ''
+    }
+    if (rootLink) {
+      const read = await files.readFile(rootLink, 'inside.txt')
+      ok('專案根目錄本身是連結時照常運作', read.content === 'ok')
+    }
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true })
+  }
+}
+
+/**
+ * [V] 存檔前要比對磁碟版本：外部改過就不准硬蓋。
+ */
+async function staleWrite() {
+  console.log('\n[V] 存檔版本守衛')
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vi-stale-'))
+  try {
+    fs.writeFileSync(path.join(tmp, 'a.txt'), 'v1')
+    const first = await files.readFile(tmp, 'a.txt')
+
+    // 外部改一次（把 mtime 往前推，避免同一毫秒內看不出差別）
+    fs.writeFileSync(path.join(tmp, 'a.txt'), 'v2-外部')
+    const later = new Date(Date.now() + 5000)
+    fs.utimesSync(path.join(tmp, 'a.txt'), later, later)
+
+    let stale = false
+    try {
+      await files.writeFile(tmp, 'a.txt', 'v1-我的', first.mtimeMs)
+    } catch (error) {
+      stale = error.code === 'STALE'
+    }
+    ok('外部改過就不准存', stale)
+    ok('外部那一版還在', fs.readFileSync(path.join(tmp, 'a.txt'), 'utf8') === 'v2-外部')
+
+    const forced = await files.writeFile(tmp, 'a.txt', 'v3-覆寫')
+    ok('不帶版本＝明確覆寫', fs.readFileSync(path.join(tmp, 'a.txt'), 'utf8') === 'v3-覆寫')
+    ok('回傳新的版本識別', typeof forced.mtimeMs === 'number' && forced.mtimeMs > 0)
+
+    const again = await files.writeFile(tmp, 'a.txt', 'v4', forced.mtimeMs)
+    ok('版本對得上就存得進去', fs.readFileSync(path.join(tmp, 'a.txt'), 'utf8') === 'v4' && again.rel === 'a.txt')
+
+    // 檔案被刪掉之後，普通存檔不可以把它重新建出來
+    const before = await files.readFile(tmp, 'a.txt')
+    fs.unlinkSync(path.join(tmp, 'a.txt'))
+    let gone = false
+    try {
+      await files.writeFile(tmp, 'a.txt', 'zombie', before.mtimeMs)
+    } catch (error) {
+      gone = error.code === 'STALE'
+    }
+    ok('原檔被刪掉就不准無聲重建', gone && !fs.existsSync(path.join(tmp, 'a.txt')))
+
+    // 新建檔案（沒有版本可比）照樣寫得進去
+    await files.writeFile(tmp, 'brand-new.txt', 'x')
+    ok('全新檔案不受影響', fs.readFileSync(path.join(tmp, 'brand-new.txt'), 'utf8') === 'x')
+
+    // 同一個檔案同時存兩次：暫存檔不可以撞在一起
+    await Promise.all([
+      files.writeFile(tmp, 'race.txt', 'A'.repeat(5000)),
+      files.writeFile(tmp, 'race.txt', 'B'.repeat(5000))
+    ])
+    const raced = fs.readFileSync(path.join(tmp, 'race.txt'), 'utf8')
+    ok('併發存檔不會寫出混在一起的內容', raced === 'A'.repeat(5000) || raced === 'B'.repeat(5000))
+    ok('沒有留下暫存檔', fs.readdirSync(tmp).every((n) => !n.includes('voiceink-tmp')))
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true })
+  }
+}
+
+/**
+ * [W] AI 記錄的來源：家目錄不是只有一個。
+ *
+ * 這台機器實測 `CODEX_HOME` 指到別的工作台（Orca）的 runtime home——
+ * 只看 `~/.codex` 的話，明明剛跑過的對話一筆都列不出來。
+ * 順便釘住「同一個 session 在兩個家目錄各一份時只留最新的一份」。
+ */
+async function agentHomes() {
+  console.log('\n[W] AI 記錄的家目錄與去重')
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'vi-agent-homes-'))
+  const home = path.join(base, 'home')
+  const runtime = path.join(base, 'runtime')
+  fs.mkdirSync(path.join(home, '.codex', 'sessions'), { recursive: true })
+  fs.mkdirSync(path.join(runtime, 'sessions'), { recursive: true })
+
+  const project = path.join(base, 'proj')
+  fs.mkdirSync(project, { recursive: true })
+
+  const rollout = (id, title) => [
+    JSON.stringify({ type: 'session_meta', payload: { id, cwd: project } }),
+    JSON.stringify({
+      type: 'response_item',
+      payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: title }] }
+    })
+  ].join('\n')
+
+  // 同一個 id 兩邊各一份（備份／回填會這樣），runtime 那份比較新
+  fs.writeFileSync(path.join(home, '.codex', 'sessions', 'rollout-dup.jsonl'), rollout('dup-000001', '舊的那一份'))
+  fs.writeFileSync(path.join(runtime, 'sessions', 'rollout-dup.jsonl'), rollout('dup-000001', '新的那一份'))
+  // 只有 runtime 有的那一份
+  fs.writeFileSync(path.join(runtime, 'sessions', 'rollout-only.jsonl'), rollout('only-000002', '只有 runtime 有'))
+
+  const originalHome = os.homedir
+  const originalCodexHome = process.env.CODEX_HOME
+  const originalClaudeDir = process.env.CLAUDE_CONFIG_DIR
+  os.homedir = () => home
+  process.env.CODEX_HOME = runtime
+  delete process.env.CLAUDE_CONFIG_DIR
+  try {
+    // 這台機器上可能真的裝著別的工作台，所以只驗「順序」與「有沒有收進來」，
+    // 不驗總筆數（那會跟機器上裝了什麼綁在一起）
+    const homes = agents.codexHomes()
+    ok('CODEX_HOME 排在預設家目錄前面', fs.realpathSync.native(runtime) === homes[0])
+    ok('預設家目錄也還在', homes.includes(fs.realpathSync.native(path.join(home, '.codex'))))
+
+    const rows = await agents.sessions(project)
+    ok('環境變數指到的家目錄也掃得到', rows.some((row) => row.id === 'only-000002'))
+    const dup = rows.filter((row) => row.id === 'dup-000001')
+    ok('同一個 session 只留一筆', dup.length === 1)
+    ok('留下來的是比較新的那一份', dup[0]?.title === '新的那一份')
+
+    // 不存在的家目錄要安靜跳過，不是拋錯
+    const missing = path.join(base, 'nope')
+    process.env.CODEX_HOME = missing
+    ok('家目錄不存在就跳過', !agents.codexHomes().includes(missing))
+  } finally {
+    os.homedir = originalHome
+    if (originalCodexHome === undefined) delete process.env.CODEX_HOME
+    else process.env.CODEX_HOME = originalCodexHome
+    if (originalClaudeDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = originalClaudeDir
+    fs.rmSync(base, { recursive: true, force: true })
+  }
+
+  // 純函式：去重規則本身
+  const merged = agents.dedupeSessions([
+    { agent: 'claude', id: 'a', mtime: 10, title: '' },
+    { agent: 'claude', id: 'a', mtime: 5, title: '有標題' },
+    { agent: 'codex', id: 'a', mtime: 1, title: '別家的同名 id' }
+  ])
+  ok('去重只看 agent + id', merged.length === 2)
+  ok('標題只有舊的那份有時會補回來', merged.find((one) => one.agent === 'claude')?.title === '有標題')
+
+  // 工具分類：讀過的不可以被說成改過的
+  ok('Edit 算改過', agents.EDIT_TOOLS.test('Edit') && agents.EDIT_TOOLS.test('apply_patch'))
+  // 不認得的工具名一律算「讀過」，所以判斷只有 EDIT_TOOLS 這一條
+  ok('Read 不算改過', !agents.EDIT_TOOLS.test('Read') && !agents.EDIT_TOOLS.test('Grep'))
+  ok('Codex 的參數挑得出路徑', agents.codexFileArg('{"path":"src/a.js","x":1}') === 'src/a.js')
+  ok('挑不出路徑就回空字串', agents.codexFileArg('{"command":"ls"}') === '')
+}
+
+/**
+ * [X] 審閱：`git diff --numstat -z` 的解析與 ref 白名單。
+ *
+ * 那個 ref 會變成 `git merge-base <ref> HEAD` 的參數。走陣列不會被 shell 吃掉，
+ * 但 `-` 開頭會被 git 當成選項、`..` 會變成範圍語法。
+ */
+async function reviewParsing() {
+  console.log('\n[X] 審閱的解析與 ref 白名單')
+  const rows = git.parseNumstat('12\t3\tsrc/a.js\x00-\t-\tbin/x.png\x000\t7\tdocs/b b.md\x00')
+  ok('numstat 三筆都解得出來', rows.length === 3)
+  ok('數字對得上', rows[0].additions === 12 && rows[0].deletions === 3 && rows[0].path === 'src/a.js')
+  ok('二進位檔標得出來', rows[1].binary === true && rows[1].additions === 0)
+  ok('檔名有空白也不會斷', rows[2].path === 'docs/b b.md')
+  ok('空輸入回空陣列', git.parseNumstat('').length === 0)
+
+  ok('正常分支收得下', git.checkRef('feat/voice-input') === 'feat/voice-input')
+  ok('遠端分支收得下', git.checkRef('origin/master') === 'origin/master')
+  for (const bad of ['--upload-pack=x', 'a..b', 'a b', '', 'x/', 'a;rm -rf /', 'a$(id)']) {
+    let code = ''
+    try {
+      git.checkRef(bad)
+    } catch (error) {
+      code = error.code
+    }
+    ok(`ref 擋掉「${bad || '(空的)'}」`, code === 'BAD_REF')
+  }
+
+  // 工作樹的路徑比對鍵（Windows 不分大小寫）
+  const sameKey = worktree.keyOf('D:/Workspace/Proj') === worktree.keyOf('D:\\Workspace\\Proj\\')
+  ok('工作樹路徑比對鍵一致', process.platform === 'win32' ? sameKey : true)
+}
+
+/**
+ * [Y] 對話與終端機的專案歸屬：可選欄位，缺值＝未分類。
+ */
+async function projectOwnership() {
+  console.log('\n[Y] 對話與終端機的專案歸屬')
+  const chatStore = require(path.join(ROOT, 'src/main/chat-store.js'))
+  const termStore = require(path.join(ROOT, 'src/main/terminal/store.js'))
+  ok('合法的 id 收得下', chatStore.sanitizeProjectId('w_abc_123') === 'w_abc_123')
+  ok('缺值＝未分類', chatStore.sanitizeProjectId(undefined) === '')
+  ok('路徑之類的字串一律丟掉', chatStore.sanitizeProjectId('../../etc') === '')
+  ok('太長的丟掉', chatStore.sanitizeProjectId('w'.repeat(65)) === '')
+  ok('終端機那邊同一套', termStore.normalizeProjectId('w_abc_123') === 'w_abc_123'
+    && termStore.normalizeProjectId({}) === '')
+
+  const rows = termStore.sanitizeAll([
+    { id: 't1', shell: 'pwsh', preset: 'shell', cwd: os.tmpdir(), projectId: 'w_1' },
+    { id: 't2', shell: 'pwsh', preset: 'shell', cwd: os.tmpdir() }
+  ])
+  ok('舊檔沒有這個欄位也讀得起來', rows.length === 2 && rows[1].projectId === '')
+  ok('有值的讀得回來', rows[0].projectId === 'w_1')
+}
+
+/**
+ * [Z] 資料夾監看：哪些變動要理、哪些是雜訊。
+ */
+async function watchClassify() {
+  console.log('\n[Z] 資料夾監看的分類')
+  const watch = require(path.join(ROOT, 'src/main/workspace/watch.js'))
+  ok('一般檔案要理', watch.classify('src/a.js').ignore === false)
+  ok('.git 底下只當成 Git 狀態變了', watch.classify('.git/index').git === true
+    && watch.classify('.git/index').ignore === true)
+  ok('node_modules 整段丟掉', watch.classify('node_modules/x/y.js').ignore === true
+    && watch.classify('node_modules/x/y.js').git === false)
+  ok('反斜線的路徑也認得', watch.classify('node_modules\\x\\y.js').ignore === true)
+  ok('名字裡有 .git 的資料夾不算', watch.classify('.github/workflows/a.yml').ignore === false)
+
+  // 事件一直來時，純 trailing debounce 會永遠等不到安靜（npm install 就是這樣），
+  // 而那正好是最需要更新畫面的時候 → 最久 MAX_WAIT_MS 一定要送一次。
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'vi-watch-'))
+  try {
+    let sent = 0
+    const started = watch.start('p-watch', dir, () => { sent += 1 })
+    if (!started.watching) {
+      console.log('  SKIP 這個檔案系統不支援 recursive watch')
+    } else {
+      // 固定 1.6 秒，不跟著 MAX_WAIT_MS 走——沒有上限時這個迴圈會永遠跑不完
+      const stop = Date.now() + 1600
+      while (Date.now() < stop) {
+        await fsp.writeFile(path.join(dir, `a${Date.now()}.txt`), 'x')
+        await new Promise((r) => setTimeout(r, watch.DEBOUNCE_MS / 4))
+      }
+      ok('事件一直來也送得出去（不會被 debounce 餓死）', sent >= 1)
+    }
+  } finally {
+    watch.stop()
+    await fsp.rm(dir, { recursive: true, force: true }).catch(() => {})
+  }
+}
+
+/**
+ * [T2] worktree 移除前的「有什麼擋著」：改名是兩格，不可以算成兩個檔案。
+ */
+function worktreeDirty() {
+  console.log('\n[T2] worktree 的未提交變更計數')
+
+  const NUL = '\0'
+  const raw = ['1 .M src/app.js', 'R  new/name.js', 'old/name.js', '?? untracked.log', ''].join(NUL)
+  const r = worktree.parseDirty(raw)
+  ok('改名只算一個檔案', r.dirty === 3)
+  ok('改名取的是新檔名，而且沒被切頭', r.samples.includes('new/name.js'))
+  ok('原檔名不會變成獨立一筆', !r.samples.some((s) => s.startsWith('/name.js')))
+  ok('空輸入是 0', worktree.parseDirty('').dirty === 0)
+}
+
 async function main() {
   await fileRoundTrip()
+  await linkEscape()
+  await staleWrite()
+  await agentHomes()
+  await reviewParsing()
+  await projectOwnership()
+  await watchClassify()
+  worktreeDirty()
 
   // ===== [C] git status --porcelain=v2 -z 解析 =====
   console.log('\n[C] git status 解析')
@@ -355,7 +686,11 @@ async function main() {
       })
     ].join('\n'))
     const originalHome = os.homedir
+    const originalCodexHome = process.env.CODEX_HOME
+    const originalClaudeDir = process.env.CLAUDE_CONFIG_DIR
     os.homedir = () => codexHome
+    delete process.env.CODEX_HOME
+    delete process.env.CLAUDE_CONFIG_DIR
     try {
       const detail = await agents.sessionDetail('D:\\Proj', 'codex', 'xyz-789')
       ok('Codex 新格式 detail 讀得到對話', detail.turns?.length === 2
@@ -365,7 +700,22 @@ async function main() {
         && detail.prompts?.length === 1
         && detail.prompts[0].text === '目前格式的提問'
         && detail.toolCallsCount === 0
-        && detail.modifiedFiles?.length === 0)
+        // 「改過」與「讀過」是兩個欄位（以前混成一個 modifiedFiles，
+        // 看過三十個檔案會被說成改過三十個）
+        && Array.isArray(detail.editedFiles) && detail.editedFiles.length === 0
+        && Array.isArray(detail.readFiles) && detail.readFiles.length === 0
+        && detail.truncated === false)
+
+      // 接續要驗「這段對話是不是這個專案的」，不是只驗 id 長得像不像
+      const resumed = await agents.resume('D:\\Proj', 'codex', 'xyz-789')
+      ok('接續指令由 main 組', resumed.command === 'codex resume xyz-789')
+      let resumeBlocked = ''
+      try {
+        await agents.resume('D:\\Proj', 'codex', 'other-456')
+      } catch (error) {
+        resumeBlocked = error.code
+      }
+      ok('別的專案的對話接續不了', resumeBlocked === 'SESSION_NOT_FOUND')
       let crossProjectBlocked = false
       try {
         await agents.sessionDetail('D:\\Proj', 'codex', 'other-456')
@@ -375,6 +725,10 @@ async function main() {
       ok('Codex detail 不跨專案讀取', crossProjectBlocked)
     } finally {
       os.homedir = originalHome
+      if (originalCodexHome === undefined) delete process.env.CODEX_HOME
+      else process.env.CODEX_HOME = originalCodexHome
+      if (originalClaudeDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = originalClaudeDir
       fs.rmSync(codexHome, { recursive: true, force: true })
     }
     ok('Codex 讀得到標題', head.title === '幫我加測試')
@@ -505,13 +859,14 @@ console.log('\n[L] 分頁狀態持久化 sanitizeTabsState')
       { id: 'e:p1:src/index.js', kind: 'editor', title: 'index.js', relPath: 'src/index.js', draftContent: 'console.log("hi")', preview: false },
       { id: 'd:p1:w:src/index.js', kind: 'diff', title: 'index.js', relPath: 'src/index.js', staged: false },
       { id: 'b:1', kind: 'browser', title: 'Google', url: 'https://www.google.com' },
-      { id: 't:1', kind: 'terminal', title: '終端機' }, // 終端機不該被持久化
+      { id: 't:1', kind: 'terminal', title: '終端機' }, // 每個專案自己一組終端機分頁，要存
       { id: 'bad', kind: 'unknown', title: 'bad' } // 非法類型該被過濾
     ]
   }
   const clean = store.sanitizeTabsState(raw)
-  ok('過濾掉未知 kind', clean.tabs.every(t => ['editor', 'diff', 'browser', 'ai-session'].includes(t.kind)))
-  ok('terminal 分頁不存進 tabsState', !clean.tabs.some(t => t.kind === 'terminal'))
+  ok('過濾掉未知 kind', clean.tabs.every(t => ['terminal', 'editor', 'diff', 'browser', 'ai-session'].includes(t.kind)))
+  ok('terminal 分頁要存進 tabsState（分頁狀態跟著專案走）',
+    clean.tabs.some(t => t.kind === 'terminal' && t.id === 't:1' && t.title === '終端機'))
   ok('editor 保留 draftContent', clean.tabs[0].draftContent === 'console.log("hi")')
   ok('browser 保留合法 http(s) url', clean.tabs[2].url === 'https://www.google.com')
   ok('非 http(s) url 被過濾', store.sanitizeTabsState({ tabs: [{ id: 'b:2', kind: 'browser', url: 'file:///etc/passwd' }] }).tabs[0].url === '')
@@ -597,6 +952,32 @@ console.log('\n[Q] index.js 的 exports 都有定義')
     `(?:^|\\n)\\s*(?:async\\s+function|function|const|let|var)\\s+${name}\\b`
   ).test(indexSource))
   ok('每個 export 都在檔案裡定義得到', missing.length === 0, missing.join(', '))
+}
+
+// ===== [Q2] 三份清單要對得起來：ipc.js ↔ main.js 的 service ↔ preload =====
+// `main.js` 的 `registerWorkspaceIpc({ service })` 是**逐一列舉**的白名單
+// （AGY 與系統監控都踩過同一條）。ipc.js 加了 handler 但那裡漏一行，
+// `service.X` 就是 undefined → TypeError → renderer 只看得到通用的
+// 「工作區操作失敗」，IPC 層與單元測試全綠。實測這一輪的 gitBranches 就漏過。
+console.log('\n[Q2] ipc.js／main.js／preload 三份清單對得起來')
+{
+  const ipcSource = fs.readFileSync(path.join(ROOT, 'src/main/workspace/ipc.js'), 'utf8')
+  const mainSource = fs.readFileSync(path.join(ROOT, 'src/main/main.js'), 'utf8')
+  const preloadSource = fs.readFileSync(path.join(ROOT, 'src/preload/preload.js'), 'utf8')
+
+  const used = [...new Set([...ipcSource.matchAll(/service\.([A-Za-z_$][\w$]*)\(/g)].map((m) => m[1]))]
+  ok('ipc.js 真的有在用 service', used.length > 30, String(used.length))
+
+  const at = mainSource.indexOf('registerWorkspaceIpc({')
+  const block = mainSource.slice(at, mainSource.indexOf('isMainSender', at))
+  const missing = used.filter((name) => !block.includes(`${name}: (...args)`))
+  ok('main.js 的 service 白名單一個都沒漏', missing.length === 0, missing.join(', '))
+
+  const channels = [...new Set(
+    [...ipcSource.matchAll(/ipcMain\.handle\('workspace:([A-Za-z_$][\w$]*)'/g)].map((m) => m[1])
+  )]
+  const noPreload = channels.filter((name) => !preloadSource.includes(`'workspace:${name}'`))
+  ok('每一支 IPC 在 preload 都接得到', noPreload.length === 0, noPreload.join(', '))
 }
 
 // ===== [R] 快速開檔的檔案清單 =====

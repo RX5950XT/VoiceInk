@@ -30,9 +30,6 @@ function registerTerminalIpc({ ipcMain, service, isMainSender, dialog, getWindow
   ipcMain.handle('terminal:delete', (event, id) => (
     invoke(event, () => service.deleteSession(id))
   ))
-  ipcMain.handle('terminal:reorder', (event, ids) => (
-    invoke(event, () => service.reorderSessions(ids))
-  ))
   ipcMain.handle('terminal:open', (event, id, cols, rows) => (
     invoke(event, () => service.openSession(id, cols, rows))
   ))

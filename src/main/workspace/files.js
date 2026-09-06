@@ -112,7 +112,55 @@ function resolveIn(root, relPath) {
   if (full !== base && !full.startsWith(base + path.sep)) {
     throw fail('BAD_PATH', '路徑超出專案範圍')
   }
+  assertInsideReal(base, full)
   return full
+}
+
+/**
+ * 解開連結之後的真實路徑；解不開（不存在、權限不足）回空字串。
+ * @param {string} target
+ * @returns {string}
+ */
+function realOf(target) {
+  try {
+    return fs.realpathSync.native(target)
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * 確認解開所有連結之後仍然在專案裡。
+ *
+ * **字面比對擋不住資料夾連結**：在專案裡建一個指向 `C:\` 的 junction，
+ * `path.resolve` 看到的還是專案內的路徑，實際讀到的卻是整台電腦。
+ * 專案根目錄自己住在連結底下是合法的，所以基準也要解開再比。
+ * 還不存在的路徑（新增檔案）往上找到第一個存在的祖先，把剩下那段接回去比。
+ *
+ * @param {string} base 專案根目錄（已 resolve）
+ * @param {string} full 已通過字面檢查的絕對路徑
+ */
+function assertInsideReal(base, full) {
+  const realRoot = realOf(base)
+  // 根目錄本身解不開（隨身碟拔掉、網路磁碟沒接上）：交給後面的 stat 去報錯，
+  // 在這裡拒絕的話錯誤訊息會變成「路徑超出專案範圍」，指不到真正的原因
+  if (!realRoot) return
+  let probe = full
+  let tail = ''
+  for (;;) {
+    const real = realOf(probe)
+    if (real) {
+      const target = tail ? path.resolve(real, tail) : real
+      if (target !== realRoot && !target.startsWith(realRoot + path.sep)) {
+        throw fail('BAD_PATH', '路徑超出專案範圍')
+      }
+      return
+    }
+    const up = path.dirname(probe)
+    if (up === probe) return
+    tail = tail ? path.join(path.basename(probe), tail) : path.basename(probe)
+    probe = up
+  }
 }
 
 /**
@@ -209,38 +257,83 @@ async function readFile(root, relPath) {
   return { rel, content: buf.toString('utf8'), binary: false, tooLarge: false, size: stat.size, ext, mtimeMs: stat.mtimeMs }
 }
 
+/** 暫存檔的流水號：同一個檔案同時被存兩次時，兩份暫存檔不可以撞在一起 */
+let tmpSeq = 0
+
+/**
+ * 同一個檔案的寫入佇列。
+ *
+ * 光把暫存檔取成不同名字還不夠：**Windows 上兩個 rename 同時指向同一個目的地會直接失敗**
+ * （實測併發存檔會拿到 EPERM，UI 看到的是「存檔失敗」，而使用者只是連按了兩次儲存）。
+ * 一個檔案一條鏈，排隊跑完就把鏈拿掉。
+ *
+ * @type {Map<string, Promise<any>>}
+ */
+const writeChains = new Map()
+
+/**
+ * @template T
+ * @param {string} full
+ * @param {() => Promise<T>} task
+ * @returns {Promise<T>}
+ */
+function queueWrite(full, task) {
+  const prev = writeChains.get(full) || Promise.resolve()
+  const next = prev.then(task, task)
+  writeChains.set(full, next)
+  const done = () => {
+    if (writeChains.get(full) === next) writeChains.delete(full)
+  }
+  next.then(done, done)
+  return next
+}
+
 /**
  * 存檔。先寫暫存再 rename（原子替換）——中途失敗不會留下寫到一半的原檔。
+ *
+ * `expectedMtimeMs` 是**開檔（或上次存檔）當下磁碟的版本**：對不上就代表這份檔案
+ * 在外面被改過或被刪掉了，這時一律拒絕，讓 UI 去問使用者要比較、重載還是覆寫。
+ * 沒帶這個參數＝明確要求覆寫（使用者按過「覆寫」那顆）。
+ *
  * @param {string} root
  * @param {unknown} relPath
  * @param {unknown} content
+ * @param {unknown} [expectedMtimeMs]
  * @returns {Promise<{ rel: string, size: number }>}
  */
-async function writeFile(root, relPath, content) {
+async function writeFile(root, relPath, content, expectedMtimeMs) {
   if (typeof content !== 'string') throw fail('BAD_CONTENT', '內容不合法')
   if (content.length > MAX_WRITE_CHARS) throw fail('TOO_LARGE', '檔案太大，存不下')
   const full = resolveIn(root, relPath)
-  try {
-    const stat = await fsp.stat(full)
-    if (!stat.isFile()) throw fail('NOT_A_FILE', '這不是一個檔案')
-  } catch (error) {
-    if (error.code === 'NOT_A_FILE') throw error
-    // 不存在 → 允許新建（但目錄必須已經在）
-  }
-  const tmp = `${full}.voiceink-tmp`
-  try {
-    await fsp.writeFile(tmp, content, 'utf8')
-    await fsp.rename(tmp, full)
-  } catch {
+  return queueWrite(full, async () => {
+    let stat = null
     try {
-      await fsp.unlink(tmp)
+      stat = await fsp.stat(full)
     } catch {
-      // 暫存檔清不掉就算了，不要蓋掉真正的錯誤
+      // 不存在 → 允許新建（但目錄必須已經在）
     }
-    throw fail('WRITE_FAILED', '存檔失敗')
-  }
-  const stat = await fsp.stat(full)
-  return { rel: toRel(root, full), size: Buffer.byteLength(content, 'utf8'), mtimeMs: stat.mtimeMs }
+    if (stat && !stat.isFile()) throw fail('NOT_A_FILE', '這不是一個檔案')
+    const expected = Number(expectedMtimeMs)
+    if (Number.isFinite(expected) && expected > 0) {
+      if (!stat) throw fail('STALE', '原本的檔案已經不在了（被刪除或改名）')
+      // mtime 是浮點毫秒，某些檔案系統的精度只到毫秒 → 差 1ms 以內當成同一版
+      if (Math.abs(stat.mtimeMs - expected) > 1) throw fail('STALE', '這個檔案在外部被改過了')
+    }
+    const tmp = `${full}.${process.pid}-${(tmpSeq += 1)}.voiceink-tmp`
+    try {
+      await fsp.writeFile(tmp, content, 'utf8')
+      await fsp.rename(tmp, full)
+    } catch {
+      try {
+        await fsp.unlink(tmp)
+      } catch {
+        // 暫存檔清不掉就算了，不要蓋掉真正的錯誤
+      }
+      throw fail('WRITE_FAILED', '存檔失敗')
+    }
+    const after = await fsp.stat(full)
+    return { rel: toRel(root, full), size: Buffer.byteLength(content, 'utf8'), mtimeMs: after.mtimeMs }
+  })
 }
 
 /**
