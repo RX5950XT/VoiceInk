@@ -40,6 +40,7 @@ CC代理（Claude Code 工作台）｜額度｜AGY反代｜語音轉文字｜翻
 
 ```bash
 npm run electron:dev     # 開發（vite + electron）
+npm run dev:sandbox      # 沙箱實例：不干擾你正在用的那份，但接得到原本的模型與專案
 npm run electron:pack    # 免安裝快速預覽 → dist/win-unpacked/VoiceInk.exe（UI／功能改完必跑）
 npm run electron:build   # 完整打包：NSIS 安裝檔 + win-unpacked → dist/
 npm run build:sensors    # 系統監控提權感測器 sidecar（需 .NET 8 SDK）→ resources/sensors/（36MB）
@@ -50,6 +51,12 @@ npm run build:hook       # 語音輸入原生熱鍵 sidecar（需 .NET 8 SDK）�
   右 Alt 退回「只監聽」模式。
 - 打包前先關掉 `dist/win-unpacked/VoiceInk.exe`（否則卡 `d3dcompiler_47.dll: Access is denied`）。
 - 使用者同時在用電腦時，桌面 QA 只能用 CDP／視窗 API 背景操作；不可移動滑鼠、發全域快捷鍵或搶前景焦點。
+- **手動開一份來玩一律走 `npm run dev:sandbox`**：三份 VoiceInk（安裝版／`dist/win-unpacked`／`electron:dev`）
+  預設共用 `%APPDATA%\voiceink`，而 `requestSingleInstanceLock()` 綁的就是 userData 路徑——
+  直接開第二份只會自己關掉，還會跟使用者那份搶 `chats.json`／`config.json` 與 AGY 的埠。
+  沙箱在 `%APPDATA%\voiceink-dev`：`models`／`hf-models` 用 junction 接回去（唯讀、30GB 不能複製），
+  `config.json`／`workspaces.json` 複製一份，`agyEnabled`／`dictationEnabled`／`sysmonSensors`
+  強制關掉（這三個的影響會跑出 userData 之外：搶埠、全機吞右 Alt、跳 UAC）。
 
 ### 發行流程
 
