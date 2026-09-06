@@ -230,7 +230,7 @@ CSP 多了兩條，**都是 Monaco 要的**：`font-src` 加 `data:`（codicon �
 
 ## 最近變更（2026-09-06，分支 `feat/voice-input`）— 對齊 Orca 的專案使用體驗（第八輪）
 
-讀 `D:\Workspace\Personal_Project\orca` 的 `right-sidebar/FileExplorer*`、`QuickOpen.tsx`、
+讀 Orca 原始碼的 `right-sidebar/FileExplorer*`、`QuickOpen.tsx`、
 `shared/quick-open-path-search.ts`、`tab-bar/`，只搬互動、不搬版面與編輯器核心
 （Orca 是 Monaco ＋ git worktree 的完整 IDE，量級差太多；`pdfjs-dist` 已經讓 asar 多 36MB）。
 

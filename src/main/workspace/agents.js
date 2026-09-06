@@ -142,7 +142,7 @@ function fail(code, message) {
 
 /**
  * Claude Code 用「把工作目錄裡所有非英數字元換成 `-`」當資料夾名。
- * 實測：`D:\Workspace\Personal_Project\VoiceInk` → `D--Workspace-Personal-Project-VoiceInk`。
+ * 例：`D:\Code\My_Project\App` → `D--Code-My-Project-App`（底線也算非英數字元）。
  * @param {string} full
  * @returns {string}
  */

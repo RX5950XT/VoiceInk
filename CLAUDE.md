@@ -51,12 +51,8 @@ npm run build:hook       # 語音輸入原生熱鍵 sidecar（需 .NET 8 SDK）�
   右 Alt 退回「只監聽」模式。
 - 打包前先關掉 `dist/win-unpacked/VoiceInk.exe`（否則卡 `d3dcompiler_47.dll: Access is denied`）。
 - 使用者同時在用電腦時，桌面 QA 只能用 CDP／視窗 API 背景操作；不可移動滑鼠、發全域快捷鍵或搶前景焦點。
-- **手動開一份來玩一律走 `npm run dev:sandbox`**：三份 VoiceInk（安裝版／`dist/win-unpacked`／`electron:dev`）
-  預設共用 `%APPDATA%\voiceink`，而 `requestSingleInstanceLock()` 綁的就是 userData 路徑——
-  直接開第二份只會自己關掉，還會跟使用者那份搶 `chats.json`／`config.json` 與 AGY 的埠。
-  沙箱在 `%APPDATA%\voiceink-dev`：`models`／`hf-models` 用 junction 接回去（唯讀、30GB 不能複製），
-  `config.json`／`workspaces.json` 複製一份，`agyEnabled`／`dictationEnabled`／`sysmonSensors`
-  強制關掉（這三個的影響會跑出 userData 之外：搶埠、全機吞右 Alt、跳 UAC）。
+- **手動開一份來玩一律走 `npm run dev:sandbox`**（細節見「測試（CDP／e2e）」的沙箱那條）：
+  三份 VoiceInk 預設共用 `%APPDATA%\voiceink`，直接開第二份會被單一實例鎖擋掉，還跟使用者搶資料檔與埠。
 
 ### 發行流程
 
@@ -86,13 +82,8 @@ gh release upload vX.Y.Z dist/VoiceInk-Setup-X.Y.Z.exe dist/VoiceInk-Setup-X.Y.Z
 | `latest.yml` | 舊版永遠說「沒有附帶更新資訊」——**它只在 `build.publish` 有設定時才產出** |
 | `.blockmap` | 不報錯，但差異更新退回下載完整 360MB |
 
-另外三條：
-
-- **不可以 `--draft` 或 `--prerelease`**：electron-updater 走的是 `releases/latest`，
-  那條路徑跳過草稿與預覽版（`GitHubProvider.getLatestTagName`），發了等於沒發。
-- **`nsis.artifactName` 不可改回預設**：預設帶空白，上傳 GitHub 會被改名成 `VoiceInk.Setup.X.Y.Z.exe`，
-  而 `latest.yml` 寫的是連字號版 → 下載 404。
-- tag 用 `vX.Y.Z`，且要跟 `package.json` 的 version 一致（`latest.yml` 的 `version` 是從那裡來的）。
+tag 用 `vX.Y.Z` 且要跟 `package.json` 的 version 一致（`latest.yml` 的 `version` 從那裡來）。
+`--draft`／`--prerelease` 與 `nsis.artifactName` 兩個坑見「打包／建置」的地雷。
 
 發完之後，舊版使用者開 App 20 秒後（或設定 → 基本按「檢查更新」）就會看到。
 
@@ -526,7 +517,7 @@ gh release upload vX.Y.Z dist/VoiceInk-Setup-X.Y.Z.exe dist/VoiceInk-Setup-X.Y.Z
 - **agent 恢復指令是 main 的固定表**（`agents.js` 的 `AGENTS`），session id 卡 `^[A-Za-z0-9_-]{6,64}$`：
   那個字串會被直接送進終端機，放行空白或分號等於指令注入。
 - **Claude 的 session 資料夾名＝把 cwd 的非英數字元全換成 `-`**
-  （`D:\Workspace\Personal_Project\VoiceInk` → `D--Workspace-Personal-Project-VoiceInk`）；
+  （`D:\Code\My_Project\App` → `D--Code-My-Project-App`）；
   Codex 沒有這個對應，只能開第一行讀 `session_meta.cwd`（**帶 `forked_from_id` 的是母 thread 的重播，不能收**）。
 - **內建瀏覽器是 `<webview>`（2026-09-04 從 iframe 換過來，比照 Orca）**：實測矩陣
   `scripts/probe-workspace-webview.js` 證明 Electron 43 的 `sandbox: true × webviewTag: true` 能用
@@ -1291,6 +1282,20 @@ gh release upload vX.Y.Z dist/VoiceInk-Setup-X.Y.Z.exe dist/VoiceInk-Setup-X.Y.Z
 
 ### 測試（CDP／e2e）
 
+- **在這個 App 裡開發這個 App，一律用 `npm run dev:sandbox`**（`scripts/dev-sandbox.js`）：
+  安裝版／`dist/win-unpacked`／`electron:dev` 三份預設共用 `%APPDATA%\voiceink`，而
+  `requestSingleInstanceLock()` 綁的是 **userData 路徑**（`main.js` 特地在搶鎖**之前**就套用
+  `--user-data-dir`）——不換路徑就只會把使用者的視窗叫到前面，然後自己關掉，
+  過程中還跟他搶 `chats.json`／`config.json` 與 AGY 的埠。沙箱在 `%APPDATA%\voiceink-dev`：
+  - `models`／`hf-models` 用 junction 接回真的那份（唯讀、30GB 不能複製）→ 模型與 HF 那兩頁**真的能測**；
+  - `config.json`（供應商與金鑰）、`workspaces.json`（專案清單）**複製**一份 → 聊天、翻譯、工作區有真資料可用，
+    但怎麼寫都弄不髒使用者的；
+  - 會累積的紀錄（`usage`／`code-usage`／`agy-logs`／`dictations`／`terminals`）**不接**
+    ——測試資料混進去就分不出來，而 `terminals.json` 指的是**另一份程序**的 pty，接過來也是死的；
+  - `agyEnabled`／`dictationEnabled`／`sysmonSensors` 強制關掉——只有這三個的影響**跑得出 userData 之外**
+    （搶同一個埠、原生 hook 在全機器層級吞掉右 Alt、提權 sidecar 跳 UAC）。
+  寫進沙箱前一律先 `rm` 目的地：`writeFileSync`／`copyFileSync` 會**跟著符號連結寫到對面**，
+  沙箱裡只要有一條指回真 userData 的連結，這支「保護資料」的腳本就會親手覆寫使用者的設定。
 - **CDP 收尾只能殺自己**：每支打包測試都要用暫存 `--user-data-dir`，並只以 spawn 回傳的 `child.pid`
   執行 `taskkill /PID /T`；**禁止 `/IM VoiceInk.exe`**（會把使用者安裝版一起關掉）。
   暫存 SQLite 在 Windows 釋放較慢，刪資料夾要有有限重試。
@@ -1363,4 +1368,5 @@ gh release upload vX.Y.Z dist/VoiceInk-Setup-X.Y.Z.exe dist/VoiceInk-Setup-X.Y.Z
 | 自動更新 | `node scripts/test-updater.js`（狀態機／開關／結束時安裝／接線）＋`node scripts/e2e-update-cdp.js`（打包版 UI，**會真的連一次 GitHub**） |
 | 視覺／RWD | `node scripts/e2e-visual-cdp.js`（七頁 × dark/light × 三尺寸）＋`node scripts/test-usage-reorder.js` |
 | 使用體驗（本輪四項） | `node scripts/e2e-ux-tweaks-cdp.js`（打包版：系統監控錯誤自動收起、風扇下限 20%、終端機選取複製／右鍵貼上／窄邊框、側欄拖寬。**會把測試視窗叫到最前面**讀剪貼簿） |
+| 開發沙箱 | `node scripts/probe-dev-sandbox.js`（**實測**：沙箱讀得到你的模型與供應商，而你正在用的那份一個位元組都沒動；動 `dev-sandbox.js` 前後都要跑） |
 | 冒煙 | `node scripts/e2e-cdp-smoke.js` |

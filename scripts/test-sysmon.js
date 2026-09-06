@@ -81,7 +81,7 @@ console.log('\n[框解析]')
 console.log('\n[靜態清單]')
 {
   const s = m.parseStatic([
-    'SYS|Gigabyte|X570 AORUS PRO|x64-based PC|102995783680|RX5950XT|X570 MB',
+    'SYS|Gigabyte|X570 AORUS PRO|x64-based PC|102995783680|PC-DEMO|X570 MB',
     'CASE|Default string|3|Default string',
     'CPU|AMD Ryzen 7 5700X 8-Core Processor|8|16|3401|4096|32768|AM4|AuthenticAMD|178BFBFF00A20F12|64|True|11|AMD64 Family 25|3401',
     'BOARD|Gigabyte|X570 AORUS PRO|Default string',
@@ -89,10 +89,10 @@ console.log('\n[靜態清單]')
     'OS|Windows 11 專業版|10.0.26200|26200|1788060251500',
     'RAM|P0 CHANNEL A|17179869184|2133|2133|Samsung|32G3200CL22|26|8|DIMM 0|1200',
     'GPU|NVIDIA GeForce RTX 5060 Ti|4293918720|32.0.16.1074|2560 x 1440|2026-07-02|2560|1440|144|RTX 5060 Ti|PCI\\VEN_10DE',
-    'PDISK|1|ADATA SX8200PNP|SSD|NVMe|2048408248320|Healthy|SN123|42AATCTE|0|False',
+    'PDISK|1|ADATA SX8200PNP|SSD|NVMe|2048408248320|Healthy|SN123|FW1234|0|False',
     'VOL|C:|OS|1023135444992|425396494336|NTFS',
     'MON|PHL|PHL 272E1GJ|UK02203064377|2022|60x34',
-    'NIC|乙太網路 2|Intel(R) I211|B4:2E:99:93:F4:5E|1000000000|2|192.168.0.202',
+    'NIC|乙太網路 2|Intel(R) I211|00:11:22:33:44:55|1000000000|2|192.168.1.100',
     'SND|Realtek High Definition Audio|Realtek|OK',
     'BAT|內建電池|87|2|11400|6',
     'SEC|on',
@@ -115,10 +115,10 @@ console.log('\n[靜態清單]')
   ok('記憶體型別 26 → DDR4', s.memoryModules[0].type === 'DDR4')
   ok('記憶體外型 8 → DIMM 且有插槽名', s.memoryModules[0].formFactor === 'DIMM' && s.memoryModules[0].slot === 'DIMM 0')
   ok('GPU 顯示模式與驅動日期', s.gpus[0].width === 2560 && s.gpus[0].refreshHz === 144 && s.gpus[0].driverDate === '2026-07-02')
-  ok('實體碟韌體版本', s.physicalDisks[0].firmware === '42AATCTE')
+  ok('實體碟韌體版本', s.physicalDisks[0].firmware === 'FW1234')
   ok('系統與機殼', s.system.model === 'X570 AORUS PRO' && s.chassis.type === '桌上型')
   ok('顯示器 EDID', s.monitors[0].name === 'PHL 272E1GJ' && s.monitors[0].year === 2022)
-  ok('網路卡狀態 2 → 已連線', s.nics[0].status === '已連線' && s.nics[0].ips === '192.168.0.202')
+  ok('網路卡狀態 2 → 已連線', s.nics[0].status === '已連線' && s.nics[0].ips === '192.168.1.100')
   ok('音效裝置', s.sound[0].vendor === 'Realtek')
   ok('電池化學 6 → 鋰離子', s.batteries[0].chemistry === '鋰離子' && s.batteries[0].charge === 87)
   ok('Secure Boot 狀態', s.security.secureBoot === 'on')
@@ -130,13 +130,13 @@ console.log('\n[靜態清單]')
     'MEMARR|4|134217728|134217728',
     'GPU|RTX 5060 Ti|4293918720|32.0|2560 x 1440|2026-07-02|2560|1440|144|GB206|PCI\\VEN_10DE|17103323136',
     'VOL|D:|資料|2048390066176|1464655380480|NTFS|1',
-    'NIC|乙太網路|I211|B4:2E:99:93:F4:5E|1000000000|2|192.168.0.202|192.168.0.1|8.8.8.8|dhcp'
+    'NIC|乙太網路|I211|00:11:22:33:44:55|1000000000|2|192.168.1.100|192.168.1.1|8.8.8.8|dhcp'
   ])
   ok('L1 快取（SMBIOS Level 3 → L1）', extra.caches[0].level === 1 && extra.caches[0].sizeKb === 512)
   ok('記憶體插槽總數與上限', extra.memoryArray.slots === 4 && extra.memoryArray.maxCapacity === 137438953472)
   ok('VRAM 用 64 位元真值不用爆掉的 AdapterRAM', extra.gpus[0].vram === 17103323136)
   ok('磁碟區標得出住在哪顆實體碟', extra.volumes[0].diskId === '1')
-  ok('網路卡帶閘道／DNS／取得方式', extra.nics[0].gateway === '192.168.0.1' && extra.nics[0].dns === '8.8.8.8' && extra.nics[0].dhcp === 'dhcp')
+  ok('網路卡帶閘道／DNS／取得方式', extra.nics[0].gateway === '192.168.1.1' && extra.nics[0].dns === '8.8.8.8' && extra.nics[0].dhcp === 'dhcp')
   // 舊 probe 沒有第 11 格時要退回 AdapterRAM，不能變成 0
   const oldGpu = m.parseStatic(['GPU|GTX 1060|6442450944|31.0|1920 x 1080|2024-01-01|1920|1080|60|GP106|PCI\\VEN_10DE'])
   ok('舊格式 VRAM 退回 AdapterRAM', oldGpu.gpus[0].vram === 6442450944)
@@ -153,29 +153,29 @@ console.log('\n[靜態清單]')
 
   // 第二批補上的欄位（總覽原本整片空著的那些）
   const more = m.parseStatic([
-    'SYS|Gigabyte|X570|x64-based PC|102995783680|RX5950XT|X570 MB|WORKGROUP|False|RX5950XT\\rx595|True|1|Normal boot|1',
+    'SYS|Gigabyte|X570|x64-based PC|102995783680|PC-DEMO|X570 MB|WORKGROUP|False|PC-DEMO\\user|True|1|Normal boot|1',
     'CPU|Ryzen 7 5700X|8|16|3401|4096|32768|AM4|AuthenticAMD|178B|64|True|11|AMD64|3401|100|107|2|8|9|8450',
     'BOARD|Gigabyte|X570 AORUS PRO|Default string|Default string',
     'BIOS|AMI|F40a|2026-04-14|Default string|3.3|ALASKA - 1072009',
     'OS|Windows 11 專業版|10.0.26200|26200|1788267653500|64 位元|25H2|9168|zh-TW en-US|C:|C:\\WINDOWS||Professional||1024000|101605820',
     'TZ|(UTC+08:00) 台北|台北標準時間|480',
-    'PDISK|1|ADATA SX8200PNP|SSD|NVMe|2048408248320|Healthy|SN|42AATCTE|0|False|3|SCSI',
+    'PDISK|1|ADATA SX8200PNP|SSD|NVMe|2048408248320|Healthy|SN|FW1234|0|False|3|SCSI',
     'PAGE|C:\\pagefile.sys|1000|120|340',
-    'MON|AUS|VG27AQL1A|LCLMQS256208|2020|60x34|2560x1440@60|10|53|2705',
-    'NIC|乙太網路|I211|B4:2E:99:93:F4:5E|1000000000|2|192.168.0.202|192.168.0.1|8.8.8.8|dhcp|255.255.255.0|192.168.0.1|fdfd::1|乙太網路 802.3|PCI\\VEN_8086',
+    'MON|AUS|VG27AQL1A|MON-SN-0001|2020|60x34|2560x1440@60|10|53|2705',
+    'NIC|乙太網路|I211|00:11:22:33:44:55|1000000000|2|192.168.1.100|192.168.1.1|8.8.8.8|dhcp|255.255.255.0|192.168.1.1|fdfd::1|乙太網路 802.3|PCI\\VEN_8086',
     'SLOT|J10|4|10|System Slot 0',
     'SLOT|J3600|3|8|System Slot 1',
     'USBC|AMD USB 3.10|泛型 USB xHCI|OK',
     'HID|kb|HID Keyboard Device|增強 (101 或 102 鍵)|5'
   ])
-  ok('系統帶工作群組／使用者／Hypervisor', more.system.workgroup === 'WORKGROUP' && more.system.inDomain === false && more.system.hypervisor === true && more.system.user === 'RX5950XT\\rx595')
+  ok('系統帶工作群組／使用者／Hypervisor', more.system.workgroup === 'WORKGROUP' && more.system.inDomain === false && more.system.hypervisor === true && more.system.user === 'PC-DEMO\\user')
   ok('CPU 帶外頻／步進／架構', more.cpus[0].extClockMhz === 100 && more.cpus[0].stepping === '2' && more.cpus[0].arch === 'x64' && more.cpus[0].enabledCores === 8)
   ok('OS 帶功能更新版本與 UBR', more.os.displayVersion === '25H2' && more.os.ubr === 9168 && more.os.arch === '64 位元' && more.os.edition === 'Professional')
   ok('時區', more.timeZone.caption.includes('台北') && more.timeZone.biasMin === 480)
   ok('磁碟帶分割區數與介面', more.physicalDisks[0].partitions === 3 && more.physicalDisks[0].interfaceType === 'SCSI')
   ok('分頁檔（單位 MB）', more.pageFiles[0].sizeMb === 1000 && more.pageFiles[0].usedMb === 120 && more.pageFiles[0].peakMb === 340)
   ok('顯示器帶原生解析度與接頭', more.monitors[0].native === '2560x1440@60' && more.monitors[0].connector === 'DisplayPort' && more.monitors[0].week === 53)
-  ok('網路卡帶遮罩／DHCP 伺服器／IPv6', more.nics[0].subnet === '255.255.255.0' && more.nics[0].dhcpServer === '192.168.0.1' && more.nics[0].ipv6 === 'fdfd::1')
+  ok('網路卡帶遮罩／DHCP 伺服器／IPv6', more.nics[0].subnet === '255.255.255.0' && more.nics[0].dhcpServer === '192.168.1.1' && more.nics[0].ipv6 === 'fdfd::1')
   ok('擴充插槽的使用狀態與通道數', more.slots[0].usage === '使用中' && more.slots[0].width === '×16' && more.slots[1].usage === '空置' && more.slots[1].width === '×8')
   ok('USB 控制器與輸入裝置', more.usbControllers[0].name === 'AMD USB 3.10' && more.inputDevices[0].kind === '鍵盤' && more.inputDevices[0].count === 5)
   // SMBIOS 的佔位字串原樣顯示會變成規格表上寫著「Default string」，比留白更糟

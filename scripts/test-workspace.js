@@ -633,8 +633,8 @@ async function main() {
 
     ok(
       'Claude 專案資料夾的編碼',
-      agents.encodeClaudeDir('D:' + SEP + 'Workspace' + SEP + 'Personal_Project' + SEP + 'VoiceInk')
-        === 'D--Workspace-Personal-Project-VoiceInk'
+      agents.encodeClaudeDir('D:' + SEP + 'Code' + SEP + 'My_Project' + SEP + 'App')
+        === 'D--Code-My-Project-App'
     )
 
     // 開場那份 AGENTS.md／系統提示不能拿來當標題，否則每一筆長得一模一樣

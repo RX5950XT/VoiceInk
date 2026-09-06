@@ -151,7 +151,7 @@
 
 ## 規劃（2026-09-06 第八輪）— 對齊 Orca 的專案使用體驗
 
-讀 `D:\Workspace\Personal_Project\orca` 的 `right-sidebar/FileExplorer*`、
+讀 Orca 原始碼的 `right-sidebar/FileExplorer*`、
 `QuickOpen.tsx`、`shared/quick-open-path-search.ts`、`tab-bar/`，挑出**我們真的缺、
 而且使用者天天會碰到**的五件事。Orca 是 Monaco ＋ worktree 的完整 IDE，
 版面與編輯器核心不照搬（量級差太多），只搬互動。
