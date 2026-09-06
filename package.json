@@ -30,9 +30,11 @@
     "electron-store": "^10.0.0",
     "electron-updater": "^6.8.9",
     "ffmpeg-static": "^5.3.0",
+    "monaco-editor": "^0.55.1",
     "node-edge-tts": "^1.2.10",
     "node-llama-cpp": "^3.19.0",
     "opencc-js": "^1.4.1",
+    "pdfjs-dist": "6.3.289",
     "sherpa-onnx-node": "^1.13.4",
     "uiohook-napi": "^1.5.5"
   },
@@ -52,7 +54,8 @@
       "**/node_modules/@reflink/**",
       "**/node_modules/uiohook-napi/**",
       "src/main/usage/read-windows-credential.ps1",
-      "src/main/sysmon/probe.ps1"
+      "src/main/sysmon/probe.ps1",
+      "src/main/screentime/observer.ps1"
     ],
     "files": [
       "**/*",
@@ -60,6 +63,14 @@
       "!**/node_modules/@node-llama-cpp/win-arm64/**",
       "!**/node_modules/node-llama-cpp/llama/**",
       "**/node_modules/node-llama-cpp/llama/binariesGithubRelease.json",
+      "!**/node_modules/@napi-rs/**",
+      "!**/node_modules/pdfjs-dist/**",
+      "**/node_modules/pdfjs-dist/package.json",
+      "**/node_modules/pdfjs-dist/build/pdf.min.mjs",
+      "**/node_modules/pdfjs-dist/build/pdf.worker.min.mjs",
+      "!**/node_modules/monaco-editor/**",
+      "**/node_modules/monaco-editor/package.json",
+      "**/node_modules/monaco-editor/min/**",
       "!dist/**",
       "!dist-*/**",
       "!tasks/**",

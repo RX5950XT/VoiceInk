@@ -281,7 +281,7 @@ function renderDownloadOptions(detail) {
   }
   if (!detail.info) {
     body.appendChild(el('p', 'setting-hint',
-      '讀不到檔頭，所以沒辦法先算「這台跑不跑得動」——下載完到模型庫還是看得到實際參數。'))
+      '讀不到檔頭，算不出可行性；下載後仍會顯示實際參數。'))
   }
   for (const variant of variants) body.appendChild(renderVariantRow(detail.repoId, variant))
   return section
@@ -359,7 +359,7 @@ async function refreshLibrary() {
   if (!rows) return
   libraryRows = rows
   if (!rows.length) {
-    box.replaceChildren(el('p', 'setting-hint', '還沒有本機模型。到「探索」搜一顆下載，或把 .gguf 放進模型資料夾。'))
+    box.replaceChildren(el('p', 'setting-hint', '還沒有本機模型。到「探索」下載，或放入 .gguf。'))
     return
   }
   box.replaceChildren(...rows.map(renderModelCard))
@@ -419,7 +419,7 @@ function renderModelCard(model) {
 
   const auto = el('button', 'btn btn-secondary btn-sm', '自動調參')
   auto.type = 'button'
-  auto.title = '先用官方 llama-fit-params 量記憶體，再用 llama-bench 實測挑最快的參數'
+  auto.title = '先量記憶體，再實測挑最快參數'
   auto.addEventListener('click', () => runAutoTune(model.id, auto))
   actions.appendChild(auto)
 
@@ -519,7 +519,7 @@ function openParams(id) {
   const desc = $('hfParamsDesc')
   if (desc) {
     desc.textContent = model.meta?.hasFit
-      ? '記憶體配置是官方 llama-fit-params 實際量出來的；下面留空的欄位維持自動。'
+      ? '記憶體配置由官方 llama-fit-params 實測；留空欄位維持自動。'
       : '下面留空的欄位維持自動決定；填了就以你填的為準。'
   }
   const reasons = $('hfParamsReasons')
@@ -648,7 +648,7 @@ async function runFit() {
   const status = $('hfTuneStatus')
   const button = /** @type {HTMLButtonElement} */ ($('hfFitBtn'))
   button.disabled = true
-  if (status) status.textContent = '正在載入模型量記憶體…（要一兩分鐘）'
+  if (status) status.textContent = '正在量記憶體…（一兩分鐘）'
   const result = await call(electronAPI.hfmodels.refreshFit(editing.id))
   button.disabled = false
   if (status) {
@@ -665,7 +665,7 @@ async function runAutoTuneFromDialog() {
   if (!editing) return
   const button = /** @type {HTMLButtonElement} */ ($('hfAutoTuneBtn'))
   const status = $('hfTuneStatus')
-  if (status) status.textContent = '先量記憶體，再實測速度…（要好幾分鐘）'
+  if (status) status.textContent = '量記憶體＋實測速度…（好幾分鐘）'
   const id = editing.id
   await runAutoTune(id, button)
   const fresh = libraryRows.find((m) => m.id === id)

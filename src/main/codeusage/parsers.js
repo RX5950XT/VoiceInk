@@ -10,7 +10,7 @@
  * - **Codex**：`event_msg` / `token_count` 帶兩份數字——`total_token_usage` 是**累計**、
  *   `last_token_usage` 是**這一輪**。要加的是後者；把累計值逐行相加會得到天文數字。
  * - **Grok**：`turn_completed` 的 `usage` 是**這一輪的總量**（不是累計快照），直接相加就對。
- *   它還自帶 `costUsdTicks`（1 USD = 1e9 ticks）與逐模型細目，不必靠單價表。
+ *   它還自帶 `costUsdTicks` 與逐模型細目；所有模型均為 1 USD = 1e10 ticks。
  *
  * 每個解析器吃「一行字串 ＋ 一份跨行狀態」，回傳 0 到多筆標準用量事件：
  * `{ ts, model, input, output, reasoning, cacheRead, cacheWrite, requests, costUsd }`
@@ -23,8 +23,8 @@
  * 字串比對擋掉了，所以放寬不會變慢。
  */
 const MAX_LINE = 16 * 1024 * 1024
-/** Grok 的花費單位：1 USD = 1e9 ticks */
-const USD_TICKS = 1e9
+/** Grok CLI 官方 user-guide/14-headless-mode.md：1 USD = 10^10 ticks，包含 4.6。 */
+const USD_TICKS = 1e10
 
 /**
  * @typedef {object} UsageEvent
@@ -66,11 +66,41 @@ function toMs(value) {
 }
 
 /**
+ * 檢查是否為 UUIDv7（版本欄位在第 14 碼，必為 '7'）。
+ * @param {unknown} id
+ * @returns {boolean}
+ */
+function isUuidV7(id) {
+  return typeof id === 'string' && id.length >= 36 && id.charAt(14) === '7'
+}
+
+/**
+ * 解析 UUIDv7 的前 48 位元毫秒時間戳。
+ * UUIDv7 格式：xxxxxxxx-xxxx-7xxx-yxxx-xxxxxxxxxxxx，前 8 碼＋後 4 碼十六進位即為毫秒時間戳。
+ * 非 UUIDv7（例如 UUIDv4 或隨機字串）一律回傳 0，避免被十六進位誤算成天文數字未來時間。
+ * @param {string} uuid
+ * @returns {number} 毫秒；若非合規 UUIDv7 回 0
+ */
+function uuidv7Ms(uuid) {
+  if (!isUuidV7(uuid)) return 0
+  const hex = uuid.slice(0, 8) + uuid.slice(9, 13)
+  const n = parseInt(hex, 16)
+  return Number.isFinite(n) ? n : 0
+}
+
+/**
  * 建一個新的跨行狀態。每個檔案一份。
- * @returns {{ seen: Set<string>, model: string, replay: boolean }}
+ * @returns {{ seen: Set<string>, model: string, replay: boolean, isFork: boolean, sessionStartMs: number, lastTotalTokens: number }}
  */
 function newState() {
-  return { seen: new Set(), model: '', replay: false }
+  return {
+    seen: new Set(),
+    model: '',
+    replay: false,
+    isFork: false,
+    sessionStartMs: 0,
+    lastTotalTokens: 0
+  }
 }
 
 // ===== Claude Code =====
@@ -163,22 +193,58 @@ function parseCodexLine(line, state) {
     return []
   }
 
-  // 記住目前這一輪用的是哪顆模型（同一個 session 中途可以換）
-  if (row?.type === 'turn_context' || row?.type === 'session_meta') {
-    state.replay = row.type === 'session_meta'
-      && !!(row.payload?.forked_from_id || row.payload?.parent_thread_id)
+  if (row?.type === 'session_meta') {
+    const isFork = !!(row.payload?.forked_from_id || row.payload?.parent_thread_id)
+    if (isFork) {
+      state.isFork = true
+      state.replay = true
+      state.sessionStartMs = uuidv7Ms(row.payload?.id)
+    }
     const model = row.payload?.model
     if (typeof model === 'string' && model) state.model = model
     return []
   }
 
+  if (row?.type === 'turn_context') {
+    const model = row.payload?.model
+    if (typeof model === 'string' && model) state.model = model
+    // 子代理 fork：母 thread 歷史重播中每個 turn 也帶 turn_context，
+    // 其 turn_id 為母 thread 時期的舊時間戳（早於子代理啟動 sessionStartMs 或為 UUIDv4）；
+    // 只有進入時間戳 >= sessionStartMs - 500 的輪次才代表子代理真正開始工作
+    if (state.isFork) {
+      if (state.sessionStartMs > 0) {
+        const turnMs = uuidv7Ms(row.payload?.turn_id)
+        if (turnMs && turnMs >= state.sessionStartMs - 500) {
+          state.replay = false
+        } else {
+          state.replay = true
+        }
+      } else {
+        // 測試 mock 或無時間戳 session：第一個 turn_context 即視為重播結束
+        state.replay = false
+      }
+    }
+    return []
+  }
+
   if (row?.type !== 'event_msg' || row.payload?.type !== 'token_count') return []
-  // 母檔已經算過這一批了
+  // 母檔已經算過這一批歷史重播了
   if (state.replay) return []
-  // last_token_usage 才是這一輪的量；total_token_usage 是累計，逐行相加會爆掉
-  const usage = row.payload?.info?.last_token_usage
+
+  const info = row.payload?.info
+  const usage = info?.last_token_usage
   if (!usage || typeof usage !== 'object') return []
   if (!num(usage.input_tokens) && !num(usage.output_tokens)) return []
+
+  // 防每輪前後重複 emit token_count 快照以及 heartbeat 空轉：
+  // Codex 在每輪前後會各 emit 一次 token_count，且無進展時 total_token_usage 保持不變。
+  // 只有當總累計 token 增加時才視為真實有效的新消耗。
+  const curTotal = num(info?.total_token_usage?.total_tokens)
+    || (num(info?.total_token_usage?.input_tokens) + num(info?.total_token_usage?.output_tokens))
+  if (curTotal > 0) {
+    if (curTotal <= state.lastTotalTokens) return []
+    state.lastTotalTokens = curTotal
+  }
 
   return [{
     ts: toMs(row.timestamp),
@@ -239,15 +305,30 @@ function parseGrokLine(line, state) {
     cacheRead: num(part.cachedReadTokens),
     cacheWrite: num(part.cacheCreationTokens),
     requests: num(part.modelCalls) || 1,
-    costUsd: Number.isFinite(Number(part.costUsdTicks)) ? Number(part.costUsdTicks) / USD_TICKS : null
+    costUsd: Number.isFinite(Number(part.costUsdTicks))
+      ? Number(part.costUsdTicks) / USD_TICKS
+      : null
   })
+
+  const hasTokens = (part) => {
+    if (!part || typeof part !== 'object') return false
+    return num(part.inputTokens) > 0
+      || num(part.outputTokens) > 0
+      || num(part.cachedReadTokens) > 0
+      || num(part.cacheCreationTokens) > 0
+      || num(part.reasoningTokens) > 0
+      || (Number.isFinite(Number(part.costUsdTicks)) && Number(part.costUsdTicks) > 0)
+  }
 
   if (detail) {
     const events = Object.entries(detail)
-      .filter(([, part]) => part && typeof part === 'object')
+      .filter(([, part]) => hasTokens(part))
       .map(([model, part]) => toEvent(model, part))
     if (events.length) return events
   }
+  // 被使用者取消（stop_reason: "cancelled"）或中斷的 turn 沒有任何 token，
+  // 不能 fallback 成未知模型的一筆請求（實測會多出一筆 0 token 的 unknown 模型且無單價）
+  if (!hasTokens(usage)) return []
   return [toEvent('unknown', usage)]
 }
 
@@ -256,6 +337,7 @@ module.exports = {
   USD_TICKS,
   newState,
   toMs,
+  uuidv7Ms,
   parseClaudeLine,
   parseCodexLine,
   parseGrokLine

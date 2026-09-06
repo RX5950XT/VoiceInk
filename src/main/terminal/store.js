@@ -33,7 +33,10 @@ const SHELLS = {
 const PRESETS = {
   shell: { label: '純 shell', command: '' },
   claude: { label: 'Claude Code', command: 'claude' },
-  codex: { label: 'Codex CLI', command: 'codex' }
+  codex: { label: 'Codex CLI', command: 'codex' },
+  opencode: { label: 'OpenCode', command: 'opencode' },
+  agy: { label: 'Antigravity CLI', command: 'agy' },
+  grok: { label: 'Grok CLI', command: 'grok' }
 }
 
 const DEFAULT_SHELL = 'pwsh'

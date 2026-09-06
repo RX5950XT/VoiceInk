@@ -39,11 +39,13 @@ const TTS_PREVIEW_TEXT = Object.freeze({
 const { registerUsageIpc } = require('./usage/ipc')
 const { registerAgyIpc } = require('./agy/ipc')
 const { registerTerminalIpc } = require('./terminal/ipc')
+const { registerWorkspaceIpc } = require('./workspace/ipc')
 const { registerSysmonIpc } = require('./sysmon/ipc')
 const { registerHfModelsIpc } = require('./hfmodels/ipc')
 const { registerCcSwitchIpc } = require('./ccswitch/ipc')
 const { registerCodeUsageIpc } = require('./codeusage/ipc')
 const { registerDictationIpc } = require('./dictation/ipc')
+const { registerScreentimeIpc } = require('./screentime/ipc')
 const dictationHud = require('./dictation/hud')
 const updater = require('./updater')
 
@@ -85,7 +87,9 @@ const loadCudaEnv = lazyLoad('./cuda-env')
 let agyMod = null
 let dictationMod = null
 let terminalMod = null
+let workspaceMod = null
 let sysmonMod = null
+let screentimeMod = null
 let ccSwitchMod = null
 let codeUsageMod = null
 let hfModelsMod = null
@@ -112,6 +116,16 @@ dictationHud.configure({ isDev, preload: path.join(__dirname, '../preload/preloa
 // 開機自啟動時帶的旗標：靜靜地縮在系統匣，不要跳一扇窗出來
 const HIDDEN_FLAG = '--hidden'
 const startHidden = process.argv.includes(HIDDEN_FLAG)
+
+// 預覽／CDP 會帶 --user-data-dir。Chromium 有時還沒套到 app.getPath('userData')
+// 就先跑到 requestSingleInstanceLock，會跟安裝版搶同一把鎖、視窗直接自己關掉。
+const userDataArg = process.argv.find((a) => typeof a === 'string' && a.startsWith('--user-data-dir='))
+const userDataDir = (
+  (userDataArg ? userDataArg.slice('--user-data-dir='.length) : '')
+  || app.commandLine.getSwitchValue('user-data-dir')
+  || ''
+).replace(/^["']|["']$/g, '')
+if (userDataDir) app.setPath('userData', userDataDir)
 
 /**
  * 只准跑一份。
@@ -295,6 +309,15 @@ function loadTerminal() {
 }
 
 /**
+ * 第一次進工作區才載模組（會讀使用者的專案資料夾與 agent 記錄，不該擋啟動）。
+ * @returns {object}
+ */
+function loadWorkspace() {
+  if (!workspaceMod) workspaceMod = require('./workspace')
+  return workspaceMod
+}
+
+/**
  * 第一次進 Claude Code 頁才載模組（會讀使用者家目錄的設定檔，不該擋啟動）。
  * @returns {object}
  */
@@ -328,6 +351,19 @@ function loadCodeUsage() {
  * 第一次進系統監控頁才載模組（會開 PowerShell 與 nvidia-smi 子程序，不該擋啟動）。
  * @returns {object}
  */
+/**
+ * 使用時長：開機就導入 Tai 資料並開始記，不必等使用者點開系統監控頁。
+ * @returns {object}
+ */
+function loadScreentime() {
+  if (!screentimeMod) {
+    screentimeMod = require('./screentime').createScreentimeService({
+      userDataPath: app.getPath('userData')
+    })
+  }
+  return screentimeMod
+}
+
 function loadSysmon() {
   if (!sysmonMod) {
     sysmonMod = require('./sysmon').createSysmonService()
@@ -704,6 +740,9 @@ function createMainWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
+      // 工作區的內建瀏覽器用 <webview>（比照 Orca）。**只開在主視窗**：
+      // 字幕視窗與 HUD 用不到，少一扇視窗多吃一個能力。
+      webviewTag: true,
       spellcheck: false,
       preload: path.join(__dirname, '../preload/preload.js')
     },
@@ -778,9 +817,27 @@ function attachWindowSecurity(win) {
     return { action: 'deny' }
   })
   win.webContents.on('will-navigate', (event, url) => {
-    // 允許 dev Vite 與 file:// 本機頁；其餘擋下
-    if (isDev && url.startsWith('http://localhost:5173')) return
-    if (url.startsWith('file://')) return
+    try {
+      const target = new URL(url)
+      const current = new URL(win.webContents.getURL())
+      if (isDev && target.origin === 'http://localhost:5173') return
+      // 只有同一份 App 頁面能保留 preload；任意本機 HTML 也不可信。
+      if (target.protocol === 'file:' && target.origin === current.origin
+        && target.host === current.host && target.pathname === current.pathname) return
+    } catch { /* 無效導覽一律拒絕 */ }
+    event.preventDefault()
+  })
+  win.webContents.on('will-attach-webview', (event, preferences, params) => {
+    // 不接受 renderer 自帶的 preload 或關閉沙箱選項。
+    delete preferences.preload
+    delete preferences.preloadURL
+    Object.assign(preferences, { nodeIntegration: false, nodeIntegrationInSubFrames: false,
+      nodeIntegrationInWorker: false, contextIsolation: true, sandbox: true,
+      webSecurity: true, allowRunningInsecureContent: false, webviewTag: false })
+    try {
+      const url = new URL(params.src)
+      if (url.protocol === 'http:' || url.protocol === 'https:' || url.href === 'about:blank') return
+    } catch { /* 無效網址一律拒絕 */ }
     event.preventDefault()
   })
 }
@@ -1505,6 +1562,58 @@ registerTerminalIpc({
   getWindow: () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null)
 })
 
+// ===== 專案工作區 =====
+// renderer 只送 projectId 與專案內的相對路徑；絕對路徑一律由 workspace/index.js 從 store 取，
+// 檔案存取全部過 workspace/files.js 的 resolveIn（逃出專案範圍就拒絕）。
+registerWorkspaceIpc({
+  ipcMain,
+  service: {
+    listProjects: (...args) => loadWorkspace().listProjects(...args),
+    addProject: (...args) => loadWorkspace().addProject(...args),
+    addDropped: (...args) => loadWorkspace().addDropped(...args),
+    renameProject: (...args) => loadWorkspace().renameProject(...args),
+    removeProject: (...args) => loadWorkspace().removeProject(...args),
+    reorderProjects: (...args) => loadWorkspace().reorderProjects(...args),
+    saveTabsState: (...args) => loadWorkspace().saveTabsState(...args),
+    getTabsState: (...args) => loadWorkspace().getTabsState(...args),
+    getFileMtime: (...args) => loadWorkspace().getFileMtime(...args),
+    projectPath: (...args) => loadWorkspace().projectPath(...args),
+    listDir: (...args) => loadWorkspace().listDir(...args),
+    readFile: (...args) => loadWorkspace().readFile(...args),
+    writeFile: (...args) => loadWorkspace().writeFile(...args),
+    createEntry: (...args) => loadWorkspace().createEntry(...args),
+    renameEntry: (...args) => loadWorkspace().renameEntry(...args),
+    moveEntry: (...args) => loadWorkspace().moveEntry(...args),
+    removeEntry: (...args) => loadWorkspace().removeEntry(...args),
+    searchFiles: (...args) => loadWorkspace().searchFiles(...args),
+    listFiles: (...args) => loadWorkspace().listFiles(...args),
+    listPorts: (...args) => loadWorkspace().listPorts(...args),
+    reveal: (...args) => loadWorkspace().reveal(...args),
+    openExternal: (...args) => loadWorkspace().openExternal(...args),
+    gitStatus: (...args) => loadWorkspace().gitStatus(...args),
+    gitLog: (...args) => loadWorkspace().gitLog(...args),
+    gitStage: (...args) => loadWorkspace().gitStage(...args),
+    gitUnstage: (...args) => loadWorkspace().gitUnstage(...args),
+    gitStageAll: (...args) => loadWorkspace().gitStageAll(...args),
+    gitUnstageAll: (...args) => loadWorkspace().gitUnstageAll(...args),
+    gitDiscard: (...args) => loadWorkspace().gitDiscard(...args),
+    gitCommit: (...args) => loadWorkspace().gitCommit(...args),
+    gitPush: (...args) => loadWorkspace().gitPush(...args),
+    gitPull: (...args) => loadWorkspace().gitPull(...args),
+    gitDiff: (...args) => loadWorkspace().gitDiff(...args),
+    gitFileVersions: (...args) => loadWorkspace().gitFileVersions(...args),
+    worktreeList: (...args) => loadWorkspace().worktreeList(...args),
+    worktreeAdd: (...args) => loadWorkspace().worktreeAdd(...args),
+    worktreeRemove: (...args) => loadWorkspace().worktreeRemove(...args),
+    agentSessions: (...args) => loadWorkspace().agentSessions(...args),
+    agentResumeCommand: (...args) => loadWorkspace().agentResumeCommand(...args),
+    agentSessionDetail: (...args) => loadWorkspace().agentSessionDetail(...args)
+  },
+  isMainSender: assertMainWindowSender,
+  dialog,
+  getWindow: () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null)
+})
+
 // ===== HF模型（本機 llama.cpp router）=====
 // renderer 只送 repoId／variantId／模型 id；下載網址由 hub.fileUrl 在 main 組，
 // router 的 api key 不出 main（`runtimeStatus` 只回 running 與 port）。
@@ -1582,6 +1691,10 @@ registerSysmonIpc({
     fanTaskStatus: (...args) => loadSysmon().fanTaskStatus(...args),
     fanTaskInstall: (...args) => loadSysmon().fanTaskInstall(...args),
     fanTaskRemove: (...args) => loadSysmon().fanTaskRemove(...args),
+    ocStatus: (...args) => loadSysmon().ocStatus(...args),
+    ocSetDraft: (...args) => loadSysmon().ocSetDraft(...args),
+    ocApply: (...args) => loadSysmon().ocApply(...args),
+    ocReset: (...args) => loadSysmon().ocReset(...args),
     // GPU 壓力測試期間把 renderer 的背景節流關掉，測完立刻打開。
     //
     // 視窗被別的視窗遮住時，Chromium 會把這個 renderer 降級——GPU 指令跟著被降優先，
@@ -1637,6 +1750,18 @@ registerCcSwitchIpc({
 // ===== 語音輸入（全域右 Alt）=====
 // 熱鍵、麥克風以外的每一段都在 main：ASR 模型、整理用的供應商金鑰、剪貼簿與模擬按鍵。
 // renderer 只送得出「錄好的一段 PCM」與字典的兩個字串。
+registerScreentimeIpc({
+  ipcMain,
+  service: {
+    status: (...args) => loadScreentime().status(...args),
+    stats: (...args) => loadScreentime().stats(...args),
+    drill: (...args) => loadScreentime().drill(...args),
+    exportCsv: (...args) => loadScreentime().exportCsv(...args),
+    openFolder: (...args) => loadScreentime().openFolder(...args)
+  },
+  isMainSender: assertMainWindowSender
+})
+
 registerDictationIpc({
   ipcMain,
   service: {
@@ -1665,6 +1790,20 @@ registerCodeUsageIpc({
     reset: (...args) => loadCodeUsage().reset(...args)
   },
   isMainSender: assertMainWindowSender
+})
+
+// webview guest 的 popup 走不到主視窗那條 attachWindowSecurity（那是掛在
+// 主視窗 webContents 上），一律在 app 層補上：http(s) 交給系統瀏覽器，其餘擋掉。
+app.on('web-contents-created', (_event, contents) => {
+  contents.setWindowOpenHandler(({ url }) => {
+    try {
+      const u = new URL(url)
+      if (u.protocol === 'https:' || u.protocol === 'http:') {
+        shell.openExternal(url).catch(() => {})
+      }
+    } catch { /* ignore bad url */ }
+    return { action: 'deny' }
+  })
 })
 
 // 設定系統音訊擷取的媒體請求處理器
@@ -1706,9 +1845,19 @@ app.whenReady().then(() => {
     .then(() => {
       // 風扇接管：使用者上次開著就在開機自啟動時直接接手，**不必等他點開系統監控頁**。
       // 這之前的幾秒由 BIOS 曲線負責，那是安全的預設值。
-      if (store?.get('fanControl')?.enabled !== true) return undefined
-      return loadSysmon().ensureFanControl()
-        .catch((err) => console.error('[sysmon] fan takeover failed:', err?.message || err))
+      try { loadScreentime().start() } catch (err) {
+        console.error('[screentime] start failed:', err?.message || err)
+      }
+      const fansOn = store?.get('fanControl')?.enabled === true
+      const sensorsOn = store?.get('sysmonSensors') !== false
+      if (!fansOn && !sensorsOn) return undefined
+      const sysmon = loadSysmon()
+      if (fansOn) {
+        return sysmon.ensureFanControl()
+          .catch((err) => console.error('[sysmon] fan takeover failed:', err?.message || err))
+      }
+      return sysmon.ensureSensors()
+        .catch((err) => console.error('[sysmon] sensors start failed:', err?.message || err))
     })
     .catch((err) => console.error('[store] init failed:', err?.message || err))
 })
@@ -1730,6 +1879,9 @@ app.on('before-quit', (e) => {
   const stopSysmon = sysmonMod
     ? Promise.resolve(sysmonMod.shutdown()).catch((err) => console.error('[sysmon] shutdown failed:', err))
     : Promise.resolve()
+  const stopScreentime = screentimeMod
+    ? Promise.resolve(screentimeMod.shutdown()).catch((err) => console.error('[screentime] shutdown failed:', err))
+    : Promise.resolve()
   // 低階鍵盤 hook 有自己的執行緒，不收掉會擋住程序真的結束
   if (dictationMod) dictationMod.shutdown()
   // llama.cpp router：它自己會帶走底下跑模型的子程序，但沒人收它就會留一台在背景吃顯存
@@ -1743,6 +1895,7 @@ app.on('before-quit', (e) => {
     : Promise.resolve()
   const stopAgy = Promise.all([
     stopSysmon,
+    stopScreentime,
     stopGateway,
     agyMod ? agyMod.shutdown() : Promise.resolve()
   ])
@@ -1771,4 +1924,3 @@ app.on('activate', () => {
     createMainWindow()
   }
 })
-

@@ -339,8 +339,8 @@ async function main() {
       })()`), 20_000, '掃描彈窗開啟')
 
       check('掃描列出所有模型', dialog.items.length === fake.models.length, dialog.items.join(','))
-      check('說明帶出供應商名稱與數量',
-        dialog.desc.includes('掃描測試') && dialog.desc.includes(String(fake.models.length)), dialog.desc)
+      check('說明帶出掃到的數量',
+        dialog.desc.includes(String(fake.models.length)), dialog.desc)
       check('預設一個都沒勾', dialog.count.includes('已勾選 0'), dialog.count)
 
       const filtered = await cdp.eval(`(() => {

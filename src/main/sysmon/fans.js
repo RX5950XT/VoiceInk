@@ -21,6 +21,11 @@
  *   - sidecar 自己還有 5 秒看門狗（見 native/sysmon-sensors/Program.cs）
  */
 
+const os = require('node:os')
+
+/** 這次開機的時間（毫秒 epoch）。BIOS 在 POST 重設風扇曲線，所以它是「手動 PWM 還在不在」的分界 */
+const bootTime = () => Date.now() - os.uptime() * 1000
+
 const TICK_MS = 1000
 /** 每秒最多變動幾 %；再快就會聽得出來忽大忽小 */
 const MAX_STEP = 5
@@ -30,7 +35,7 @@ const HYSTERESIS = 2
 const SMOOTH_N = 3
 /** 下限的下限：使用者可以調低，但不准低於這裡 */
 const MIN_FLOOR = 20
-const DEFAULT_MIN_PWM = 30
+const DEFAULT_MIN_PWM = MIN_FLOOR
 const DEFAULT_PANIC_TEMP = 90
 const IDENTIFY_MS = 4000
 const IDENTIFY_PWM = 100
@@ -221,6 +226,8 @@ function sanitizeConfig(raw, names = new Map()) {
   return {
     enabled: raw?.enabled === true,
     dirty: raw?.dirty === true,
+    // 0 ＝ 舊檔沒記時間：保守當成「這次開機留下的」照樣警告
+    dirtyAt: Number.isFinite(Number(raw?.dirtyAt)) ? Number(raw.dirtyAt) : 0,
     panicTemp: clamp(Math.round(Number(raw?.panicTemp) || DEFAULT_PANIC_TEMP), 60, 105),
     channels
   }
@@ -260,6 +267,7 @@ function createFanEngine(deps = {}) {
   function markDirty() {
     if (config.dirty) return
     config.dirty = true
+    config.dirtyAt = Date.now()
     persist()
   }
 
@@ -269,7 +277,9 @@ function createFanEngine(deps = {}) {
     let raw = null
     try { raw = store.get('fanControl') } catch { raw = null }
     config = sanitizeConfig(raw, nameMap())
-    crashedLastRun = config.dirty
+    // 重開機時 BIOS 會在 POST 重設 SmartGuardian → 那之前留下的手動 PWM 早就沒了，
+    // 再警告「重開機才會回復」等於叫使用者去做一件已經做過的事。
+    crashedLastRun = config.dirty && (!config.dirtyAt || config.dirtyAt > bootTime())
   }
 
   /** identifier → 接頭名稱（sanitize 拿來猜槽位／來源） */

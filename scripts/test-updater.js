@@ -15,6 +15,9 @@ const path = require('path')
 const Module = require('module')
 
 const ROOT = path.join(__dirname, '..')
+const resources = fs.mkdtempSync(path.join(require('os').tmpdir(), 'vi-update-test-'))
+process.resourcesPath = resources
+process.on('exit', () => fs.rmSync(resources, { recursive: true, force: true }))
 
 /** 假的 electron-updater：把 on() 收下來，測試自己觸發 */
 function makeFakeAutoUpdater() {
@@ -46,6 +49,9 @@ Module._load = function (request, ...rest) {
  * @param {{isPackaged: boolean}} appOpts
  */
 function loadUpdater(appOpts) {
+  const config = path.join(resources, 'app-update.yml')
+  if (appOpts.hasConfig === false) fs.rmSync(config, { force: true })
+  else fs.writeFileSync(config, 'provider: github\n')
   const fake = makeFakeAutoUpdater()
   stubs.electron = { app: { isPackaged: appOpts.isPackaged, getVersion: () => '1.11.0' } }
   stubs['electron-updater'] = { autoUpdater: fake }
@@ -54,6 +60,13 @@ function loadUpdater(appOpts) {
 }
 
 async function main() {
+  {
+    const { updater, fake } = loadUpdater({ isPackaged: true, hasConfig: false })
+    await updater.check()
+    assert.strictEqual(updater.status().state, 'unsupported', '缺更新資訊要說明，不能安靜停在 idle')
+    assert.strictEqual(fake.checkCount, 0)
+    console.log('[預覽] 缺更新資訊有明確狀態 ✓')
+  }
   // [A] 開發模式：不檢查、不安裝，UI 有話可說
   {
     const { updater, fake } = loadUpdater({ isPackaged: false })
@@ -116,12 +129,14 @@ async function main() {
     assert.strictEqual(updater.installOnQuit(), false, '沒下載完不可以叫 install')
     assert.strictEqual(fake.installCalls.length, 0)
     const origErr = console.error
-    console.error = () => {}
+    const logged = []
+    console.error = (...args) => logged.push(args.join(' '))
     fake.fire('error', new Error('SECRET-TOKEN-abc123 leaked from upstream'))
     console.error = origErr
     const msg = updater.status().message
     assert.strictEqual(updater.status().state, 'error')
     assert.ok(!msg.includes('SECRET-TOKEN'), '上游錯誤原文不可以進 UI')
+    assert.ok(!logged.join(' ').includes('SECRET-TOKEN'), '上游錯誤原文不可以進 console')
     console.log('[D] 未下載不安裝、錯誤訊息不外洩 ✓')
   }
 

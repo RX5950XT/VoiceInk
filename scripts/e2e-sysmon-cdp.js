@@ -27,6 +27,7 @@ const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-
 // 暫存 user-data-dir：使用者開著的正式實例佔 single-instance lock，
 // 沒有自己的資料夾會被擋掉（second-instance 轉交後退出，CDP 等不到主視窗）
 const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-cdp-'))
+fs.writeFileSync(path.join(USER_DATA_DIR, 'config.json'), JSON.stringify({ sysmonSensors: false }))
 const RESTORE_KEYS = ['sysmonInterval', 'sysmonSort', 'sysmonSensors']
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -101,7 +102,7 @@ async function waitFor(action, timeoutMs, label) {
 }
 
 async function main() {
-  const child = spawn(EXE, [`--remote-debugging-port=${PORT}`, `--user-data-dir=${USER_DATA_DIR}`], { stdio: ['ignore', 'pipe', 'pipe'] })
+  const child = spawn(EXE, ['--hidden', `--remote-debugging-port=${PORT}`, `--user-data-dir=${USER_DATA_DIR}`], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
   let processLog = ''
   child.stdout.on('data', (c) => { processLog += c })
   child.stderr.on('data', (c) => { processLog += c })

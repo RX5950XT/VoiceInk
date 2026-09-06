@@ -90,18 +90,23 @@ function readOpencode(sinceMs, dbPath = opencodeDbPath()) {
       const cache = tokens.cache || {}
       const input = Number(tokens.input) || 0
       const cacheRead = Number(cache.read) || 0
+      const output = Number(tokens.output) || 0
+      const reasoning = Number(tokens.reasoning) || 0
+      const cacheWrite = Number(cache.write) || 0
+      const costUsd = Number.isFinite(Number(data.cost)) ? Number(data.cost) : null
+      if (!input && !output && !reasoning && !cacheRead && !cacheWrite && !costUsd) continue
       events.push({
         ts: Number(row.time_created) || 0,
         model: String(data.modelID || 'unknown'),
         // OpenCode 的 input 不含 cache（實測 input 152079 / cache.read 128 / total 152528）
         input,
-        output: Number(tokens.output) || 0,
-        reasoning: Number(tokens.reasoning) || 0,
+        output,
+        reasoning,
         cacheRead,
-        cacheWrite: Number(cache.write) || 0,
+        cacheWrite,
         requests: 1,
         // 自帶花費，比我們用單價表推算準
-        costUsd: Number.isFinite(Number(data.cost)) ? Number(data.cost) : null
+        costUsd
       })
     }
     return events

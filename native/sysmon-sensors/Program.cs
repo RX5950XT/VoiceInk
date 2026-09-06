@@ -22,11 +22,15 @@ namespace VoiceInkSensors
     /// 每一框另外帶 "c"：可寫入的 PWM 通道（風扇控制用）。
     ///
     /// 管道是**雙向**的：主程式可以送指令進來（一行一個，空白分隔，不用 JSON——
-    /// 指令只有四種、識別碼不含空白，自己 split 比拉一包序列化器省事）：
+    /// 指令識別碼不含空白，自己 split 比拉一包序列化器省事）：
     ///   S &lt;identifier&gt; &lt;0~100&gt;   把該通道設成手動 PWM
     ///   D &lt;identifier&gt;            該通道交還（LHM 的 SetDefault）
-    ///   R                          全部交還
+    ///   R                          全部交還（風扇＋效能調整）
     ///   P                          心跳
+    ///   G &lt;coreMHz&gt; &lt;memMHz&gt; &lt;powerPct&gt; [voltMv] [tempC]  GPU 時脈／功耗／電壓／溫度牆
+    ///   C &lt;pptW&gt; &lt;tdcA&gt; &lt;edcA&gt; &lt;scalar×100&gt; [co] [freq] [tctl] [voltMv]  CPU PBO／鎖頻／電壓
+    ///   K &lt;n&gt; &lt;m0…&gt;             Curve Optimizer 每核
+    ///   X                          還原本次套用的 CPU／GPU
     /// 交還完成後回一行 {"reset":1}，主程式靠它知道可以安全結束了。
     ///
     /// **看門狗**：只要我們寫過任何一條通道，超過 WatchdogMs 沒收到任何指令就自己
@@ -56,9 +60,17 @@ namespace VoiceInkSensors
         /// 同一顆硬體上同 Index 的轉速感測器（可能沒有，例如沒插風扇的接頭）
         private static readonly Dictionary<string, ISensor> Fans = new Dictionary<string, ISensor>(StringComparer.Ordinal);
         private static long _lastCommandAt;
+        /** 主程式送 R 後，回報交還並立即離開，不再多跑取樣迴圈。 */
+        private static volatile bool _stopRequested;
 
         private static int Main(string[] args)
         {
+            _stopRequested = false;
+            if (args.Length >= 1 && string.Equals(args[0], "--oc-probe", StringComparison.OrdinalIgnoreCase))
+            {
+                bool hold = args.Length > 1 && string.Equals(args[1], "--hold", StringComparison.OrdinalIgnoreCase);
+                return Oc.RunProbe(hold);
+            }
             if (args.Length < 1 || string.IsNullOrWhiteSpace(args[0]))
             {
                 return 2;
@@ -151,6 +163,7 @@ namespace VoiceInkSensors
             // 先跑一輪才索引得到控制通道（LHM 要 Update 過才會把感測器物件建出來）
             try { computer.Accept(visitor); } catch { /* 下一輪還會再試 */ }
             IndexControls(computer);
+            Oc.Init(computer);
             _lastCommandAt = Environment.TickCount64;
 
             var reader = new Thread(() => ReadCommands(pipe, writer)) { IsBackground = true };
@@ -158,7 +171,7 @@ namespace VoiceInkSensors
 
             try
             {
-                while (writeFailures < WriteFailuresBeforeExit)
+                while (writeFailures < WriteFailuresBeforeExit && !_stopRequested)
                 {
                     lock (Gate)
                     {
@@ -190,11 +203,16 @@ namespace VoiceInkSensors
                         break;
                     }
 
-                    // 看門狗：只有在我們真的接管過風扇時才作用——純讀感測器的用法沒有心跳，
-                    // 不能因此被關掉。主程式被硬殺時，這是唯一會把風扇交還的機制。
+                    if (_stopRequested)
+                    {
+                        break;
+                    }
+
+                    // 看門狗：只有在我們真的寫過風扇或效能調整時才作用——純讀感測器的
+                    // 用法沒有心跳，不能因此被關掉。主程式被硬殺時，這是唯一會交還的機制。
                     lock (Gate)
                     {
-                        if (Overridden.Count > 0
+                        if ((Overridden.Count > 0 || Oc.IsApplied)
                             && Environment.TickCount64 - _lastCommandAt > WatchdogMs)
                         {
                             RestoreAll();
@@ -316,6 +334,30 @@ namespace VoiceInkSensors
                             lock (Gate) { RestoreAll(); }
                             // 主程式靠這一行知道風扇已經交還、可以安全收掉我們了
                             lock (Gate) { TryWrite(writer, "{\"reset\":1}"); }
+                            _stopRequested = true;
+                            break;
+                        case "G" when parts.Length >= 4:
+                            Oc.ApplyGpu(
+                                ParseInt(parts[1]), ParseInt(parts[2]), ParseInt(parts[3]),
+                                OptInt(parts, 4, 0), OptInt(parts, 5, 90));
+                            break;
+                        case "C" when parts.Length >= 5:
+                            Oc.ApplyCpu(
+                                ParseInt(parts[1]), ParseInt(parts[2]), ParseInt(parts[3]), ParseInt(parts[4]),
+                                OptInt(parts, 5, 0), OptInt(parts, 6, 0), OptInt(parts, 7, 90),
+                                OptInt(parts, 8, 0), OptInt(parts, 9, 0));
+                            break;
+                        case "K" when parts.Length >= 2:
+                            Oc.ApplyCores(ParseList(parts, 16));
+                            break;
+                        case "F" when parts.Length >= 2:
+                            Oc.ApplyFreqCores(ParseList(parts, 16));
+                            break;
+                        case "V" when parts.Length >= 2:
+                            Oc.ApplyVf(ParseList(parts, 96));
+                            break;
+                        case "X":
+                            Oc.Reset();
                             break;
                     }
                 }
@@ -356,15 +398,38 @@ namespace VoiceInkSensors
             }
         }
 
-        /// <summary>把所有被我們接管的通道交還。呼叫端要自己拿 Gate。</summary>
+        /// <summary>把所有被我們接管的通道交還，並還原效能調整。呼叫端要自己拿 Gate。</summary>
         private static void RestoreAll()
         {
+            Oc.Reset();
             foreach (string identifier in new List<string>(Overridden))
             {
                 if (!Controls.TryGetValue(identifier, out ISensor sensor)) continue;
                 try { sensor.Control?.SetDefault(); } catch { /* 盡力而為 */ }
             }
             Overridden.Clear();
+        }
+
+        private static int ParseInt(string raw)
+        {
+            if (int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out int value)) return value;
+            return 0;
+        }
+
+        private static int OptInt(string[] parts, int index, int fallback)
+        {
+            if (index >= parts.Length) return fallback;
+            return ParseInt(parts[index]);
+        }
+
+        private static int[] ParseList(string[] parts, int max)
+        {
+            int n = ParseInt(parts[1]);
+            if (n < 0) n = 0;
+            if (n > max) n = max;
+            var values = new int[n];
+            for (int i = 0; i < n && i + 2 < parts.Length; i++) values[i] = ParseInt(parts[i + 2]);
+            return values;
         }
 
         private static void TryWrite(StreamWriter writer, string line)
@@ -408,7 +473,9 @@ namespace VoiceInkSensors
                   .Append('}');
             }
 
-            sb.Append("]}");
+            sb.Append("],");
+            Oc.AppendJson(sb, computer);
+            sb.Append('}');
         }
 
         /// 讀不到就送 null——送 0 會在畫面上變成「轉速 0」，那是完全不同的意思

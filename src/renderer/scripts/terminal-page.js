@@ -1,5 +1,6 @@
 import { electronAPI, showToast, setChatPaneMode } from './app.js'
 import { createListReorder } from './list-reorder.js'
+import { initWsTabs, showSurface, trackTerminal, removeTerminalTab, renameTerminalTab } from './ws-tabs.js'
 // renderer 沒有 bundler，但 xterm 有現成的 ESM 產物，相對路徑直接載就好：
 // vendoring 只會多一份得跟著升級的複本（markdown.js 那條慣例同理）。
 import { Terminal } from '../../../node_modules/@xterm/xterm/lib/xterm.mjs'
@@ -281,6 +282,7 @@ function startRename(el, item) {
     if (commit && next && next !== item.title) {
       await call(electronAPI.terminal.rename(item.id, next), '改名失敗')
       await reloadList()
+      renameTerminalTab(item.id, next)
     } else {
       input.replaceWith(title)
     }
@@ -341,7 +343,7 @@ async function deleteSession(item) {
   unread.delete(item.id)
   if (currentId === item.id) currentId = ''
   await reloadList()
-  if (!currentId) showHost(false)
+  removeTerminalTab(item.id)
 }
 
 /**
@@ -412,6 +414,16 @@ function createPane(id) {
   term.onData((data) => {
     void electronAPI.terminal.write(id, data)
   })
+  // 一般終端機的習慣：選起來就進剪貼簿、右鍵就貼上
+  pane.addEventListener('mouseup', (event) => {
+    if (event.button !== 0) return
+    const selection = term.getSelection()
+    if (selection) void navigator.clipboard.writeText(selection).catch(() => {})
+  })
+  pane.addEventListener('contextmenu', (event) => {
+    event.preventDefault()
+    navigator.clipboard.readText().then((text) => { if (text) term.paste(text) }, () => {})
+  })
 
   /** @type {Pane} */
   const entry = { term, fit, pane, seq: 0, ready: false, writing: false, queue: [] }
@@ -431,11 +443,12 @@ function disposePane(id) {
 }
 
 /**
+ * 顯示終端機那一格。**實際的切換交給 `ws-tabs.js`**——工作區主區現在還裝著
+ * 編輯器與瀏覽器，各自 toggle 自己的 hidden 會互相疊在一起。
  * @param {boolean} on
  */
 function showHost(on) {
-  hostEl?.classList.toggle('hidden', !on)
-  emptyEl?.classList.toggle('hidden', on)
+  showSurface(on ? 'terminal' : 'empty')
 }
 
 /**
@@ -443,8 +456,8 @@ function showHost(on) {
  * @param {string} id
  */
 async function openSession(id) {
-  // 聊天與終端機同頁：點終端機就是切到終端機主區（同步切 DOM，xterm 才量得到尺寸）
-  setChatPaneMode('terminal')
+  // 聊天與工作區同頁：點終端機就是切到工作區主區（同步切 DOM，xterm 才量得到尺寸）
+  setChatPaneMode('workspace')
   currentId = id
   unread.delete(id)
   showHost(true)
@@ -479,6 +492,8 @@ async function openSession(id) {
 
   entry.term.focus()
   await reloadList()
+  // 分頁列要有這一格（從側欄點進來的也算）
+  trackTerminal(id, items.find((item) => item.id === id)?.title || '終端機')
 }
 
 /**
@@ -630,6 +645,7 @@ function onStatus(payload) {
 export function initTerminalPage() {
   if (initialized) return
   initialized = true
+  initWsTabs()
 
   listEl = document.getElementById('termList')
   hostEl = document.getElementById('termHost')
@@ -691,6 +707,25 @@ export async function runInNewTerminal(title, command) {
   await openSession(created.id)
   await electronAPI.terminal.write(created.id, `${command}\r`)
   return created.id
+}
+
+/**
+ * 給 `ws-tabs.js` 用：切到（或開啟）某個工作階段。
+ * @param {string} id
+ */
+export async function openTerminalSession(id) {
+  initTerminalPage()
+  await openSession(id)
+}
+
+/**
+ * 關掉一個終端機**分頁**：只收掉畫面那一格，工作階段本身還在側欄裡活著
+ * （下次點側欄會重新掛上，scrollback 由 main 那邊留著）。
+ * @param {string} id
+ */
+export function detachTerminalPane(id) {
+  disposePane(id)
+  if (currentId === id) currentId = ''
 }
 
 export function refreshTerminalPage() {

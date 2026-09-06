@@ -303,7 +303,7 @@ async function refreshUiState() {
     const st = await electronAPI.models.status().catch(() => null)
     const llmKey = resolveTranslateModelKey(settings, st?.models)
     if (!st?.models?.[llmKey]?.downloaded) {
-      bannerMsg = '本地翻譯模型尚未下載，請到設定下載。'
+      bannerMsg = '本地翻譯模型未下載，請到設定下載。'
       statusLabel = '翻譯：本地 LLM（模型未下載）'
     } else {
       canTranslate = true
@@ -312,7 +312,7 @@ async function refreshUiState() {
     const cloud = resolveCloudTranslate(settings)
     statusLabel = cloud.modelId ? `翻譯：雲端 · ${cloud.modelId}` : '翻譯：雲端 LLM'
     if (!cloud.ready) {
-      bannerMsg = '雲端翻譯需要一組填好 API Key 的供應商，請到設定 → 雲端模型設定。'
+      bannerMsg = '雲端翻譯需要一組 API Key，請到設定 → 雲端模型。'
       statusLabel = '翻譯：雲端 LLM（未設定）'
     } else {
       canTranslate = true

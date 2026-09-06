@@ -117,7 +117,8 @@ function renderSummary() {
     const show = models.length > 0
     note.classList.toggle('hidden', !show)
     if (show) {
-      note.textContent = `有 ${models.length} 個模型還沒設單價，${s.uncostedRequests} 次請求沒有算進花費：${models.join('、')}。按「單價」填上去。`
+      note.textContent = `${models.length} 個模型未設單價（${s.uncostedRequests} 次請求未計費）：${models.join('、')}（點擊設定單價）`
+      note.style.cursor = 'pointer'
     }
   }
 
@@ -125,7 +126,7 @@ function renderSummary() {
   if (syncedAt) {
     syncedAt.textContent = latest.syncedAt
       ? `上次掃描：${new Date(latest.syncedAt).toLocaleString()}`
-      : '尚未掃描。第一次會讀滿本機的 session 記錄，之後只讀新增的部分。'
+      : '尚未掃描'
   }
 }
 
@@ -288,6 +289,13 @@ function openPricesDialog() {
 function priceRow(model, price, source) {
   const row = el('div', 'cu-price-row')
   row.dataset.model = model
+  row.dataset.source = source
+  if (price) {
+    row.dataset.origInput = price.input !== undefined ? String(price.input) : ''
+    row.dataset.origOutput = price.output !== undefined ? String(price.output) : ''
+    row.dataset.origCacheRead = price.cacheRead !== undefined ? String(price.cacheRead) : ''
+    row.dataset.origCacheWrite = price.cacheWrite !== undefined ? String(price.cacheWrite) : ''
+  }
   row.append(el('span', 'cu-price-name', model))
 
   // 四格都是「每 100 萬 token 的美金」。快取那兩格留空＝照 Anthropic 的公開規則推
@@ -323,16 +331,32 @@ async function savePrices() {
   const prices = {}
   for (const row of host.querySelectorAll('.cu-price-row')) {
     const model = row.dataset.model
+    if (!model) continue
+    const source = row.dataset.source
     const value = (field) => row.querySelector(`[data-field="${field}"]`)?.value ?? ''
     const input = value('input')
     const output = value('output')
+    const cacheRead = value('cacheRead')
+    const cacheWrite = value('cacheWrite')
+
     // 輸入與輸出都要填才算數；留空＝這顆模型沒有單價（不是 0 元）
-    if (!model || input === '' || output === '') continue
+    if (input === '' || output === '') continue
+
+    // 原本是內建且數值完全未修改時，不寫入自訂單價，避免覆蓋官方配置與丟失 1h 快取倍率
+    if (source === 'builtin') {
+      const origInput = row.dataset.origInput || ''
+      const origOutput = row.dataset.origOutput || ''
+      const origCacheRead = row.dataset.origCacheRead || ''
+      const origCacheWrite = row.dataset.origCacheWrite || ''
+      if (input === origInput && output === origOutput && cacheRead === origCacheRead && cacheWrite === origCacheWrite) {
+        continue
+      }
+    }
+
     prices[model] = { input: Number(input), output: Number(output) }
     // 快取那兩格可以留空：空的話 main 會照公開規則從輸入價推
-    for (const field of ['cacheRead', 'cacheWrite']) {
-      if (value(field) !== '') prices[model][field] = Number(value(field))
-    }
+    if (cacheRead !== '') prices[model].cacheRead = Number(cacheRead)
+    if (cacheWrite !== '') prices[model].cacheWrite = Number(cacheWrite)
   }
   try {
     await call(electronAPI.codeusage.savePrices(prices), '儲存單價失敗')
@@ -362,6 +386,9 @@ async function refresh() {
   try {
     latest = await call(electronAPI.codeusage.stats({ range }), '讀取用量統計失敗')
     render()
+    if (latest?.needsRescan && !syncing) {
+      void runSync()
+    }
   } catch {
     // call() 已經顯示訊息
   }
@@ -405,6 +432,7 @@ function bindOnce() {
     })
   })
   document.getElementById('cuSyncBtn')?.addEventListener('click', () => void runSync())
+  document.getElementById('cuUncosted')?.addEventListener('click', openPricesDialog)
   document.getElementById('cuPricesBtn')?.addEventListener('click', openPricesDialog)
   document.getElementById('cuPricesSaveBtn')?.addEventListener('click', () => void savePrices())
   document.getElementById('cuPricesCancelBtn')?.addEventListener('click', () => {

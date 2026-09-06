@@ -91,6 +91,12 @@ function registerSysmonIpc({ ipcMain, service, isMainSender }) {
   ipcMain.handle('sysmon:fanTaskInstall', (event) => invoke(event, () => service.fanTaskInstall()))
   ipcMain.handle('sysmon:fanTaskRemove', (event) => invoke(event, () => service.fanTaskRemove()))
 
+  // 效能調整。renderer 只送數字；opcode、PCI 位址、裝置路徑都不准出現在這條路上。
+  ipcMain.handle('sysmon:ocStatus', (event) => invoke(event, () => service.ocStatus()))
+  ipcMain.handle('sysmon:ocSetDraft', (event, patch) => invoke(event, () => service.ocSetDraft(patch)))
+  ipcMain.handle('sysmon:ocApply', (event) => invoke(event, () => service.ocApply()))
+  ipcMain.handle('sysmon:ocReset', (event) => invoke(event, () => service.ocReset()))
+
   ipcMain.handle('sysmon:cancelDiskBench', (event) => (
     invoke(event, () => { service.cancelDiskBench(); return true })
   ))

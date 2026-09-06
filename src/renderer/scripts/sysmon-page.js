@@ -12,6 +12,8 @@
 import { electronAPI } from './app.js'
 import { initCustomSelects, syncCustomSelects } from './custom-select.js'
 import { showFanPanel, hideFanPanel } from './sysmon-fans.js'
+import { showOcPanel, hideOcPanel, onOcSample } from './sysmon-oc.js'
+import { showScreentimePanel, hideScreentimePanel } from './sysmon-screentime.js'
 
 const HISTORY = 120
 const ROW_HEIGHT = 30
@@ -1655,7 +1657,7 @@ function selectPid(pid) {
     if (state.selectedPid !== pid || !box) return
     const d = res?.ok ? res.data : null
     if (!d) {
-      box.textContent = '這個處理程序已經結束，或需要更高權限才能查看細節。'
+      box.textContent = '程序已結束，或需要更高權限。'
       return
     }
     const bits = [
@@ -1684,8 +1686,8 @@ function askKill(force) {
   const confirm = $('sysmonKillConfirm')
   if (!dialog || !desc || !confirm) return
   desc.textContent = force
-    ? `強制結束「${proc?.name || pid}」（PID ${pid}）與它的子處理程序。未存檔的資料會直接遺失。`
-    : `要求「${proc?.name || pid}」（PID ${pid}）關閉。程式會有機會存檔；沒有回應的話再用強制結束。`
+    ? `強制結束「${proc?.name || pid}」（PID ${pid}）與子程序，未存檔資料會遺失。`
+    : `請「${proc?.name || pid}」（PID ${pid}）關閉，程式可存檔；不回應再用強制結束。`
   confirm.textContent = force ? '強制結束' : '結束'
   confirm.dataset.force = force ? '1' : ''
   dialog.showModal()
@@ -1886,7 +1888,7 @@ function startStress() {
   const gl = initStressGl()
   const stat = $('sysmonStressStat')
   if (!gl) {
-    if (stat) stat.textContent = '這台機器沒有可用的 WebGL2，無法執行 GPU 壓力測試。'
+    if (stat) stat.textContent = '沒有可用的 WebGL2，無法跑 GPU 壓力測試。'
     return
   }
   const level = Number($('sysmonGpuLoad')?.value || 3)
@@ -1945,7 +1947,7 @@ function startStress() {
   schedule(loop)
 
   if (targetVram > 0 && allocated < targetVram && stat) {
-    stat.textContent = `只配置到 ${allocated} MB（顯示卡拒絕再給），仍會繼續跑著色器負載。`
+    stat.textContent = `只配置到 ${allocated} MB（顯示卡拒絕），負載照跑。`
   }
 }
 
@@ -2178,7 +2180,7 @@ async function runBench() {
   const d = res.data
   showBenchResult(
     `${d.drive}　序列寫入 ${d.writeMbPerSec.toFixed(1)} MB/s（含 fsync，實際落盤）\n` +
-    `序列讀取 ${d.readMbPerSec.toFixed(1)} MB/s（含系統快取，僅供相對參考）\n` +
+    `序列讀取 ${d.readMbPerSec.toFixed(1)} MB/s（含系統快取）\n` +
     `測試檔 ${d.sizeMb} MB，已刪除`
   )
 }
@@ -2190,11 +2192,18 @@ function showBenchResult(text) {
 
 // ===== 訊息 =====
 
+/** 錯誤只是「剛剛那一下」的狀態，取樣器早就自己重開了——留在畫面上只會嚇人 */
+const ERROR_AUTO_HIDE_MS = 8000
+let errorHideTimer = null
+
 function showError(text) {
   const el = $('sysmonError')
   if (!el) return
   el.textContent = text || ''
   el.classList.toggle('hidden', !text)
+  clearTimeout(errorHideTimer)
+  errorHideTimer = null
+  if (text) errorHideTimer = setTimeout(() => showError(''), ERROR_AUTO_HIDE_MS)
 }
 
 function showSensorNote(status) {
@@ -2243,6 +2252,10 @@ function switchSubtab(name) {
   if (name === 'stress') renderStressGauges()
   if (name === 'fans') showFanPanel()
   else hideFanPanel()
+  if (name === 'oc') showOcPanel()
+  else hideOcPanel()
+  if (name === 'screentime') showScreentimePanel()
+  else hideScreentimePanel()
 }
 
 // ===== 生命週期 =====
@@ -2286,6 +2299,7 @@ function onSample(sample) {
   if (state.subtab === 'overview') renderBlocks()
   else if (state.subtab === 'processes') rebuildRows()
   else if (state.subtab === 'stress') renderStressGauges()
+  else if (state.subtab === 'oc') onOcSample(sample)
 }
 
 export function initSysmonPage() {
@@ -2340,7 +2354,7 @@ export function initSysmonPage() {
     btn.disabled = true
     btn.textContent = '安裝中…'
     const noteText = $('sysmonSensorNoteText')
-    if (noteText) noteText.textContent = '正在下載並安裝 PawnIO 核心驅動，過程中會要求一次系統管理員授權…'
+    if (noteText) noteText.textContent = '正在安裝 PawnIO 驅動，會跳一次 UAC…'
     const res = await electronAPI.sysmon.installPawnIo()
     if (res?.ok) {
       btn.classList.add('hidden')
@@ -2409,22 +2423,24 @@ export function initSysmonPage() {
     }
     if (state.active) {
       electronAPI.sysmon.start(state.intervalKey)
-      if (state.sensorsAuto) enableSensors()
     }
   })
 }
 
 /**
- * 啟用完整感測器。**預設是開的**：每次 App 啟動第一次進這一頁會走一次 UAC，
- * 因為 sidecar 是獨立的提權程序，App 重開它就不在了。
- * 使用者在 UAC 按「否」（state 'declined'）就把自動啟用關掉——同一個提示連跳兩天很煩，
- * 之後改由旁邊那顆按鈕手動啟用。
+ * 啟用完整感測器。進頁時自動跑一次（`sysmonSensors !== false`），使用者不必按任何東西。
+ * 第一次會先裝「免 UAC 啟動」的排程工作——那一次授權之後，之後每次開 App 都是靜默拉起
+ * （開機那條走 main 的 `ensureSensors`）。裝不了（開發版）或被拒就退回每次一個 UAC 的舊路。
  */
 async function enableSensors() {
   if (sensorsInFlight) return
   sensorsInFlight = true
-  showSensorNote({ state: 'starting' })
+  showSensorNote({ state: 'starting', message: '正在啟用完整感測器（第一次要 UAC，之後不用）…' })
   try {
+    const task = await electronAPI.sysmon.fanTaskStatus().catch(() => null)
+    if (task?.ok && task.data?.canInstall && (!task.data.installed || task.data.stale)) {
+      await electronAPI.sysmon.fanTaskInstall().catch(() => null)
+    }
     const res = await electronAPI.sysmon.enableSensors()
     const status = res?.ok ? res.data : { state: 'blocked', message: '無法啟用完整感測器。' }
     showSensorNote(status)
@@ -2477,11 +2493,16 @@ export function refreshSysmonPage() {
       if (out) out.textContent = `${size.value} GB`
     }
   })
-  electronAPI.sysmon.status().then((res) => {
+  electronAPI.sysmon.status().then(async (res) => {
     if (!res?.ok) return
     showSensorNote(res.data.sensors)
-    // 沒開過就自己開一次：使用者要的是「進來就看得到溫度」，不是每次都先按一顆鈕
-    if (state.sensorsAuto && res.data.sensors?.state === 'off') enableSensors()
+    // 感測器即開即用：沒起來就自己啟用，不再要使用者按按鈕。
+    // 使用者在 UAC 按過「否」（`sysmonSensors === false`）就尊重他，維持關閉。
+    const sensors = res.data.sensors
+    if (!sensors.installed || sensors.state === 'on' || sensors.state === 'starting') return
+    const auto = await electronAPI.store.get('sysmonSensors', true)
+    state.sensorsAuto = auto !== false
+    if (state.sensorsAuto) enableSensors()
   })
 }
 

@@ -20,6 +20,7 @@ const http = require('http')
 const PORT = 9248
 const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
 const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-fans-cdp-'))
+fs.writeFileSync(path.join(USER_DATA_DIR, 'config.json'), JSON.stringify({ sysmonSensors: false }))
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 function getJson(url) {
@@ -80,7 +81,7 @@ async function waitFor(action, timeoutMs, label) {
 }
 
 async function main() {
-  const child = spawn(EXE, [`--remote-debugging-port=${PORT}`, `--user-data-dir=${USER_DATA_DIR}`], { stdio: ['ignore', 'pipe', 'pipe'] })
+  const child = spawn(EXE, ['--hidden', `--remote-debugging-port=${PORT}`, `--user-data-dir=${USER_DATA_DIR}`], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
   let cdp = null
   let originalSensors = null
   let passed = 0
@@ -138,8 +139,14 @@ async function main() {
 
     // 沒啟用感測器：要講原因，不是留白
     await waitFor(() => cdp.eval(`(document.getElementById('fanList')?.textContent || '').includes('感測器')`), 5000, '空狀態說明')
+    // 空狀態文案 ≤12 字是規定（CLAUDE.md 的 UI 那條），所以**不可以拿字數當門檻**——
+    // 「請先啟用感測器」只有 7 字，量長度會在文案收乾淨之後變成假紅燈。
+    // 要驗的是「有沒有講原因」：文字裡要出現「感測器」或「風扇通道」。
     ok('沒啟用感測器時顯示說明而不是留白',
-      await cdp.eval(`(document.getElementById('fanList')?.textContent || '').length > 10`))
+      await cdp.eval(`(() => {
+        const text = document.getElementById('fanList')?.textContent || ''
+        return /感測器|風扇通道/.test(text)
+      })()`))
 
     const bar = await cdp.eval(`(() => ({
       toggle: Boolean(document.getElementById('fanEnabled')),

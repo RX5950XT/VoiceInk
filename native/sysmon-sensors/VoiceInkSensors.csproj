@@ -15,7 +15,8 @@
   -->
 
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
+    <!-- WinExe：沒有主控台視窗。排程工作用 Interactive 拉起時，Exe 會多跳一扇黑窗。 -->
+    <OutputType>WinExe</OutputType>
     <!-- net8.0 而不是 net8.0-windows：後者會把 WindowsDesktop（WPF/WinForms）整包拉進
          自帶執行環境。實測單檔輸出 72MB → 37MB（再加 EnableCompressionInSingleFile）。 -->
     <TargetFramework>net8.0</TargetFramework>

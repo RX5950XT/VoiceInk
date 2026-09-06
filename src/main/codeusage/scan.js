@@ -17,7 +17,7 @@
 
 const fs = require('fs')
 const path = require('path')
-const readline = require('readline')
+const { StringDecoder } = require('string_decoder')
 
 /** 只掃這麼多天內修改過的檔案 */
 const SCAN_WINDOW_DAYS = 90
@@ -86,31 +86,41 @@ async function streamFile(file, offset, parseLine, state, onEvent) {
   }
   if (size <= offset) return size
 
-  const stream = fs.createReadStream(file, { start: offset, encoding: 'utf8' })
-  const reader = readline.createInterface({ input: stream, crlfDelay: Infinity })
+  // 固定 end，這一輪只看 stat() 時已存在的位元組；新追加的內容留給下一輪。
+  const stream = fs.createReadStream(file, { start: offset, end: size - 1 })
+  const decoder = new StringDecoder('utf8')
+  let pending = ''
+  let completeOffset = offset
   try {
-    for await (const line of reader) {
-      if (!line) continue
-      for (const event of parseLine(line, state)) onEvent(event)
+    for await (const chunk of stream) {
+      pending += decoder.write(chunk)
+      let index
+      while ((index = pending.indexOf('\n')) >= 0) {
+        const rawLine = pending.slice(0, index)
+        pending = pending.slice(index + 1)
+        completeOffset += Buffer.byteLength(rawLine, 'utf8') + 1
+        const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine
+        if (!line) continue
+        for (const event of parseLine(line, state)) onEvent(event)
+      }
     }
+    pending += decoder.end()
   } catch {
-    // 讀到一半檔案被砍或編碼壞掉：把已經收到的留著，位移不推進，下次重試
-    return offset
+    // 讀到一半檔案被砍：已交出去的完整行可以記住，下一輪會依新檔案大小判斷是否 rewind。
+    return completeOffset
   } finally {
-    reader.close()
     stream.destroy()
   }
-  return size
+  // 沒有換行的尾端可能只是尚未寫完的 JSON，不能把游標推過去。
+  return completeOffset
 }
 
 /**
  * 掃一個來源（一個根目錄 ＋ 一種檔名 ＋ 一個解析器）。
  *
  * 跨行狀態（去重集合、目前模型）**每個檔案一份，而且要跟游標一起留著**：
- * 檔案是附加寫入的，下一次只讀新的那一段，如果去重集合重新開始，
- * 那些「同一則訊息的後續串流行」就會被當成新的再算一次。這裡的做法是
- * 只在**同一次掃描**內共用狀態，並把「已推進的位移」當成去重的邊界——
- * 已經讀過的行不會再被讀到，所以不需要跨次保留集合。
+ * 檔案是附加寫入的，下一次只讀新的那一段；如果去重集合重新開始，
+ * 那些「同一則訊息的後續串流行」就會被當成新的再算一次。
  *
  * @param {object} source
  * @param {string} source.provider
@@ -118,7 +128,13 @@ async function streamFile(file, offset, parseLine, state, onEvent) {
  * @param {(name: string) => boolean} source.match
  * @param {(line: string, state: object) => Array<object>} source.parseLine
  * @param {() => object} source.newState
- * @param {Record<string, { offset: number, mtimeMs: number }>} cursors 就地更新
+ * @param {((file: string) => string) | undefined} source.keyOf
+ *   這個檔案的**穩定游標 key**。Codex／Grok 的 session 檔會從 `sessions/` 搬進
+ *   `archived_sessions/`——游標若認絕對路徑，搬完之後整份檔案會從 0 重讀、
+ *   整個 session 的用量算兩次（實測重現）。key 必須跟著檔案走：Codex 與
+ *   Claude 用檔名（唯一 UUID），Grok 用上一層資料夾名（session UUID，
+ *   檔名一律叫 updates.jsonl 不能用）。省略時退回絕對路徑（相容舊行為）。
+ * @param {Record<string, { offset: number, mtimeMs: number, seen?: string[] }>} cursors 就地更新
  * @param {(event: object) => void} onEvent
  * @param {number} sinceMs
  * @returns {Promise<{ files: number, scannedBytes: number }>}
@@ -132,34 +148,57 @@ async function scanSource(source, cursors, onEvent, sinceMs) {
 
   let scannedBytes = 0
   for (const file of files) {
-    const key = file
+    const key = source.keyOf ? `${source.provider}:${source.keyOf(file)}` : file
     const previous = cursors[key]
-    let offset = previous && Number.isFinite(previous.offset) ? previous.offset : 0
+    let offset = previous && Number.isFinite(previous.offset)
+      ? Math.max(0, Math.floor(previous.offset)) : 0
     let size = 0
     try {
       size = fs.statSync(file).size
     } catch {
       continue
     }
-    // 檔案變小＝被截斷或換過一份，整份重讀
-    if (size < offset) offset = 0
-    if (size === offset) continue
+    // 檔案變小＝被截斷或換過一份，整份重讀，連同舊的去重狀態一起清掉
+    const rewound = size < offset
+    if (rewound) offset = 0
+    if (size === offset && !rewound) {
+      // 穩定 key 可能讓 session 從 sessions/ 搬到 archived_sessions/；即使沒有新位元組，
+      // 也要把游標的實際路徑換過去，否則下一次 pruneCursors 會誤刪，之後整份重讀。
+      if (previous && typeof previous === 'object') {
+        cursors[key] = { ...previous, path: file }
+      }
+      continue
+    }
 
     const state = source.newState()
     // 模型名要跨次留著：Codex 只在 `session_meta`／`turn_context` 寫一次模型，
     // 而增量掃描下一次只讀新附加的那一段——那幾行早就被上一次讀掉了，
     // 不把它接回來，同一個 session 之後的每一筆用量都會變成 `unknown`（實測 7.8 萬筆）
-    if (previous && typeof previous.model === 'string') state.model = previous.model
+    if (!rewound && previous && typeof previous.model === 'string') state.model = previous.model
     // 「還在重播母 thread 的歷史」同理要跨次留著：檔案還在寫的時候可能掃到重播的一半，
     // 下一次不接回來的話，剩下那半份重播就會被當成新用量收進去（而且記成 unknown）
-    if (previous && previous.replay === true) state.replay = true
+    if (!rewound && previous && previous.replay === true) state.replay = true
+    if (!rewound && previous && previous.isFork === true) state.isFork = true
+    if (!rewound && previous && Number.isFinite(previous.sessionStartMs)) state.sessionStartMs = previous.sessionStartMs
+    if (!rewound && previous && Number.isFinite(previous.lastTotalTokens)) state.lastTotalTokens = previous.lastTotalTokens
+    if (!rewound && previous && Array.isArray(previous.seen) && state.seen instanceof Set) {
+      for (const id of previous.seen) {
+        if (typeof id === 'string') state.seen.add(id)
+      }
+    }
     const next = await streamFile(file, offset, source.parseLine, state, onEvent)
     scannedBytes += Math.max(0, next - offset)
     cursors[key] = {
       offset: next,
       mtimeMs: Date.now(),
       model: String(state.model || ''),
-      replay: state.replay === true
+      replay: state.replay === true,
+      isFork: state.isFork === true,
+      sessionStartMs: Number(state.sessionStartMs || 0),
+      lastTotalTokens: Number(state.lastTotalTokens || 0),
+      seen: state.seen instanceof Set ? [...state.seen] : [],
+      // 穩定 key 不是路徑，清游標時要另外知道檔案在哪
+      path: file
     }
   }
 
@@ -168,11 +207,16 @@ async function scanSource(source, cursors, onEvent, sinceMs) {
 
 /**
  * 清掉已經不存在的檔案的游標，免得 `code-usage.json` 無限長大。
+ * 穩定 key（`provider:檔名`）本身不是路徑，檔案位置存在游標的 `path` 欄位；
+ * 舊格式（key 就是路徑、沒有 `path` 欄）一併視為過期丟掉。
  * @param {Record<string, object>} cursors
  */
 function pruneCursors(cursors) {
   for (const key of Object.keys(cursors)) {
-    if (!fs.existsSync(key)) delete cursors[key]
+    const cursor = cursors[key]
+    if (!cursor || typeof cursor.path !== 'string' || !fs.existsSync(cursor.path)) {
+      delete cursors[key]
+    }
   }
 }
 

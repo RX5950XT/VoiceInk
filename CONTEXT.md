@@ -9,7 +9,7 @@
 VoiceInk：Windows Electron AI 工作台。Vanilla JS + Vite，無前端框架；Electron 43.4.1 ＋ Node.js 22。
 已發行 **v1.12.0**（應用程式內自動更新；前幾版為管理員終端機、全域語音輸入、系統監控、HF模型、CC 代理工作台）。
 
-nav 九頁：聊天（預設，**終端機在同一頁**）｜CC代理（原「Claude Code」，data-page 仍是 `ccswitch`）｜額度｜AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型（本機 LLM）｜設定。
+nav 九頁：聊天（預設，**專案工作區與終端機都在同一頁**）｜CC代理（原「Claude Code」，data-page 仍是 `ccswitch`）｜額度｜AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型（本機 LLM）｜設定。
 
 ## 架構
 
@@ -38,13 +38,20 @@ src/main/
                       gpu.js（nvidia-smi）、bench.js（磁碟測速）、stress.js（CPU／記憶體）、
                       sensors.js（提權 sidecar 雙向橋接）、sensors-task.js（免 UAC 啟動的排程工作）、
                       fans.js（風扇曲線引擎：內插／遲滯／斜率／下限／panic）、
+                      oc.js（CPU／GPU 效能調整：夾值／panic／不開機套用／即時儀表讀數）、
                       pawnio.js（代裝＋驗簽）、ipc.js
+  screentime/         使用時長：Tai 相容 SQLite、前景觀測、8908 WebSocket、統計查詢
   usage/              七家額度 provider（全走官方端點）、bounded HTTPS／Credential Manager bridge、
                       api-key.js（env → OpenCode auth.json → CC 代理 store）、6h soft cache、受限 IPC
   agy/                本機反向代理：server.js（127.0.0.1＋強制金鑰）、OpenAI/Anthropic ⇄ Gemini
                       雙向轉換、catalog.js／model-map.js、credential.js（nudgeCli 續期）、logs.js
   dictation/          語音輸入：index.js（管線）、hotkey.js（原生 sidecar／uiohook 雙路徑）、
                       hook.js（sidecar 生命週期）、text.js（切段／字典／清理）、hud.js（指示器視窗）
+  workspace/          專案工作區：store.js（`workspaces.json`，一個專案＝一個本機資料夾）、
+                      files.js（**唯一的檔案系統入口**，`resolveIn` 擋路徑逃逸）、
+                      git.js（`status --porcelain=v2 -z` 解析＋commit／push，spawn 不開 shell）、
+                      agents.js（Claude Code／Codex 的本機 session，恢復指令是固定表）、
+                      worktree.js（git worktree：路徑由 main 組、移除拿 list 當白名單）、index.js、ipc.js
   hfmodels/           HF模型（本機 LLM）：hub.js（HF API 唯讀）、catalog.js（量化／分片／mmproj 歸組）、
                       gguf.js（檔頭解析＋KV 估算＋激活參數）、hardware.js（`--list-devices`）、
                       plan.js（參數決策，純函式）、fit.js（跑官方 llama-fit-params 拿實測值）、
@@ -65,8 +72,12 @@ src/renderer/scripts/
   terminal-page.js  ccswitch-page.js  sysmon-page.js  usage-page.js  code-usage-page.js  agy-page.js
   stt-page.js（三個子分頁）  transcribe.js  live-caption.js  vad.js  translate-page.js
   dictation.js（錄音與熱鍵事件）  model-picker.js  custom-select.js（共用 ARIA listbox）
-  list-reorder.js（聊天與終端機側欄拖曳）  hf-page.js（探索／模型庫／執行環境三個子分頁）
+  workspace-page.js（專案側欄＋右側欄三面板＋檔案樹多選與拖曳搬檔）  ws-tabs.js（分頁列＋編輯器＋內建瀏覽器）
+  ws-monaco.js（Monaco 外殼：AMD min/vs、語法高亮、並排 diff；載不起來就退回 textarea）
+  list-reorder.js（聊天、終端機與專案側欄拖曳）  hf-page.js（探索／模型庫／執行環境三個子分頁）
   sysmon-fans.js（機殼示意圖 SVG ＋ 可拖點的轉速曲線編輯器）
+  sysmon-oc.js（效能調整即時儀表＋兩欄滑桿；套用是按鈕）
+  sysmon-screentime.js（使用時長：應用／網站、日週月年、柱狀圖）
 
 native/  dictation-hook/（WH_KEYBOARD_LL，→ resources/hook/）  sysmon-sensors/（→ resources/sensors/）
 ```
@@ -79,6 +90,7 @@ native/  dictation-hook/（WH_KEYBOARD_LL，→ resources/hook/）  sysmon-senso
 | `chats.json` | 聊天會話（不含圖片） | `chat:*` |
 | `chat-images/` | 圖片附件與生圖 | main 產生檔名 |
 | `terminals.json` | 終端機 metadata（不存畫面內容） | `terminal:*` |
+| `workspaces.json` | 專案清單（`{ id, name, path }`，只存路徑不存內容） | `workspace:*` |
 | `dictations.json` | 語音輸入紀錄與個人字典 | `dictation:*` |
 | `usage.json` | 七家額度快取 | `usage:*` |
 | `code-usage.json` | 每小時 × 供應商 × 模型的用量桶＋掃描游標 | `codeusage:*` |
@@ -87,6 +99,7 @@ native/  dictation-hook/（WH_KEYBOARD_LL，→ resources/hook/）  sysmon-senso
 | `models/<key>/` | 下載的模型與 llama.cpp 執行環境 | `models:*` |
 | `hf-models/<id>/` | HF模型的本機模型庫（一顆一夾，含 `voiceink-meta.json`）。路徑可由 `hfModelsDir` 改到別的碟 | `hfmodels:*` |
 | `hf-presets.ini` | router 的 `--models-preset`（每顆模型實際的執行參數） | main 產生 |
+| `screentime/data.db` | Tai 相容的應用／網站時長（第一次從本機 Tai `Data\` 拷入） | `screentime:*` |
 
 （皆在 `%APPDATA%/voiceink/`。AGY 設定與終端機、聊天、語音輸入紀錄**刻意不進** `STORE_ALLOWLIST`；
 `hfToken` 同理——它是機密，只走 `hfmodels:setToken`，renderer 讀不到。）
@@ -104,7 +117,276 @@ native/  dictation-hook/（WH_KEYBOARD_LL，→ resources/hook/）  sysmon-senso
 值格式：ASR＝`local:<key>`／`cloud:<設定 id>:<模型 id>`；LLM＝`local:<key>`／`cloud:<供應商 id>:<模型 id>`／`''`。
 翻譯與 TTS 頁**不在這組**，維持全域 `translator`／`localTranslateModel`／`translateProviderId`／`translateModelId`。
 
-## 最近變更（2026-09-04，分支 `feat/voice-input`）— 應用程式內自動更新
+## 最近變更（2026-09-06）— Monaco、worktree、拖曳搬檔、多選、分頁滑動（第九輪）
+
+第八輪只搬了 Orca 的互動、刻意跳過的四件重量級功能，這一輪全部補上。
+
+| 改動 | 重點 |
+|---|---|
+| 分頁列滑動 | 拖曳只吃 X 軸、讓位距離改用量出來的 gap（寫死的值會讓放開瞬間整排跳一下）、位移補上 `strip.scrollLeft` 變化、拖到邊緣自動捲、切分頁 `scrollIntoView`、滾輪橫捲、藏掉會撐高分頁列的橫向捲軸 |
+| Monaco | 新 `src/renderer/scripts/ws-monaco.js`。走 **AMD 的 `min/vs`**（ESM 那份有 98 個 CSS import，沒 bundler 用不了），惰性載入、每個分頁一份 model（切回來還留著捲動與復原歷程）、深淺主題跟著 `data-theme` 走。`<textarea>` 沒有拿掉，是**雙向同步的影子**——存檔、草稿落盤、外部變更偵測全部照舊讀它 |
+| 真 diff | `git.fileVersions` 回 original／modified 兩份完整內容（unified diff 只夠算 +/- 數字），`monaco.editor.createDiffEditor` 並排顯示；拿不到就退回原本自繪的逐行檢視 |
+| git worktree | 新 `src/main/workspace/worktree.js`（list／add／remove）＋ Git 面板下面一區。路徑由 main 組（repo 的兄弟資料夾），移除用 `git worktree list` 的結果當白名單，不加 `--force`。建好會自動加進側欄 |
+| 拖曳搬檔 | `files.moveEntry` ＋ 檔案樹的 HTML5 DnD。擋「搬進自己底下」與「覆蓋同名」 |
+| 多選 | Ctrl／⌘ 加減、Shift 區間（照畫面順序不是字母序），右鍵變批次（複製路徑／刪除），拖曳整批搬 |
+
+CSP 多了兩條，**都是 Monaco 要的**：`font-src` 加 `data:`（codicon 字型內嵌）、
+`worker-src 'self' blob:`（沒有它 diff 算不出來）。`build.files` 只放行 `monaco-editor/min/**`，asar 437MB → 460MB。
+
+驗證：`test-workspace` 155、`test-workspace-nav`／`-state`／`-editor` PASS、`test-workspace-ui` 39、
+`test-terminal` 60、`test-ipc-invoke` 11、`test-error-hygiene` 82、`test-markdown` 23；
+打包版 `e2e-workspace-cdp` **102**（原 91）、`e2e-chat-cdp` 44、`e2e-terminal-cdp` 34、
+`e2e-visual-cdp` 71、`e2e-ux-tweaks-cdp` 18、`e2e-cdp-smoke` 22；
+`probe-workspace-monaco.js` PASS（實測高亮有 6 種顏色、並排 diff 有裝飾）。
+
+## 最近變更（2026-09-06，分支 `feat/voice-input`）— 對齊 Orca 的專案使用體驗（第八輪）
+
+讀 `D:\Workspace\Personal_Project\orca` 的 `right-sidebar/FileExplorer*`、`QuickOpen.tsx`、
+`shared/quick-open-path-search.ts`、`tab-bar/`，只搬互動、不搬版面與編輯器核心
+（Orca 是 Monaco ＋ git worktree 的完整 IDE，量級差太多；`pdfjs-dist` 已經讓 asar 多 36MB）。
+
+1. **檔案樹增量展開**（`workspace-page.js` 的 `toggleDir`）：只在那一列後面插／刪自己的子樹。
+   以前每展一層都 `renderTree()` 整棵重畫 → 所有展開過的層再 `listDir` 一次，**捲動位置跳回最上面**。
+2. **檔案樹鍵盤導覽**（`onTreeKeydown`）：↑↓ 走看得到的那幾列、→ 展開或走進第一個子項、
+   ← 收合或退回父層、Home／End。roving tabindex（整棵樹只有一列 `tabindex=0`，
+   不然幾百列的樹會讓 Tab 鍵沒用）。
+3. **開著的檔案在樹上標出來**（`.ws-tree-row.is-open`）：`ws-tabs.js` 的 `activate()` 發
+   `ws:active-file` CustomEvent，`markOpenFile` 收（**用事件不用 import**——workspace-page
+   已經 import 了 ws-tabs，反過來再 import 就繞成一個圈）。檔案藏在收合的資料夾裡時
+   自動把每一層祖先展開再捲過去。
+4. **Ctrl+P 快速開檔**（新 `src/renderer/scripts/ws-quickopen.js`）：
+   main 新增 `workspace:listFiles`（`search.listFiles`，**重用全文搜尋那份 walk**，
+   所以跳過的資料夾一致）；模糊評分照 Orca（連續字元加分少、`/ . - _` 後面的字減 5、
+   檔名整段命中減 100），**沒命中回 `null` 不是 `-1`**。清單打開時抓一次就丟，不做背景索引。
+5. **Ctrl+W 關分頁／Ctrl+Tab 切分頁**（`ws-tabs.js` 的 `closeActiveTab`／`cycleTab`）。
+   三顆快捷鍵都只在 `#termMain` 看得見時才收，且**焦點在 `#termHost` 裡時一律放行**
+   （那三顆在 shell 裡本來就有意思）。
+
+驗證：`test-workspace` 128/128、`test-workspace-nav`（新）PASS、`test-workspace-state` PASS、
+`test-workspace-ui` 39/39、`test-workspace-editor` PASS；打包版 `e2e-workspace-cdp` **91/91**
+（69 → 91，順便補上第七輪只有單元測試的 Ctrl+F／Ctrl+H 尋找取代、外部變更提示條、Git 全部暫存）、
+`e2e-terminal-cdp` 34、`e2e-ux-tweaks-cdp` 18、`e2e-chat-cdp` 44、`e2e-visual-cdp` 71、`e2e-cdp-smoke` 22。
+
+一個測試坑：切分頁的 click 掛在 `.ws-tab-open` 上，對 `.ws-tab` 呼叫 `.click()`
+**什麼都不會發生也不報錯**（第一次跑 [P] 就假紅在這裡）。
+
+## 最近變更（2026-09-06，分支 `feat/voice-input`）— 接手 Codex 未完的驗收：修好工作區整頁失效、Grok 花費灌水 10 倍
+
+前一輪（Codex）把修改留在 working tree 沒有 commit，並在 `tasks/qa-20260905/review.md` 列了
+「尚在驗收」：專案互動、感測器與風扇生命週期、真實用量獨立對帳、打包版 UI、預覽更新。本輪把那五項跑完。
+
+1. **專案工作區整頁失效（P0，打包版才看得出來）**：`src/main/workspace/index.js` 的
+   `module.exports` 留著 `agentResumeCommand`，但第七輪把 resume 從 UI 拿掉時順手刪了它的定義
+   → **整個模組在 require 時就 ReferenceError**，每一支 `workspace:*` IPC 都回通用的
+   「工作區操作失敗」，側欄一個專案都列不出來。renderer 其實還在用它（AI 記錄面板點一下開終端機），
+   所以是補回定義而不是刪掉那條路。回歸：`test-workspace.js` 的 [Q]（比對 exports 清單與檔案裡的定義）。
+2. **Grok 花費灌水 10 倍**：`costUsdTicks` 的單位**所有世代都是 1 USD = 1e10**，
+   舊註解寫的「4.6 起是 1e9」是拿實收價除以 api.x.ai 表列單價反推的（CLI 實收本來就便宜三～四倍）。
+   依據是 CLI 自附的 `~/.grok/docs/user-guide/14-headless-mode.md`：明寫 10^10，
+   範例同時給 `costUSD: 0.01268905` 與 `total_cost_usd_ticks: 126890500`（比值剛好 1e10），
+   而且那個範例用的就是 grok-4.6。`RULES_VERSION` 已在 10，舊桶子開頁時自己整份重讀。
+3. **本機統計實際校正**（`%APPDATA%/voiceink/code-usage.json`，rulesVersion 6 → 10）：
+   總花費 **$45,050.64 → $5,276.81**、請求數 **540,008 → 67,122**；Grok 那半 $1,480 → $132。
+   `probe-code-usage-audit.js` 獨立重算逐模型對帳全數吻合（總額差 0.17%）。
+4. **三個假紅燈的測試修掉**（都是斷言追不上實作，不是產品壞掉）：
+   風扇空狀態改驗「有沒有講原因」而不是字數（文案 ≤12 字是規定）；使用時長要先把畫面切到「年」
+   再斷言清單內容（原本只用 IPC 問年、卻去量停在「日」的畫面）；分頁拖曳終點改放鄰居**正中心**
+   （落點是 closestCenter，放右緣時只要鄰居比下一顆寬就會一次跳兩格）。
+   冒煙的長文翻譯另外改成等「翻譯」鈕可按再按，並把「已停止」也當成終止條件（原本要等滿 300 秒）。
+5. **驗收全綠**：25 支單元測試 ＋ 18 支打包版 CDP 全過（見下方「驗證」）。
+   免安裝預覽已重新打包在 `dist/win-unpacked/VoiceInk.exe`（打包到工作區外再覆寫回來，
+   避開別的 Electron 工具抓著 `app.asar` 的老問題）。
+   **這一輪那個 handle 連 `C:i-pack` 也抓到了**：asar 靜靜錯位、electron-builder exit 0，
+   App 啟動即結束（CDP 埠連不上），看起來完全像剛改的程式碼壞了。所以流程多一步：
+   打完先 `npx @electron/asar extract-file <app.asar> package.json` 驗印得出正常 JSON，
+   錯位就**換一個全新的輸出目錄**重打（同一個目錄再打會被同一個 handle 再抓一次）。
+
+6. **單價表補齊（官方文件查證，2026-09-06）**：補上 `gpt-6-astra`
+   （in 10／cached 1／cache write 12.5／out 50）。順手抓到一條會少算的：**gpt-5.6 那一代起
+   官方表上有「cache writes」那一格了**（＝input × 1.25），我們沿用「OpenAI 自動快取不收寫入費」
+   把 sol／terra／luna 都寫成 0——那只對 5.5 及更舊成立。Codex 的 rollout 沒有
+   `cache_write_input_tokens`，所以從 Codex 那條路看不出來，但同一顆模型經 Claude Code／閘道打就會少算。
+   OpenAI 沒有 5m／1h 兩檔，`cacheWrite1h` 寫成跟 `cacheWrite` 同價（留 0 等於說 1h 免費，
+   空著又會被 `costOf` 推成 1.6 倍）。單價表改動**不必**動 `RULES_VERSION`（金額每次 stats 現算）。
+   補完之後「未設單價」歸零，總花費 $5,276.81 → **$5,319.53**。
+
+## 最近變更（2026-09-05，分支 `feat/voice-input`）— 專案工作區適配 stablyai/orca 核心架構能力與 UI 打磨
+
+### 工作區深度適配（2026-09-05 第七輪）：Orca 能力適配、拖曳遮罩修復、分頁持久化、外部變更偵測、IDE 尋找取代與 AI 會話卡片
+
+1. **拖曳半透明矩形範圍修正**：將 `.is-drop::after` 掛載範圍限定於 `.proj-unified-list`（專案清單容器），頂部操作列 `.proj-actions-bar` 設置 `position: relative; z-index: 25;`，拖曳資料夾時遮罩不再覆蓋頂部「＋加入專案」與「＋終端機」按鈕。
+2. **分頁狀態持久化與 Hot Exit 草稿防護**：
+   - 借 Orca 分頁狀態模型，在 `workspaces.json` 記錄各專案開啟的分頁狀態（`tabsState: { activeId, tabs }`，支援 editor/diff/browser/ai-session）。
+   - 編輯器未存檔內容以 `draftContent`（上限 500KB）安全保存，切換專案或重新開機時自動原地還原草稿，`dirty` 狀態完整保留。
+3. **外部檔案變更偵測（External File Change Banner）**：
+   - 後端實作 `files.getFileMtime(root, relPath)` 極速 stat（<1ms），`readFile` 同步回傳 `mtimeMs`。
+   - 編輯器在視窗 focus 或切換分頁時比對磁碟 `mtimeMs`：無未存草稿時平滑無痛自動重新載入；有草稿時彈出非阻斷式的微光提示條（`#wsEditorExtBanner`），由使用者選擇「重新載入」或「保留編輯」。
+4. **輕量 IDE 體驗升級**：
+   - 浮動尋找與取代面板（`#wsIdeFindWidget`），支援 `Ctrl+F`（尋找）、`Ctrl+H`（取代）、即時匹配計數、Enter/Shift+Enter 上下導航與一鍵全部取代。
+   - 頂部工具列提供「預覽／編輯」按鈕，支援 Markdown 原始碼與渲染預覽雙模切換。
+5. **AI 會話結構化卡片分頁（不需 resume）**：
+   - 依使用者明確要求「不需要 resume」，移除終端機指令注入流程，改以純檢視分頁呈現。
+   - 後端 `agents.sessionDetail(projectPath, agent, sessionId)` 深度解析 Claude Code 與 Codex 的本機 jsonl，提取使用者提問時間軸、工具呼叫統計與涉及檔案清單。
+   - 點選涉及檔案標籤可直接在編輯器開啟該檔案。
+6. **Git 快速操作**：
+   - 新增「全部暫存（Stage All）」（`git add -A`）與「開啟所有變更檔案（Open All Changed）」（一鍵開啟全部變更檔案的 Diff 分頁審查）。
+
+### 用量統計（2026-09-04 第六輪）：徹查並修正 Codex 天文數字高估（子代理重播雪崩與重複計費修復）
+
+1. **真因定位與高估排查**：
+   - 舊版統計中 Codex 佔了高達 92%（$40,838 USD），全域總額達 $44,365 USD。
+   - **Bug A（子代理重播雪崩）**：本機 403 份 Codex 檔案有 292 份為 forked subagent，每個 fork 開頭會重播母檔歷史（達數萬行），舊版 parser 遇母 thread 舊 `turn_context` / UUIDv4 工具輪次時誤切為 `replay = false`，導致單一母檔用量被 20~30 個子代理重複加總幾十次。
+   - **Bug B（每輪前後重複 emit `token_count` 及空轉心跳）**：Codex 每輪前後各 emit 一次快照且中斷/心跳時重複輸出，舊版逐行計為獨立請求。
+2. **演算法修復**：
+   - `parsers.js`: 加入 `isUuidV7`（第 14 碼必為 `'7'`）與 `uuidv7Ms`，`turn_context` 嚴格要求時間戳達到子代理啟動點（`turnMs >= sessionStartMs - 500`）才退出重播；`token_count` 增加累計推進守衛（`curTotal > state.lastTotalTokens`）。
+   - `scan.js`: 游標保存 `isFork`, `sessionStartMs`, `lastTotalTokens`，跨增量讀取不丟狀態。
+   - `pricing.js`: 升級 `RULES_VERSION = 9`，觸發舊桶子全量重設。
+3. **校正結果**：本機全量重讀後，總請求數由 540,009 降為 **65,974**，總金額由 $44,365.20 USD 降為 **$5,930.11 USD**（修正虛報 $38,435.09 USD，約 120 萬台幣），未設單價請求 0 筆。
+
+### 用量統計（2026-09-04）：計算錯誤修正、更新機制與模型單價補齊
+
+1. **計算錯誤修復（Grok Esc 取消事件）**：`parsers.js: parseGrokLine` 在使用者取消 turn 時（`MidTurnAbort` / `cancelled`），舊版 fallback 呼叫 `toEvent('unknown', usage)` 且因 `num(part.modelCalls) || 1` 計為 1 次請求，產生未設單價的 unknown 幽靈記錄。現加 `hasTokens()` 守衛跳過全 0 記錄。
+2. **規則版本與自動更新機制**：`pricing.js: RULES_VERSION` 升級為 8；`index.js: loadBuckets` 載入時過濾 `unknown` 0 token 幽靈桶；`stats()` 回傳 `needsRescan`，前端頁面若檢測到規則過期且未在同步中，自動在背景觸發 `runSync()` 刷新桶子。
+3. **模型單價補齊與正規化**：補齊主流模型查證公開單價（GPT-5.4、Claude 3.7/3.5、DeepSeek-V4/V3/R1、Kimi K2.6、Qwen 2.5 系列等），收斂通道後綴（`:cloud` 等）與破折號版本號。
+4. **前端單價保護與快捷設定**：儲存自訂單價時僅存變動或新增項，保護內建單價與快取倍率；未設單價提示條支援點擊直達單價設定彈窗。
+
+### 第五輪（2026-09-04）：專案側欄徹底整合、拖曳半透明矩形、簡易 IDE、Git Diff 與多格式支援
+
+1. **專案側欄徹底整合**：移除上下硬切條（`.proj-term-head`），頂部整合為 `.proj-actions-bar`（包含「＋加入專案」與「終端機」按鈕），專案列右側新增終端機快捷圖示（支援 Shift 點擊或右鍵選單以系統管理員身分執行），底層維持 `#projList` 與 `#termList` 相容所有自動化測試。
+2. **拖曳半透明質感矩形**：移除藍色虛線框，改用符合側邊欄輪廓的毛玻璃半透明微光遮罩（`#projPanel.is-drop::after`）。
+3. **簡易 IDE 編輯器**：抽離 `ws-ide.js`，提供行號欄滾動同步、Tab 縮排/凸排、成對符號補全、Enter 自動縮排、底部狀態列（Ln, Col, 行數, 大小, UTF-8, 語言）。
+4. **Git Diff 檢視（借 stablyai/orca）**：後端 `git.diff`（支援暫存區、工作區與未追蹤檔），前端 `ws-diff.js` 呈現 Unified Diff 視圖，包含增減統計徽章、暫存切換與切換編輯器按鈕。
+5. **多媒體與格式不支援提示**：支援音訊（mp3/wav/ogg/m4a/flac/aac）、影片（mp4/webm）、SVG 雙模切換；二進位/超大檔顯示專屬卡片與 Reveal 按鈕。
+
+### 第四輪（2026-09-04）：使用者回饋六點整頓
+
+1. **文字精簡（全 App）**：空狀態 ≤ 12 字、hint 只留「這是什麼」，70+ 筆冗長句壓短
+   （最長的 92 字 → 20 字內）。防誤解的最短說法（dwm VRAM、磁碟測速含快取、風扇下限）保留。
+   **教訓**：改文案前先 grep 測試斷言——`e2e-chat-cdp.js` 的掃描彈窗說明就中了一次。
+2. **側欄合併**：三顆鈕變兩顆（專案／對話），終端機清單併進專案面板下半
+   （`.proj-term-head` 小標＋「＋」）。三個清單容器 id 都不動；`SIDEBAR_PANELS` 兩值，
+   舊 `localStorage` 值 `'terminals'` 落回 `'projects'`。管理員終端機兩條路（工作區「＋」勾選、
+   側欄彈窗 `#termAdminInput`）鏈路不變，`probe-terminal-admin.js` 驗過 host 協定。
+3. **分頁拖曳改 pointer 跟手＋FLIP**（取代 HTML5 DnD 的一次性跳位）：被拖那顆留在 flex 流裡
+   靠 transform 跟手、跨過鄰居**中點**才 `insertBefore`、其他人 150ms 滑回。
+   測試用 `Input.dispatchMouseEvent` 且**終點放鄰居右緣**（放正中點會因嚴格小於不換位→假紅）。
+4. **「＋」貼著最後一個分頁右邊**：從 `.ws-tabs-actions` 移進 `.ws-tabs-strip` 尾端，
+   `renderTabs()` 改成只洗 `.ws-tab`（不能 `replaceChildren`，會把＋一起洗掉）。
+5. **Git 面板升級**：三組清單（暫存區／變更／未追蹤）＋逐檔「暫存／取消／捨棄」（捨棄 3 秒二次確認）、
+   全部暫存、**提交 staged**（不再自動 `add -A`）、推送、**拉取（ff-only）**、**最近提交 10 筆**。
+   `git.js` 新增 `stage/unstage/discard/log/pull`；`relPathOf` 擋絕對路徑與 `..`；
+   `git log` 欄位分隔 `%x1f`（**不能跟 `-z` 混用**，NUL 會把記錄與欄位界線攪成一鍋湯）。
+6. **瀏覽器 iframe → `<webview>`**（比照 Orca）：`probe-workspace-webview.js` 實測
+   Electron 43 的 `sandbox × webviewTag` 能用（OOPIF attach、導航、標題同步）。
+   `webviewTag: true` **只開主視窗**；popup 在 `app.on('web-contents-created')` 收斂
+   （http(s) → `shell.openExternal`，其餘 deny——guest 走不到主視窗的 `attachWindowSecurity`）。
+   `partition="persist:wsbrowser"` 持久（登入留著）；X-Frame-Options 從此不存在，
+   `#wsBrowserNote` 移除。CSP 的 `frame-src` 留著（編輯器 srcdoc 預覽用）。
+
+**Orca 對照（GitHub 實查 stablyai/orca）**：瀏覽器＝`createElement('webview')`＋`partition`＋
+`allowpopups`＋guest 不掛 preload（同款）；SourceControl＝整套系統（diff 行內註解／review／notes），
+我們取核心（分組＋逐檔操作＋staged 提交＋log＋pull）。**仍然刻意不做**：worktree、SSH、
+diff 檢視、tab 分割／持久化、語法高亮、simulator、plugin。
+
+回歸：`test-workspace.js` 100 項＋`e2e-workspace-cdp.js` 69 項＋`e2e-terminal-cdp` 34＋
+`e2e-chat-cdp` 44＋`e2e-ux-tweaks-cdp` 18＋`e2e-visual-cdp` 71＋冒煙 22＋`probe-terminal-admin` 6，
+全綠；`dist/win-unpacked` 已是新版。
+
+### 前三輪的原始紀錄
+
+- **左側欄不再上下對切**：頂部三顆鈕（專案／對話／終端機），下面三個**各自獨立的容器**
+  （`#projList`／`#chatList`／`#termList`）用 `hidden` 切。模式存 `localStorage['chatSidebarMode']`。
+  `chat-page.js`／`terminal-page.js` 幾乎沒動——合併成一個容器的話 `.chat-list-item` 會互相打到。
+  （第四輪改兩顆鈕、終端機併進專案面板，容器 id 不動。）
+
+**版面從兩欄變三欄，全部塞在原本的 `#page-chat` 裡**（沒有新增 nav 分頁）。
+
+- **左側欄不再上下對切**：頂部三顆鈕（專案／對話／終端機），下面三個**各自獨立的容器**
+  （`#projList`／`#chatList`／`#termList`）用 `hidden` 切。模式存 `localStorage['chatSidebarMode']`。
+  `chat-page.js`／`terminal-page.js` 幾乎沒動——合併成一個容器的話 `.chat-list-item` 會互相打到。
+- **中間 `#termMain` 升級成工作區容器**（id 刻意不改名）：上面一條分頁列 `#wsTabs`，
+  下面 `.ws-surfaces` 裡疊著 `#termHost`／`#wsEditor`／`#wsBrowser`／`#termEmpty`。
+  誰在畫面上只有一個擁有者：`ws-tabs.js` 的 `showSurface()`（`terminal-page.js` 的 `showHost()` 也走它）。
+  `app.js` 的 `setChatPaneMode` 值從 `'terminal'` 改名成 `'workspace'`。
+- **分頁模型抄 Orca 但砍到一維**：`{ id, kind: 'terminal'|'editor'|'browser', ... }`，
+  **不落盤、沒有分割、沒有 tab group、沒有 pin**。終端機分頁的 id 就是工作階段 id（本來就靠
+  `terminals.json` 活著）；編輯器／瀏覽器分頁關了就沒了。
+- **「＋」一鍵開**：終端機／Claude Code／Codex／OpenCode／Antigravity／Grok（`terminal/store.js`
+  的 `PRESETS` 加了後三個）＋瀏覽器，並有「以系統管理員身分執行」勾選（沿用既有的 `admin` 那套）。
+  cwd 自動帶目前選定的專案。
+- **右側欄三面板**：檔案總管（一次展一層，跳過 `.git`／`node_modules`）、
+  Git（分支／ahead-behind／變更清單＋提交＋推送）、AI 記錄（這個資料夾跑過的 Claude Code 與
+  Codex session，點一下在新終端機 `--resume`）。寬度 `--ws-right-w` 可拖（`initResizer` 抽成共用，
+  右側欄傳 `invert: true`）。
+- **編輯器是 `<textarea>`**，`.md` 走現有的 `markdown.js` 預覽、`.html` 走 `srcdoc` ＋
+  `sandbox="allow-scripts"`（不給 `allow-same-origin`）。Ctrl+S 存檔，未存的分頁標一個點、
+  關掉要按兩次×。
+- **內建瀏覽器是 `<iframe>` 不是 `<webview>`**：CSP 只加了 `frame-src http: https:`。
+  撞到 `X-Frame-Options` 會空白，所以留了「用系統瀏覽器開」。
+  （第四輪已換成 `<webview>`，見上。）
+- **信任邊界**：renderer 只送 `projectId` ＋ 專案內相對路徑；「加入專案」走系統對話框。
+  `openExternal` 在 main 只放行 http(s)。
+- **回頭對過 Orca 一次（2026-09-04）補的三件**：點開圖片直接顯示（`files.imageMime` → `data:` URI，
+  走既有的 `readFile`，沒有新 IPC）、分頁中鍵關閉、檔案總管的「在檔案總管開啟」
+  （`workspace:reveal` 本來就寫好了但沒人叫）。順手修掉 `.btn` 用 `el.hidden` 收不起來
+  （`display: inline-flex` 壓過內建的 `[hidden]`）——那是全 App 的規則，補在 `.btn[hidden]`。
+- **第三輪（2026-09-04）**：三欄縫隙再收到 4px（把手照樣騎在縫上）；專案區支援直接拖
+  資料夾加入（`workspace:addDropped`，main 的 `store.addDropped` 逐筆走 `create` 驗證）；
+  應用內說明文字整體精簡；**全 App 禁用強調條／裝飾條**（方框左側粗彩條，CLAUDE.md 與
+  AGENTS.md 都已寫死），原本的四條（`.md-quote`／`.chat-think`／`.sysmon-note`／
+  `.settings-subsection-title::before`）已清掉，改完整 1px 邊框或 tint。
+- **第二輪補的五項（2026-09-04）**：
+  ① **埠號面板**（`workspace/ports.js`，`netstat -ano` ＋ `tasklist`）——右側欄第四個分頁，
+  點一下用內建瀏覽器開 `http://127.0.0.1:<port>`；跟專案無關，所以 IPC 不吃 projectId。
+  ② **專案內全文搜尋**（`workspace/search.js`）——檔案總管頂部「檔案 ⇄ 搜尋」切換，
+  自己遞迴走目錄，**不依賴 ripgrep**（這台就沒裝）；點一筆開檔並把游標移到那一行。
+  ③ **檔案樹右鍵**——新增檔案／資料夾、改名、刪除、複製相對路徑、在檔案總管顯示；
+  名字走 main 的 `files.checkName`。
+  ④ **分頁拖曳排序 ＋ 右鍵選單**（關閉／關閉其他／關閉右邊／複製路徑／用系統瀏覽器開）；
+  右鍵選單抽成 `renderer/scripts/ws-menu.js`，檔案樹與分頁列共用。
+  ⑤ **PDF 預覽**——Electron **沒有**內建檢視器（`probe-workspace-pdf.js` 實測），
+  改用 pdf.js 畫在 canvas 上，`build.files` 只放行兩支 .mjs、排掉 `@napi-rs`。
+- **窄邊框一輪（2026-09-04）**：三欄外框 14px→6px、欄間縫 14px→8px、側欄與右欄內距 14px→8px、
+  `#termMain`／`.term-host`／`.term-pane` 6px→4px（**term-host 與 term-pane 是一對，要同改**）、
+  `.ws-editor`／`.ws-browser` 6px→4px、`.chat-main` 16/18/18→12/14/14。
+  拖曳把手是 `margin-inline: -3px` 騎在 gap 上，gap 縮小不影響；玻璃面 radius 未動（`e2e-visual-cdp` 的
+  signature 是 12px radius＋blur，量的是圓角不是 padding）。
+- **對過之後仍然不做**：快速開啟（Ctrl+P，要先建檔名索引，專案不大時用不到）。
+- **刻意不做**：git worktree、SSH、diff 註解、PR／Issue 面板、語法高亮、手機模擬器、
+  分頁持久化、`webviewTag`。
+- 回歸：`node scripts/test-workspace.js`（62 項）＋`node scripts/e2e-workspace-cdp.js`（32 項）。
+  `test-terminal.js` 的 preset 表斷言、`e2e-terminal-cdp.js` 的「管理員標記」量尺寸那條要
+  先把側欄切到終端機模式（跟著改了）。
+
+## 前一次變更（2026-09-04，分支 `feat/voice-input`）— 效能調整即時儀表
+
+- 效能調整頁上方加 Ryzen Master／Afterburner 式儀表：CPU 負載／時脈／電壓／功耗／溫度＋每核時脈，
+  GPU 負載／核心／記憶體／功耗／溫度／電壓，各一條 60 秒走勢。讀數每秒更新，套用仍是按鈕。
+- 可調項：手動超頻 CPU VID、SoC 電壓（有進門快照才寫）、每核鎖頻（`F`）、GPU V/F 逐點（`V`）。
+- 儀表的「功耗」是實際瓦數，PPT／功耗牆另外標；舊框沒有 `pl` 時仍退回 `p`。
+
+## 前一次變更（2026-09-04，分支 `feat/voice-input`）— 系統監控「使用時長」
+
+- 總覽與處理程序之間加子分頁。第一次啟動把本機 Tai `Data\data.db` 拷進
+  `%APPDATA%/voiceink/screentime/`，之後只寫這一份。
+- 應用時長：前景視窗每秒取樣（`observer.ps1`）；網站時長：相容 Tai Sentry 外掛的
+  `ws://127.0.0.1:8908/TaiWebSentry`。Tai 還佔著 8908 時會重試，不換埠。
+- **沒有「持續記錄」開關**：開 App 就一直記，`setEnabled` 那條路（IPC／preload／store 鍵）整條移除。
+- 柱狀圖有 Y 軸（三格刻度＋單位，上限取整成好讀的時間刻度），X 軸標籤掛在繪圖區外面，
+  矮柱才不會被時間字壓住。
+- 回歸：`node scripts/test-screentime.js`、`node scripts/e2e-screentime-cdp.js`。
+
+## 前一次變更（2026-09-04，分支 `feat/voice-input`）— 系統監控第五子分頁「效能調整」
+
+- 風扇控制右邊加第五顆：**效能調整**。NVIDIA 功耗牆＋核心／記憶體時脈偏移；Ryzen 3000／5000
+  桌面 PBO 的 PPT／TDC／EDC＋scalar。同一顆 sidecar 新指令 `G`／`C`／`X`，不能沿用風扇 PWM。
+- 安全方向相反：上限夾值、≥95°C 或讀不到溫度就還原、看門狗與 `before-quit` 都還原。
+  **開機不自動套用**。電壓／Curve Optimizer／全核鎖頻／I2C 不做。
+- 走勢圖兩條線各自縮放，所以 Y 軸也各標各的：左緣是第一條（MHz）、右緣是第二條（°C／W），
+  只標上下限＋單位——沒有單位的曲線等於在猜數量級。
+- `ocControl` 不進 allowlist。回歸：`node scripts/test-sysmon-oc.js`、`e2e-sysmon-oc-cdp.js`（不按套用）。
+
+## 前一次變更（2026-09-04，分支 `feat/voice-input`）— 應用程式內自動更新
 
 **已發行 v1.12.0**（tag `v1.12.0`、master 與 feat/voice-input 同步、GitHub Release 帶
 `VoiceInk-Setup-1.12.0.exe` ＋ `.blockmap` ＋ `latest.yml`）。
@@ -218,7 +500,7 @@ CPU Fan 1527→740、System Fan #1 3230→**9507**、PCH Fan 0→5232、GPU Fan 
 
 ### 3. sidecar 改成雙向（`native/sysmon-sensors/Program.cs`）
 
-指令一行一個、空白分隔（`S <id> <0~100>` / `D <id>` / `R` / `P`），payload 加 `"c"`（可控通道）。
+指令一行一個、空白分隔（`S <id> <0~100>` / `D <id>` / `R` / `P` / `G` / `C` / `X`），payload 加 `"c"`（可控通道）與 `"o"`（效能調整讀數）。
 **`PipeOptions.Asynchronous` 不可省**——不帶它，同一 handle 上的同步讀會把同步寫整個擋住，
 症狀是只收到第一框、之後永遠「感測器沒有連線」，而且完全不報錯（詳見 CLAUDE.md 地雷）。
 
@@ -609,6 +891,8 @@ static 框約 6 秒。
 | 2026-08-30~31 | 新分頁「系統監控」（取樣器／處理程序／壓力測試／提權感測器）；語音輸入上線 |
 | 2026-08-28~29 | 終端機分頁、常駐系統匣與開機自啟動、AGY token 自動續期、共用自訂下拉（`custom-select.js`） |
 | 2026-08-30 | v1.9.0 發行（NSIS 安裝檔已上傳 GitHub Release） |
+| 2026-09-04 | 系統監控感測器改成即開即用：進頁自動啟用並先裝免 UAC 排程工作（之後永遠靜默）、開機那條維持只走排程工作（不在啟動時彈 UAC）、sidecar 斷線自己重拉（上限 5 次，經 `ensureSensors` 才接回風扇）；回歸 `test-sysmon.js` 的「感測器斷線重拉」 |
+| 2026-09-04 | 使用體驗四項：系統監控錯誤 8 秒自動收起、風扇下限預設 20%、終端機選取自動複製／右鍵貼上／窄邊框（順手拿掉多包一層的 `.chat-main`）、聊天側欄可拖寬（`--chat-sidebar-w`，終端機靠既有 ResizeObserver 跟著縮放）；回歸 `e2e-ux-tweaks-cdp.js` |
 | 2026-09-04 | 應用程式內自動更新（設定 → 基本）：`src/main/updater.js`、`update:*` IPC、`build.publish` ＋ `nsis.artifactName`；發行時要一併上傳 `latest.yml` 與 `.blockmap` |
 
 ## 已知取捨與未做

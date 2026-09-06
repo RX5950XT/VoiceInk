@@ -82,9 +82,9 @@ async function main() {
       return fake
     }
   })
-  await probe.enable()
+  await probe.enable({ elevate: true })
   probe.stop()
-  await probe.enable()
+  await probe.enable({ elevate: true })
   probe.stop()
   ok('每次啟用都用新的管道名', seen.length === 2 && seen[0] !== seen[1], JSON.stringify(seen))
   ok('管道名是 128 bit 亂數', seen.every((s) => s.length === 32), JSON.stringify(seen.map((s) => s.length)))
@@ -93,7 +93,7 @@ async function main() {
 
   console.log('\n[真的跑一次（會跳 UAC）]')
   console.log('  → 請在彈出的「使用者帳戶控制」按「是」；按「否」也算通過（會驗降級路徑）')
-  const result = await bridge.enable()
+  const result = await bridge.enable({ elevate: true })
   ok('enable() 一定會回結果，不會永遠掛著', Boolean(result?.state), JSON.stringify(result))
 
   if (result.state === 'on') {

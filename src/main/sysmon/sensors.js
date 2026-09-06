@@ -32,6 +32,11 @@ const STALE_MS = 20_000
 const MAX_LINE_BYTES = 512 * 1024
 /** 等 sidecar 回報「風扇已交還」的上限；逾時就直接斷（它自己還有看門狗） */
 const RESET_TIMEOUT_MS = 2_000
+/** sidecar 中途死掉後隔多久自己重拉（走排程工作那條，不會彈 UAC） */
+const RECONNECT_DELAY_MS = 3_000
+/** 連續重拉上限；撐過 STABLE_MS 就當作這次是好的，計數歸零 */
+const MAX_RECONNECTS = 5
+const STABLE_MS = 60_000
 
 /** @returns {string} sidecar 執行檔位置；打包後在 resources/sensors/ */
 function resolveSensorExe(deps = {}) {
@@ -63,6 +68,8 @@ function createSensorBridge(deps = {}) {
   let socket = null
   /** @type {NodeJS.Timeout | null} */
   let connectTimer = null
+  /** @type {NodeJS.Timeout | null} */
+  let reconnectTimer = null
   let buf = ''
   /** @type {any[]} */
   let groups = []
@@ -71,13 +78,25 @@ function createSensorBridge(deps = {}) {
   let needsPawnIo = false
   /** 可寫入的 PWM 通道（風扇控制用）；sidecar 每一框都會重送 */
   let controls = []
+  /** 效能調整讀數（CPU／GPU 牆與是否已套用）；沒有就 null */
+  let oc = null
   /** 等 sidecar 回報「風扇已交還」的人 */
   let resetWaiters = []
   /** 這次是不是用排程工作啟動的（決定失敗時要不要退回 -Verb RunAs） */
   let launchedByTask = false
+  /** sidecar 中途死掉時通知上層重拉（重拉才會把風扇接管接回去）；沒設就不重試 */
+  let onLost = typeof deps.onLost === 'function' ? deps.onLost : null
+  /** 連上的時間與連續重試次數：撐得夠久就歸零，才不會在「一連上就死」時每 3 秒重生一次 */
+  let connectedAt = 0
+  let retries = 0
+  /** 同一時間只允許一個啟動流程，避免風扇在 starting 狀態錯過接管。 */
+  let pendingEnable = null
+  let pendingResolve = null
+  let lifecycle = 0
 
   function cleanup() {
     if (connectTimer) { clearTimeout(connectTimer); connectTimer = null }
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
     if (socket) { try { socket.destroy() } catch { /* 已經斷了 */ } socket = null }
     if (server) { try { server.close() } catch { /* 已經關了 */ } server = null }
     buf = ''
@@ -117,6 +136,7 @@ function createSensorBridge(deps = {}) {
     if (Array.isArray(payload?.h)) {
       groups = payload.h
       controls = Array.isArray(payload.c) ? payload.c : []
+      oc = payload.o && typeof payload.o === 'object' ? payload.o : null
       lastAt = Date.now()
       state = 'on'
       // 缺 PawnIO 的說明要留著：它講的是「還有一半拿不到、以及怎麼補」
@@ -138,9 +158,9 @@ function createSensorBridge(deps = {}) {
 
     read() {
       if (state !== 'on' || (Date.now() - lastAt) >= STALE_MS) {
-        return { available: false, groups: [], controls: [] }
+        return { available: false, groups: [], controls: [], oc: null }
       }
-      return { available: true, groups, controls }
+      return { available: true, groups, controls, oc }
     },
 
     /**
@@ -158,9 +178,15 @@ function createSensorBridge(deps = {}) {
       }
     },
 
-    /** @returns {Promise<{ state: string, message: string }>} */
-    enable() {
-      if (state === 'on' || state === 'starting') return Promise.resolve({ state, message })
+    /**
+     * @param {{ elevate?: boolean }} [opts] `elevate: true` 才准跳 UAC（使用者按了按鈕）。
+     * 開機／進頁自動啟用一律 false：有排程工作就靜默拉起，沒有就維持關掉、畫面給按鈕。
+     * @returns {Promise<{ state: string, message: string }>}
+     */
+    enable(opts = {}) {
+      const elevate = opts.elevate === true
+      if (state === 'on') return Promise.resolve({ state, message })
+      if (state === 'starting' && pendingEnable) return pendingEnable
       const exe = exePathFn()
       if (!exe) {
         state = 'missing'
@@ -169,24 +195,29 @@ function createSensorBridge(deps = {}) {
       }
 
       cleanup()
+      const runId = ++lifecycle
       state = 'starting'
       message = ''
       const pipeName = `\\\\.\\pipe\\voiceink-sensors-${crypto.randomBytes(16).toString('hex')}`
 
-      return new Promise((resolve) => {
+      pendingEnable = new Promise((resolve) => {
+        pendingResolve = resolve
         const settle = (nextState, nextMessage) => {
+          if (runId !== lifecycle) return
           state = nextState
           message = nextMessage
+          pendingResolve = null
+          pendingEnable = null
           resolve({ state, message })
         }
 
         server = net.createServer((conn) => {
+          if (runId !== lifecycle) { conn.destroy(); return }
           // 只收第一個連線：管道名是密鑰，收完就不再開門
           if (socket) { conn.destroy(); return }
           socket = conn
           try { server?.close() } catch { /* 已經關了 */ }
           server = null
-          if (connectTimer) { clearTimeout(connectTimer); connectTimer = null }
           conn.setEncoding('utf8')
           conn.on('data', (chunk) => {
             buf += chunk
@@ -194,28 +225,57 @@ function createSensorBridge(deps = {}) {
             while ((idx = buf.indexOf('\n')) >= 0) {
               handleLine(buf.slice(0, idx))
               buf = buf.slice(idx + 1)
+              if (pendingResolve && state === 'on') {
+                if (connectTimer) { clearTimeout(connectTimer); connectTimer = null }
+                settle('on', message)
+              }
             }
             if (buf.length > MAX_LINE_BYTES) buf = ''
           })
           conn.on('close', () => {
+            if (runId !== lifecycle) return
             socket = null
-            if (state === 'on') {
+            // 只有「跑著跑著斷掉」才重拉：stop() 走的是 finish()，那條會先把 state 設成 off
+            if (pendingResolve) {
+              cleanup()
+              settle('blocked', '感測器尚未就緒，請重試。')
+            } else if (state === 'on') {
               state = 'off'
-              message = '感測器元件已結束。'
+              if (Date.now() - connectedAt > STABLE_MS) retries = 0
+              if (onLost && retries < MAX_RECONNECTS) {
+                retries += 1
+                message = '感測器元件已結束，正在重新連線…'
+                reconnectTimer = setTimeout(() => {
+                  reconnectTimer = null
+                  if (runId === lifecycle && state === 'off') onLost()
+                }, RECONNECT_DELAY_MS)
+              } else {
+                message = '感測器元件已結束。'
+              }
             }
           })
           conn.on('error', () => { /* 斷線由 close 處理 */ })
-          settle('on', '')
+          connectedAt = Date.now()
         })
         server.on('error', () => {
+          if (runId !== lifecycle) return
           cleanup()
           settle('blocked', '無法建立感測器連線通道。')
         })
 
         server.listen(pipeName, async () => {
-          // 先試排程工作（不彈 UAC）；沒裝或觸發失敗才退回 -Verb RunAs（每次一個 UAC）
-          launchedByTask = await task.run(pipeName).catch(() => false)
+          if (runId !== lifecycle || state !== 'starting') return
+          // 先試排程工作（不彈 UAC、不開視窗）。自動啟用到此為止。
+          launchedByTask = await task.run(pipeName, exe).catch(() => false)
+          if (runId !== lifecycle || state !== 'starting') return
           if (launchedByTask) return
+          if (!elevate) {
+            cleanup()
+            // 沒有排程工作就到此為止：開機時不彈 UAC。使用者一開系統監控頁，
+            // 那邊會自動走 elevate 那條（並順手把排程工作裝起來，之後就永遠靜默）。
+            settle('off', '')
+            return
+          }
 
           let child
           try {
@@ -234,10 +294,12 @@ function createSensorBridge(deps = {}) {
             return
           }
           child.on('error', () => {
+            if (runId !== lifecycle) return
             cleanup()
             settle('blocked', '無法啟動感測器元件。')
           })
           child.on('close', (code) => {
+            if (runId !== lifecycle) return
             // 使用者在 UAC 按「否」時 Start-Process 會失敗；此時還沒有人連上來
             if (code !== 0 && !socket) {
               cleanup()
@@ -247,11 +309,13 @@ function createSensorBridge(deps = {}) {
         })
 
         connectTimer = setTimeout(() => {
-          if (socket) return
+          if (runId !== lifecycle) return
+          if (!pendingResolve) return
           cleanup()
           settle('timeout', '感測器元件沒有回應；CPU 與主機板溫度會維持空白，其餘數值不受影響。')
         }, CONNECT_TIMEOUT_MS)
       })
+      return pendingEnable
     },
 
     /**
@@ -262,6 +326,10 @@ function createSensorBridge(deps = {}) {
      */
     stop() {
       const finish = () => {
+        lifecycle += 1
+        const resolvePending = pendingResolve
+        pendingResolve = null
+        pendingEnable = null
         cleanup()
         groups = []
         controls = []
@@ -271,6 +339,7 @@ function createSensorBridge(deps = {}) {
           state = 'off'
           message = ''
         }
+        if (resolvePending) resolvePending({ state, message })
       }
       if (!socket || state !== 'on') {
         finish()
@@ -297,9 +366,10 @@ function createSensorBridge(deps = {}) {
 
     /**
      * 免 UAC 啟動的排程工作。`packaged` 為假時 `install()` 會被擋下來（見 sensors-task.js）。
-     * @param {{ userDataPath?: string, packaged?: boolean }} options
+     * @param {{ userDataPath?: string, packaged?: boolean, onLost?: () => void }} options
      */
     configure(options = {}) {
+      if (typeof options.onLost === 'function') onLost = options.onLost
       task = createSensorTask({
         spawnFn,
         userDataPath: options.userDataPath || '',

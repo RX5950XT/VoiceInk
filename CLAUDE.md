@@ -10,16 +10,18 @@ Windows Electron AI 工作台：聊天＋終端機＋本機 LLM（HF模型）＋
 額度與用量統計＋AGY 反代＋語音轉文字（檔案轉錄／即時字幕／全域語音輸入）＋翻譯與 TTS。
 Vanilla JS + Vite，無前端框架；Electron 43.4.1（固定版本）＋ Node.js 22。
 
-nav 順序：聊天（預設，**終端機併在同一頁**：側欄上半對話、下半終端機）｜
+nav 順序：聊天（預設，**工作區與終端機併在同一頁**：側欄頂部兩顆鈕切專案／對話，
+終端機清單併在專案面板下半）｜
 CC代理（Claude Code 工作台）｜額度｜AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型（本機 LLM）｜設定。
 
 | 模組 | 重點 |
 |---|---|
 | 聊天 | 多組供應商（`chatProviders`＋`chatProviderId`＋`chatModelId`），各帶 url／key／模型清單，可掃 `/models`；**雲端翻譯共用同一份清單**（`translateProviderId`＋`translateModelId`）。系統提示 preset、thinking 開關、圖片附件、生圖模型（`imageModels`）、訊息複製與重新生成、側欄搜尋與拖曳排序。會話存 `<userData>/chats.json` |
-| 終端機 | **與聊天同一頁**（側欄上半對話／下半終端機，主區 `#chatMain` ⇄ `#termMain`）。`@lydell/node-pty`（ConPTY）＋ xterm.js；側欄多開、狀態「運行中／已完成／已結束」＋未讀點。shell 與啟動指令是 main 固定表（renderer 只送 key），cwd 走系統對話框。可勾「以系統管理員身分執行」（`admin`）——ConPTY 開不出提權 shell，改由 `--terminal-admin-host=` 再開一份自己（UAC 一次）代開，見 `admin.js`／`admin-host.js`。metadata 存 `<userData>/terminals.json`（**不存畫面內容**） |
+| 終端機 | **與聊天同一頁**（清單在側欄「專案」面板的下半，主區 `#chatMain` ⇄ `#termMain`）。`@lydell/node-pty`（ConPTY）＋ xterm.js；多開、狀態「運行中／已完成／已結束」＋未讀點。選取自動複製、右鍵貼上、窄邊框；聊天側欄寬度可拖（`--chat-sidebar-w`）。shell 與啟動指令是 main 固定表（renderer 只送 key），cwd 走系統對話框。可勾「以系統管理員身分執行」（`admin`）——ConPTY 開不出提權 shell，改由 `--terminal-admin-host=` 再開一份自己（UAC 一次）代開，見 `admin.js`／`admin-host.js`。metadata 存 `<userData>/terminals.json`（**不存畫面內容**） |
+| 專案工作區 | `src/main/workspace/`：**與聊天同一頁**，借 Orca 的三欄版面。左側欄兩顆鈕切專案／對話，「專案」面板上半列本機資料夾（`workspaces.json`，**不做 git worktree**，可拖資料夾進來加入）、下半是終端機清單（**三個清單容器 id 都不動**：`#projList`／`#chatList`／`#termList`）；中間 `#termMain` 裡多一條分頁列（終端機／編輯器／瀏覽器，「＋」貼著分頁尾端可一鍵開 Claude Code／Codex／OpenCode／Antigravity／Grok，可勾管理員）；右側欄四面板＝檔案總管（含搜尋、右鍵新增／改名／刪除）／Git 狀態（暫存區／變更／未追蹤三組，逐檔暫存／取消／捨棄（3 秒二次確認）、全部暫存、提交（staged）、推送、拉取、最近提交 10 筆）／這個資料夾跑過的 AI 對話（點一下在新終端機 resume）／本機正在監聽的埠（點一下用內建瀏覽器開）。分頁拖曳是 **pointer 跟手＋FLIP 平滑讓位**（不是 HTML5 DnD）、中鍵關閉、右鍵「關閉其他／右邊」。鍵盤：**Ctrl+P 快速開檔**（模糊比對整條相對路徑）、Ctrl+W 關分頁、Ctrl+Tab 切分頁、檔案樹 ↑↓←→／Home／End 走位（照 VS Code），開著的檔案在樹上標出來、藏起來會自動展開。檔案樹可 Ctrl／Shift 多選、拖曳搬檔。Git 面板下面有 **worktree** 一區（列出／新增／移除，新的會自動加進側欄）。編輯器是 **Monaco**（語法高亮、內建尋找取代、真正的並排 diff；載不起來退回 `<textarea>`），`.md`／`.html` 有預覽，圖片與 PDF 直接顯示；瀏覽器是 **`<webview>`**（`partition="persist:wsbrowser"`＋`allowpopups`，**只有主視窗開 `webviewTag`**） |
 | HF模型 | `src/main/hfmodels/`：在 Hugging Face 搜 GGUF → 下載 → 一鍵載入 → **直接出現在聊天的模型選單**。探索頁是左清單／右模型卡兩欄（README＋每個量化的大小與「這台跑不跑得動」）。推論走 `llama-server` 的 **router 模式**（`--models-dir`＋`--models-preset`，一顆程序管全部模型），參數由 `plan.js`（估算）＋官方 `llama-fit-params`（實測）決定，每一項都可覆寫、可原始參數直通、可 `llama-bench` 實測調校。模型放 `hfModelsDir`（可自選，預設 `<userData>/hf-models`），一顆一個子資料夾（`mmproj-*.gguf` 同夾＝多模態） |
 | Claude Code 工作台 | `src/main/ccswitch/`：供應商（CC Switch 式 tile，一鍵改 `~/.claude/settings.json` 的 `env`；「Claude 官方訂閱」排第一、內建各家自動播種、「＋」新增自訂；**端點只有自訂能填，六家內建可選上游格式**）／MCP（`~/.claude.json`）／CLI 版本。走閘道那幾家經 `ccswitch/gateway/` 轉協議；Codex／Grok 可 App 內 OAuth 或沿用 CLI 憑證 |
-| 系統監控 | `src/main/sysmon/`：常駐 `probe.ps1` 取樣器＋`nvidia-smi -l`；四個子分頁（總覽／處理程序／壓力測試／風扇控制）。磁碟**按實體碟分開**顯示，S.M.A.R.T. 走免提權 NVMe IOCTL（健康度／通電時數／寫入總量／溫度，CrystalDiskInfo 那半邊）；壓力測試 CPU／GPU 各一排四格（負載／功耗／溫度／轉速）＋磁碟測速（`bench.js`，測試檔跑完刪掉）。感測器走提權 sidecar，預設進頁自動啟用；**風扇控制**（`fans.js`＋`sensors-task.js`）走同一顆 sidecar 的雙向管道，通用機殼示意圖＋可拖點的轉速曲線，開機自啟動時直接接管（排程工作免 UAC） |
+| 系統監控 | `src/main/sysmon/`：常駐 `probe.ps1` 取樣器＋`nvidia-smi -l`；六個子分頁（總覽／使用時長／處理程序／壓力測試／風扇控制／效能調整）。磁碟**按實體碟分開**顯示，S.M.A.R.T. 走免提權 NVMe IOCTL（健康度／通電時數／寫入總量／溫度，CrystalDiskInfo 那半邊）；壓力測試 CPU／GPU 各一排四格（負載／功耗／溫度／轉速）＋磁碟測速（`bench.js`，測試檔跑完刪掉）。感測器走提權 sidecar（WinExe、無主控台視窗），**即開即用**：開 App 靜默拉起（有排程工作就不跳 UAC），沒有排程工作時一進系統監控頁就自動啟用，**第一次順手把排程工作裝起來（一次 UAC），之後永遠靜默**；sidecar 中途死掉會自己重拉（上限 5 次）；**風扇控制**（`fans.js`＋`sensors-task.js`）走同一顆 sidecar 的雙向管道，通用機殼示意圖＋可拖點的轉速曲線，開機自啟動時直接接管（排程工作免 UAC）；**效能調整**（`oc.js`）同顆 sidecar 另走 `G`／`C`／`X` 寫 NVIDIA 功耗牆／時脈偏移與 Ryzen PBO 牆，不能沿用風扇的 `S`／`D`／`R` |
 | 額度 | 七家（Claude Code／Codex／Antigravity／OpenCode Go／Grok／Ollama Cloud／Command Code），**全部走官方端點**，只在手動同步時查詢，快取 `<userData>/usage.json`；Main-only 固定來源 |
 | 用量統計 | `src/main/codeusage/`：從五家 CLI 的本機 session 記錄算 token／花費（跟「訂閱額度」是兩件事），增量掃描，桶子存 `<userData>/code-usage.json` |
 | AGY 反代 | `src/main/agy/`：把 Antigravity 憑證轉成 OpenAI `/v1/chat/completions` 與 Anthropic `/v1/messages`；只綁 127.0.0.1＋強制金鑰；日誌 `<userData>/agy-logs.db` |
@@ -93,15 +95,17 @@ gh release upload vX.Y.Z dist/VoiceInk-Setup-X.Y.Z.exe dist/VoiceInk-Setup-X.Y.Z
 - Renderer 是 ESM，Main／Preload 是 CJS。函數 <50 行、檔案 <800 行、巢狀 ≤4 層。
 - Commit 格式 `<type>: <description>`，訊息用繁體中文。
 - 設定走 electron-store IPC，**key 僅 allowlist**。以下**不走** `store:*`，各有獨立 store／IPC：
-  聊天（`chat:*`／`chats.json`）、終端機（`terminal:*`／`terminals.json`）、AGY（`agy:*`）、
+  聊天（`chat:*`／`chats.json`）、終端機（`terminal:*`／`terminals.json`）、
+  工作區（`workspace:*`／`workspaces.json`）、AGY（`agy:*`）、
   語音輸入紀錄與字典（`dictation:*`／`dictations.json`）、用量統計（`codeusage:*`）。
-- 八組模組 IPC（agy／ccswitch／codeusage／dictation／hfmodels／sysmon／terminal／usage）的
+- 九組模組 IPC（agy／ccswitch／codeusage／dictation／hfmodels／sysmon／terminal／usage／workspace）的
   「只有主視窗能呼叫 ＋ 回 `{ ok, data }`／`{ ok, error }` ＋ 錯誤訊息走 `userMessage` 白名單」
   收在 `src/main/ipc-invoke.js` 的 `makeInvoke()`。**收掉的只是那段 try/catch，
   每組仍然要逐一列舉自己的 handler**（漏一行的坑照舊存在）。要換一套收斂規則就傳 `publicError`
   （usage 與 hfmodels 各有自己的一套）。回歸：`test-ipc-invoke.js`
 - 本地 ASR 模型 key 走 `models.isAsrKey()`；`models.openFolder` 僅收 registry key 或根目錄。
-- 兩窗 `sandbox: true`；CSP `connect-src 'self' https: http:`（自訂 API URL 的前提，不要改回白名單）。
+- 兩窗 `sandbox: true`；CSP `connect-src 'self' https: http:`（自訂 API URL 的前提，不要改回白名單）、
+  `font-src 'self' data:` 與 `worker-src 'self' blob:`（**兩條都是 Monaco 要的**，見地雷區）。
 - **UI／功能改動完成後先跑 `npm run electron:pack`** 更新免安裝預覽；完整安裝檔僅發佈時再打。
 
 ---
@@ -150,6 +154,13 @@ gh release upload vX.Y.Z dist/VoiceInk-Setup-X.Y.Z.exe dist/VoiceInk-Setup-X.Y.Z
   `robocopy /MIR /XF app.asar` 覆寫回 `dist/win-unpacked`（那個 handle 擋 delete 不擋 write），
   asar 用 `[IO.File]::Open(dst,'Open','Write','Read')` 就地覆寫＋`SetLength`。
   **`VoiceInk.exe` 一定要一起換**（asar 完整性雜湊嵌在它的資源裡）。收尾 `sha256sum` 對兩邊＋跑一次 CDP。
+- **打包完一定要先驗 asar 沒錯位，再覆寫回 `dist/`**（2026-09-06 又中一次，這次是 `C:i-pack` 也被抓）：
+  `npx @electron/asar extract-file <app.asar> package.json` 印得出正常 JSON 才算過（**這個指令不是印到 stdout，是把檔案寫進當下的工作目錄**——在專案根目錄跑會把
+  自己的 `package.json` 蓋掉，而且完全沒有輸出、看起來像成功。一定要 `cd` 到暫存目錄再跑；
+  真的蓋掉了就 `git checkout-index -f -- package.json` 從索引救回來，再把行尾換回 LF）；
+  錯位時印出來是二進位亂碼，而 electron-builder **exit 0、完全不報錯**。
+  症狀是啟動即結束（CDP 埠連不上、`--version` 無輸出 exit 1），看起來會很像剛剛那筆程式碼改壞了。
+  修法：**換一個全新的輸出目錄重打**（同一個目錄再打可能又被同一個 handle 抓住），驗過再 copy。
 - **`electron:pack` 中途 EPERM 失敗會留下壞掉的 `dist/win-unpacked`**：症狀是啟動無 log、CDP 埠連不上，
   `--version` 卻回 0，實際是 `icudtl.dat` 沒更新完。**整個刪掉重打**，不要原地重試。
 - **自動更新靠 `latest.yml`，而它只在 `build.publish` 有設定時才產出**：拿掉那段設定不會有任何錯誤，
@@ -393,6 +404,160 @@ gh release upload vX.Y.Z dist/VoiceInk-Setup-X.Y.Z.exe dist/VoiceInk-Setup-X.Y.Z
   否則停止後才 resolve 的 stale 結果會建新 batch、幽靈重載已卸載的模型。
 - `displayMedia` handler 失敗也要 `callback({})`（否則 `getDisplayMedia` 永久掛起）。
 
+### 專案工作區
+
+- **`index.js` 的 `module.exports` 列了一個沒定義的名字＝整個模組在載入期就 ReferenceError**：
+  症狀是**每一支 workspace IPC 都回「工作區操作失敗」**（那是 `makeInvoke` 的通用訊息），
+  側欄一個專案都列不出來。`node --check` 過、所有單元測試全綠——因為 `index.js` 要 electron
+  才 require 得起來，測試載的是各個子模組。實測踩過：第七輪把 resume 從 UI 拿掉時，
+  順手刪了 `agentResumeCommand` 的定義卻留著那一行 export（renderer 其實還在用）。
+  回歸：`test-workspace.js` 的 [Q]（比對 exports 清單與檔案裡的定義）
+- **`workspace/files.js` 的 `resolveIn` 是唯一的檔案系統入口**：renderer 一律只送
+  `{ projectId, relPath }`，絕對路徑由 main 從 store 取。收 renderer 給的路徑等於把
+  「讀寫任意檔案」變成一個 API。比對**必須帶路徑分隔符號**（`full.startsWith(base + path.sep)`）——
+  少了它，`D:\Proj-evil` 這種「字首相同的鄰居目錄」會被當成專案內。
+  回歸：`test-workspace.js` 的 [A]（七種寫法）＋`e2e-workspace-cdp.js` 的 [G]（真的打 IPC）
+- **git 一律 `spawn(..., { shell: false })` 且參數走陣列**：commit message 是使用者輸入，
+  串成字串丟給 shell 就是注入。而且要**關掉互動提示**（`GIT_TERMINAL_PROMPT=0`＋`GIT_ASKPASS=''`），
+  否則要密碼時 git 會安安靜靜等一個永遠不會來的輸入，UI 看起來就是「按了沒反應」。
+- **git 的 stderr 不透傳**：裡面有遠端 URL、使用者名稱，有時候還有 token。回 renderer 的一律是
+  寫死的句子（跟雲端路徑的錯誤衛生同一條）。「沒東西可提交」要跟「提交失敗」分開講——
+  git 對兩者都回非 0。
+- **`git status` 用 `--porcelain=v2 -b -z`**：預設格式會把含空白／非 ASCII 的檔名加引號再跳脫，
+  自己反解那套規則遲早會錯。欄位是**位置**決定的，改名（`2`）那型**後面還跟著一格原檔名**——
+  少吃那一格，之後每一筆檔名都錯位。回歸：`test-workspace.js` 的 [C]
+- **agent 恢復指令是 main 的固定表**（`agents.js` 的 `AGENTS`），session id 卡 `^[A-Za-z0-9_-]{6,64}$`：
+  那個字串會被直接送進終端機，放行空白或分號等於指令注入。
+- **Claude 的 session 資料夾名＝把 cwd 的非英數字元全換成 `-`**
+  （`D:\Workspace\Personal_Project\VoiceInk` → `D--Workspace-Personal-Project-VoiceInk`）；
+  Codex 沒有這個對應，只能開第一行讀 `session_meta.cwd`（**帶 `forked_from_id` 的是母 thread 的重播，不能收**）。
+- **內建瀏覽器是 `<webview>`（2026-09-04 從 iframe 換過來，比照 Orca）**：實測矩陣
+  `scripts/probe-workspace-webview.js` 證明 Electron 43 的 `sandbox: true × webviewTag: true` 能用
+  （attach 成 OOPIF、導航、標題都正常）。三件套缺一不可：① `webviewTag: true` **只開在主視窗**
+  （字幕／HUD 用不到，少一扇視窗多吃一個能力）；② guest 不掛 preload；
+  ③ **popup 一律在 app 層收斂**——`app.on('web-contents-created')` 給每個 webContents 補
+  `setWindowOpenHandler`（http(s) → `shell.openExternal`、其餘 deny），因為 webview guest 的
+  window.open 走不到主視窗那條 `attachWindowSecurity`。`partition="persist:wsbrowser"` 是持久的
+  （登入狀態要留著）；`allowpopups` 交給 main 管就不怕 target=_blank 沒反應。
+- **網址正規化不能只看「有沒有冒號」**：`localhost:5173` 的 `localhost:` 會被 `new URL` 當成協定，
+  於是最常用的那個網址反而進不去。做法是先照原樣解析，**協定不是 http(s) 才**補 `http://` 重解一次
+  （`javascript:alert(1)` 補成 `http://javascript:alert(1)` 會因為 port 不合法而失敗，照樣擋得住）。
+- **本機 HTML 的預覽用 `srcdoc` ＋ `sandbox="allow-scripts"`，不給 `allow-same-origin`**：
+  給了等於讓那份 HTML 拿到我們這個 origin 的一切。
+- **側欄兩顆模式鈕（專案／對話），三個清單各自是獨立容器**（`#projList`／`#chatList`／`#termList`），
+  切換只 toggle `hidden`；終端機清單併在專案面板下半，**容器 id 不可以改**（terminal-page.js 與測試都認）。
+  `.chat-list-item` 三邊共用，合併成一個容器的話所有選擇器都會互相打到。
+  用 `hidden` 收合的 `.sidebar-panel` **必須自己補 `[hidden] { display: none }`**（作者規則的 `display: flex` 壓得過瀏覽器內建樣式）。
+- **`#termMain`／`.term-main` 這兩個名字不可以改**：終端機的「人在不在看」判定與
+  `e2e-ux-tweaks-cdp.js` 都認它。工作區是加在它裡面，不是取代它。
+- **哪一塊內容在畫面上只有一個擁有者**（`ws-tabs.js` 的 `showSurface`）：
+  終端機那邊的 `showHost()` 也要走它，各自 toggle 自己的 hidden 會讓編輯器跟終端機疊在一起。
+- **圖片不可以走「二進位檔」那條**：PNG／JPG 一定含 NUL byte，`readFile` 的二進位偵測會把它判成
+  「不能編輯」，結果點開圖片畫面上什麼都沒有。做法是**先看副檔名**（`files.imageMime`），是圖片就回
+  一個 `data:` URI（大小照樣受 `MAX_READ_BYTES` 管，CSP 的 `img-src` 本來就放行 `data:`）——
+  **不另外開一個 IPC**。SVG 也走這條：`<img>` 不執行 SVG 裡的 script。
+  回歸：`test-workspace.js` 的 [B]＋`e2e-workspace-cdp.js` 的 [D2]
+- **Electron 43 沒有內建 PDF 檢視器**：`plugins: true` 也長不出來
+  （實測矩陣 `scripts/probe-workspace-pdf.js`：plugins 開關 × blob:／file: 四種組合全都沒有
+  `embed[type="application/pdf"]`），所以 PDF 只能自己用 pdf.js 畫在 canvas 上。
+  **`pdfjs-dist` 整包 35MB ＋ 一個 37MB 的 `@napi-rs/canvas`（那是給 Node 端算圖的，用不到）**，
+  `build.files` 只放行 `pdf.min.mjs` 與 `pdf.worker.min.mjs` 兩支，其餘連同 `@napi-rs` 一起排掉
+  （不排的話 asar 從 421MB 變 457MB）。
+- **pdf.js v6 的 `workerSrc` 不能給空字串**（會直接拋 `No "GlobalWorkerOptions.workerSrc" specified.`）：
+  指到 asar 裡那支 worker 就好——file:// 開不出真的 Worker，pdf.js 自己會退回 fake worker
+  把它 import 進主執行緒。**症狀是預覽一片空白**，看起來像 PDF 壞掉。
+- **`netstat -ano` 的 `LISTENING` 沒有被在地化**（zh-TW 只翻欄位標題），所以可以直接比對這個字；
+  刻意**不用 `Get-NetTCPConnection`**——那要自動載入 NetTCPIP 模組，`PSModulePath` 被污染時整組載不起來
+  （`Get-NetAdapter` 已經踩過一次）。程序名要另外跑一次 `tasklist`（netstat 只給 PID）。
+  同一個埠 IPv4／IPv6 各一列，要去重。回歸：`test-workspace.js` 的 [H]
+- **搜尋只收字串、不收 regex**：收 regex 等於讓 renderer 送一個會災難性回溯的 pattern 把 main 卡死。
+  四個上限（命中 200／掃 8000 檔／單檔 1MB／整趟 15 秒）少一個都會在大 repo 上把 UI 凍住。
+- **新增／改名的「名字」是使用者打的，要在 `checkName` 就擋**：含 `/`／`\\`／`:` 等於在指定路徑，
+  `resolveIn` 雖然是最後一道門，但在這裡擋才講得出人話；Windows 的保留檔名（`CON`、`PRN`…）
+  建出來會是個刪不掉的東西。刪除另外要擋掉「專案根目錄本身」。
+  回歸：`test-workspace.js` 的 [F]＋`e2e-workspace-cdp.js` 的 [I]（真的打 IPC）
+- **拖資料夾加入專案的路徑要在 main 端收斂**：drop 的 File 由 preload 的 `webUtils.getPathForFile`
+  轉成路徑，但每一筆仍走 `store.create` 的全套驗證（解析成絕對路徑、必須是存在的目錄、
+  已存在就略過、上限照樣拋）——renderer 不能繞過對話框自己送任意路徑。
+  回歸：`e2e-workspace-cdp.js` 的 [M]
+- **分頁拖曳是 pointer 跟手＋FLIP，不是 HTML5 DnD**（使用者要求「拖住跟著滑鼠走、平滑推開別的」）：
+  被拖那顆**留在 flex 流裡**靠 transform 跟手（它的槽位就是空格），跨過鄰居**中點**才
+  `insertBefore`；其他分頁用 FLIP（記舊座標 → 反向 transform → 150ms 滑回）。
+  落點是 **closestCenter**（拖曳中那顆的中心離哪個**靜態槽位**中心最近，跟額度卡片同一套）。
+  測試要用 `Input.dispatchMouseEvent`（合成 PointerEvent 走不了真輸入管線），且**終點要放
+  鄰居的正中心**——放到鄰居右緣時，只要那顆鄰居比再下一顆寬，拖曳中心就會離下一個槽位更近，
+  **一次跳兩格**，斷言會假紅。
+  `user-select: none` 不可省（拖曳變選字）。回歸：`e2e-workspace-cdp.js` 的 [L]
+- **Git 面板的逐檔動作**：`stage`／`unstage`／`discard` 的檔名來自 renderer，
+  `relPathOf` 擋絕對路徑與 `..` 段、git 參數一律陣列＋`--` 分隔；**捨棄救不回來**，
+  renderer 的鈕要 3 秒二次確認（第一下變「確定？」）。`git log` 的欄位分隔用 `%x1f`，
+  **不能跟 `-z` 混用**（NUL 同時是記錄與欄位的界線，整包變成一鍋湯）。
+  回歸：`test-workspace.js` 的 [J]＋`e2e-workspace-cdp.js` 的 [E]
+- **檔案樹展開／收合只能動自己那一列後面的子樹**：以前是 `renderTree()` 整棵重畫，
+  等於把每一個展開過的層都再 `listDir` 一次，而且**捲動位置會跳回最上面**
+  （展到第三層之後就找不到自己在哪）。收起來時把子節點丟掉、再展開重讀一次就好，
+  順便反映磁碟上的變動，比自己維護一份快取便宜。
+  回歸：`e2e-workspace-cdp.js` 的 [N]（在別列做記號，展開後記號要還在）
+- **Ctrl+P／Ctrl+W／Ctrl+Tab 在焦點落在 `#termHost` 裡時一律放行**：那三顆在 shell 裡本來就有意思
+  （Ctrl+W 刪一個詞、Ctrl+P 上一筆指令），搶走等於把終端機弄壞。
+  三顆也只在 `#termMain` 真的看得見時才收（`offsetParent`），否則會把整個 App 的 Ctrl+P 吃掉。
+- **快速開檔的檔案清單跟全文搜尋共用同一份 `walk`**（`search.listFiles`）：
+  跳過的資料夾（`files.SKIP_DIRS`）與四個上限一定要一致，不然會出現
+  「搜尋找得到但 Ctrl+P 找不到」這種說不清的怪事。模糊評分照 Orca 的
+  `shared/quick-open-path-search.ts`（分數越小越前面），但**沒命中要回 `null` 不是 `-1`**——
+  `-1` 是算得出來的合法分數，拿它當哨兵會把一筆真的命中丟掉。
+  回歸：`test-workspace-nav.js` 的 [A]＋`test-workspace.js` 的 [R]
+- **切分頁的 click 掛在 `.ws-tab-open` 上，不是 `.ws-tab`**（`.ws-tab` 那層只有 pointerdown 拖曳、
+  中鍵與右鍵）：測試對著 `.ws-tab` 呼叫 `.click()` **什麼都不會發生也不報錯**，
+  看起來會像「切分頁壞了」。
+- **Monaco 只能走 AMD 的 `min/vs`，ESM 那份沒有 bundler 一 import 就死**：`esm/vs` 裡面有 98 個
+  `import './x.css'`，瀏覽器不會把 CSS 當模組。AMD 那份自帶 `loader.js`（它自己注入 `<script>`，
+  同源所以過得了 `script-src 'self'`），CSS 是獨立一支 `editor.main.css`，`<link>` 進來就好。
+  三件事要一起做，少一件都是「看起來壞掉但不報錯」：① codicon 字型是 **`data:` 內嵌**的，
+  `font-src` 沒放行只會看到一排小方框；② Monaco 的 Worker 是 **blob** 開的，
+  `worker-src 'self' blob:` 沒放行時它會退回主執行緒，**diff 就算不出來**（並排編輯器畫得出來、
+  但一條變更都不標）；③ `build.files` 只放行 `monaco-editor/min/**`（`esm`／`dev`／`min-maps`
+  加起來 57MB 全用不到），asar 437MB → 460MB。回歸：`probe-workspace-monaco.js`
+- **視窗藏著的時候 Monaco 不會做語法高亮**（背景 tokenize 走 `requestIdleCallback`，
+  視窗不可見時根本不觸發）：測試裡 `show: false` 量到的是「整片同一個顏色」，
+  看起來就像「這個語言沒支援」。探針要 `showInactive()`（不搶前景焦點）。
+  斷言也**不可以只數 `.mtk` 節點**——沒高亮時每一段照樣是 `mtk1`，要比對**實際顏色**有幾種。
+- **Monaco 的尋找列收起來時高度還在**（只是 `visibility: hidden`）：判斷開沒開要看 `.find-widget.visible`
+  這個 class，量 `offsetHeight` 會永遠判成「開著」，於是切換鈕再按一次就沒反應。
+  另外 `closeFindWidget` 是**命令不是動作**，`getAction` 找不到，要用 `editor.trigger`。
+- **那份 `<textarea>` 還在，而且是雙向同步的**：Monaco 是真的內容來源，但存檔、草稿落盤、
+  外部變更偵測、Hot Exit 全部仍讀 `#wsEditorText.value`。所以 Monaco 改 → 寫回 textarea；
+  有人直接改 textarea → `pushValue` 推進 Monaco（走 `executeEdits` 不走 `setValue`，
+  後者會把復原歷程清光）。少任何一邊，存下去的就是舊內容。
+- **跳到某一行要等 Monaco 把 model 掛上去**：`useMonaco` 是非同步的，`openEditorTab` 之後
+  馬上 `goToLine` 會跳在**上一個檔案**的 model 上。先記著（`pendingGoto`），掛好再補跳。
+- **搬檔要擋兩件事，少一件就弄丟東西**（`files.moveEntry`）：① 資料夾不能搬進自己底下
+  （`rename` 對這種情況的行為不一致，最壞整棵子樹變孤兒）；② 目的地同名就拒絕，**不覆蓋**
+  （覆蓋救不回來，而使用者只是手滑放錯一格）。放在檔案上＝放進**那個檔案的資料夾**（比照檔案總管）。
+  回歸：`test-workspace.js` 的 [S]
+- **檔案樹的拖曳用 HTML5 DnD，分頁列刻意不用**：檔案總管本來就是這個手感，
+  半透明拖影正好代表「要搬走的東西」，而且 drop 目標判定是瀏覽器算的。
+  分頁列要的是「跟手＋平滑讓位」，那裡的拖影只會礙事——兩邊的取捨不同，不要統一。
+- **worktree 的路徑一律由 main 組**：renderer 只送一個名字（走 `files.checkName`），
+  位置固定是 repo 的**兄弟資料夾**（放在 repo 裡面會被自己的檔案清單、搜尋掃到，還可能被誤 commit）。
+  要移除哪一個**用 `git worktree list` 的結果當白名單**比對，而且不准移主工作樹、不加 `--force`
+  （有未提交變更時讓 git 擋下來——那些改動只存在那個資料夾裡）。
+  `--porcelain` 是「一段一個、空行分隔」且**每段行數不一樣**（detached 的沒有 branch 那行），
+  逐行看關鍵字、不要數行號。回歸：`test-workspace.js` 的 [T]
+- **分頁列會橫向溢出，拖曳三件事一起才順**：① transform **只吃 X**（帶 Y 會讓分頁飛出那一條）；
+  ② 鄰居讓位的距離要用**量出來的 gap**（寫死的值跟 CSS 差幾 px，放開的瞬間整排會跳一下）；
+  ③ 位移要加上 `strip.scrollLeft` 的變化量，並在指標靠近邊緣時自動捲——沒有這段就**搬不到
+  看不見的那幾顆旁邊**。捲軸用 `scrollbar-width: none` 藏起來（橫向捲軸會把分頁列撐高一截），
+  改用滾輪橫捲＋切分頁時 `scrollIntoView`。
+- **`workspaces.json` 的路徑不存在不可以整筆丟掉**（隨身碟拔掉、網路磁碟沒接上），
+  只標 `missing: true` 讓 UI 講明白——丟掉的話插回硬碟專案就沒了。
+- **空狀態的斷言不可以用「字數大於 N」**：文案上限是 12 字（下一條），
+  收乾淨之後「請先啟用感測器」只有 7 字 → `textContent.length > 10` 變成假紅燈。
+  要驗的是「有沒有講原因」（比對關鍵字），不是長度。
+- **精簡說明文字時，測試裡的斷言字串要跟著掃**：精簡前 `grep` 測試腳本裡有沒有引用舊文案
+  （這輪 `e2e-chat-cdp.js` 的掃描彈窗說明就中了一次）。空狀態 ≤ 12 字、hint 只留「這是什麼」，
+  但「防誤解」的最短說法（dwm VRAM、磁碟測速含快取、風扇下限保險）**不準刪光**——拿掉會再被回報。
+
 ### 終端機
 
 - **忙碌判定不能只靠 OSC 133 標記**：PSReadLine 會把整份提示字元（含標記）重送
@@ -424,6 +589,15 @@ gh release upload vX.Y.Z dist/VoiceInk-Setup-X.Y.Z.exe dist/VoiceInk-Setup-X.Y.Z
   用 `[char]34` 兜（`admin.psArgList`）。回歸：`probe-terminal-admin.js`（不需 UAC）＋
   `probe-terminal-admin-elevate.js`（**會跳一次 UAC**）
 - 初始 snapshot 與後續 PTY 事件走同一條序列佇列；視窗背景時用 xterm 的同步 write buffer。
+- **選取自動複製掛 `mouseup`、不掛 `onSelectionChange`**：後者在拖曳途中每過一格就發一次，
+  等於每拖一列就寫一次剪貼簿。右鍵貼上讀的是 `navigator.clipboard.readText()`，
+  **視窗沒有焦點時它會丟 `NotAllowedError: Document is not focused`**——使用者右鍵的當下一定有焦點，
+  所以只影響自動化測試（CDP 要先 `Page.bringToFront`）；handler 本身照樣要吞掉這個錯。
+- **側欄寬度走 `--chat-sidebar-w`，不要寫 inline width**：`.chat-sidebar` 的寬度在
+  `main.css` 出現三次（基礎、Token Anxiety、900px），每一處都要留 `var(--chat-sidebar-w, <原值>)`，
+  漏掉後面那條就會把拖好的寬度蓋回去。640px 以下側欄改成橫排、把手要 `display: none`。
+  終端機不需要另外通知——`term-host` 上本來就有 ResizeObserver。
+
 
 ### HF模型（本機 LLM）
 
@@ -572,6 +746,11 @@ gh release upload vX.Y.Z dist/VoiceInk-Setup-X.Y.Z.exe dist/VoiceInk-Setup-X.Y.Z
 - **增量掃描要把「這個檔案用哪顆模型」跟著游標留下來**：Codex 只在 `session_meta`／`turn_context` 寫一次模型，
   下一輪只讀新附加的那段就讀不到 → 之後每筆都記成 `unknown`。
   `scanSource` 的 `cursors[key]` 要存 `model` 並在下一輪回填。
+- **游標 key 必須跟著檔案走（`source.keyOf`），不能認絕對路徑**：Codex／Grok 的 session 檔會從
+  `sessions/` 搬進 `archived_sessions/`，搬完之後新路徑沒有游標 → 整份檔案從 0 重讀、
+  整個 session 的用量算兩次（模擬重現：搬移後 +N 筆假事件）。Claude／Codex 用檔名（UUID 唯一）、
+  Grok 用上一層資料夾名（檔名一律叫 `updates.jsonl`）；`pruneCursors` 靠游標的 `path` 欄驗存在，
+  舊格式（無 `path`）一併丟掉。回歸：`test-code-usage.js` 的「搬到 archived 後不重複計算」
 - **Codex 子代理（fork）的 rollout 開頭是「母 thread 整份歷史的重播」，一筆都不能收**：
   `session_meta` 帶 `forked_from_id`／`parent_thread_id` 時，後面幾千行是從母檔複製過來的舊記錄，
   **而且每一行都蓋上 fork 當下的時間戳** → 憑空多一份用量，還全部塞進同一個小時的桶子
@@ -584,11 +763,19 @@ gh release upload vX.Y.Z dist/VoiceInk-Setup-X.Y.Z.exe dist/VoiceInk-Setup-X.Y.Z
 - **三個「加錯就差十倍」**：Codex 的 `token_count` 要加 `last_token_usage`（單輪）不是 `total_token_usage`（累計）；
   Claude 串流同一則 assistant 會寫好幾行，要靠 `message.id` 去重；
   `input` 有沒有含 cache 三家不同（**Claude 沒含、Codex 與 Grok 有含**，後兩者要扣掉 cached 才不會重複計價）。
-  Grok 的 `turn_completed` 自帶 `costUsdTicks`（1 USD = 1e9），OpenCode 的 `message.data.cost` 也是真花費。
+  Grok 的 `turn_completed` 自帶 `costUsdTicks`（**所有世代都是 1 USD = 1e10 ticks，4.6 也一樣**——
+  依據是 CLI 自己附的 `~/.grok/docs/user-guide/14-headless-mode.md`：那份文件明寫「1 USD = 10^10 ticks」，
+  範例還同時給 `costUSD: 0.01268905` 與 `total_cost_usd_ticks: 126890500`（比值剛好 1e10），而且那個範例用的就是 grok-4.6。
+  **不要用「ticks ÷ 表列單價」去反推單位**：CLI 的實收價比 api.x.ai 表列便宜約 3～4 倍（訂閱制／build 檔位），
+  照那個比值猜會得到「4.6 是 1e9」的錯誤結論，把花費一次灌水 10 倍），
+  OpenCode 的 `message.data.cost` 也是真花費。
 - **快取的價錢一定要分開算**（長對話九成以上 token 走快取）：Anthropic 規則是 read = input × 0.1、
   **5 分鐘寫入 ×1.25、1 小時寫入 ×2**，而 Claude Code 寫的幾乎都是 1h
   （`usage.cache_creation.ephemeral_1h_input_tokens`，實測 78%）——混在一起用 5m 價算會低估三成多。
-  桶子有獨立的 `cacheWrite1h` 欄位；OpenAI／xAI／Gemini 的自動快取沒有寫入費，值是 **0 不是「沒填」**。
+  桶子有獨立的 `cacheWrite1h` 欄位。**「OpenAI 的自動快取不收寫入費」只到 gpt-5.5 為止**——
+  官方表從 gpt-5.6 那一代起多了「cache writes」一格（＝input × 1.25，astra 是 12.5），
+  照舊寫 0 會少算；OpenAI 沒有 5m／1h 兩檔，`cacheWrite1h` 要寫成跟 `cacheWrite` 同價
+  （留 0 等於宣告 1h 免費，空著又會被 `costOf` 推成 1.6 倍）。xAI／Gemini 仍是 **0 不是「沒填」**。
   單價彈窗四格：輸入／輸出／快取讀／快取寫（1h 沒填就用 5m × 1.6 推）。
 - **趨勢與分佈都要把 token 拆成輸入／輸出／快取讀／快取寫**（`emptyTotals`＋`addTotals`，
   `fillSeries` 與 byModel／byProvider 共用）：只回一個總數的話，使用者看到「幾百億 token」
@@ -796,10 +983,21 @@ gh release upload vX.Y.Z dist/VoiceInk-Setup-X.Y.Z.exe dist/VoiceInk-Setup-X.Y.Z
 - **dwm 的 VRAM 顯示十幾 GB 不是計算錯**：`GPUProcessMemory` 的 `DedicatedUsage` 對 dwm.exe 就是這麼大
   （工作管理員同一套計數器照樣這樣報；實測 16GB 卡計數器加總 16GB，nvidia-smi 只住 3.8GB——兩種量法）。
   不要為了「看起來合理」去改演算法；處理程序頁的說明（`#sysmonProcNote`）拿掉會馬上再收到「數值異常偏高」回報。
+- **錯誤訊息 8 秒後自己收起來**（`showError` 裡的計時器）：取樣逾時那一則的下一句就是「已重新啟動取樣器」，
+  留在畫面上只是嚇人。要改成別的行為就改那一個函式，不要在各個呼叫點各寫一份。
 - **不顯示 `Idle`（pid 0）**：它的「CPU%」其實是 100 減整機負載，依 CPU 遞減排序時永遠洗在頂端
   （被回報過兩次「CPU 偏高」）。`parseTick` 的 P 列與 `_Total` 一起擋。
 - **結束工作的 pid 守衛只收 `number`**（`Number([1234])` 是 1234、`Number({toString:()=>'99'})` 是 99），
   並擋掉 0（Idle）與 4（System）。只有「強制結束工作」一顆鈕（溫和的那顆對沒有訊息迴圈的程序沒作用）。
+- **感測器的「自動啟用」只能放在進系統監控頁時，不可放在開機那條**：開機就走 `-Verb RunAs`
+  等於一啟動就彈 UAC（而且所有 CDP 測試都是先啟動、再把 `sysmonSensors` 關掉，會整批卡在對話框前）。
+  開機那條只走排程工作（靜默，失敗就安靜維持 off），進頁時 renderer 才 `enableSensors()`——
+  它會**先裝排程工作**（一次 UAC）再啟用，所以正常情況下一輩子只授權一次。
+- **sidecar 死掉要自己重拉**（`sensors.js` 的 `onLost` → `index.js` 的 `ensureSensors`）：
+  防毒收掉或它自己崩掉時，狀態會停在 off，畫面上的溫度就再也不會回來。重拉走排程工作（不彈 UAC），
+  且**要有上限**（連續 5 次，撐過 60 秒就歸零），否則「一連上就死」會變成每 3 秒生一顆提權程序。
+  重拉一定要經過 `ensureSensors` 而不是直接 `sensors.enable`——風扇接管要跟著接回去。
+  回歸：`test-sysmon.js` 的「感測器斷線重拉」
 - **感測器 sidecar 不把整個 App 提權**（整包提權會讓終端機分頁用管理員開 shell）：只有 `VoiceInkSensors.exe`
   走一次 UAC，透過 128-bit 亂數具名管道回傳，只收第一個連線。版本鎖 `0.9.7-pre728`
   （0.9.6 在 Ryzen 5000 上 Tctl/Tdie 恆為 0）。
@@ -847,7 +1045,7 @@ gh release upload vX.Y.Z dist/VoiceInk-Setup-X.Y.Z.exe dist/VoiceInk-Setup-X.Y.Z
   重讀仍是 100%。更糟的是 **`SetDefault()` 只還原「自己 Open 當下的快照」**——用**全新**程序對
   同一條通道 `SetDefault()` **無效**（它 Open 時看到的就已經是手動狀態），所以事後救不回來，
   **只有重新開機**（BIOS 在 POST 重設 SmartGuardian）才會回到原本的曲線。
-  因此這四件事缺一不可：① 每條通道有下限 `minPwm`（≥20，預設 30，最壞情況只能是「吵」不是「燒」）；
+  因此這四件事缺一不可：① 每條通道有下限 `minPwm`（≥20，預設也是 20，最壞情況只能是「吵」不是「燒」）；
   ② sidecar 自己的 **5 秒看門狗**（主程式被硬殺時唯一會交還的機制）；
   ③ `before-quit` **要 await 得到** sysmon 的 shutdown，且**風扇要排在 `sensors.stop()` 之前**；
   ④ `dirty` 旗標存 store，下次啟動看到還是 true 就在 UI 講明「重開機可回復」。
@@ -892,6 +1090,30 @@ gh release upload vX.Y.Z dist/VoiceInk-Setup-X.Y.Z.exe dist/VoiceInk-Setup-X.Y.Z
   （`Get-Process` 連 `Path` 都拿不到），要用 `Invoke-CimMethod ... -MethodName Terminate`。
   留著的話它佔著 PawnIO，新的 sidecar `Computer.Open()` 會撞在一起——測試會莫名其妙紅一整輪。
 
+### 效能調整
+
+- **不能沿用風扇的 `S`／`D`／`R`**：LHM `IControl` 只接到 PWM。CPU 走 PawnIO `ioctl_send_smu_command`（Vermeer／Matisse RSMU），GPU 走未公開 NVAPI QueryInterface。IPC 只收數字；opcode、PCI 位址、裝置路徑不准出現在 renderer。`ocControl` **不進 `STORE_ALLOWLIST`**。`registerSysmonIpc` 要逐一列舉 `ocStatus`／`ocSetDraft`／`ocApply`／`ocReset`。
+- **安全方向跟風扇相反**：卡住要還原出廠，不是拉高。硬上限（核心 ±200 MHz、記憶體 −500～＋1000、功耗 50～120%、PBO 牆為工廠值 50%～150%）main 與 sidecar 兩邊都夾。套用期間 CPU／GPU ≥ 95°C 或讀不到溫度 → 立刻 `X`。看門狗與 `before-quit` 都要還原（`oc.shutdown()` 排在 `sensors.stop()` 之前）。
+- **開機不自動套用**：GPU 軟體時脈重開就回預設，開機再套等於主動超頻。`dirty` 只表示「這次行程有套用、還沒還原」——下次啟動看到它是提示，不是再套一次。套用是按鈕，不每秒灌 SMU。
+- **不做 I2C／RTCore**（CVE-2019-16098）。GPU 電壓走 NVAPI VID。Curve Optimizer、全核／每核鎖頻、Tctl、GPU 溫度牆、手動超頻 CPU VID、SoC 電壓（先快照才能還原）、V/F 逐點都要有。偵測不到可寫路徑時卡片改說明，不要留白。CDP 測試**不准按套用**。
+- **V/F 寫入 frequencyDeltaKHz 要 ×2**（nvapioc 同源）。核心滑桿是整條基底，`V n d0…` 是各點額外 MHz。SoC 沒讀到進門值就不要寫，否則還原不知道要回到哪。
+- **走勢圖兩條線各自縮放，所以 Y 軸要各標各的**（左緣第一條、右緣第二條，只標上下限＋單位）：
+  沒有單位的曲線等於在猜數量級。**讀不到值時不可以用 0 佔位**——自動縮放會被那顆 0 壓扁一整分鐘，
+  看起來像時脈突然掉到 0。整分鐘同一個值時線走中間、只標一次。
+- **儀表要顯示實際讀數，不是牆**：CPU 功耗是 Package 瓦數，PPT 牆另標；負載 0% 是閒置不是「沒讀到」（JSON 的 `u` 允許 0）。每核時脈走 sidecar `ck`，GPU 負載／功耗可退回 nvidia-smi。套用後走勢圖要看得出時脈／功耗在動。
+
+### 使用時長
+
+- **同一份 Tai 庫、同一套寫入規則**：表名 `AppModels`／`DailyLogModels`／`HoursLogModels`／`WebSiteModels`／`WebBrowseLogModels`／`WebUrlModels`；時長是秒，日桶上限 86400、小時桶是整點且上限 3600。第一次啟動把本機 Tai `Data\data.db` 拷進 `<userData>/screentime/`，之後只寫這一份——不要跟還在跑的 Tai 搶同一顆檔。
+- **外掛協定不能改**：Chrome／Edge「Tai Sentry」連寫死的 `ws://127.0.0.1:8908/TaiWebSentry`。只綁 127.0.0.1、收 JSON（`Url`／`Title`／`Duration`／`ActiveTime`）、丟掉純文字 `ping`。Tai 佔著 8908 時要重試，不能換埠。`observer.ps1` 要進 `asarUnpack`（PowerShell 執行不了 asar 內檔案）。
+- **`registerScreentimeIpc` 要逐一列舉** `status`／`stats`／`drill`／`export`／`openFolder`。renderer 只送 kind／range／date；存檔路徑由系統對話框決定。**沒有開關**：使用時長開 App 就一直記，所以沒有 `setEnabled` IPC、也沒有 store 鍵。
+- **有 `LIMIT` 的清單不可以拿來算總數**：`總時長`／`應用數` 走各自的聚合查詢
+  （`SUM` ＋ `COUNT DISTINCT`）。拿 `LIMIT 80` 的清單加總在「日」永遠是對的（一天不到 80 個應用），
+  切到「年」就少一大截，而畫面上看不出來（實測 80 vs 283 個應用）。
+- **柱狀圖有 Y 軸**：三格刻度＋格線，單位由上限決定（同一條軸只用一種單位）；
+  X 軸標籤掛在繪圖區**外面**，掛在柱子裡的話矮柱會被時間字壓住。回歸：`e2e-screentime-cdp.js`
+- CDP **不准關使用者的 Tai.exe**；讀舊資料用暫存 userData 自己拷一份。回歸：`test-screentime.js`、`e2e-screentime-cdp.js`。
+
 ### UI／CSS
 
 - **`themes.css` 沒有 `--surface`／`--accent`／`--border` 這三個名字**（正確的是 `--surface-glass`／
@@ -911,6 +1133,9 @@ gh release upload vX.Y.Z dist/VoiceInk-Setup-X.Y.Z.exe dist/VoiceInk-Setup-X.Y.Z
 - **`<details>` 收起後，子元素的 `offsetHeight` 還是舊值**（Chromium 用 `::details-content` 的
   `content-visibility: hidden`，幾何留著）：要量就量 `details` 自己的高度跟 `summary` 比，
   量內容那一層會拿到「看起來沒收起來」的假紅燈。
+- **`.btn` 也是其中一個**（`display: inline-flex`）：`el.hidden = true` 的按鈕照樣看得見。
+  已經在 `.btn[hidden] { display: none }` 補掉了（屬性選擇器特異度較高，跟寫在前後無關），
+  新寫的按鈕類別要記得比照。回歸：`e2e-workspace-cdp.js` 的「圖片分頁不給存檔」
 - **同一條適用 `<dialog>`**：給 `.app-dialog` 寫 `display` 一定要帶 `[open]`，否則
   `dialog:not([open]) { display: none }` 被壓過，**沒開的彈窗會全部浮出來疊在頁面上**。
   只斷言 `dialog.open === false` 抓不到，要量 `offsetHeight`。回歸：`e2e-visual-cdp.js` 的 `dialog-hidden`。
@@ -934,6 +1159,10 @@ gh release upload vX.Y.Z dist/VoiceInk-Setup-X.Y.Z.exe dist/VoiceInk-Setup-X.Y.Z
   `position: fixed` 子孫的**定位基準**（跟 `transform`／`filter` 一樣），清單整個位移一個 dialog 左上角
   （實測寫 515/447、落在 1005/727）。修法是先把 `left/top` 歸零、量出實際原點再回推。
   **斷言要量 trigger 與 menu 的相對位置**，只檢查「清單在不在 dialog 裡」抓不到。
+- **`.chat-layout` 底下只能有一個 `.chat-main`**：曾經多出一層沒有 id 的 `<div class="chat-main">`
+  把 `chatMain` 與 `termMain` 一起包住（HTML 沒報錯，parser 自己補上收尾），
+  症狀是終端機憑空多一圈 18px 的內距、看起來就是「邊框好厚」。
+  回歸：`e2e-ux-tweaks-cdp.js` 的「沒有多餘的 chat-main 外框」。
 - **`.subtab-panel` 的顯示只由 `.active` 控制**：不要對 `#stt-live` 之類的子分頁容器裸寫 `display: flex`
   （會蓋掉 `display: none` 讓兩個子分頁疊在一起）。要置中改內容自己的 `margin: 0 auto`。
 - **批次改 CSS 前先確認選擇器不是某條多選擇器規則的結尾**：`.sysmon-stress-card {` 同時也是
@@ -946,6 +1175,10 @@ gh release upload vX.Y.Z dist/VoiceInk-Setup-X.Y.Z.exe dist/VoiceInk-Setup-X.Y.Z
   欄寬同時放寬（`minmax(330px, 1fr)`）、列距放鬆。
 - **`<dl>` 做多欄流版時每組 dt/dd 要包一層 `<div>`**，否則 `auto-fill` 會把標籤跟值拆到不同欄。
 - **hover 才出現的操作等於沒有**（觸控裝置沒有 hover）：兩個不同的動作就給兩顆有文字標籤的常駐按鈕。
+- **全 App 禁用強調條／裝飾條**：不准用「方框左邊一條粗粗的彩色條」（`border-left: 3px solid <accent>`、
+  標題前的 3×13px 色票偽元素都算）。強調一律走完整 1px 邊框、底色 tint 或字級／顏色本身；
+  已清掉的：`.md-quote`、`.chat-think`、`.sysmon-note`、`.settings-subsection-title::before`。
+  新樣式不准再長出來（grep `border-left: [2-9]px` 應為 0 筆裝飾用途）。
 - Aurora 視覺 token 集中在 `themes.css`，共用 surface／RWD 在 `main.css`；
   不要用 React、DnD 或動畫 dependency 取代原生 DOM／Web Animations。
 - **設定頁不放「用哪一顆模型」**：設定頁只管裝了什麼、怎麼推論、雲端端點；選用哪一顆在做事的頁面上直接選，
@@ -1010,9 +1243,14 @@ gh release upload vX.Y.Z dist/VoiceInk-Setup-X.Y.Z.exe dist/VoiceInk-Setup-X.Y.Z
 | 轉換閘道 | `node scripts/test-ccswitch-gateway.js`＋`node scripts/e2e-ccswitch-gateway.js`（自開 mock 上游） |
 | 用量統計 | `node scripts/test-code-usage.js`＋`npx electron scripts/e2e-code-usage.js`（**真的讀本機記錄**，實測 5.4GB）＋`npx electron scripts/probe-code-usage-audit.js`（**不經 codeusage 自己重算一次**再對帳；動 `parsers.js`／`pricing.js` 前後都要跑） |
 | AGY | `node scripts/test-agy-mappers.js`＋`npx electron scripts/e2e-agy.js`（mock cloudcode-pa）＋`node scripts/e2e-agy-cdp.js`；動映射表／端點順序前先跑 `npx electron scripts/probe-agy-upstream.js`，動 `runAgyCli` 前跑 `probe-agy-nudge.js` |
+| 專案工作區 | `node scripts/test-workspace-nav.js`（快速開檔模糊排序／檔案樹鍵盤導覽／roving tabindex）＋`node scripts/test-workspace.js`（路徑逃逸守衛／`git status --porcelain=v2 -z` 解析／agent id 白名單／專案 sanitize／檔名白名單／搜尋／`netstat` 解析）＋`node scripts/e2e-workspace-cdp.js`（打包版 UI，**用暫存 user-data-dir ＋ 自己種一個暫存專案，不碰使用者的專案**）；動 Monaco（版本、`build.files` 的 monaco 規則、CSP）前後都要跑
+`node_modules/electron/dist/electron.exe scripts/probe-workspace-monaco.js`（實測高亮與並排 diff 真的畫得出來）；
+動 PDF 預覽前先跑 `node_modules/electron/dist/electron.exe scripts/probe-workspace-pdf.js`（實測 Electron 到底有沒有內建檢視器） |
 | 終端機 | `node scripts/test-terminal.js`＋`npx electron scripts/e2e-terminal.js`（真 ConPTY）＋`node scripts/e2e-terminal-cdp.js`；管理員終端機 `node scripts/probe-terminal-admin.js`（宿主協定，**不需 UAC**）＋`node_modules/electron/dist/electron.exe scripts/probe-terminal-admin-elevate.js`（**會跳一次 UAC**，驗 shell 真的是 High） |
 | 系統監控 | `node scripts/test-sysmon.js`＋`npx electron scripts/e2e-sysmon.js`＋`node scripts/e2e-sysmon-cdp.js`＋`node scripts/probe-sysmon-stress.js`（**實機量有沒有真的壓到**）＋`node scripts/e2e-sysmon-sensors.js`（**會跳一次 UAC**） |
 | 風扇控制 | `node scripts/test-sysmon-fans.js`（內插／遲滯／斜率／下限／panic／sanitize）＋`node scripts/e2e-sysmon-fans-cdp.js`（打包版 UI，**不接管真風扇**）＋`node scripts/probe-sysmon-fans.js`（**實機轉你的風扇**，100%/40% 各量一次 RPM，會跳 UAC）＋`node scripts/probe-sensors-task.js`（免 UAC 啟動那條路，**會跳兩次 UAC**：建立與移除工作） |
+| 效能調整 | `node scripts/test-sysmon-oc.js`（夾值／panic／指令形狀）＋`node scripts/e2e-sysmon-oc-cdp.js`（打包版 UI，**不按套用**） |
+| 使用時長 | `node scripts/test-screentime.js`（切桶／寫入／讀 Tai 舊庫／WebSocket）＋`node scripts/e2e-screentime-cdp.js`（打包版 UI，**不關使用者的 Tai**） |
 | 額度 | `node scripts/test-usage.js`＋`npx electron scripts/e2e-usage.js`（真實來源）＋`node scripts/e2e-usage-cdp.js`；動 OpenCode Go／Ollama／Command Code 端點或解析前後跑 `node scripts/probe-usage-endpoints.js`（**打真上游**） |
 | 聊天 | `npx electron scripts/e2e-chat.js`（mock SSE）＋`node scripts/e2e-chat-cdp.js`＋`node scripts/test-markdown.js` |
 | ASR | `npx electron scripts/e2e-llama-asr.js`（GPU）／`e2e-asr-threads.js`（CPU）／`node scripts/e2e-stt-cdp.js`（三個子分頁的模型選單）；雲端形狀矩陣 `node_modules/electron/dist/electron.exe scripts/probe-cloud-asr.js`（**會用真金鑰打真上游**） |
@@ -1024,4 +1262,5 @@ gh release upload vX.Y.Z dist/VoiceInk-Setup-X.Y.Z.exe dist/VoiceInk-Setup-X.Y.Z
 | 常駐／自啟動 | `node scripts/e2e-tray-cdp.js` |
 | 自動更新 | `node scripts/test-updater.js`（狀態機／開關／結束時安裝／接線）＋`node scripts/e2e-update-cdp.js`（打包版 UI，**會真的連一次 GitHub**） |
 | 視覺／RWD | `node scripts/e2e-visual-cdp.js`（七頁 × dark/light × 三尺寸）＋`node scripts/test-usage-reorder.js` |
+| 使用體驗（本輪四項） | `node scripts/e2e-ux-tweaks-cdp.js`（打包版：系統監控錯誤自動收起、風扇下限 20%、終端機選取複製／右鍵貼上／窄邊框、側欄拖寬。**會把測試視窗叫到最前面**讀剪貼簿） |
 | 冒煙 | `node scripts/e2e-cdp-smoke.js` |

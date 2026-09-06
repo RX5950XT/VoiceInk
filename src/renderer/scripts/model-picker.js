@@ -262,8 +262,8 @@ export function readinessHint(select, options) {
   const chosen = options.find((o) => o.value === select?.value)
   if (!chosen || chosen.ready) return ''
   return chosen.value.startsWith(CLOUD_VALUE)
-    ? '這個雲端供應商還沒設好，請到設定 → 雲端模型補上 API URL 與 Key。'
-    : '這顆模型還沒安裝，請到設定 → 本地模型下載後再使用。'
+    ? '供應商未設好，請到設定 → 雲端模型補上。'
+    : '模型未安裝，請到設定 → 本地模型下載。'
 }
 
 /**

@@ -73,6 +73,14 @@ async function loadAgyPage() {
   return agyPage
 }
 
+/** @type {typeof import('./workspace-page.js') | null} */
+let workspacePage = null
+/** @returns {Promise<typeof import('./workspace-page.js')>} */
+async function loadWorkspacePage() {
+  if (!workspacePage) workspacePage = await import('./workspace-page.js')
+  return workspacePage
+}
+
 /** @returns {Promise<typeof import('./terminal-page.js')>} */
 async function loadTerminalPage() {
   if (!terminalPage) terminalPage = await import('./terminal-page.js')
@@ -467,6 +475,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   initWindowControls()
   bindSettingsControls()
   initNavigation()
+  initSidebarResize()
+  initSidebarModes()
   initChatPage()
   refreshChatPage()
   // 終端機跟聊天共用這一頁：側欄的終端機清單啟動時就要接上（動態 import，不卡啟動）
@@ -527,7 +537,7 @@ async function loadStartupSettings() {
   loginInput.disabled = startup?.supported !== true
   if (hint) {
     hint.classList.toggle('hidden', startup?.supported === true)
-    hint.textContent = startup?.supported === true ? '' : '開發模式下不註冊開機自啟動（只有打包版才會寫入）。'
+    hint.textContent = startup?.supported === true ? '' : '開發模式不註冊開機自啟動。'
   }
 
   if (startupBound) return
@@ -644,28 +654,166 @@ function initNavigation() {
 }
 
 /**
- * 聊天與終端機共用同一頁：主區要顯示哪一個由最後點選的側欄項目決定。
- * 'chat'＝對話主區、'terminal'＝終端機主區。切分頁時保持原樣，不重置。
- * @type {'chat' | 'terminal'}
+ * 聊天與工作區共用同一頁：主區要顯示哪一個由最後點選的側欄項目決定。
+ * 'chat'＝對話主區、'workspace'＝工作區主區（分頁列＋終端機／編輯器／瀏覽器）。
+ * 切分頁時保持原樣，不重置。
+ * @type {'chat' | 'workspace'}
  */
 let chatPaneMode = 'chat'
 
 /**
- * 切換聊天頁的主區（對話／終端機）。
+ * 切換聊天頁的主區（對話／工作區）。
  * DOM 的切換是同步的——呼叫端（點側欄項目、ccswitch 的更新按鈕）要先切再操作，
  * xterm 的 fit 才量得到尺寸；模組載入與清單重讀是背景跑。
- * @param {'chat' | 'terminal'} mode
+ * @param {'chat' | 'workspace'} mode
  */
+/** 側欄寬度可拖：終端機吃的是 term-host 的 ResizeObserver，不必另外通知 */
+const SIDEBAR_MIN_W = 180
+const SIDEBAR_MAX_W = 560
+
+/**
+ * 一條可拖的分隔把手。左右兩側欄共用這一份——右側欄只差在「往左拖是變寬」（`invert`）。
+ *
+ * @param {{
+ *   handleId: string,
+ *   panelSelector: string,
+ *   cssVar: string,
+ *   storageKey: string,
+ *   invert?: boolean
+ * }} options
+ */
+function initResizer({ handleId, panelSelector, cssVar, storageKey, invert = false }) {
+  const handle = document.getElementById(handleId)
+  const panel = /** @type {HTMLElement | null} */ (document.querySelector(panelSelector))
+  if (!handle || !panel) return
+
+  /** @param {number} width */
+  function apply(width) {
+    const px = Math.round(Math.min(SIDEBAR_MAX_W, Math.max(SIDEBAR_MIN_W, width)))
+    document.documentElement.style.setProperty(cssVar, `${px}px`)
+    try {
+      localStorage.setItem(storageKey, String(px))
+    } catch {
+      // 沒有 storage 就只是這次有效，不值得為它中斷拖曳
+    }
+  }
+
+  let saved = 0
+  try {
+    saved = Number(localStorage.getItem(storageKey)) || 0
+  } catch {
+    saved = 0
+  }
+  if (saved) apply(saved)
+
+  /** @param {PointerEvent} event */
+  const onMove = (event) => {
+    const rect = panel.getBoundingClientRect()
+    apply(invert ? rect.right - event.clientX : event.clientX - rect.left)
+  }
+  const stop = () => {
+    handle.classList.remove('is-dragging')
+    window.removeEventListener('pointermove', onMove)
+    window.removeEventListener('pointerup', stop)
+  }
+  // 監聽掛 window：拖到把手外（甚至拖出視窗）仍要跟得上、放得掉
+  handle.addEventListener('pointerdown', (event) => {
+    event.preventDefault()
+    handle.classList.add('is-dragging')
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', stop)
+  })
+  handle.addEventListener('keydown', (event) => {
+    const raw = event.key === 'ArrowLeft' ? -16 : event.key === 'ArrowRight' ? 16 : 0
+    if (!raw) return
+    event.preventDefault()
+    apply(panel.getBoundingClientRect().width + (invert ? -raw : raw))
+  })
+}
+
+function initSidebarResize() {
+  initResizer({
+    handleId: 'chatSidebarResizer',
+    panelSelector: '.chat-sidebar',
+    cssVar: '--chat-sidebar-w',
+    storageKey: 'chatSidebarWidth'
+  })
+  initResizer({
+    handleId: 'wsRightResizer',
+    panelSelector: '.ws-right',
+    cssVar: '--ws-right-w',
+    storageKey: 'wsRightWidth',
+    invert: true
+  })
+}
+
+/**
+ * 側欄上面三顆鈕：決定下面列的是專案／對話／終端機。
+ * 兩個清單容器（終端機清單併在專案面板下半），切換只 toggle `hidden`，
+ * 既有的 chat-page／terminal-page 一行都不用改。
+ * @type {'projects' | 'chats'}
+ */
+let sidebarMode = 'chats'
+
+const SIDEBAR_PANELS = {
+  projects: 'projPanel',
+  chats: 'chatPanel'
+}
+
+/**
+ * @param {'projects' | 'chats'} mode
+ */
+export function setSidebarMode(mode) {
+  if (!SIDEBAR_PANELS[mode]) return
+  sidebarMode = mode
+  document.querySelectorAll('.sidebar-mode').forEach((btn) => {
+    const on = /** @type {HTMLElement} */ (btn).dataset.mode === mode
+    btn.classList.toggle('active', on)
+    btn.setAttribute('aria-selected', on ? 'true' : 'false')
+  })
+  for (const [key, id] of Object.entries(SIDEBAR_PANELS)) {
+    const panel = document.getElementById(id)
+    if (panel) panel.hidden = key !== mode
+  }
+  try {
+    localStorage.setItem('chatSidebarMode', mode)
+  } catch {
+    // 沒有 storage 就只是這次有效
+  }
+  if (mode === 'projects') loadWorkspacePage().then((m) => m.refreshWorkspacePage())
+}
+
+function initSidebarModes() {
+  document.querySelectorAll('.sidebar-mode').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      setSidebarMode(/** @type {'projects'|'chats'} */ (
+        /** @type {HTMLElement} */ (btn).dataset.mode
+      ))
+    })
+  })
+  let saved = ''
+  try {
+    saved = localStorage.getItem('chatSidebarMode') || ''
+  } catch {
+    saved = ''
+  }
+  // 舊版存過 'terminals'：終端機已併進專案面板
+  if (saved === 'terminals') saved = 'projects'
+  setSidebarMode(/** @type {'projects'|'chats'} */ (
+    SIDEBAR_PANELS[saved] ? saved : 'chats'
+  ))
+}
+
 export function setChatPaneMode(mode) {
-  if (mode !== 'chat' && mode !== 'terminal') return
+  if (mode !== 'chat' && mode !== 'workspace') return
   if (mode === chatPaneMode && mode === 'chat') return
   chatPaneMode = mode
   const chatMain = document.getElementById('chatMain')
   const termMain = document.getElementById('termMain')
   if (chatMain) chatMain.classList.toggle('hidden', mode !== 'chat')
-  if (termMain) termMain.classList.toggle('hidden', mode !== 'terminal')
-  // 終端機主區剛從 display:none 顯現，xterm 要等這一幀才 fit 得準
-  if (mode === 'terminal') {
+  if (termMain) termMain.classList.toggle('hidden', mode !== 'workspace')
+  // 工作區主區剛從 display:none 顯現，xterm 要等這一幀才 fit 得準
+  if (mode === 'workspace') {
     loadTerminalPage().then((m) => m.refreshTerminalPage())
   }
 }
@@ -687,8 +835,9 @@ export function switchPage(pageName) {
   // 先啟動新頁 acquire，再 release 舊頁，避免中間 owner 歸零觸發 unload＋重付 warm
   if (pageName === 'chat') {
     refreshChatPage()
-    // 聊天與終端機同頁：兩邊的清單與狀態都要接上
+    // 聊天、終端機與工作區同頁：三邊的清單與狀態都要接上
     loadTerminalPage().then((m) => m.refreshTerminalPage())
+    loadWorkspacePage().then((m) => m.refreshWorkspacePage())
     setChatPaneMode(chatPaneMode)
   }
   if (pageName === 'ccswitch') loadCcSwitchPage().then((m) => m.refreshCcSwitchPage())
@@ -1015,7 +1164,7 @@ async function refreshGpuCapabilityUi(forceRefresh = false) {
       cudaEnvStatus.textContent = 'CUDA Runtime：已就緒（可走 CUDA 加速）'
     } else if (ok && hasVulkan) {
       cudaEnvStatus.textContent =
-        'CUDA Runtime：未安裝（目前可用 Vulkan）。點「安裝 CUDA 環境」可啟用 CUDA。'
+        'CUDA Runtime：未安裝（目前用 Vulkan）；點「安裝 CUDA 環境」啟用。'
     } else if (ok) {
       cudaEnvStatus.textContent = 'CUDA Runtime：未安裝。建議安裝以獲得最佳 GPU 效能。'
     } else {
@@ -1197,7 +1346,7 @@ function handleDeleteAsrCloud() {
   const cur = asrCloudsDraft.find((c) => c.id === asrCloudDraftId)
   if (!cur) return
   const label = cur.name || '未命名設定'
-  if (!window.confirm(`刪除設定「${label}」？它的 API Key 與模型清單會一併移除。`)) return
+  if (!window.confirm(`刪除設定「${label}」？API Key 與模型清單一併移除。`)) return
   asrCloudsDraft = asrCloudsDraft.filter((c) => c.id !== asrCloudDraftId)
   asrCloudDraftId = asrCloudsDraft[0]?.id || ''
   renderAsrCloudSelect()
@@ -1284,7 +1433,7 @@ async function saveSettings() {
     ['fileAsr', 'liveAsr', 'dictationAsr'].map((k) => electronAPI.store.get(k, 'local:qwen3asr'))
   ).then((values) => values.some((v) => String(v || '').startsWith('cloud')))
   if (usingCloudAsr && !curCloud?.apiKey) {
-    showToast('有頁面的語音轉文字選的是雲端，需要 API Key', 'error')
+    showToast('語音轉文字選的是雲端，需要 API Key', 'error')
     return
   }
   const chatValidation = validateChatSettings()
@@ -1407,7 +1556,7 @@ function renderModelItem(model) {
       try {
         const st = await electronAPI.engine.status()
         if (st.asrLoaded || st.llmLoaded) {
-          showToast('請先停止字幕／轉錄並離開即時分頁後再刪除模型', 'error')
+          showToast('請先停止字幕／轉錄再刪除模型', 'error')
           return
         }
         await electronAPI.models.delete(model.key)

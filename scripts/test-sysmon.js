@@ -579,7 +579,48 @@ async function testPawnIo() {
     await pawnio.verifySignature(path.join(ROOT, 'package.json'), spawn) === false)
 }
 
-testStress().then(testPawnIo).then(() => {
+// ===== 感測器 sidecar 斷線自己重拉 =====
+// sidecar 被防毒收掉／自己崩掉時，畫面上的溫度就再也不會回來（狀態停在 off，沒人重試）。
+// 重拉走排程工作那條，所以不會彈 UAC。
+async function testSensorReconnect() {
+  console.log('\n[感測器斷線重拉]')
+  const net = require('net')
+  const { createSensorBridge } = require(path.join(ROOT, 'src/main/sysmon/sensors.js'))
+  /** @type {net.Socket[]} */
+  const clients = []
+  let lost = 0
+  const bridge = createSensorBridge({
+    resolveExe: () => path.join(ROOT, 'package.json'), // 只要「存在」就好，這條測試不真的開 sidecar
+    onLost: () => { lost += 1 },
+    // 假的排程工作：直接用一條 socket 冒充連上來的 sidecar
+    task: {
+      run: (pipeName) => new Promise((resolve) => {
+        const c = net.connect(pipeName, () => { clients.push(c); c.write('{"h":[]}\n'); resolve(true) })
+        c.on('error', () => resolve(false))
+      }),
+      status: async () => ({ installed: true, stale: false, canInstall: true, reason: '' }),
+      install: async () => ({ installed: true, stale: false }),
+      remove: async () => ({ installed: false, stale: false })
+    }
+  })
+
+  const first = await bridge.enable({ elevate: false })
+  ok('排程工作拉起來就是 on', first.state === 'on', first.state)
+
+  clients.pop().destroy()
+  await new Promise((r) => setTimeout(r, 3600))
+  ok('sidecar 死掉會自己重拉', lost === 1, `lost=${lost}`)
+  ok('重拉期間狀態不是 on', bridge.status().state !== 'on', bridge.status().state)
+
+  // stop() 是「使用者要它停」，不可以被當成斷線又拉回來
+  await bridge.enable({ elevate: false })
+  await bridge.stop()
+  await new Promise((r) => setTimeout(r, 3600))
+  ok('stop() 之後不重拉', lost === 1, `lost=${lost}`)
+  for (const c of clients) { try { c.destroy() } catch { /* 已經斷了 */ } }
+}
+
+testStress().then(testPawnIo).then(testSensorReconnect).then(() => {
   console.log(`\n${passed} passed, ${failed} failed`)
   process.exit(failed === 0 ? 0 : 1)
 })

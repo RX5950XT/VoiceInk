@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; connect-src 'self' https: http:; media-src 'self' blob:"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; worker-src 'self' blob:; img-src 'self' data: blob:; connect-src 'self' https: http:; media-src 'self' blob:; frame-src http: https:"
     />
     <link rel="icon" type="image/png" href="../../assets/icon.png" />
     <!-- xterm 的樣式直接吃 node_modules（renderer 無 bundler，vendoring 只會多一份要同步的複本） -->
@@ -81,7 +81,51 @@
           <section id="page-chat" class="page active">
             <div class="chat-layout">
               <aside class="chat-sidebar">
-                <section class="sidebar-half">
+                <!--
+                  側欄只有一塊，上面兩顆鈕決定下面列什麼。清單各自是獨立容器
+                  （`.chat-list-item` 三邊共用，選擇器一定要限定 #projList / #chatList / #termList）
+                -->
+                <div class="sidebar-modes" role="tablist" aria-label="側欄內容">
+                  <button
+                    type="button"
+                    class="sidebar-mode"
+                    id="sidebarModeProjects"
+                    role="tab"
+                    data-mode="projects"
+                    aria-controls="projPanel"
+                    aria-selected="false"
+                  >
+                    專案
+                  </button>
+                  <button
+                    type="button"
+                    class="sidebar-mode active"
+                    id="sidebarModeChats"
+                    role="tab"
+                    data-mode="chats"
+                    aria-controls="chatPanel"
+                    aria-selected="true"
+                  >
+                    對話
+                  </button>
+                </div>
+
+                <section class="sidebar-panel" id="projPanel" role="tabpanel" hidden>
+                  <div class="proj-actions-bar">
+                    <button type="button" id="projNewBtn" class="btn btn-primary btn-sm proj-action-btn">
+                      ＋ 加入專案
+                    </button>
+                    <button type="button" id="termNewBtn" class="btn btn-secondary btn-sm proj-action-btn" title="新終端機（可選系統管理員身分）" aria-label="新終端機">
+                      ＋ 終端機
+                    </button>
+                  </div>
+                  <div class="proj-unified-list">
+                    <div id="projList" class="chat-list proj-list" aria-label="專案清單"></div>
+                    <div id="termList" class="chat-list term-list" aria-label="終端機清單"></div>
+                  </div>
+                </section>
+
+                <section class="sidebar-panel" id="chatPanel" role="tabpanel">
                   <button type="button" id="chatNewBtn" class="btn btn-primary btn-sm chat-new-btn">
                     ＋ 新對話
                   </button>
@@ -94,15 +138,18 @@
                   />
                   <div id="chatList" class="chat-list" aria-label="對話清單"></div>
                 </section>
-                <section class="sidebar-half sidebar-half-term">
-                  <button type="button" id="termNewBtn" class="btn btn-primary btn-sm chat-new-btn">
-                    ＋ 新終端機
-                  </button>
-                  <div id="termList" class="chat-list term-list" aria-label="終端機清單"></div>
-                </section>
-              </aside>
 
-              <div class="chat-main">
+                <!-- 終端機清單併進 #projPanel 下半（id 不動：terminal-page.js 與測試都認它） -->
+              </aside>
+              <div
+                id="chatSidebarResizer"
+                class="sidebar-resizer"
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="調整側欄寬度"
+                tabindex="0"
+              ></div>
+
               <div class="chat-main" id="chatMain">
                 <div id="chatBanner" class="translate-banner hidden" role="status">
                   <span id="chatBannerText">尚未設定聊天 API</span>
@@ -172,18 +219,285 @@
                 <p id="chatError" class="live-error hidden" role="alert"></p>
               </div>
 
-              <!-- 終端機主區：跟聊天共用這一頁，點側欄的終端機項目才顯示 -->
+              <!--
+                工作區主區：跟聊天共用這一頁（`#chatMain` ⇄ `#termMain` 二選一）。
+                id 維持 `termMain`／`term-main` 不改名——終端機的未讀點判定與既有的
+                CDP 回歸都認這兩個名字。裡面的分頁列可以裝終端機／編輯器／瀏覽器。
+              -->
               <div class="term-main hidden" id="termMain">
-                <p id="termError" class="live-error hidden" role="alert"></p>
-                <div id="termEmpty" class="term-empty">
-                  <h2>終端機</h2>
-                  <p class="page-desc">
-                    每個工作階段是一顆獨立的 shell，可以同時開好幾個跑不同的 AI 代理。
-                    側欄會顯示各自是「運行中」還是「已完成」，跑完但你不在看的那個會亮未讀點。
-                  </p>
+                <div class="ws-tabs" id="wsTabs" role="tablist" aria-label="開啟中的分頁">
+                  <!-- ＋ 在 strip 尾端，貼著最後一個分頁（比照瀏覽器） -->
+                  <div class="ws-tabs-strip" id="wsTabStrip">
+                    <button
+                      type="button"
+                      id="wsNewBtn"
+                      class="btn-icon ws-new-btn"
+                      title="新增分頁"
+                      aria-label="新增分頁"
+                      aria-haspopup="true"
+                      aria-expanded="false"
+                    >
+                      ＋
+                    </button>
+                  </div>
                 </div>
-                <div id="termHost" class="term-host hidden"></div>
+
+                <p id="termError" class="live-error hidden" role="alert"></p>
+
+                <div class="ws-surfaces" id="wsSurfaces">
+                  <div id="termEmpty" class="term-empty">
+                    <h2>工作區</h2>
+                    <p class="page-desc">加一個資料夾開始，或按「＋」開終端機。</p>
+                  </div>
+                  <div id="termHost" class="term-host hidden"></div>
+
+                  <!-- 編輯器：簡易 IDE 模式（行號欄、等寬編輯區、預覽切換、狀態列） -->
+                  <div id="wsEditor" class="ws-editor" hidden>
+                    <div class="ws-editor-bar">
+                      <span class="ws-editor-name" id="wsEditorName"></span>
+                      <span class="ws-editor-spacer"></span>
+                      <button type="button" id="wsEditorFindBtn" class="btn btn-secondary btn-sm" title="尋找與取代 (Ctrl+F)">
+                        尋找
+                      </button>
+                      <button type="button" id="wsEditorPreviewBtn" class="btn btn-secondary btn-sm" hidden>
+                        預覽
+                      </button>
+                      <button type="button" id="wsEditorSaveBtn" class="btn btn-primary btn-sm">
+                        儲存
+                      </button>
+                    </div>
+                    <div id="wsEditorExtBanner" class="ws-ext-banner" hidden>
+                      <span class="ws-ext-banner-msg">檔案已在外部修改</span>
+                      <div class="ws-ext-banner-actions">
+                        <button type="button" id="wsEditorReloadDiskBtn" class="btn btn-primary btn-sm">重新載入</button>
+                        <button type="button" id="wsEditorIgnoreDiskBtn" class="btn btn-secondary btn-sm">保留編輯</button>
+                      </div>
+                    </div>
+                    <div class="ws-ide-container" id="wsIdeContainer">
+                      <div id="wsIdeFindWidget" class="ws-find-widget" hidden>
+                        <div class="ws-find-row">
+                          <input type="text" id="wsFindInput" class="input input-sm ws-find-input" placeholder="尋找…" aria-label="尋找" />
+                          <span class="ws-find-count" id="wsFindCount">0/0</span>
+                          <button type="button" id="wsFindPrevBtn" class="btn-icon ws-find-btn" title="上一個 (Shift+Enter)" aria-label="上一個結果">↑</button>
+                          <button type="button" id="wsFindNextBtn" class="btn-icon ws-find-btn" title="下一個 (Enter)" aria-label="下一個結果">↓</button>
+                          <button type="button" id="wsFindToggleReplaceBtn" class="btn-icon ws-find-btn" title="切換取代 (Ctrl+H)" aria-label="顯示取代">⇄</button>
+                          <button type="button" id="wsFindCloseBtn" class="btn-icon ws-find-btn" title="關閉 (Esc)" aria-label="關閉尋找">✕</button>
+                        </div>
+                        <div class="ws-replace-row" id="wsReplaceRow" hidden>
+                          <input type="text" id="wsReplaceInput" class="input input-sm ws-find-input" placeholder="取代為…" aria-label="取代" />
+                          <button type="button" id="wsReplaceBtn" class="btn btn-secondary btn-sm">取代</button>
+                          <button type="button" id="wsReplaceAllBtn" class="btn btn-secondary btn-sm">全部取代</button>
+                        </div>
+                      </div>
+                      <div class="ws-ide-gutter" id="wsIdeGutter" aria-hidden="true"></div>
+                      <textarea
+                        id="wsEditorText"
+                        class="ws-editor-text ws-ide-textarea"
+                        spellcheck="false"
+                        aria-label="檔案內容"
+                      ></textarea>
+                      <!-- Monaco 掛這裡；載得起來就把上面那組 gutter＋textarea 藏起來 -->
+                      <div class="ws-monaco" id="wsMonacoHost" hidden></div>
+                    </div>
+                    <div id="wsEditorPreview" class="ws-editor-preview" hidden></div>
+                    <div id="wsEditorUnsupported" class="ws-editor-unsupported" hidden>
+                      <div class="ws-unsupported-icon" aria-hidden="true">▧</div>
+                      <div id="wsEditorUnsupportedName" class="ws-unsupported-name"></div>
+                      <div class="ws-unsupported-meta">
+                        <span id="wsEditorUnsupportedSize"></span>
+                        <span aria-hidden="true">·</span>
+                        <span id="wsEditorUnsupportedType"></span>
+                      </div>
+                      <p class="ws-unsupported-desc">無法在這裡預覽</p>
+                      <button type="button" id="wsEditorUnsupportedRevealBtn" class="btn btn-secondary btn-sm">
+                        在檔案總管顯示
+                      </button>
+                    </div>
+                    <div class="ws-ide-statusbar" id="wsIdeStatusbar">
+                      <div class="ws-ide-status-left">
+                        <span class="ws-ide-status-item" id="wsIdeCursorPos">Ln 1, Col 1</span>
+                        <span class="ws-ide-status-item" id="wsIdeSelection"></span>
+                      </div>
+                      <div class="ws-ide-status-right">
+                        <span class="ws-ide-status-item" id="wsIdeFileInfo">0 行</span>
+                        <span class="ws-ide-status-item">UTF-8</span>
+                        <span class="ws-ide-status-item ws-ide-lang" id="wsIdeLang">純文字</span>
+                      </div>
+                    </div>
+                    <p id="wsEditorNote" class="ws-editor-note" hidden></p>
+                  </div>
+
+                  <!-- Git 變更 Diff 檢視面板 -->
+                  <div id="wsDiff" class="ws-diff" hidden>
+                    <div class="ws-diff-bar">
+                      <span class="ws-diff-title" id="wsDiffTitle">Diff</span>
+                      <span class="ws-diff-stat" id="wsDiffStats"></span>
+                      <span class="ws-editor-spacer"></span>
+                      <button type="button" id="wsDiffStageBtn" class="btn btn-secondary btn-sm">暫存</button>
+                      <button type="button" id="wsDiffOpenEditorBtn" class="btn btn-secondary btn-sm">在編輯器開啟</button>
+                    </div>
+                    <!-- Monaco 的並排 diff；載不起來才退回下面那份自繪的逐行檢視 -->
+                    <div class="ws-monaco ws-diff-monaco" id="wsDiffMonaco" hidden></div>
+                    <div class="ws-diff-body" id="wsDiffContent"></div>
+                  </div>
+
+                  <!--
+                    內建瀏覽器：<webview>（partition 持久），只放行 http(s)；
+                    本機 HTML 的檔案預覽仍走編輯器的 srcdoc iframe（不給 allow-same-origin）。
+                  -->
+                  <div id="wsBrowser" class="ws-browser" hidden>
+                    <div class="ws-browser-bar">
+                      <button type="button" id="wsBrowserReloadBtn" class="btn-icon" title="重新整理" aria-label="重新整理">
+                        ⟳
+                      </button>
+                      <input
+                        type="url"
+                        id="wsBrowserUrl"
+                        class="input input-sm ws-browser-url"
+                        placeholder="http://localhost:5173"
+                        aria-label="網址"
+                      />
+                      <button type="button" id="wsBrowserGoBtn" class="btn btn-secondary btn-sm">前往</button>
+                      <button type="button" id="wsBrowserExternalBtn" class="btn btn-secondary btn-sm">
+                        用系統瀏覽器開
+                      </button>
+                    </div>
+                    <!-- 真的瀏覽器：<webview> 由 JS 建立放進這個容器
+                         （partition 持久＝登入狀態留著；popup 交給 main 的系統瀏覽器） -->
+                    <div id="wsBrowserFrame" class="ws-browser-frame" title="網頁預覽"></div>
+                  </div>
+
+                  <!-- AI 會話結構化卡片檢視面板（不用 resume，直接檢視） -->
+                  <div id="wsAiSession" class="ws-ai-session" hidden>
+                    <div class="ws-ai-session-bar" id="wsAiSessionBar">
+                      <span class="ws-ai-session-title" id="wsAiSessionTitle">對話記錄</span>
+                      <span class="ws-editor-spacer"></span>
+                      <span class="ws-ai-session-meta" id="wsAiSessionMeta"></span>
+                    </div>
+                    <div class="ws-ai-session-body" id="wsAiSessionBody"></div>
+                  </div>
+                </div>
               </div>
+
+              <div
+                id="wsRightResizer"
+                class="sidebar-resizer sidebar-resizer-right"
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="調整右側欄寬度"
+                tabindex="0"
+              ></div>
+
+              <!-- 右側欄：檔案總管／Git／AI 對話記錄，全部繫在「目前選定的專案」上 -->
+              <aside class="ws-right" id="wsRight">
+                <div class="ws-right-tabs" role="tablist" aria-label="右側欄面板">
+                  <button
+                    type="button"
+                    class="ws-right-tab active"
+                    role="tab"
+                    data-panel="files"
+                    aria-selected="true"
+                  >
+                    檔案
+                  </button>
+                  <button type="button" class="ws-right-tab" role="tab" data-panel="git" aria-selected="false">
+                    Git
+                  </button>
+                  <button type="button" class="ws-right-tab" role="tab" data-panel="agents" aria-selected="false">
+                    AI 記錄
+                  </button>
+                  <button type="button" class="ws-right-tab" role="tab" data-panel="ports" aria-selected="false">
+                    埠號
+                  </button>
+                </div>
+
+                <p class="ws-right-empty" id="wsRightEmpty">還沒有選專案</p>
+
+                <div class="ws-right-body" id="wsPanelFiles" role="tabpanel" hidden>
+                  <div class="ws-right-head">
+                    <span class="ws-right-project" id="wsFilesProject"></span>
+                    <button type="button" id="wsFilesRevealBtn" class="btn-icon" title="在檔案總管開啟" aria-label="在檔案總管開啟這個專案">
+                      🗁
+                    </button>
+                    <button type="button" id="wsFilesRefreshBtn" class="btn-icon" title="重新整理" aria-label="重新整理檔案樹">
+                      ⟳
+                    </button>
+                  </div>
+                  <div class="ws-files-switch" role="tablist" aria-label="檔案或搜尋">
+                    <button type="button" class="ws-files-mode active" data-view="tree" aria-selected="true">
+                      檔案
+                    </button>
+                    <button type="button" class="ws-files-mode" data-view="search" aria-selected="false">
+                      搜尋
+                    </button>
+                  </div>
+                  <div class="ws-tree" id="wsTree" aria-label="檔案總管"></div>
+                  <div class="ws-search" id="wsSearch" hidden>
+                    <input
+                      type="search"
+                      id="wsSearchInput"
+                      class="input input-sm"
+                      placeholder="在這個專案裡找…（至少兩個字）"
+                      aria-label="搜尋字串"
+                    />
+                    <div class="ws-search-results" id="wsSearchResults" aria-label="搜尋結果"></div>
+                  </div>
+                </div>
+
+                <div class="ws-right-body" id="wsPanelGit" role="tabpanel" hidden>
+                  <div class="ws-right-head">
+                    <span class="ws-git-branch" id="wsGitBranch">—</span>
+                    <button type="button" id="wsGitOpenAllBtn" class="btn-icon" title="開啟所有變更 (Review)" aria-label="開啟所有變更">⇗</button>
+                    <button type="button" id="wsGitPullBtn" class="btn-icon" title="拉取（ff-only）" aria-label="拉取上游">⇣</button>
+                    <button type="button" id="wsGitRefreshBtn" class="btn-icon" title="重新整理" aria-label="重新整理 Git 狀態">
+                      ⟳
+                    </button>
+                  </div>
+                  <div class="ws-git-files" id="wsGitFiles" aria-label="變更的檔案"></div>
+                  <div class="ws-git-commit">
+                    <textarea
+                      id="wsGitMessage"
+                      class="input ws-git-message"
+                      rows="2"
+                      placeholder="提交訊息…"
+                      aria-label="提交訊息"
+                    ></textarea>
+                    <div class="ws-git-actions">
+                      <button type="button" id="wsGitStageAllBtn" class="btn btn-secondary btn-sm">全部暫存</button>
+                      <button type="button" id="wsGitCommitBtn" class="btn btn-primary btn-sm">提交</button>
+                      <button type="button" id="wsGitPushBtn" class="btn btn-secondary btn-sm">推送</button>
+                    </div>
+                  </div>
+                  <div class="ws-git-log-head">
+                    <span>工作樹</span>
+                    <button type="button" id="wsWorktreeAddBtn" class="btn-icon" title="新增工作樹" aria-label="新增工作樹">＋</button>
+                  </div>
+                  <div class="ws-worktrees" id="wsWorktrees" aria-label="git 工作樹"></div>
+                  <div class="ws-git-log-head">最近提交</div>
+                  <div class="ws-git-log" id="wsGitLog" aria-label="最近提交"></div>
+                </div>
+
+                <div class="ws-right-body" id="wsPanelAgents" role="tabpanel" hidden>
+                  <div class="ws-right-head">
+                    <span class="ws-right-project" id="wsAgentsHint">最近 60 天</span>
+                    <button type="button" id="wsAgentsRefreshBtn" class="btn-icon" title="重新整理" aria-label="重新整理 AI 記錄">
+                      ⟳
+                    </button>
+                  </div>
+                  <div class="ws-agent-list" id="wsAgentList" aria-label="AI 對話記錄"></div>
+                </div>
+
+                <!-- 埠號：這台機器正在聽的本機 TCP 埠，點一下用內建瀏覽器開 -->
+                <div class="ws-right-body" id="wsPanelPorts" role="tabpanel" hidden>
+                  <div class="ws-right-head">
+                    <span class="ws-right-project">本機正在監聽</span>
+                    <button type="button" id="wsPortsRefreshBtn" class="btn-icon" title="重新整理" aria-label="重新整理埠號清單">
+                      ⟳
+                    </button>
+                  </div>
+                  <div class="ws-port-list" id="wsPortList" aria-label="本機埠號"></div>
+                </div>
+              </aside>
             </div>
           </section>
 
@@ -194,10 +508,7 @@
                 <div class="page-header-text">
                   <p class="hf-eyebrow">本機大型語言模型</p>
                   <h1>HF模型</h1>
-                  <p class="page-desc">
-                    搜尋 Hugging Face 上的 GGUF 模型、下載後一鍵載入，載好的會直接出現在聊天的模型選單裡。
-                    推論引擎是 llama.cpp，參數依這台機器自動決定，也可以自己改。
-                  </p>
+                  <p class="page-desc">搜尋 Hugging Face 的 GGUF 模型，下載後一鍵載入聊天。</p>
                 </div>
                 <div class="hf-runtime-chip" id="hfRuntimeChip" role="status" aria-live="polite">
                   <span class="hf-dot" id="hfRuntimeDot" aria-hidden="true"></span>
@@ -237,10 +548,7 @@
                     <div id="hfSearchResults" class="hf-results" role="listbox"
                          aria-label="搜尋結果" aria-live="polite"></div>
                     <div id="hfDetail" class="hf-detail" aria-live="polite">
-                      <p class="setting-hint">
-                        點左邊任一顆模型，這裡會顯示它的模型卡（README）與所有量化版本的大小，
-                        每個版本旁邊都標「這台跑不跑得動」——那是先抓檔頭前 1MB 算出來的，不必先下載幾 GB。
-                      </p>
+                      <p class="setting-hint">點左邊模型，看 README 與每個量化的大小與可行性。</p>
                     </div>
                   </div>
                 </section>
@@ -254,10 +562,7 @@
                     <button type="button" id="hfOpenFolderBtn" class="btn btn-secondary">開啟模型資料夾</button>
                     <button type="button" id="hfImportBtn" class="btn btn-secondary">匯入 .gguf</button>
                   </div>
-                  <p class="setting-hint">
-                    也可以自己把 <code>.gguf</code> 拖進模型資料夾（一顆模型一個子資料夾，
-                    多模態的 <code>mmproj-*.gguf</code> 放同一夾），再按「重新掃描資料夾」。
-                  </p>
+                  <p class="setting-hint">也可自行放入 <code>.gguf</code>（一顆一個子資料夾，<code>mmproj-*.gguf</code> 同夾）。</p>
                   <div id="hfLibraryList" class="hf-models" aria-live="polite"></div>
                 </section>
               </div>
@@ -271,9 +576,7 @@
 
                 <section class="hf-panel">
                   <h2>推論引擎</h2>
-                  <p class="setting-hint">
-                    Vulkan 版任何顯示卡都能跑；NVIDIA 卡上 CUDA 版的 prompt 處理與 MoE offload 明顯更快。
-                  </p>
+                  <p class="setting-hint">Vulkan 通用；NVIDIA 用 CUDA 更快。</p>
                   <div class="hf-library-actions">
                     <button type="button" id="hfAutoInstallBtn" class="btn btn-primary">
                       一鍵安裝最佳配置
@@ -289,14 +592,14 @@
                     <div class="hf-setting-text">
                       <span class="hf-setting-label">模型資料夾</span>
                       <span class="hf-setting-value" id="hfModelsDirText">—</span>
-                      <span class="setting-hint">換資料夾不會搬移舊模型，舊的留在原地。</span>
+                      <span class="setting-hint">舊模型留在原地不搬。</span>
                     </div>
                     <button type="button" id="hfChooseDirBtn" class="btn btn-secondary btn-sm">變更</button>
                   </div>
                   <div class="hf-setting-row">
                     <div class="hf-setting-text">
                       <span class="hf-setting-label">同時載入模型數上限</span>
-                      <span class="setting-hint">超過就會把最久沒用的那顆卸載。</span>
+                      <span class="setting-hint">超過卸載最久沒用的。</span>
                     </div>
                     <input type="number" id="hfModelsMax" class="input hf-num" min="1" max="8" step="1"
                            aria-label="同時載入模型數上限">
@@ -304,9 +607,7 @@
                   <div class="hf-setting-row">
                     <div class="hf-setting-text">
                       <span class="hf-setting-label">Hugging Face Token</span>
-                      <span class="setting-hint">
-                        只有需要授權（gated）的 repo 才要填。存起來之後不會再顯示出來。
-                      </span>
+                      <span class="setting-hint">只有 gated repo 需要。</span>
                     </div>
                     <div class="hf-token-row">
                       <input type="password" id="hfTokenInput" class="input" placeholder="hf_…"
@@ -326,11 +627,7 @@
                 <div class="page-header-text">
                   <p class="cc-eyebrow">Claude Code 工作台</p>
                   <h1>CC代理</h1>
-                  <p class="page-desc">
-                    切換 Claude Code 走哪一家模型、管理 MCP 伺服器、看 CLI 有沒有新版。
-                    只會改 <code class="cc-code-inline">~/.claude/settings.json</code> 的 env
-                    與 <code class="cc-code-inline">~/.claude.json</code> 的 mcpServers，寫入前自動備份。
-                  </p>
+                  <p class="page-desc">切換 Claude Code 的供應商、管理 MCP、查 CLI 版本。</p>
                 </div>
                 <div class="cc-actions" role="group" aria-label="操作">
                   <button type="button" id="ccRefreshBtn" class="btn btn-secondary btn-sm">重新整理</button>
@@ -379,9 +676,7 @@
                   </div>
                   <p id="ccMcpPath" class="cc-panel-desc"></p>
                   <div id="ccMcpList" class="cc-list" role="list"></div>
-                  <p id="ccMcpEmpty" class="cc-empty hidden">
-                    還沒有 MCP 伺服器。按「新增伺服器」從範本挑一個，或自己貼一份設定。
-                  </p>
+                  <p id="ccMcpEmpty" class="cc-empty hidden">還沒有 MCP 伺服器</p>
                 </section>
               </div>
 
@@ -392,7 +687,7 @@
                     <h2 id="ccVersionTitle" class="cc-panel-title">CLI 版本</h2>
                     <button type="button" id="ccCheckVersionBtn" class="btn btn-secondary btn-sm">重新檢查</button>
                   </div>
-                  <p class="cc-panel-desc">按「更新」會在終端機分頁開一個工作階段執行 npm 指令，過程看得到。</p>
+                  <p class="cc-panel-desc">按「更新」會在終端機分頁執行。</p>
                   <div id="ccVersionList" class="cc-list" role="list"></div>
                 </section>
               </div>
@@ -406,9 +701,7 @@
                 <div class="sysmon-heading">
                   <p class="sysmon-eyebrow">本機硬體與資源</p>
                   <h1>系統監控</h1>
-                  <p class="page-desc">
-                    整機規格、即時負載、完整處理程序清單與壓力測試。只有停在這一頁時才會取樣。
-                  </p>
+                  <p class="page-desc">即時負載、溫度與風扇</p>
                 </div>
                 <div class="sysmon-actions" role="group" aria-label="系統監控操作">
                   <label class="sysmon-interval">
@@ -440,12 +733,16 @@
               <nav class="sysmon-tabs" id="sysmonTabs" role="tablist" aria-label="系統監控子分頁">
                 <button type="button" class="sysmon-tab active" data-subtab="overview" role="tab"
                   aria-selected="true" aria-controls="sysmon-overview">總覽</button>
+                <button type="button" class="sysmon-tab" data-subtab="screentime" role="tab"
+                  aria-selected="false" aria-controls="sysmon-screentime">使用時長</button>
                 <button type="button" class="sysmon-tab" data-subtab="processes" role="tab"
                   aria-selected="false" aria-controls="sysmon-processes">處理程序</button>
                 <button type="button" class="sysmon-tab" data-subtab="stress" role="tab"
                   aria-selected="false" aria-controls="sysmon-stress">壓力測試</button>
                 <button type="button" class="sysmon-tab" data-subtab="fans" role="tab"
                   aria-selected="false" aria-controls="sysmon-fans">風扇控制</button>
+                <button type="button" class="sysmon-tab" data-subtab="oc" role="tab"
+                  aria-selected="false" aria-controls="sysmon-oc">效能調整</button>
               </nav>
 
               <!--
@@ -455,6 +752,51 @@
               -->
               <div id="sysmon-overview" class="sysmon-panel active" role="tabpanel">
                 <div id="sysmonBlocks" class="sysmon-blocks"></div>
+              </div>
+
+              <!-- 使用時長：Tai 相容的應用／網站累積時長 -->
+              <div id="sysmon-screentime" class="sysmon-panel" role="tabpanel">
+                <div class="stime-bar">
+                  <div class="sysmon-tabs" id="stimeKind" role="tablist" aria-label="應用或網站">
+                    <button type="button" class="sysmon-tab active" data-kind="app" aria-selected="true">應用</button>
+                    <button type="button" class="sysmon-tab" data-kind="web" aria-selected="false">網站</button>
+                  </div>
+                  <div class="sysmon-tabs" id="stimeRange" role="tablist" aria-label="時間範圍">
+                    <button type="button" class="sysmon-tab active" data-range="day" aria-selected="true">日</button>
+                    <button type="button" class="sysmon-tab" data-range="week" aria-selected="false">週</button>
+                    <button type="button" class="sysmon-tab" data-range="month" aria-selected="false">月</button>
+                    <button type="button" class="sysmon-tab" data-range="year" aria-selected="false">年</button>
+                  </div>
+                  <div class="stime-nav">
+                    <button type="button" id="stimePrev" class="btn btn-secondary btn-sm" aria-label="上一段">‹</button>
+                    <span id="stimeDateLabel" class="stime-date">—</span>
+                    <button type="button" id="stimeNext" class="btn btn-secondary btn-sm" aria-label="下一段">›</button>
+                  </div>
+                  <span class="stime-bar-spacer"></span>
+                  <button type="button" id="stimeExport" class="btn btn-secondary btn-sm">匯出 CSV</button>
+                  <button type="button" id="stimeFolder" class="btn btn-secondary btn-sm">資料夾</button>
+                </div>
+                <p id="stimeNote" class="stime-hint hidden" role="status"></p>
+                <div id="stimeCards" class="stime-cards"></div>
+                <div id="stimeChart" class="stime-chart" role="img" aria-label="時長柱狀圖">
+                  <div id="stimeTip" class="stime-tip" hidden role="tooltip"></div>
+                </div>
+                <div class="stime-split">
+                  <section class="stime-card">
+                    <header class="stime-card-head"><h2>最常使用</h2></header>
+                    <div id="stimeList" class="stime-list"></div>
+                  </section>
+                  <section class="stime-card">
+                    <header class="stime-card-head"><h2>分類</h2></header>
+                    <div id="stimeCats" class="stime-list"></div>
+                  </section>
+                </div>
+                <section id="stimeDrillWrap" class="stime-card hidden">
+                  <header class="stime-card-head">
+                    <h2 id="stimeDrillTitle">此時段</h2>
+                  </header>
+                  <div id="stimeDrill" class="stime-list"></div>
+                </section>
               </div>
 
               <!-- 處理程序：虛擬捲動的完整清單 -->
@@ -476,8 +818,7 @@
                   </div>
                 </div>
                 <p id="sysmonDetail" class="sysmon-detail" role="status" aria-live="polite"></p>
-                <p class="sysmon-detail sysmon-proc-note">VRAM 欄是 Windows 記帳的「配置量」：桌面視窗管理員（dwm）會刻意預留大塊 VRAM，
-                  工作管理員顯示的也是同一套數字；實際駐留量請看總覽頁的 GPU 讀數。</p>
+                <p class="sysmon-detail sysmon-proc-note">VRAM 欄是 Windows 記帳的「配置量」：dwm 會刻意預留大塊 VRAM（工作管理員同一套數字）；實際駐留量看總覽頁的 GPU 讀數。</p>
               </div>
 
               <!-- 壓力測試：CPU／GPU／記憶體／磁碟四項，上方一條即時負載與溫度儀錶 -->
@@ -501,10 +842,7 @@
                 <div class="sysmon-stress-grid">
                   <section class="sysmon-stress-card">
                     <h2>CPU 壓力測試</h2>
-                    <p class="sysmon-stress-desc">
-                      每條執行緒開一個工作緒跑純運算，把核心佔滿；預設就是這台機器的全部邏輯核心。
-                      上方儀錶會即時顯示負載與溫度。預設 5 分鐘自動停止，長時間滿載會讓溫度明顯上升。
-                    </p>
+                    <p class="sysmon-stress-desc">多執行緒純運算壓滿核心；5 分鐘自動停止。</p>
                     <div class="sysmon-stress-row">
                       <label for="sysmonCpuThreads">執行緒數</label>
                       <input id="sysmonCpuThreads" type="range" min="1" max="64" step="1" value="1" />
@@ -520,10 +858,7 @@
                   <section class="sysmon-stress-card">
                     <h2>GPU 壓力測試</h2>
                     <p class="sysmon-stress-desc">
-                      在 1080p 的離屏畫面上跑重量級著色器，一批連畫多次、畫完立刻排下一批，
-                      把 GPU 佔滿；另可配置 VRAM。<strong>跑起來畫面會明顯卡頓，這是正常的</strong>
-                      （負載是在同一個程序裡跑的）。預設 5 分鐘自動停止，極端強度可能觸發
-                      驅動重置（畫面閃一下後自動復原）。
+                      著色器壓滿 GPU，可另配 VRAM。畫面卡頓是正常的；5 分鐘自動停止。
                     </p>
                     <div class="sysmon-stress-row">
                       <label for="sysmonGpuLoad">負載強度</label>
@@ -551,10 +886,7 @@
 
                   <section class="sysmon-stress-card">
                     <h2>記憶體壓力測試</h2>
-                    <p class="sysmon-stress-desc">
-                      配置並持續寫入指定容量，看記憶體在高佔用下的表現。預設就放在目前吃得下的最大值
-                      （可用量的七成），再多就是在測分頁交換而不是記憶體。停止就立刻釋放。
-                    </p>
+                    <p class="sysmon-stress-desc">配置並持續寫入記憶體；停止即釋放。</p>
                     <div class="sysmon-stress-row">
                       <label for="sysmonMemSize">配置容量</label>
                       <input id="sysmonMemSize" type="range" min="1" max="64" step="1" value="4" />
@@ -569,11 +901,7 @@
 
                   <section class="sysmon-stress-card">
                     <h2>磁碟測速</h2>
-                    <p class="sysmon-stress-desc">
-                      序列讀寫。選要測哪一顆硬碟（磁碟代號），測試檔由程式自己建在該碟根目錄、
-                      跑完（或中途取消）都會自動刪除，不會留下任何東西。
-                      寫入值有 fsync 是實際落盤速度；讀取值含系統快取，只能當同一台機器上的相對參考。
-                    </p>
+                    <p class="sysmon-stress-desc">序列讀寫，測試檔跑完自動刪除；讀取值含系統快取。</p>
                     <div class="sysmon-stress-row">
                       <label for="sysmonBenchDisk">測試位置</label>
                       <select id="sysmonBenchDisk" class="select">
@@ -622,8 +950,7 @@
                       <span class="fan-card-hint">斜上方視角示意圖</span>
                     </header>
                     <div id="fanChassis" class="fan-chassis"></div>
-                    <p class="fan-hint">接頭名稱給不出實體位置，所以位置是預設猜的。用右側每一列的「識別」讓那顆轉到最大聲，
-                      聽出來是哪一顆之後再改成正確的位置。</p>
+                    <p class="fan-hint">位置靠聽的：用「識別」讓那顆全速轉幾秒。</p>
                   </section>
                   <section class="fan-card fan-list-card">
                     <header class="fan-card-head">
@@ -632,6 +959,61 @@
                     </header>
                     <div id="fanList" class="fan-list"></div>
                     <div id="fanEditor" class="fan-editor" hidden></div>
+                  </section>
+                </div>
+              </div>
+
+              <!--
+                效能調整：上面是即時儀表（套用後看得到時脈／功耗／溫度在動），
+                下面兩欄是 Ryzen Master／Afterburner 的可調項。套用是按鈕。
+              -->
+              <div id="sysmon-oc" class="sysmon-panel" role="tabpanel">
+                <div class="oc-bar">
+                  <span id="ocStatus" class="oc-status" role="status" aria-live="polite"></span>
+                  <span class="oc-bar-spacer"></span>
+                  <button type="button" id="ocResetBtn" class="btn btn-secondary btn-sm">還原出廠</button>
+                  <button type="button" id="ocApplyBtn" class="btn btn-primary btn-sm">套用</button>
+                </div>
+                <div id="ocNotices" class="oc-notices"></div>
+                <p class="oc-hint">PBO／Curve Optimizer／功耗與時脈牆；只這次開機有效，過熱即還原。</p>
+                <div class="oc-dash" id="ocDash" role="status" aria-live="off" aria-label="效能調整即時儀表">
+                  <section class="oc-dash-group">
+                    <h3>處理器即時</h3>
+                    <div id="ocCpuGauges" class="sysmon-gauges"></div>
+                    <div id="ocCpuCores" class="oc-coregrid" aria-label="每核時脈"></div>
+                    <p class="oc-spark-legend"><i class="oc-spark-swatch is-clock"></i>時脈（這一分鐘）<i class="oc-spark-swatch is-temp"></i>溫度</p>
+                    <canvas id="ocCpuSpark" class="oc-spark" width="640" height="56" aria-hidden="true"></canvas>
+                  </section>
+                  <section class="oc-dash-group">
+                    <h3>顯示卡即時</h3>
+                    <div id="ocGpuGauges" class="sysmon-gauges"></div>
+                    <p class="oc-spark-legend"><i class="oc-spark-swatch is-clock"></i>核心時脈（這一分鐘）<i class="oc-spark-swatch is-power"></i>功耗</p>
+                    <canvas id="ocGpuSpark" class="oc-spark" width="640" height="56" aria-hidden="true"></canvas>
+                  </section>
+                </div>
+                <div class="oc-layout">
+                  <section class="oc-card" id="ocCpuCard">
+                    <header class="oc-card-head">
+                      <h2>處理器</h2>
+                      <span id="ocCpuHint" class="oc-card-hint"></span>
+                    </header>
+                    <p id="ocCpuLive" class="oc-live"></p>
+                    <div id="ocCpuSliders" class="oc-sliders"></div>
+                  </section>
+                  <section class="oc-card" id="ocGpuCard">
+                    <header class="oc-card-head">
+                      <h2>顯示卡</h2>
+                      <span id="ocGpuHint" class="oc-card-hint"></span>
+                    </header>
+                    <p id="ocGpuLive" class="oc-live"></p>
+                    <div id="ocGpuSliders" class="oc-sliders"></div>
+                    <details class="oc-fold" id="ocVfFold" hidden>
+                      <summary class="oc-fold-sum">V/F 曲線</summary>
+                      <div class="oc-fold-body">
+                        <p class="oc-empty">橫軸電壓、直軸時脈；往上拖＝加 MHz。</p>
+                        <div id="ocVfHost" class="oc-vf-host"></div>
+                      </div>
+                    </details>
                   </section>
                 </div>
               </div>
@@ -656,7 +1038,7 @@
                 <div class="usage-heading">
                   <p class="usage-eyebrow">本機訂閱狀態</p>
                   <h1>額度儀錶板</h1>
-                  <p class="page-desc">集中查看七個 AI 工具的已用額度與重置時間；只有按下同步才會連線查詢。</p>
+                  <p class="page-desc">七家 AI 工具的額度與重置時間。</p>
                 </div>
                 <div class="usage-actions" role="group" aria-label="額度操作">
                   <button type="button" id="usageDiagnosticsBtn" class="btn btn-secondary btn-sm">診斷</button>
@@ -703,10 +1085,10 @@
                       </div>
                       <button type="button" id="cuPricesBtn" class="btn btn-secondary btn-sm">單價</button>
                       <button type="button" id="cuSyncBtn" class="btn btn-primary btn-sm"
-                        title="讀本機的 session 記錄；只讀上次之後新增的部分。統計規則改過時會自動整份重讀">掃描本機記錄</button>
+                        title="增量掃描本機 session 記錄；規則改版會自動重讀">掃描本機記錄</button>
                     </div>
                   </div>
-                  <p id="cuSyncedAt" class="cc-panel-desc">尚未掃描。第一次會讀滿本機的 session 記錄，之後只讀新增的部分。</p>
+                  <p id="cuSyncedAt" class="cc-panel-desc">尚未掃描</p>
                   <p id="cuError" class="live-error hidden" role="alert"></p>
 
                   <div id="cuSummary" class="cu-summary"></div>
@@ -759,7 +1141,7 @@
             <dialog id="usageDiagnosticsDialog" class="app-dialog usage-dialog" aria-labelledby="usageDiagnosticsTitle">
               <header class="dialog-head">
                 <h2 id="usageDiagnosticsTitle" class="dialog-title">同步診斷</h2>
-                <p class="dialog-desc">只顯示連線狀態、HTTP status 與額度視窗；不包含 token 或憑證內容。</p>
+                <p class="dialog-desc">只顯示連線狀態與額度視窗，不含任何憑證內容。</p>
               </header>
               <div class="usage-dialog-body">
                 <pre id="usageDiagnosticsText" class="usage-diagnostics-text">尚無診斷資料</pre>
@@ -778,7 +1160,7 @@
                 <div class="agy-heading">
                   <p class="agy-eyebrow">本機 API 閘道</p>
                   <h1>AGY 反向代理</h1>
-                  <p class="page-desc">把 Antigravity 額度轉成 OpenAI／Anthropic 相容 API，只監聽 127.0.0.1 且必須帶金鑰。</p>
+                  <p class="page-desc">把 Antigravity 額度轉成 OpenAI／Anthropic API；只聽 127.0.0.1，需帶金鑰。</p>
                 </div>
                 <div class="agy-actions" role="group" aria-label="服務操作">
                   <button type="button" id="agyRefreshBtn" class="btn btn-secondary btn-sm">重新整理</button>
@@ -843,11 +1225,7 @@
                         <span class="agy-client-note">填上面那組 API Key</span>
                         <button type="button" class="btn btn-secondary btn-sm" data-agy-copy="apiKey">複製</button>
                       </div>
-                      <p class="agy-client-warn">
-                        結尾<strong>不要</strong>加 <code class="agy-code-inline">/v1</code>：Claude Code 會自己接
-                        <code class="agy-code-inline">/v1/messages</code>，加了會變成
-                        <code class="agy-code-inline">/v1/v1/messages</code> 而 404。
-                      </p>
+                      <p class="agy-client-warn">結尾<strong>不要</strong>加 <code class="agy-code-inline">/v1</code>（Claude Code 自己接）。</p>
                     </div>
                     <div class="agy-client">
                       <p class="agy-client-tag">OpenAI 相容工具</p>
@@ -856,7 +1234,7 @@
                         <code id="agyOpenaiUrl" class="agy-code">尚未啟動</code>
                         <button type="button" class="btn btn-secondary btn-sm" data-agy-copy="baseUrl">複製</button>
                       </div>
-                      <p class="agy-client-note">這一組<strong>要</strong>帶 <code class="agy-code-inline">/v1</code>，客戶端自己接 <code class="agy-code-inline">/chat/completions</code>。</p>
+                      <p class="agy-client-note">這一組<strong>要</strong>帶 <code class="agy-code-inline">/v1</code>。</p>
                     </div>
                   </div>
                 </details>
@@ -917,7 +1295,7 @@
               <section class="agy-panel agy-models" aria-labelledby="agyModelsTitle">
                 <div class="agy-panel-head">
                   <h2 id="agyModelsTitle" class="agy-panel-title">可用模型</h2>
-                  <p class="agy-panel-desc">直接向上游查詢的即時清單，非寫死的表。點模型 ID 即可複製。</p>
+                  <p class="agy-panel-desc">即時向上游查詢；點模型 ID 可複製。</p>
                 </div>
                 <div class="agy-models-bar">
                   <button type="button" id="agyModelsRefreshBtn" class="btn btn-secondary btn-sm">
@@ -1119,7 +1497,7 @@
               <!-- 翻譯後端提示（雙語／僅翻譯切換已移至字幕視窗右上角）-->
               <div class="option-group" id="liveCaptionDisplayGroup">
                 <p class="setting-hint" id="liveTranslatorHint">翻譯：檢查中…</p>
-                <p class="setting-hint">字幕顯示（雙語／僅翻譯）可在字幕視窗右上角「雙／譯」鈕切換</p>
+                <p class="setting-hint">雙語／僅翻譯在字幕視窗右上角切換</p>
               </div>
 
               <!-- 控制按鈕 -->
@@ -1160,9 +1538,7 @@
                     <span>啟用語音輸入</span>
                   </label>
                   <p class="setting-hint">
-                    按住右邊的 <kbd>Alt</kbd> 講話，放開就把整理好的文字貼到你正在打字的地方；
-                    快速點一下則是「開始／結束」切換，錄音中按 <kbd>Esc</kbd> 取消。
-                    啟用後即使 VoiceInk 縮在系統匣也有效。
+                    按住右 <kbd>Alt</kbd> 講話，放開自動貼上；快速點一下＝開始／結束，錄音中 <kbd>Esc</kbd> 取消。
                   </p>
                 </div>
                 <div class="dict-state">
@@ -1219,7 +1595,7 @@
                 <section class="dict-panel">
                   <div class="dict-panel-head">
                     <h3>個人字典</h3>
-                    <span class="dict-panel-note">講兩次以上被改成同一個寫法就會自動收進來；整理模型若把它改了回去，就退回觀察中</span>
+                    <span class="dict-panel-note">同一取代出現兩次才自動收進；被整理模型改回去就退回觀察中</span>
                   </div>
                   <form class="dict-term-form" id="dictationTermForm">
                     <input type="text" id="dictationTermFrom" class="input" placeholder="聽成什麼" maxlength="16" />
@@ -1320,7 +1696,7 @@
               <button type="button" id="translateRunBtn" class="btn btn-primary">
                 翻譯
               </button>
-              <p class="setting-hint translate-hint">點擊翻譯，或 Ctrl+Enter；長文自動分段翻譯，可中途停止。朗讀需連上網路（Edge TTS）。</p>
+              <p class="setting-hint translate-hint">Ctrl+Enter 翻譯，長文自動分段；朗讀走 Edge TTS。</p>
             </div>
             <p id="translateStatus" class="translate-status">翻譯：檢查中…</p>
             <p id="translateError" class="live-error hidden" role="alert"></p>
@@ -1350,9 +1726,7 @@
                   <section class="settings-section active" id="set-local" data-section="local">
                     <header class="settings-section-head">
                       <h2 class="settings-section-title">本地模型</h2>
-                      <p class="settings-section-desc">
-                        管理已安裝的本地模型與推論方式。要用哪一顆，在「語音轉文字」與「翻譯與 TTS」頁面上方直接選。
-                      </p>
+                      <p class="settings-section-desc">管理已安裝的本地模型與推論方式；要用哪一顆在功能頁上選。</p>
                     </header>
                     <div class="settings-card">
                       <div class="models-path">
@@ -1387,11 +1761,7 @@
 
                       <div class="setting-group">
                         <label>語音辨識</label>
-                        <p class="setting-hint">
-                          不必設定：<strong>0.6B</strong> 走 <code>sherpa-onnx</code>（只有 CPU，執行緒自動），
-                          <strong>1.7B</strong> 走 llama.cpp 執行環境（Vulkan GPU）。
-                          選了哪一顆就用哪一種推論。
-                        </p>
+                        <p class="setting-hint">選模型即選推論：0.6B 走 CPU、1.7B 走 GPU。</p>
                       </div>
                     </div>
                   </section>
@@ -1400,17 +1770,11 @@
                   <section class="settings-section" id="set-cloud" data-section="cloud">
                     <header class="settings-section-head">
                       <h2 class="settings-section-title">雲端模型</h2>
-                      <p class="settings-section-desc">
-                        聊天與翻譯共用同一份供應商清單（都是 OpenAI 相容的 chat completions）；
-                        語音轉文字是另一種端點，另外設。要用哪一顆在各功能頁上方直接選。
-                      </p>
+                      <p class="settings-section-desc">聊天與翻譯共用供應商；語音轉文字另設。</p>
                     </header>
                     <div class="settings-card">
                       <h4 class="settings-subsection-title">供應商（聊天與翻譯共用）</h4>
-                      <p class="setting-hint">
-                        可設多組供應商、各自帶獨立的模型清單。勾「生圖」的模型會以圖片模式呼叫，
-                        在聊天頁選到它就能生成圖片。系統提示改在聊天頁的工具列切換與管理。
-                      </p>
+                      <p class="setting-hint">勾「生圖」的模型可生成圖片。</p>
                       <div class="setting-group">
                         <label for="chatProviderSelect">供應商</label>
                         <div class="chat-provider-bar">
@@ -1452,16 +1816,13 @@
                             掃描模型
                           </button>
                         </div>
-                        <p class="setting-hint">
-                          聊天頁可即時切換清單中的模型。「掃描模型」會<strong>先儲存供應商設定</strong>，
-                          再向該供應商的 <code class="agy-code-inline">/models</code> 端點取得可用清單。
-                        </p>
+                        <p class="setting-hint">「掃描模型」會<strong>先儲存設定</strong>再抓 /models 清單。</p>
                       </div>
                     </div>
 
                     <div class="settings-card">
                       <h4 class="settings-subsection-title">語音轉文字</h4>
-                      <p class="setting-hint">需支援 <code>/audio/transcriptions</code>。可設多組設定（不同供應商或不同模型），自由切換。</p>
+                      <p class="setting-hint">需支援 <code>/audio/transcriptions</code>。</p>
                       <div class="setting-group">
                         <label for="asrCloudSelect">設定</label>
                         <div class="chat-provider-bar">
@@ -1505,9 +1866,7 @@
                           </button>
                         </div>
                         <p class="setting-hint">
-                          同一組設定可以放多顆模型，語音轉文字的三個子分頁各自挑要用哪一顆。
-                          必須是<strong>轉錄模型</strong>（不是聊天模型）。
-                          若出現 <code>HTTP 403</code>，代表金鑰沒問題、是這一顆模型未開通，換一顆即可。
+                          必須是<strong>轉錄模型</strong>（不是聊天模型）；403＝這顆模型未開通，換一顆。
                           <a href="https://openrouter.ai/collections/speech-to-text-models" target="_blank" rel="noopener">STT 模型列表</a>
                         </p>
                       </div>
@@ -1636,7 +1995,7 @@
       <dialog id="chatPromptDialog" class="app-dialog" aria-label="管理系統提示">
         <div class="dialog-head">
           <h2 class="dialog-title">系統提示</h2>
-          <p class="dialog-desc">可存多組，聊天頁工具列隨時切換。內容留空的那組不會被儲存。</p>
+          <p class="dialog-desc">可存多組，聊天頁工具列隨時切換。</p>
         </div>
         <div class="prompt-editor">
           <div class="prompt-list-pane">
@@ -1680,7 +2039,7 @@
       <dialog id="termNewDialog" class="app-dialog" aria-label="新終端機">
         <div class="dialog-head">
           <h2 class="dialog-title">新終端機</h2>
-          <p class="dialog-desc">選好之後會開一顆獨立的 shell；關掉視窗縮到系統匣時它會繼續跑。</p>
+          <p class="dialog-desc">開的是獨立 shell；縮到系統匣後照常執行。</p>
         </div>
         <div class="term-new-body">
           <div class="setting-group">
@@ -1692,12 +2051,12 @@
               <input type="checkbox" id="termAdminInput" />
               <span>以系統管理員身分執行</span>
             </label>
-            <p class="setting-hint">會跳一次 UAC；同一次啟動之後開的管理員終端機不用再按。</p>
+            <p class="setting-hint">會跳一次 UAC；同次啟動之後不用再按。</p>
           </div>
           <div class="setting-group">
             <label for="termPresetSelect">啟動指令</label>
             <select id="termPresetSelect" class="select"></select>
-            <p class="setting-hint">開好之後自動送出這一行；選「純 shell」就什麼都不送。</p>
+            <p class="setting-hint">開好後自動送出；選「純 shell」不送。</p>
           </div>
           <div class="setting-group">
             <label for="termCwdInput">工作目錄</label>
@@ -1716,11 +2075,7 @@
       <dialog id="cuPricesDialog" class="app-dialog" aria-label="模型單價">
         <div class="dialog-head">
           <h2 class="dialog-title">模型單價</h2>
-          <p class="dialog-desc">
-            每 100 萬 token 的美金價。輸入與輸出留空＝沒有單價，那顆模型的花費不會算進總額（也不會當成 0）。
-            快取兩格可留空，會照公開規則從輸入價推（讀 ×0.1、寫 ×1.25，1 小時快取再 ×1.6）。
-            Grok 與 OpenCode 的記錄自帶花費，不需要在這裡填。
-          </p>
+          <p class="dialog-desc">每 100 萬 token 的美金價；留空＝不算花費。快取價留空會從輸入價推。</p>
         </div>
         <div class="cc-dialog-body">
           <div id="cuPriceRows" class="cc-list"></div>
@@ -1810,16 +2165,14 @@
                 <input type="text" id="ccOpusInput" class="input hidden" maxlength="120" spellcheck="false" />
               </label>
             </div>
-            <p id="ccScanHint" class="setting-hint">留空的那一格就用這家的預設值（灰字就是預設）。按「從 API 載入模型」把這家的模型清單抓進下拉。</p>
+            <p id="ccScanHint" class="setting-hint">留空用預設值（灰字）。</p>
             <label class="setting-check">
               <input id="ccContext1mCheck" type="checkbox" />
               <span>宣告支援 1M 上下文</span>
             </label>
             <p class="setting-hint">
-              在四個等級的模型名尾巴加上 <code>[1m]</code>，Claude Code 看到就把上下文窗當成 1M
-              （跟 CC Switch 同一套約定；後綴由 Claude Code 自己剝掉，不會送到上游）。
-              <strong>只有上游真的支援 1M 才可以開</strong>：這是「宣告」不是「升級」，
-              對面其實只有 200K／372K 的話，講到超過就會被上游擋下來。
+              模型名加 <code>[1m]</code> 宣告 1M 上下文（後綴不會送上游）。
+              <strong>上游真的有 1M 才開</strong>，講超過會被擋。
             </p>
           </div>
         </div>
@@ -1832,7 +2185,7 @@
       <dialog id="ccMcpDialog" class="app-dialog" aria-label="MCP 伺服器">
         <div class="dialog-head">
           <h2 id="ccMcpDialogTitle" class="dialog-title">新增 MCP 伺服器</h2>
-          <p class="dialog-desc">定義用 JSON 直接寫，跟 Claude Code 的 mcpServers 格式一樣。</p>
+          <p class="dialog-desc">JSON 格式同 Claude Code 的 mcpServers。</p>
         </div>
         <div class="cc-dialog-body">
           <div class="setting-group" id="ccMcpTemplateGroup">

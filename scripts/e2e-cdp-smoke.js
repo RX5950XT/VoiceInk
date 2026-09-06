@@ -631,6 +631,13 @@ async function main() {
       JSON.stringify(longRun)
     )
 
+    // 進頁後 prewarmTranslatePage() 還在跑（載模型／refreshUiState 會把「翻譯」鈕暫時停用），
+    // 睡 300ms 就按會撞在準備中的那一段 → 這一輪被自己作廢，狀態停在「（已停止）」。
+    // 等鈕真的可按再按（實測那是唯一看得出「準備好了」的訊號）。
+    for (let i = 0; i < 60; i++) {
+      if (await cdp.eval(`document.getElementById('translateRunBtn').disabled === false`)) break
+      await sleep(500)
+    }
     // 由 Node 端輪詢（長時間 awaitPromise 會讓 CDP 連線閒置斷開）
     await cdp.eval(`document.getElementById('translateRunBtn').click()`)
     let translated = null
@@ -644,7 +651,9 @@ async function main() {
         outLines: (document.getElementById('translateOutput').value || '').split('\\n').filter(Boolean).length,
         err: document.getElementById('translateError')?.textContent || ''
       })`)
-      if (/完成|失敗/.test(translated?.state || '')) break
+      // 「已停止」＝這一輪被作廢（原文／語言變了或切走了頁）：那是失敗，
+      // 不要繼續等到 300 秒逾時才發現（等到逾時只會看到同一個字串，但多花五分鐘）。
+      if (/完成|失敗|已停止/.test(translated?.state || '')) break
     }
     // 期望段數取自 UI 的「N 字（M 段）」：段長依模型不同（通用 600／LinguaForge 280），不可寫死
     const expectSegs = Number((longRun?.count || '').match(/（(\d+) 段）/)?.[1] || 0)

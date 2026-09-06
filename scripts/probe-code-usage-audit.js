@@ -81,7 +81,7 @@ function handCount(from, normalize) {
       const rawModel = String(row.message?.model || 'unknown')
       if (rawModel.startsWith('<')) continue
       const ts = Date.parse(row.timestamp)
-      if (!Number.isFinite(ts) || ts < from) continue
+      if (!Number.isFinite(ts) || Math.floor(ts / 3600000) * 3600000 < from) continue
       const id = String(row.message?.id || row.requestId || row.uuid || '')
       if (id) {
         if (seen.has(id)) continue
@@ -194,14 +194,10 @@ app.whenReady().then(async () => {
   codeusage.configure({ userDataPath: tmpUserData })
 
   try {
-    const from = Date.now() - RANGE_DAYS * DAY_MS
-    console.log(`\n[A] 手算（直接讀 ~/.claude/projects，最近 ${RANGE_DAYS} 天）`)
-    const hand = handCount(from, pricing.normalizeModel)
-    console.log(`  ${hand.size} 顆模型、${[...hand.values()].reduce((n, m) => n + m.requests, 0)} 次請求`)
-
     console.log('\n[B] App 算的（codeusage.sync + stats）')
     await codeusage.sync()
     const stats = await codeusage.stats({ range: '30d', provider: 'claude' })
+    const hand = handCount(stats.from, pricing.normalizeModel)
     console.log(`  ${stats.models.length} 顆模型、${stats.summary.requests} 次請求、$${stats.summary.costUsd.toFixed(2)}`)
 
     console.log('\n[C] 逐模型對帳')
@@ -219,11 +215,6 @@ app.whenReady().then(async () => {
         continue
       }
       handCost += cost || 0
-      // 只有幾次請求的模型，邊界那一小時就足以讓比例差超過容差 → 沒有比對價值
-      if (mine.requests < 10) {
-        console.log(`  SKIP ${model}（只有 ${mine.requests} 次請求，樣本太小）`)
-        continue
-      }
       if (!app_) {
         ok(`${model} 有出現在統計裡`, false, `手算 ${mine.requests} 次、App 沒有這一筆`)
         continue
@@ -262,6 +253,7 @@ app.whenReady().then(async () => {
 
     console.log('\n[D] 總額')
     console.log(`  手算 $${handCost.toFixed(2)} / App $${stats.summary.costUsd.toFixed(2)}`)
+    ok('總額差異小於 1%', Math.abs(handCost - stats.summary.costUsd) <= Math.max(0.01, handCost * tolerance))
     if (stats.uncostedModels.length) {
       console.log(`  未設單價：${stats.uncostedModels.join(', ')}（${stats.summary.uncostedRequests} 次請求）`)
     }

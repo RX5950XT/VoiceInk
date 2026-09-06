@@ -9,6 +9,7 @@ const PORT = 9243
 // 這時可以打包到別的資料夾再用 VOICEINK_EXE 指過去，測試不必等鎖放掉
 const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
 const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-e2e-visual-'))
+fs.writeFileSync(path.join(USER_DATA_DIR, 'config.json'), JSON.stringify({ sysmonSensors: false }))
 const PAGES = ['chat', 'ccswitch', 'usage', 'agy', 'stt', 'translate', 'sysmon', 'hfmodels', 'settings']
 const VIEWPORTS = [
   { width: 1440, height: 1000 },

@@ -207,6 +207,94 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }
   },
 
+  // ===== 專案工作區 =====
+  // 只送 projectId 與專案內的相對路徑；絕對路徑一律由 main 從 store 取，
+  // 「加入專案」的資料夾由系統對話框選。
+  workspace: {
+    listProjects: () => ipcRenderer.invoke('workspace:listProjects'),
+    /** 開系統對話框選資料夾；取消回 null */
+    addProject: () => ipcRenderer.invoke('workspace:addProject'),
+    /**
+     * 拖資料夾進專案區。files 由 drop event 來（OS 給的路徑，用
+     * `getPathForFile` 轉換），main 端仍逐一走 store.create 的驗證。
+     * @param {File[]} files
+     */
+    addDropped: (files) => (
+      ipcRenderer.invoke(
+        'workspace:addDropped',
+        Array.from(files)
+          .map((f) => { try { return webUtils.getPathForFile(f) || '' } catch { return '' } })
+          .filter(Boolean)
+      )
+    ),
+    renameProject: (id, name) => ipcRenderer.invoke('workspace:renameProject', id, name),
+    removeProject: (id) => ipcRenderer.invoke('workspace:removeProject', id),
+    /** @param {string[]} ids 側欄拖曳後的完整順序 */
+    reorderProjects: (ids) => ipcRenderer.invoke('workspace:reorderProjects', ids),
+    /** 專案根目錄（拿去當終端機的 cwd） */
+    saveTabsState: (id, tabsState) => ipcRenderer.invoke('workspace:saveTabsState', id, tabsState),
+    getTabsState: (id) => ipcRenderer.invoke('workspace:getTabsState', id),
+    getFileMtime: (id, relPath) => ipcRenderer.invoke('workspace:getFileMtime', id, relPath),
+    projectPath: (id) => ipcRenderer.invoke('workspace:projectPath', id),
+    /** @param {string} relPath 專案內的相對路徑，一律用 `/` */
+    listDir: (id, relPath) => ipcRenderer.invoke('workspace:listDir', id, relPath),
+    readFile: (id, relPath) => ipcRenderer.invoke('workspace:readFile', id, relPath),
+    writeFile: (id, relPath, content) => (
+      ipcRenderer.invoke('workspace:writeFile', id, relPath, content)
+    ),
+    /** 新增檔案／資料夾；名稱由 main 的 `checkName` 收斂（不准含分隔符號） */
+    createEntry: (id, relDir, name, dir) => (
+      ipcRenderer.invoke('workspace:createEntry', id, relDir, name, dir)
+    ),
+    /** 檔案樹拖曳搬檔（兩個都是專案內的相對路徑） */
+    moveEntry: (id, fromRel, toRelDir) => (
+      ipcRenderer.invoke('workspace:moveEntry', id, fromRel, toRelDir)
+    ),
+    renameEntry: (id, relPath, name) => (
+      ipcRenderer.invoke('workspace:renameEntry', id, relPath, name)
+    ),
+    removeEntry: (id, relPath) => ipcRenderer.invoke('workspace:removeEntry', id, relPath),
+    /** 專案內全文搜尋（純字串比對，main 不收 regex） */
+    /** 快速開檔（Ctrl+P）用的檔案清單，只有相對路徑 */
+    listFiles: (id) => ipcRenderer.invoke('workspace:listFiles', id),
+    search: (id, query, caseSensitive) => (
+      ipcRenderer.invoke('workspace:search', id, query, caseSensitive)
+    ),
+    /** 這台機器正在聽的本機 TCP 埠（跟專案無關） */
+    listPorts: () => ipcRenderer.invoke('workspace:listPorts'),
+    reveal: (id, relPath) => ipcRenderer.invoke('workspace:reveal', id, relPath),
+    /** 用系統瀏覽器開（main 只放行 http(s)） */
+    openExternal: (url) => ipcRenderer.invoke('workspace:openExternal', url),
+    gitStatus: (id) => ipcRenderer.invoke('workspace:gitStatus', id),
+    gitLog: (id) => ipcRenderer.invoke('workspace:gitLog', id),
+    /** 暫存／取消暫存／捨棄（捨棄救不回來，renderer 要二次確認） */
+    gitStage: (id, relPath) => ipcRenderer.invoke('workspace:gitStage', id, relPath),
+    gitUnstage: (id, relPath) => ipcRenderer.invoke('workspace:gitUnstage', id, relPath),
+    gitStageAll: (id) => ipcRenderer.invoke('workspace:gitStageAll', id),
+    gitUnstageAll: (id) => ipcRenderer.invoke('workspace:gitUnstageAll', id),
+    gitDiscard: (id, relPath) => ipcRenderer.invoke('workspace:gitDiscard', id, relPath),
+    gitCommit: (id, message, stageAll) => (
+      ipcRenderer.invoke('workspace:gitCommit', id, message, stageAll)
+    ),
+    gitPush: (id) => ipcRenderer.invoke('workspace:gitPush', id),
+    gitPull: (id) => ipcRenderer.invoke('workspace:gitPull', id),
+    gitDiff: (id, relPath, staged) => ipcRenderer.invoke('workspace:gitDiff', id, relPath, staged),
+    /** git worktree：renderer 只送名字，實際路徑由 main 組 */
+    worktreeList: (id) => ipcRenderer.invoke('workspace:worktreeList', id),
+    worktreeAdd: (id, name, base) => ipcRenderer.invoke('workspace:worktreeAdd', id, name, base),
+    worktreeRemove: (id, treePath) => ipcRenderer.invoke('workspace:worktreeRemove', id, treePath),
+    /** diff 編輯器要的 original／modified 兩份完整內容 */
+    gitFileVersions: (id, relPath, staged) => ipcRenderer.invoke('workspace:gitFileVersions', id, relPath, staged),
+    agentSessions: (id) => ipcRenderer.invoke('workspace:agentSessions', id),
+    /** @param {string} agent 只認 main 固定表裡的 key */
+    agentResumeCommand: (agent, sessionId) => (
+      ipcRenderer.invoke('workspace:agentResumeCommand', agent, sessionId)
+    ),
+    agentSessionDetail: (id, agent, sessionId) => (
+      ipcRenderer.invoke('workspace:agentSessionDetail', id, agent, sessionId)
+    )
+  },
+
   // ===== Claude Code 工作台 =====
   // 供應商端點、MCP 檔案路徑、CLI 的 npm 套件名都在 main 的固定表；格式值受白名單限制，
   // 這裡只送得出 preset key、供應商 id、MCP 定義、工具 key 與格式選擇。
@@ -305,6 +393,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     fanTaskStatus: () => ipcRenderer.invoke('sysmon:fanTaskStatus'),
     fanTaskInstall: () => ipcRenderer.invoke('sysmon:fanTaskInstall'),
     fanTaskRemove: () => ipcRenderer.invoke('sysmon:fanTaskRemove'),
+    ocStatus: () => ipcRenderer.invoke('sysmon:ocStatus'),
+    ocSetDraft: (patch) => ipcRenderer.invoke('sysmon:ocSetDraft', patch || {}),
+    ocApply: () => ipcRenderer.invoke('sysmon:ocApply'),
+    ocReset: () => ipcRenderer.invoke('sysmon:ocReset'),
 
     /** @param {(payload: { type: string, data: any }) => void} callback */
     onEvent: (callback) => {
@@ -312,6 +404,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on('sysmon:event', handler)
       return () => ipcRenderer.removeListener('sysmon:event', handler)
     }
+  },
+
+  // ===== 使用時長（Tai 相容庫）=====
+  // kind／range／date 是白名單；路徑與 SQL 不出 renderer。
+  screentime: {
+    status: () => ipcRenderer.invoke('screentime:status'),
+    /** @param {{ kind?: 'app'|'web', range?: 'day'|'week'|'month'|'year', date?: string }} q */
+    stats: (q) => ipcRenderer.invoke('screentime:stats', q || {}),
+    /** @param {{ kind?: 'app'|'web', stamp?: string }} q */
+    drill: (q) => ipcRenderer.invoke('screentime:drill', q || {}),
+    /** @param {{ kind?: 'app'|'web', range?: 'day'|'week'|'month'|'year', date?: string }} q */
+    exportCsv: (q) => ipcRenderer.invoke('screentime:export', q || {}),
+    openFolder: () => ipcRenderer.invoke('screentime:openFolder')
   },
 
   // ===== HF模型（本機 llama.cpp router）=====

@@ -1160,7 +1160,7 @@ async function refreshBanner() {
   ])
   const active = providers.find((p) => p.id === activeId) || providers[0] || null
   let message = ''
-  if (!providers.length) message = '尚未設定聊天供應商，請到設定新增一組'
+  if (!providers.length) message = '尚未設定聊天供應商，請到設定新增'
   else if (!active?.apiUrl) message = `供應商「${active?.name || '?'}」的 API URL 不正確`
   else if (!String(active.apiKey || '').trim()) message = `供應商「${active.name}」尚未填 API Key`
   else if (!active.models?.length) message = `供應商「${active.name}」沒有任何模型`
@@ -1302,7 +1302,7 @@ function renderProviderFields() {
   if (providerHintEl) {
     providerHintEl.textContent = has
       ? '以下欄位屬於目前選取的供應商，按下方「儲存設定」才會寫入。'
-      : '尚未有任何供應商，按「＋ 新增」建立一組。'
+      : '還沒有供應商，按「＋ 新增」建立。'
   }
 }
 
@@ -1338,7 +1338,7 @@ function handleDeleteProvider() {
   const provider = providerDraft.find((p) => p.id === draftId)
   if (!provider) return
   const label = provider.name || '未命名供應商'
-  if (!window.confirm(`刪除供應商「${label}」？它的 API Key 與模型清單會一併移除。`)) return
+  if (!window.confirm(`刪除供應商「${label}」？API Key 與模型清單一併移除。`)) return
   providerDraft = providerDraft.filter((p) => p.id !== draftId)
   draftId = providerDraft[0]?.id || ''
   renderProviderSelect()
@@ -1390,7 +1390,7 @@ function openScanDialog(models, provider) {
   scanSelected = new Set()
   if (scanDescEl) {
     scanDescEl.textContent =
-      `供應商「${provider.name || '未命名'}」回報 ${models.length} 個模型，勾選要加入清單的項目。`
+      `掃到 ${models.length} 個模型，勾選要加入的。`
   }
   if (scanSearchInput) scanSearchInput.value = ''
   renderScanList()

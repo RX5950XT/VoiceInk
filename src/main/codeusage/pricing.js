@@ -34,8 +34,28 @@ const PER_TOKENS = 1_000_000
  * v6：Codex 子代理／fork 的 rollout 開頭會重播母 thread 的整份歷史，舊版把那些
  * 當成新用量收下來（實測 7.8 萬筆假請求，全記成 `unknown`）。桶子已經落盤，
  * 一樣只能靠這個版本號整份重讀才會消失。
+ *
+ * v7：Grok 的 `costUsdTicks` 在 grok-4.5 及更舊的記錄裡單位是 1e10（不是 1e9），
+ * 舊版照 1e9 換算把 4.5 的花費灌水 10 倍。灌水值已經寫進桶子的 `reportedCost`，
+ * 只能靠這個版本號整份重讀。
+ *
+ * v8：修復 Grok 取消事件（Esc / MidTurnAbort，0 token 且無呼叫）被誤記為 unknown
+ * 假請求的計算錯誤；過濾全 0 token 幽靈桶；補齊 GPT-5.4、Claude 3.7/3.5、
+ * DeepSeek-V4/V3、Kimi K2.6、Qwen 等主流模型公開單價與 `:cloud` 後綴正規化。
+ *
+ * v9：修復 Codex 兩大天文數字高估 Bug：
+ * 1. 子代理／Fork 重播雪崩：過濾母 thread 歷史重播，避免子代理檔案開頭幾萬行母檔
+ *    token 被重複計算（本機 292 個 fork 檔灌水 ~$20,895 USD / 32.9 萬假請求）。
+ * 2. 重複 emit token_count 與無進展空轉：比對 total_token_usage 累計值，
+ *    過濾每輪前後重複 emit 快照與無進展的 heartbeat。
+ *
+ * v10：增量 JSONL 游標持久化 Claude／Grok 的去重識別，並只推進到完整換行，
+ *    讓寫入中的半行不會遺失，也讓舊游標在重掃時清掉。
+ *    同一版修正 Grok `costUsdTicks` 的單位：**所有世代都是 1 USD = 1e10**
+ *    （CLI 自附的 `docs/user-guide/14-headless-mode.md` 明寫，範例用的就是 4.6），
+ *    v7 那條「4.6 是 1e9」是拿實收價去反推單價表推錯的，會把 4.6 灌水 10 倍。
  */
-const RULES_VERSION = 6
+const RULES_VERSION = 10
 
 /**
  * @typedef {object} Price
@@ -66,13 +86,29 @@ const BUILTIN_PRICES = {
   'claude-sonnet-4.6': { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75, cacheWrite1h: 6 },
   'claude-sonnet-4.5': { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75, cacheWrite1h: 6 },
   'claude-haiku-4.5': { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25, cacheWrite1h: 2 },
-  // OpenAI（developers.openai.com/api/docs/pricing，2026-09 查證；cacheRead 是官方的 cached input）。
-  // 自動快取不另收寫入費，所以 cacheWrite 是 0（不是「沒填」）
-  'gpt-5.6-sol': { input: 4, output: 20, cacheRead: 0.4, cacheWrite: 0, cacheWrite1h: 0 },
-  'gpt-5.6-terra': { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0, cacheWrite1h: 0 },
-  'gpt-5.6-luna': { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0, cacheWrite1h: 0 },
+  'claude-3.7-sonnet': { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75, cacheWrite1h: 6 },
+  'claude-3.5-sonnet': { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75, cacheWrite1h: 6 },
+  'claude-3.5-haiku': { input: 0.8, output: 4, cacheRead: 0.08, cacheWrite: 1, cacheWrite1h: 1.6 },
+  'claude-3-opus': { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75, cacheWrite1h: 30 },
+  // OpenAI（developers.openai.com/api/docs/pricing，2026-09-06 查證；cacheRead 是官方的 cached input）。
+  // **gpt-5.6 那一代起有「cache writes」這一格了**（＝input × 1.25），舊的「OpenAI 自動快取
+  // 一律不收寫入費」只對 5.5 及更舊成立；照舊寫 0 會少算（Codex 的 rollout 沒有
+  // `cache_write_input_tokens`，所以那條路看不出來，但經 Claude Code／閘道打的同一顆會）。
+  // OpenAI **沒有** 5m／1h 兩檔，所以 cacheWrite1h 寫成跟 cacheWrite 一樣的價
+  // （留 0 等於說「1 小時快取寫入免費」，空著又會被 costOf 推成 1.6 倍）。
+  'gpt-6-astra': { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5, cacheWrite1h: 12.5 },
+  'gpt-5.6-sol': { input: 4, output: 20, cacheRead: 0.4, cacheWrite: 5, cacheWrite1h: 5 },
+  'gpt-5.6-terra': { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 2.5, cacheWrite1h: 2.5 },
+  'gpt-5.6-luna': { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25, cacheWrite1h: 0.25 },
+  // 5.5 及更舊官方表上沒有 cache writes 那一格 → 0 是「不收費」不是「沒填」
   'gpt-5.5': { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0, cacheWrite1h: 0 },
+  'gpt-5.4': { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0, cacheWrite1h: 0 },
   'gpt-5.4-mini': { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0, cacheWrite1h: 0 },
+  'gpt-4o': { input: 2.5, output: 10, cacheRead: 1.25, cacheWrite: 0, cacheWrite1h: 0 },
+  'gpt-4o-mini': { input: 0.15, output: 0.6, cacheRead: 0.075, cacheWrite: 0, cacheWrite1h: 0 },
+  'o1': { input: 15, output: 60, cacheRead: 7.5, cacheWrite: 0, cacheWrite1h: 0 },
+  'o1-mini': { input: 1.1, output: 4.4, cacheRead: 0.55, cacheWrite: 0, cacheWrite1h: 0 },
+  'o3-mini': { input: 1.1, output: 4.4, cacheRead: 0.55, cacheWrite: 0, cacheWrite1h: 0 },
   // xAI（Grok CLI 的記錄自帶花費，這裡只給沒帶的那些路徑用）。同樣是自動快取，無寫入費
   'grok-4.6': { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0, cacheWrite1h: 0 },
   'grok-4.5': { input: 2, output: 6, cacheRead: 0.3, cacheWrite: 0, cacheWrite1h: 0 },
@@ -89,6 +125,19 @@ const BUILTIN_PRICES = {
   // 寫入不另外計費 → 0 不是「沒填」。經 Claude Code 打的話 id 是 `z-ai/glm-5.3`，前綴會被剝掉
   'glm-5.3': { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0, cacheWrite1h: 0 },
   'glm-5.3-flash': { input: 0.15, output: 0.5, cacheRead: 0.03, cacheWrite: 0, cacheWrite1h: 0 },
+  // DeepSeek 官方報價（api-docs.deepseek.com）
+  'deepseek-v4-pro': { input: 0.27, output: 1.1, cacheRead: 0.07, cacheWrite: 0, cacheWrite1h: 0 },
+  'deepseek-chat': { input: 0.14, output: 0.28, cacheRead: 0.014, cacheWrite: 0, cacheWrite1h: 0 },
+  'deepseek-reasoner': { input: 0.55, output: 2.19, cacheRead: 0.14, cacheWrite: 0, cacheWrite1h: 0 },
+  'deepseek-r1': { input: 0.55, output: 2.19, cacheRead: 0.14, cacheWrite: 0, cacheWrite1h: 0 },
+  // Moonshot / Kimi 官方公開報價
+  'kimi-k2.6': { input: 0.6, output: 2.4, cacheRead: 0.15, cacheWrite: 0, cacheWrite1h: 0 },
+  // 阿里雲通義千問 Qwen 官方公開報價
+  'qwen-2.5-coder-32b': { input: 0.2, output: 0.6, cacheRead: 0.02, cacheWrite: 0, cacheWrite1h: 0 },
+  'qwen-2.5-72b': { input: 0.35, output: 1.2, cacheRead: 0.035, cacheWrite: 0, cacheWrite1h: 0 },
+  'qwen-max': { input: 2.8, output: 8.4, cacheRead: 0.7, cacheWrite: 0, cacheWrite1h: 0 },
+  'qwen-plus': { input: 0.56, output: 1.68, cacheRead: 0.14, cacheWrite: 0, cacheWrite1h: 0 },
+  'qwen-turbo': { input: 0.042, output: 0.112, cacheRead: 0.01, cacheWrite: 0, cacheWrite1h: 0 },
   // Antigravity 的 `gemini-pro-agent` 就是 Gemini 3.1 Pro 的 agent 檔位，
   // 沒有另外的公開報價 → 直接套 3.1 Pro 的價
   'gemini-pro-agent': { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0, cacheWrite1h: 0 }
@@ -105,7 +154,10 @@ const ALIASES = {
   'grok-4.6-build': 'grok-4.6',
   // Codex 反代的模型名
   'gpt-5.6-sol-high': 'gpt-5.6-sol',
-  'gpt-5.6-sol-low': 'gpt-5.6-sol'
+  'gpt-5.6-sol-low': 'gpt-5.6-sol',
+  // DeepSeek 別名
+  'deepseek-v3': 'deepseek-chat',
+  'deepseek-v3.2': 'deepseek-chat'
 }
 
 /**
@@ -126,15 +178,17 @@ function normalizeModel(raw) {
   if (slash >= 0) id = id.slice(slash + 1)
   // 日期後綴：`claude-opus-5-20260101`
   id = id.replace(/-\d{8}$/, '')
-  // 通道後綴
+  // 通道與標籤後綴（如 :cloud / :latest）
+  id = id.replace(/:(cloud|latest|free)$/, '')
   id = id.replace(/-(latest|preview|beta)$/, '')
   // 思考檔位是同一顆模型的不同設定（`claude-opus-4-6-thinking`、`gemini-3.7-flash-high`），
   // 價錢一樣，要合起來算。**`lite` 不在這裡**：Flash-Lite 是另一顆模型，
   // 價格只有 Flash 的三分之一，剝掉就會把它算成貴的那顆（實測 732 筆全被算錯）
   id = id.replace(/-thinking$/, '')
   if (id.startsWith('gemini')) id = id.replace(/-(extra-low|low|medium|high|tiered)$/, '')
-  // 「大版本-小版本」寫法收斂成小數點：Claude Code 實際寫的是 `claude-haiku-4-5`，
-  // 但公開報價與別的來源都寫 `claude-haiku-4.5`，不轉的話這顆永遠對不到單價（實測踩過）
+  // 「大版本-小版本」寫法收斂成小數點：Claude Code 實際寫的是 `claude-haiku-4-5`、`claude-3-7-sonnet`，
+  // 但公開報價與別的來源都寫 `claude-haiku-4.5`、`claude-3.7-sonnet`，不轉的話這顆永遠對不到單價
+  id = id.replace(/-(\d+)-(\d+)-/g, '-$1.$2-')
   id = id.replace(/-(\d+)-(\d+)$/, '-$1.$2')
   return ALIASES[id] || id || 'unknown'
 }
@@ -230,8 +284,9 @@ function sanitizeCustomPrices(raw) {
  * @param {Record<string, Price>} [custom]
  * @returns {Array<{ model: string, price: Price | null, source: 'custom' | 'builtin' | 'none' }>}
  */
-function priceList(custom = {}) {
-  const models = new Set([...Object.keys(BUILTIN_PRICES), ...Object.keys(custom)])
+function priceList(custom = {}, extraModels = []) {
+  const extras = Array.isArray(extraModels) ? extraModels.filter((m) => m && typeof m === 'string') : []
+  const models = new Set([...Object.keys(BUILTIN_PRICES), ...Object.keys(custom), ...extras])
   return [...models].sort().map((model) => {
     if (custom[model]) return { model, price: custom[model], source: 'custom' }
     const builtin = BUILTIN_PRICES[model]

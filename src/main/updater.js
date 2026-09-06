@@ -66,8 +66,7 @@ function get() {
     message: `v${info?.version || state.version} 已下載完成，重新啟動即可完成安裝。`
   }))
   autoUpdater.on('error', (err) => {
-    // 錯誤原文只進 console：這條路上的訊息由 GitHub 決定，不往 UI 送
-    console.error('[updater]', err?.message || err)
+    console.error('[updater] update failed')
     emit({ state: 'error', percent: 0, message: '檢查更新失敗（無法連線到 GitHub，或這個版本沒有附帶更新資訊）。' })
   })
   updater = autoUpdater
@@ -83,13 +82,28 @@ function configure({ autoUpdate, onStatus }) {
   if (updater) updater.autoDownload = autoEnabled
 }
 
+/** 預覽可能不附更新設定；明確回報不支援，避免按鈕毫無反應。 */
+function hasUpdateConfig() {
+  try {
+    const fs = require('fs')
+    const path = require('path')
+    return fs.existsSync(path.join(process.resourcesPath, 'app-update.yml'))
+  } catch {
+    return false
+  }
+}
+
 /** 手動按「檢查更新」；autoDownload 開著的話會直接接著下載 */
 async function check() {
   if (!app.isPackaged) return status()
+  if (!hasUpdateConfig()) {
+    emit({ state: 'unsupported', percent: 0, message: '此預覽版未附更新資訊。' })
+    return status()
+  }
   try {
     await get().checkForUpdates()
   } catch (err) {
-    console.error('[updater] check failed:', err?.message || err)
+    console.error('[updater] check failed')
     emit({ state: 'error', percent: 0, message: '檢查更新失敗（無法連線到 GitHub，或這個版本沒有附帶更新資訊）。' })
   }
   return status()
@@ -97,7 +111,7 @@ async function check() {
 
 /** 開機後靜靜看一次（失敗不吵使用者） */
 function checkQuietly() {
-  if (!app.isPackaged || !autoEnabled) return
+  if (!app.isPackaged || !autoEnabled || !hasUpdateConfig()) return
   check().catch(() => {})
 }
 
@@ -117,7 +131,7 @@ function installOnQuit() {
   try {
     return updater.install(true, false)
   } catch (err) {
-    console.error('[updater] install on quit failed:', err?.message || err)
+    console.error('[updater] install on quit failed')
     return false
   }
 }

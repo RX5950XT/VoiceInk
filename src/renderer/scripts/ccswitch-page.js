@@ -223,7 +223,7 @@ async function reloadProviders() {
   }
   // currentId 有值但 activeId 空＝設定檔被別的工具或使用者手改過
   showStatus(currentId && !activeId
-    ? 'settings.json 目前的 Base URL 跟記錄的供應商對不上，可能被其他工具改過。再按一次「切換」就會寫回來。'
+    ? 'settings.json 的 Base URL 與記錄不符（被其他工具改過？）。再按一次「切換」會寫回。'
     : '')
   renderProviders()
   await reloadGateway()
@@ -377,11 +377,11 @@ async function activateProvider(id) {
     const official = presetById(item?.presetId)?.auth === 'none'
     await call(electronAPI.ccswitch.activateProvider(id), '切換供應商失敗')
     await reloadProviders()
-    showStatus(official
-      ? '已把本工作台寫進 settings.json 的 env 清掉，回到官方登入（你自己的其他設定沒有動）。已經開著的 Claude Code 要重開才會生效。'
+    showStatus((official
+      ? '已回到官方登入'
       : item?.route === 'gateway'
-        ? '已寫入 settings.json。這一家需要轉換閘道；若閘道尚未開啟，請先按上方開關。已經開著的 Claude Code 要重開才會吃到新設定。'
-        : '這一家直連、不需要閘道，已寫入 settings.json。已經開著的 Claude Code 要重開才會吃到新設定。')
+        ? '已寫入 settings.json（這家需要轉換閘道）'
+        : '已寫入 settings.json') + '；開著的 Claude Code 要重開才生效')
   } catch {
     // call() 已經顯示訊息
   }
@@ -637,8 +637,8 @@ function syncProviderDialogFields() {
   document.getElementById('ccKeyGroup')?.classList.toggle('hidden', preset?.auth !== 'key')
   keyInput.placeholder = item?.hasKey ? '已儲存，留空表示不變更' : ''
   document.getElementById('ccKeyHint').textContent = isGateway
-    ? '這把金鑰交給本機閘道去用，不會寫進 settings.json。'
-    : '右邊選金鑰要寫進哪個環境變數。有些端點只認 x-api-key、有些只認 Bearer，填錯會靜默 401；不確定就用預設。'
+    ? '金鑰由本機閘道使用，不進 settings.json。'
+    : '金鑰要寫進哪個環境變數；填錯會靜默 401。'
 
   // 閘道路由的金鑰不進 settings.json，選寫哪個 env 鍵沒有意義。
   // 要收的是 custom-select 包出來的外層，藏原生 select 只會留下一顆孤兒觸發鈕。
@@ -723,8 +723,8 @@ function renderAccounts(flow) {
   list.classList.toggle('hidden', mine.length === 0)
 
   document.getElementById('ccOauthHint').textContent = mine.length
-    ? '切換供應商時就用選中的這個帳號；選「使用已登入的 CLI 憑證」則沿用終端機裡登入的那份。'
-    : `還沒在這裡登入過。按「登入」會用 ${flow.label} 官方支援的流程；不登也可以，會沿用你終端機 CLI 的憑證。`
+    ? '切換時用這個帳號。'
+    : `還沒登入過。按「登入」用 ${flow.label} 官方流程；不登就沿用 CLI 憑證。`
 }
 
 /**
@@ -812,7 +812,7 @@ async function pollLogin(flow) {
       select.value = fresh.id
       select.dispatchEvent(new Event('change', { bubbles: true }))
     }
-    showStatus(`已登入 ${state.accountLabel || flow.label}。記得按「儲存」把這一筆綁定起來。`)
+    showStatus(`已登入 ${state.accountLabel || flow.label}，記得按「儲存」綁定`)
     return
   }
   document.getElementById('ccOauthStep').textContent = state.message || '登入失敗，請再試一次。'
@@ -916,7 +916,7 @@ async function loadModels() {
       rebuildModelSelects(scan.models)
       hint.textContent = `已載入 ${scan.models.length} 個模型，直接從下拉挑。`
     } else {
-      hint.textContent = scan?.error || '掃描失敗，稍後再試或改用手動輸入。'
+      hint.textContent = scan?.error || '掃描失敗，改用手動輸入。'
     }
   } finally {
     btn.disabled = false
@@ -1139,7 +1139,7 @@ function renderVersions() {
     else {
       bits.push(`本機 ${tool.local}`)
       if (tool.latest) bits.push(`最新 ${tool.latest}`)
-      else if (tool.pkg) bits.push('最新版查詢失敗，按「更新」讓 CLI 自己檢查')
+      else if (tool.pkg) bits.push('查不到最新版，按「更新」讓 CLI 自查')
       else bits.push('沒有版本清單，按「更新」讓 CLI 自己檢查')
       if (tool.updateCommand) bits.push(tool.updateCommand)
     }
@@ -1173,7 +1173,7 @@ async function runUpdate(tool) {
     ])
     // 終端機跟聊天共用一頁：切過去並把主區換成終端機
     switchPage('chat')
-    setChatPaneMode('terminal')
+    setChatPaneMode('workspace')
     await terminal.runInNewTerminal(`更新 ${tool.label}`, command)
   } catch {
     // call() 已經顯示訊息

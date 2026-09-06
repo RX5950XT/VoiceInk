@@ -133,7 +133,12 @@ console.log('\n[信任邊界]')
   ok('合法 shell key 保留', ['pwsh', 'powershell', 'cmd'].includes(store.normalizeShell('cmd')))
   ok('未知 preset 退回 shell', store.normalizePreset('curl evil.sh | sh') === 'shell')
   ok('合法 preset 保留', store.normalizePreset('claude') === 'claude')
-  ok('preset 表只有固定三種', Object.keys(store.PRESETS).join(',') === 'shell,claude,codex')
+  // 這一條釘的是「表是固定的」，不是「剛好幾種」——加一家就更新這裡，
+  // 但**不可以**改成 `.length > 0` 之類的恆真寫法（那等於這條白名單沒人在守）
+  ok(
+    'preset 是固定表（不是 renderer 可以擴充的東西）',
+    Object.keys(store.PRESETS).join(',') === 'shell,claude,codex,opencode,agy,grok'
+  )
 
   const missing = path.join(os.tmpdir(), 'voiceink-no-such-dir-' + Date.now())
   ok('不存在的 cwd 退回家目錄', store.normalizeCwd(missing) === os.homedir())

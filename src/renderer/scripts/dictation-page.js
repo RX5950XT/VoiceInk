@@ -187,7 +187,7 @@ async function refreshTerms() {
   if (!terms.length) {
     const empty = document.createElement('p')
     empty.className = 'dict-empty'
-    empty.textContent = '還沒有詞。自己加，或者讓它從整理結果慢慢學。'
+    empty.textContent = '還沒有詞'
     host.appendChild(empty)
     return
   }
@@ -227,7 +227,7 @@ function bindOnce() {
     await refreshDictationRuntime()
     const status = await electronAPI.dictation.status().catch(() => null)
     if (enabledInput.checked && status?.ok && status.data?.listening !== true) {
-      showToast('全域熱鍵沒有掛上，請重開 VoiceInk 再試一次', 'error')
+      showToast('熱鍵沒有掛上，請重開 VoiceInk', 'error')
     } else {
       showToast(enabledInput.checked ? '語音輸入已啟用，按住右 Alt 講話' : '語音輸入已停用')
     }
@@ -293,7 +293,7 @@ function bindOnce() {
     const toInput = /** @type {HTMLInputElement} */ ($('dictationTermTo'))
     const res = await electronAPI.dictation.saveTerm({ from: fromInput.value, to: toInput.value })
     if (!res?.ok || res.data?.ok === false) {
-      showToast('這組詞不能用（只收沒有標點的短詞）', 'error')
+      showToast('這組詞不能用：只收沒有標點的短詞', 'error')
       return
     }
     fromInput.value = ''
@@ -324,7 +324,7 @@ function updateHint() {
   const option = select.selectedOptions[0]
   const notReady = option?.dataset.notReady === '1'
   hint.textContent = notReady
-    ? '這顆模型還沒準備好：本地的請到設定 → 本地模型下載，雲端的請補上 API Key。'
+    ? '模型還沒準備好：本地到設定下載，雲端補上 API Key。'
     : ''
   hint.classList.toggle('is-warning', notReady)
   hint.classList.toggle('hidden', !notReady)

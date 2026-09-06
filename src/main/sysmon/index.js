@@ -18,6 +18,7 @@ const { runDiskBench, cancelDiskBench, clampSizeMb } = require('./bench')
 const { createSensorBridge, PAWNIO_URL } = require('./sensors')
 const { createStressRunner } = require('./stress')
 const { createFanEngine } = require('./fans')
+const { createOcEngine } = require('./oc')
 const pawnio = require('./pawnio')
 const metrics = require('./metrics')
 
@@ -56,23 +57,25 @@ function createSysmonService(deps = {}) {
   const sensors = createSensorBridge(deps.sensorDeps)
   const stress = createStressRunner()
   const fans = createFanEngine({ sensors })
+  const oc = createOcEngine({ sensors })
 
   /** @type {(payload: any) => void} */
   let emit = () => {}
   let intervalKey = 'normal'
+  /** 最近一筆取樣，效能調整儀表拿 CPU% 與 nvidia-smi 補 sidecar 還沒到的欄位 */
+  let lastFeed = null
 
   sampler.setSampleHandler((sample) => {
-    emit({
-      type: 'sample',
-      data: {
-        ...sample,
-        gpu: gpu.read(),
-        // 帶上 status 是為了讓畫面能自己更新提示：裝了 PawnIO 之後 `Computer.Open()`
-        // 要載一堆核心模組，第一筆讀數實測約 10 秒才到，中間得有話講
-        sensors: { ...sensorStatus(), groups: sensors.read().groups },
-        totalMemory: os.totalmem()
-      }
-    })
+    const data = {
+      ...sample,
+      gpu: gpu.read(),
+      // 帶上 status 是為了讓畫面能自己更新提示：裝了 PawnIO 之後 `Computer.Open()`
+      // 要載一堆核心模組，第一筆讀數實測約 10 秒才到，中間得有話講
+      sensors: { ...sensorStatus(), groups: sensors.read().groups },
+      totalMemory: os.totalmem()
+    }
+    lastFeed = data
+    emit({ type: 'sample', data })
   })
   sampler.setErrorHandler((error) => {
     // 這裡的訊息全是我們自己寫死的字串，沒有夾帶系統錯誤內容
@@ -82,6 +85,28 @@ function createSysmonService(deps = {}) {
   /** 感測器狀態＋「核心驅動裝了沒」——按鈕要靠它決定是「安裝驅動」還是「啟用」 */
   function sensorStatus() {
     return { ...sensors.status(), pawnIoInstalled: pawnio.isInstalled() }
+  }
+
+  /**
+   * 儀表用的即時讀數：sidecar 的 o 是牆與每核時脈，nvidia-smi／probe 補負載與 GPU 功耗。
+   * @param {any} snap
+   */
+  function withOcFeed(snap) {
+    const card = (lastFeed?.gpu?.cards || gpu.read().cards || [])[0] || null
+    return {
+      ...snap,
+      feed: {
+        cpuTotal: lastFeed?.cpu?.total ?? null,
+        gpu: card
+      }
+    }
+  }
+
+  /** 靜默把感測器拉起來（見門面的 ensureSensors） */
+  async function ensureSensors() {
+    const result = await sensors.enable({ elevate: false })
+    if (fans.isEnabled() && result.state === 'on') await fans.setEnabled(true)
+    return result
   }
 
   /** @param {unknown} key */
@@ -237,12 +262,18 @@ function createSysmonService(deps = {}) {
      * @param {{ store?: any, userDataPath?: string, packaged?: boolean }} options
      */
     configure(options = {}) {
-      sensors.configure({ userDataPath: options.userDataPath, packaged: options.packaged })
+      sensors.configure({
+        userDataPath: options.userDataPath,
+        packaged: options.packaged,
+        // sidecar 死掉時自己重拉（走排程工作那條，不彈 UAC），風扇才不會斷手
+        onLost: () => { ensureSensors().catch(() => undefined) }
+      })
       fans.configure({ store: options.store })
+      oc.configure({ store: options.store })
     },
 
     /** 提權感測器（CPU／主機板／硬碟溫度、風扇、電壓） */
-    enableSensors: () => sensors.enable().then(async () => {
+    enableSensors: () => sensors.enable({ elevate: true }).then(async () => {
       // 感測器一上線就把風扇接管接回去——使用者上次開著的設定不該因為重開 App 就失效
       if (fans.isEnabled()) await fans.setEnabled(true)
       return sensorStatus()
@@ -254,9 +285,16 @@ function createSysmonService(deps = {}) {
      * 開機自啟動時的接管：`fanControl.enabled` 為真才會去拉感測器 sidecar。
      * **不必開系統監控頁**——風扇要在使用者還沒點任何東西之前就歸我們管。
      */
+    /**
+     * 開機預設把感測器靜默拉起來（有排程工作就不跳 UAC、也沒有主控台視窗）。
+     * `sysmonSensors === false` 才略過。sidecar 中途死掉時 `onLost` 也走這條，
+     * 所以風扇接管要在這裡接回去。
+     */
+    ensureSensors,
+
     async ensureFanControl() {
       if (!fans.isEnabled()) return { enabled: false, started: false }
-      const result = await sensors.enable()
+      const result = await sensors.enable({ elevate: false })
       if (result.state !== 'on') return { enabled: true, started: false, state: result.state }
       await fans.setEnabled(true)
       return { enabled: true, started: true }
@@ -267,7 +305,7 @@ function createSysmonService(deps = {}) {
     fanEnable(on) {
       if (on === true && sensors.status().state !== 'on') {
         // 感測器沒起來就沒有通道可控；先把它拉起來（會走一次 UAC 或排程工作）
-        return sensors.enable().then(() => fans.setEnabled(true))
+        return sensors.enable({ elevate: true }).then(() => fans.setEnabled(true))
       }
       return fans.setEnabled(on === true)
     },
@@ -280,6 +318,11 @@ function createSysmonService(deps = {}) {
     fanTaskInstall: () => sensors.taskInstall(),
     fanTaskRemove: () => sensors.taskRemove(),
 
+    ocStatus: () => withOcFeed(oc.status()),
+    ocSetDraft: (patch) => withOcFeed(oc.setDraft(patch)),
+    ocApply: () => withOcFeed(oc.apply()),
+    ocReset: () => withOcFeed(oc.reset()),
+
     /**
      * 代裝 PawnIO 核心驅動（CPU／主機板那一整組感測器的前提）。
      * 已經在跑的 sidecar 是在「沒有驅動」的狀態下 Open 的，裝完要重開才吃得到，
@@ -288,8 +331,8 @@ function createSysmonService(deps = {}) {
     async installPawnIo() {
       const result = await pawnio.install()
       if (!result.already) {
-        sensors.stop()
-        await sensors.enable()
+        await sensors.stop()
+        await sensors.enable({ elevate: true })
       }
       return { ...result, sensors: sensorStatus() }
     },
@@ -302,11 +345,11 @@ function createSysmonService(deps = {}) {
 
     /**
      * before-quit 用：三顆子程序全收。
-     * **風扇要排在 sensors.stop() 之前**——手動 PWM 是留在晶片裡的，
-     * 先斷線就等於把風扇釘在最後的轉速（只有重開機救得回來）。
+     * **風扇與效能調整都要排在 sensors.stop() 之前**——先斷線就交不回去。
      * @returns {Promise<void>}
      */
     shutdown() {
+      oc.shutdown()
       fans.shutdown()
       sampler.stop()
       gpu.stop()

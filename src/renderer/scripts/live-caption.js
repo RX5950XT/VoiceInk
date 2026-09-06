@@ -233,12 +233,12 @@ async function startCapture() {
     if (needsTranslationBackend && llmChoice.mode === 'local') {
       const llmKey = resolveTranslateModelKey({ localTranslateModel: llmChoice.modelKey }, status.models)
       if (!status.models[llmKey]?.downloaded) {
-        showToast('本地翻譯模型尚未下載，請先到設定下載', 'error')
+        showToast('本地翻譯模型未下載，請先到設定下載', 'error')
         return
       }
     }
     if (needsTranslationBackend && llmChoice.mode === 'cloud' && !resolveScopedCloud(settings, scope.llm).ready) {
-      showToast('雲端翻譯還沒選好供應商與模型，請在這一頁的「翻譯模型」挑一顆', 'error')
+      showToast('雲端翻譯未設定，請在這頁挑「翻譯模型」', 'error')
       return
     }
 

@@ -263,8 +263,8 @@ function renderList(data) {
     if (!channels.length) {
       editor.hidden = true
       host.append(el('p', 'fan-empty', data.available
-        ? '這台機器上沒有偵測到可以調整的風扇通道。桌機主機板（ITE／Nuvoton／Fintek）與獨立顯示卡通常可以；筆記型電腦幾乎都由廠商的 EC 控制，沒有公開介面。'
-        : '請先在上方啟用感測器，才讀得到風扇通道。'), editor)
+        ? '沒有可調整的風扇通道（桌機通常有，筆電多半不行）'
+        : '請先啟用感測器'), editor)
       return
     }
     for (const channel of channels) {
@@ -515,7 +515,7 @@ function renderEditor(data) {
   identify.type = 'button'
   identify.dataset.action = 'identify'
   identify.disabled = channel.identifying
-  identify.title = '把這條拉到全速幾秒，用聽的就知道是哪一顆'
+  identify.title = '全速幾秒，用聽的認這顆'
   head.append(chips, identify)
   host.append(head)
 
@@ -551,7 +551,7 @@ function renderEditor(data) {
     floor.max = '100'
     floor.value = String(channel.minPwm)
     floor.dataset.field = 'minPwm'
-    grid.append(field('轉速下限', floor, `不得低於 ${data.minFloor}%。App 被強制關閉時風扇會停在最後的設定值，下限就是那時候的保險。`))
+    grid.append(field('轉速下限', floor, `最低 ${data.minFloor}%；強關 App 時的保險。`))
   }
   host.append(grid)
 
@@ -580,8 +580,7 @@ function renderEditor(data) {
     const svg = buildCurve(channel, source)
     plot.append(svg)
     plot.append(el('p', 'fan-axis-note',
-      `橫軸 ${source?.label || ''}（${source?.unit || ''}）、直軸風扇輸出（PWM %，不是 RPM）。`
-      + '拖曳圓點調整、空白處點一下新增、選中後按 Delete 刪除；虛線以下是轉速下限，拉不進去。'))
+      `橫軸 ${source?.label || ''}（${source?.unit || ''}）、直軸 PWM%。拖點調整，虛線以下是下限。`))
     host.append(plot)
     paintCurve(svg, channel)
     bindCurve(svg, channel, readout)
@@ -630,20 +629,18 @@ function renderBar(data) {
   if (!notices) return
   const lines = []
   if (data.crashedLastRun) {
-    lines.push(['warn', '上次結束時風扇還在手動模式。手動 PWM 是留在晶片裡的，事後也還原不回去——'
-      + '重新開機才會回到 BIOS 的轉速曲線。'])
+    lines.push(['warn', '上次結束時風扇還在手動模式，重新開機才會回 BIOS 曲線。'])
   }
   if (data.enabled && !data.available) {
-    lines.push(['warn', '感測器目前沒有連線，風扇暫時交由 BIOS 控制。'])
+    lines.push(['warn', '感測器沒有連線，風扇交由 BIOS 控制。'])
   }
   if (state.taskStatus && !state.taskStatus.installed) {
     lines.push(['info', state.taskStatus.canInstall
-      ? '每次啟動感測器都會跳一次系統管理員確認。按右上角「建立排程工作」就可以免確認啟動，開機自啟動時也才接得了風扇。'
+      ? '建立排程工作可免 UAC、並支援開機接管。'
       : state.taskStatus.reason])
   }
   if (data.enabled) {
-    lines.push(['info', 'App 若被強制關閉（工作管理員結束、當機、斷電），風扇會停在最後的轉速；'
-      + '重新開機即回復 BIOS 曲線。每條通道的「轉速下限」就是為此存在的保險。'])
+    lines.push(['info', 'App 被強制關閉時風扇會停在最後轉速；下限就是保險。'])
   }
   const signature = lines.map((l) => l[1]).join('|')
   if (notices.dataset.signature === signature) return

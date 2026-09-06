@@ -333,11 +333,11 @@ async function startTranscription() {
     if (willTranslate && llmChoice.mode === 'local') {
       const llmKey = resolveTranslateModelKey({ localTranslateModel: llmChoice.modelKey }, status.models)
       if (!status.models?.[llmKey]?.downloaded) {
-        throw new Error('本地翻譯模型尚未下載，請先到設定下載')
+        throw new Error('本地翻譯模型未下載，請先到設定下載')
       }
     }
     if (willTranslate && llmChoice.mode === 'cloud' && !resolveScopedCloud(settings, scope.llm).ready) {
-      throw new Error('雲端翻譯還沒選好供應商與模型，請在這一頁的「翻譯模型」挑一顆')
+      throw new Error('雲端翻譯未設定，請在這頁挑「翻譯模型」')
     }
 
     // 本地：先載 ASR；雲端 ASR 不載 sherpa（串流過程長，LLM 等 ASR 完再載）

@@ -556,7 +556,7 @@ function render() {
   const fragment = document.createDocumentFragment()
   for (const account of accounts) fragment.appendChild(createCard(account))
   if (!fragment.childNodes.length) {
-    fragment.appendChild(createElement('p', 'usage-grid-empty', '所有項目都已隱藏，可從「顯示設定」重新開啟。'))
+    fragment.appendChild(createElement('p', 'usage-grid-empty', '所有項目都已隱藏'))
   }
   grid.replaceChildren(fragment)
   renderSummary()

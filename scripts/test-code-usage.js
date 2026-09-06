@@ -109,6 +109,15 @@ console.log('\n[A] 模型正規化與單價')
   ok('壞掉的自訂單價丟掉', Object.keys(custom).length === 1, Object.keys(custom).join(','))
   ok('自訂單價蓋過內建', pricing.priceFor('gpt-5.6-sol', custom).input === 1.25)
 
+  // 新增主流模型單價與收斂規則
+  ok('kimi-k2.6:cloud 收斂成 kimi-k2.6', pricing.normalizeModel('kimi-k2.6:cloud') === 'kimi-k2.6')
+  ok('claude-3-7-sonnet 收斂成 claude-3.7-sonnet', pricing.normalizeModel('claude-3-7-sonnet') === 'claude-3.7-sonnet')
+  ok('gpt-5.4 內建單價正確', pricing.priceFor('gpt-5.4')?.input === 2.5 && pricing.priceFor('gpt-5.4')?.output === 15)
+  ok('claude-3.7-sonnet 內建單價正確', pricing.priceFor('claude-3.7-sonnet')?.input === 3)
+  ok('deepseek-v4-pro 內建單價正確', pricing.priceFor('deepseek-v4-pro')?.input === 0.27)
+  ok('kimi-k2.6 內建單價正確', pricing.priceFor('kimi-k2.6')?.input === 0.6)
+  ok('priceList 支援 extraModels', pricing.priceList({}, ['custom-model-x']).some((m) => m.model === 'custom-model-x' && m.source === 'none'))
+
   // 桶子存的是正規化後的名字，規則改過的話舊桶子掛在舊 key 上、增量掃描碰不到，
   // 所以要靠版本戳自己整份重讀一次（使用者不必去按「全部重讀」）
   ok('沒有版本戳（舊檔）要整份重讀', pricing.needsFullRescan(undefined) === true)
@@ -221,6 +230,20 @@ console.log('\n[C] Codex 解析')
   ok('全 0 的那一輪跳過',
     parsers.parseCodexLine(tokenLine({ input_tokens: 0, output_tokens: 0 }, cumulative), state).length === 0)
 
+  // 防每輪前後重複 emit token_count 快照以及 heartbeat 空轉
+  ok('相同 total_tokens 的重複 emit 快照被過濾',
+    parsers.parseCodexLine(tokenLine(usage2, cumulative), state).length === 0)
+  ok('心跳空轉（total_tokens 未增加）被過濾',
+    parsers.parseCodexLine(tokenLine(usage1, cumulative), state).length === 0)
+  const usage3 = { input_tokens: 1000, output_tokens: 100 }
+  const cumulative3 = { total_tokens: 99999, input_tokens: 70384, output_tokens: 2294 }
+  const c = parsers.parseCodexLine(tokenLine(usage3, cumulative3), state)
+  ok('total_tokens 推進的新輪次正常計入', c.length === 1)
+
+  // UUIDv7 毫秒解析
+  ok('uuidv7Ms 解析正確', parsers.uuidv7Ms('019f6eb5-1b12-7063-9b39-5dac35754713') > 1700000000000)
+  ok('非 uuidv7 回傳 0', parsers.uuidv7Ms('not-a-uuid') === 0)
+
   // 子代理／fork 的 rollout：開頭是母 thread 整份歷史的重播（母檔已經算過），
   // 收下來就是憑空多一份用量，而且重播段落沒有 turn_context → 全記成 unknown
   const forked = parsers.newState()
@@ -239,6 +262,38 @@ console.log('\n[C] Codex 解析')
   ok('第一個 turn_context 之後重播結束', forked.replay === false)
   const real = parsers.parseCodexLine(tokenLine(usage2, usage2), forked)
   ok('新的一輪照常計入', real.length === 1 && real[0].model === 'gpt-5.6-sol')
+
+  // 真實 UUIDv7 子代理／fork 重播場景：
+  // 母 thread 歷史輪次（舊時間戳）在 fork 檔案開頭重播，即便每一輪都帶 turn_context 也不會誤切為 false
+  const childSessionId = '019f6eb5-1b12-7063-9b39-5dac35754713' // 2026-07-17 06:13:10
+  const parentTurnId = '019f4aa8-49a8-7d83-bc8b-332826c35883'   // 2026-07-10 14:15:00（母 thread 舊輪次）
+  const liveChildTurnId = '019f6edd-03d9-7262-bee6-4b3f1977ca3b' // 2026-07-17 06:56:46（子代理真輪次）
+
+  const v7Fork = parsers.newState()
+  parsers.parseCodexLine(JSON.stringify({
+    type: 'session_meta',
+    timestamp: '2026-07-17T06:13:10.898Z',
+    payload: { id: childSessionId, forked_from_id: '019f4aa2-f6de-7ac0-859a-8b108ee6da1b' }
+  }), v7Fork)
+  ok('UUIDv7 fork 初始標記為重播', v7Fork.replay === true && v7Fork.sessionStartMs > 0)
+
+  // 母 thread 歷史重播帶有 turn_context，其 turn_id 是舊時間戳
+  parsers.parseCodexLine(JSON.stringify({
+    type: 'turn_context',
+    payload: { turn_id: parentTurnId, model: 'gpt-5.6-sol' }
+  }), v7Fork)
+  ok('母 thread 歷史重播的 turn_context 維持 replay = true', v7Fork.replay === true)
+  ok('母 thread 重播段落 token_count 不計入',
+    parsers.parseCodexLine(tokenLine(usage1, usage1), v7Fork).length === 0)
+
+  // 子代理真實新輪次開始
+  parsers.parseCodexLine(JSON.stringify({
+    type: 'turn_context',
+    payload: { turn_id: liveChildTurnId, model: 'gpt-5.6-sol' }
+  }), v7Fork)
+  ok('子代理真實新輪次的 turn_context 結束重播', v7Fork.replay === false)
+  const childEvent = parsers.parseCodexLine(tokenLine(usage2, usage2), v7Fork)
+  ok('子代理真實新輪次 token_count 正常計入', childEvent.length === 1 && childEvent[0].model === 'gpt-5.6-sol')
 
   const plain = parsers.newState()
   parsers.parseCodexLine(JSON.stringify({
@@ -291,7 +346,10 @@ console.log('\n[D] Grok Build 解析')
   ok('模型取自 modelUsage', events[0].model === 'grok-4.5-build')
   ok('input 扣掉 cachedRead', events[0].input === 103020 - 72192)
   ok('requests 用 modelCalls', events[0].requests === 3)
-  ok('花費由來源提供（1e9 ticks = 1 USD）', Math.abs(events[0].costUsd - 0.957176) < 1e-9, String(events[0].costUsd))
+  // 官方 CLI 文件的 4.6 範例也使用 1 USD = 1e10 ticks。
+  ok('花費由來源提供（4.5 是 1e10 ticks = 1 USD）', Math.abs(events[0].costUsd - 0.0957176) < 1e-9, String(events[0].costUsd))
+  const events46 = parsers.parseGrokLine(turn('p3', 'grok-4.6-build'), parsers.newState())
+  ok('4.6 也使用官方 1e10 ticks', Math.abs(events46[0].costUsd - 0.0957176) < 1e-9, String(events46[0].costUsd))
   ok('秒級時間戳轉毫秒', events[0].ts === 1785834935 * 1000)
 
   ok('同一個 prompt_id 只算一次', parsers.parseGrokLine(turn('p1', 'grok-4.5-build'), state).length === 0)
@@ -305,6 +363,20 @@ console.log('\n[D] Grok Build 解析')
     params: { update: { sessionUpdate: 'turn_completed', prompt_id: 'p3', usage: { inputTokens: 10, outputTokens: 5 } } }
   }), state)
   ok('沒有逐模型細目時仍算得出來', noDetail.length === 1 && noDetail[0].model === 'unknown')
+
+  // 取消或中斷的 turn（全 0 token 且無呼叫）不產生任何事件
+  const cancelled = parsers.parseGrokLine(JSON.stringify({
+    timestamp: 1785834940,
+    params: {
+      update: {
+        sessionUpdate: 'turn_completed',
+        prompt_id: 'p_cancel',
+        stop_reason: 'cancelled',
+        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, modelCalls: 0 }
+      }
+    }
+  }), state)
+  ok('Grok 取消事件（全 0 token）不產生假 unknown 事件', cancelled.length === 0)
 }
 
 // ===== 桶子與統計 =====
@@ -340,6 +412,12 @@ console.log('\n[E] 桶子與統計')
   codeusage.addEvent(buckets, 'claude', { ts: base + 60_000, model: '', input: 2, output: 2, requests: 1 })
   ok('讀不到模型（unknown）照樣要記，不能一起丟掉',
     [...buckets.values()].some((item) => item.model === 'unknown'))
+
+  // 0 token 且無花費的事件不建桶
+  const zeroMap = new Map()
+  codeusage.addEvent(zeroMap, 'grok', { ts: base, model: 'unknown', input: 0, output: 0, requests: 1 })
+  ok('addEvent 全 0 token 且無花費不建桶', zeroMap.size === 0)
+
   // 舊檔裡已經記進去的假 id，讀檔時就要濾掉（不必等使用者去按重掃）
   const junkFile = codeusage.loadBuckets([
     { ts: base, provider: 'claude', model: 'm', input: 2, output: 2, requests: 1, reportedCost: null },
@@ -347,6 +425,13 @@ console.log('\n[E] 桶子與統計')
   ])
   ok('舊檔裡的假 id 讀檔時濾掉', junkFile.size === 1 && junkFile.has(`${base}|claude|claude-opus-5`),
     String(junkFile.size))
+
+  // 0 token 幽靈桶子（取消請求留下來的）讀檔時直接濾掉
+  const phantomFile = codeusage.loadBuckets([
+    { ts: base, provider: 'grok', model: 'unknown', input: 0, output: 0, requests: 1, reportedCost: null },
+    { ts: base, provider: 'claude', model: 'claude-opus-5', input: 10, output: 1, requests: 1, reportedCost: null }
+  ])
+  ok('0 token 幽靈桶子讀檔時濾掉', phantomFile.size === 1 && phantomFile.has(`${base}|claude|claude-opus-5`))
 
   // withCost：有來源花費用來源的，沒有就用單價表，都沒有就 null
   const reported = codeusage.withCost({ ...grok }, {})
@@ -432,23 +517,77 @@ console.log('\n[F] 增量掃描')
     await scan.scanSource(source, cursors, (event) => first.push(event), 0)
     ok('第一次讀到兩筆', first.length === 2, String(first.length))
     ok('游標記下位移', cursors[file].offset === fs.statSync(file).size)
+    ok('游標持久化去重識別', Array.isArray(cursors[file].seen)
+      && cursors[file].seen.includes('m1') && cursors[file].seen.includes('m2'),
+    JSON.stringify(cursors[file].seen))
+    // electron-store 落盤後再讀回來會是普通 JSON，不是原本的 JS 物件。
+    const persistedCursors = JSON.parse(JSON.stringify(cursors))
 
     // 沒有新內容 → 不應該再算一次
     const second = []
-    await scan.scanSource(source, cursors, (event) => second.push(event), 0)
+    await scan.scanSource(source, persistedCursors, (event) => second.push(event), 0)
     ok('沒有新內容時不重複計算', second.length === 0, String(second.length))
 
     // 附加一行 → 只讀新的那一段
-    fs.appendFileSync(file, `${mkLine('m3')}\n`)
+    fs.appendFileSync(file, `${mkLine('m2')}\n${mkLine('m3')}\n`)
     const third = []
-    await scan.scanSource(source, cursors, (event) => third.push(event), 0)
-    ok('附加後只讀新的那一行', third.length === 1, String(third.length))
+    await scan.scanSource(source, persistedCursors, (event) => third.push(event), 0)
+    ok('附加後相同識別不重複、新行照收', third.length === 1 && third[0].input === 10, String(third.length))
 
     // 檔案被截斷（Grok rewind）→ 整份重讀
-    fs.writeFileSync(file, `${mkLine('m9')}\n`)
+    fs.writeFileSync(file, `${mkLine('m2')}\n`)
     const fourth = []
-    await scan.scanSource(source, cursors, (event) => fourth.push(event), 0)
-    ok('檔案變小時整份重讀', fourth.length === 1, String(fourth.length))
+    await scan.scanSource(source, persistedCursors, (event) => fourth.push(event), 0)
+    ok('檔案變小時整份重讀且清掉舊去重狀態', fourth.length === 1, String(fourth.length))
+
+    // 寫入中的 JSONL 最後一行可能還沒收尾；游標只能推到最後一個完整換行，
+    // 否則下一次補上尾端時會從 EOF 開始，這筆用量就永遠消失。
+    const partialDir = path.join(tmp, 'partial')
+    fs.mkdirSync(partialDir)
+    const partialFile = path.join(partialDir, 'partial.jsonl')
+    const partialLine = mkLine('partial')
+    fs.writeFileSync(partialFile, partialLine.slice(0, -1))
+    const partialSource = { ...source, roots: [partialDir] }
+    const partialCursors = {}
+    const partialFirst = []
+    await scan.scanSource(partialSource, partialCursors, (event) => partialFirst.push(event), 0)
+    ok('半行 JSON 不先計算也不推進到 EOF', partialFirst.length === 0
+      && partialCursors[partialFile].offset === 0, JSON.stringify(partialCursors[partialFile]))
+    fs.appendFileSync(partialFile, '}\n')
+    const partialSecond = []
+    await scan.scanSource(partialSource, partialCursors, (event) => partialSecond.push(event), 0)
+    ok('補完整行後下一輪只計算一次', partialSecond.length === 1
+      && partialCursors[partialFile].offset === fs.statSync(partialFile).size, String(partialSecond.length))
+
+    // Grok 的 prompt_id 也要跨 electron-store 落盤後保留，否則同一輪重播會再加一次。
+    const grokDir = path.join(tmp, 'grok-session')
+    fs.mkdirSync(grokDir)
+    const grokFile = path.join(grokDir, 'updates.jsonl')
+    const grokLine = (id) => JSON.stringify({
+      timestamp: new Date().toISOString(),
+      params: { update: {
+        sessionUpdate: 'turn_completed',
+        prompt_id: id,
+        usage: { inputTokens: 10, outputTokens: 5 }
+      } }
+    })
+    fs.writeFileSync(grokFile, `${grokLine('prompt-1')}\n`)
+    const grokSource = {
+      provider: 'grok',
+      roots: [grokDir],
+      match: (name) => name === 'updates.jsonl',
+      parseLine: parsers.parseGrokLine,
+      newState: parsers.newState
+    }
+    const grokCursors = {}
+    const grokFirst = []
+    await scan.scanSource(grokSource, grokCursors, (event) => grokFirst.push(event), 0)
+    const storedGrokCursors = JSON.parse(JSON.stringify(grokCursors))
+    fs.appendFileSync(grokFile, `${grokLine('prompt-1')}\n${grokLine('prompt-2')}\n`)
+    const grokSecond = []
+    await scan.scanSource(grokSource, storedGrokCursors, (event) => grokSecond.push(event), 0)
+    ok('Grok 的 prompt_id 跨次去重', grokFirst.length === 1 && grokSecond.length === 1
+      && grokSecond[0].requests === 1, String(grokSecond.length))
 
     // 保留期外的檔案不掃
     const outside = []
@@ -506,7 +645,41 @@ console.log('\n[F] 增量掃描')
     ok('turn_context 之後的新用量照收', fk3.length === 1 && fk3[0].model === 'gpt-5.6-sol', String(fk3.length))
     fs.rmSync(fkDir, { recursive: true, force: true })
 
+    // session 檔從 sessions/ 搬進 archived_sessions/：游標若認絕對路徑，
+    // 搬完整份從 0 重讀、整個 session 的用量算兩次。keyOf 給「跟著檔案走」的 key
+    const mvLive = path.join(tmp, 'live'), mvArch = path.join(tmp, 'archived')
+    fs.mkdirSync(mvLive, { recursive: true })
+    fs.mkdirSync(mvArch, { recursive: true })
+    const mvFile = path.join(mvLive, 'rollout-move-11111111-2222-3333-4444-555555555555.jsonl')
+    fs.writeFileSync(mvFile, `${JSON.stringify({
+      type: 'session_meta', timestamp: new Date().toISOString(), payload: { model: 'gpt-5.6-sol' }
+    })}\n${cxTokens()}\n`)
+    const mvSource = {
+      provider: 'codex',
+      roots: [mvLive, mvArch],
+      match: (name) => name.startsWith('rollout-'),
+      parseLine: parsers.parseCodexLine,
+      newState: parsers.newState,
+      keyOf: (f) => path.basename(f)
+    }
+    const mvCursors = {}
+    const mv1 = []
+    await scan.scanSource(mvSource, mvCursors, (event) => mv1.push(event), 0)
+    ok('搬移前算到 1 筆', mv1.length === 1, String(mv1.length))
+    ok('游標 key 用穩定身分（不是路徑）', Object.keys(mvCursors).join(',') === 'codex:rollout-move-11111111-2222-3333-4444-555555555555.jsonl', Object.keys(mvCursors).join(','))
+    fs.renameSync(mvFile, path.join(mvArch, path.basename(mvFile)))
+    const mv2 = []
+    await scan.scanSource(mvSource, mvCursors, (event) => mv2.push(event), 0)
+    ok('搬到 archived 後不重複計算', mv2.length === 0, String(mv2.length))
+    scan.pruneCursors(mvCursors)
+    ok('搬到 archived 後清游標仍保留新路徑', Object.keys(mvCursors).length === 1
+      && mvCursors[Object.keys(mvCursors)[0]].path === path.join(mvArch, path.basename(mvFile)))
+
     // 檔案不見了 → 游標清掉
+    fs.unlinkSync(path.join(mvArch, path.basename(mvFile)))
+    scan.pruneCursors(mvCursors)
+    ok('搬移後檔案不見時游標清掉', Object.keys(mvCursors).length === 0)
+
     fs.unlinkSync(cxFile)
     fs.unlinkSync(file)
     scan.pruneCursors(cursors)

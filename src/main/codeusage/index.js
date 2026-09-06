@@ -112,6 +112,11 @@ function addEvent(buckets, provider, event) {
   // 不是模型名的 id（某些代理會寫 `model: "m"`）直接不收：留著只會在
   // 「未設單價」那一列上永遠掛著一顆使用者填不了單價的東西
   if (pricing.isJunkModel(model)) return
+  const totalTokens = (event.input || 0) + (event.output || 0) + (event.cacheRead || 0)
+    + (event.cacheWrite || 0) + (event.cacheWrite1h || 0) + (event.reasoning || 0)
+  const hasCost = Number.isFinite(event.costUsd) && event.costUsd > 0
+  // 只有 unknown 且 0 token 的空事件（取消請求遺留）才丟棄；有具體模型名的即便 token 為 0 也是真實請求
+  if (model === 'unknown' && totalTokens === 0 && !hasCost) return
   const key = bucketKey(event.ts, provider, model)
   let bucket = buckets.get(key)
   if (!bucket) {
@@ -160,24 +165,34 @@ function loadBuckets(raw) {
     if (!Number.isFinite(ts) || ts < cutoff || !provider || !model) continue
     // 舊檔裡已經記進去的假 id（`m` 之類）讀檔時就丟掉，不必等使用者去按重掃
     if (pricing.isJunkModel(model)) continue
+    const input = Number(item.input) || 0
+    const output = Number(item.output) || 0
+    const reasoning = Number(item.reasoning) || 0
+    const cacheRead = Number(item.cacheRead) || 0
+    const cacheWrite = Number(item.cacheWrite) || 0
+    const cacheWrite1h = Number(item.cacheWrite1h) || 0
+    const totalTokens = input + output + reasoning + cacheRead + cacheWrite + cacheWrite1h
+    // **不可以寫成 `Number.isFinite(Number(item.reportedCost))`**：`Number(null)` 是 0，
+    // 存進 json 的 `reportedCost: null`（＝這家沒自帶花費）會被讀成「來源說花了 0 元」，
+    // `withCost` 就直接回 0 而不去查單價表——症狀是整頁花費恆為 0，而且因為不是 null，
+    // 連「未設單價」的警語都不會出現（實測 all 範圍算出 1645 美元，實際 46794 美元）
+    const reportedCost = typeof item.reportedCost === 'number' && Number.isFinite(item.reportedCost)
+      ? item.reportedCost
+      : null
+    // 0 token 且無實際花費的 unknown 幽靈桶子（例如被取消的請求遺留的 unknown 桶）直接濾除
+    if (model === 'unknown' && totalTokens === 0 && !reportedCost) continue
     buckets.set(`${ts}|${provider}|${model}`, {
       ts,
       provider,
       model,
-      input: Number(item.input) || 0,
-      output: Number(item.output) || 0,
-      reasoning: Number(item.reasoning) || 0,
-      cacheRead: Number(item.cacheRead) || 0,
-      cacheWrite: Number(item.cacheWrite) || 0,
-      cacheWrite1h: Number(item.cacheWrite1h) || 0,
+      input,
+      output,
+      reasoning,
+      cacheRead,
+      cacheWrite,
+      cacheWrite1h,
       requests: Number(item.requests) || 0,
-      // **不可以寫成 `Number.isFinite(Number(item.reportedCost))`**：`Number(null)` 是 0，
-      // 存進 json 的 `reportedCost: null`（＝這家沒自帶花費）會被讀成「來源說花了 0 元」，
-      // `withCost` 就直接回 0 而不去查單價表——症狀是整頁花費恆為 0，而且因為不是 null，
-      // 連「未設單價」的警語都不會出現（實測 all 範圍算出 1645 美元，實際 46794 美元）
-      reportedCost: typeof item.reportedCost === 'number' && Number.isFinite(item.reportedCost)
-        ? item.reportedCost
-        : null
+      reportedCost
     })
   }
   return buckets
@@ -197,7 +212,9 @@ function jsonlSources() {
       roots: [path.join(home, '.claude', 'projects')],
       match: (name) => name.endsWith('.jsonl'),
       parseLine: parsers.parseClaudeLine,
-      newState: parsers.newState
+      newState: parsers.newState,
+      // 檔名＝session UUID，跟著檔案走
+      keyOf: (file) => path.basename(file)
     },
     {
       provider: 'codex',
@@ -207,7 +224,9 @@ function jsonlSources() {
       ],
       match: (name) => name.endsWith('.jsonl'),
       parseLine: parsers.parseCodexLine,
-      newState: parsers.newState
+      newState: parsers.newState,
+      // 檔名含 UUID；session 會被搬進 archived_sessions，游標不能認絕對路徑
+      keyOf: (file) => path.basename(file)
     },
     {
       provider: 'grok',
@@ -217,7 +236,9 @@ function jsonlSources() {
       ],
       match: (name) => name === 'updates.jsonl',
       parseLine: parsers.parseGrokLine,
-      newState: parsers.newState
+      newState: parsers.newState,
+      // 檔名一律叫 updates.jsonl，session 身分在上一層資料夾名
+      keyOf: (file) => path.basename(path.dirname(file))
     }
   ]
 }
@@ -447,12 +468,14 @@ async function stats(query = {}) {
   }
 
   const seriesFrom = from || (rows.length ? Math.min(...rows.map((row) => row.ts)) : to)
+  const uncostedList = [...uncosted].sort()
   return {
     range: rangeKey,
     bucket: range.bucket,
     from: seriesFrom,
     to,
     syncedAt: Number(s.get('syncedAt', 0)) || 0,
+    needsRescan: pricing.needsFullRescan(s.get('rulesVersion', 0)),
     summary,
     series: fillSeries(rows, seriesFrom, to, range.bucket),
     models: [...byModel.values()].sort((a, b) => b.tokens - a.tokens).slice(0, MAX_MODEL_ROWS),
@@ -462,8 +485,8 @@ async function stats(query = {}) {
       note: item.note || '',
       ...(byProvider.get(item.key) || { ...emptyTotals(), uncosted: false })
     })),
-    uncostedModels: [...uncosted].sort(),
-    prices: pricing.priceList(custom)
+    uncostedModels: uncostedList,
+    prices: pricing.priceList(custom, uncostedList)
   }
 }
 

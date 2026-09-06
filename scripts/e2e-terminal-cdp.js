@@ -19,6 +19,7 @@ const PORT = 9247
 // 這時可以打包到別的資料夾再用 VOICEINK_EXE 指過去，測試不必等鎖放掉
 const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
 const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-e2e-terminal-'))
+fs.writeFileSync(path.join(USER_DATA_DIR, 'config.json'), JSON.stringify({ sysmonSensors: false }))
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -464,6 +465,9 @@ async function main() {
       await new Promise((r) => setTimeout(r, 400))
       document.querySelector('.nav-tab[data-page="chat"]').click()
       await new Promise((r) => setTimeout(r, 1200))
+      // 終端機清單在專案面板下半，先切到專案那一塊再量
+      document.querySelector('.sidebar-mode[data-mode="projects"]').click()
+      await new Promise((r) => setTimeout(r, 300))
       const pill = document.querySelector('#termList .term-list-item[data-id="${adminId}"] .term-admin')
       if (!pill) return { found: false }
       return { found: true, text: pill.textContent, w: pill.offsetWidth, h: pill.offsetHeight }

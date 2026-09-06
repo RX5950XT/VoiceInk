@@ -7,7 +7,7 @@
 ## 1. 這是什麼
 
 **VoiceInk**（v1.12.0）：Windows 桌面 AI 工作台，Electron 43.4.1 ＋ Vite ＋ Vanilla JS（無框架）。
-九個分頁：聊天（終端機併在同一頁）｜CC代理｜額度（＋用量統計）｜AGY 反代｜語音轉文字｜翻譯與 TTS｜系統監控（含風扇控制）｜HF模型｜設定。
+九個分頁：聊天（**專案工作區與終端機併在同一頁**：側欄兩顆鈕切專案／對話，終端機清單在專案面板下半，中間有分頁列，右邊是檔案總管／Git／AI 記錄；Ctrl+P 快速開檔、Ctrl+W／Ctrl+Tab 管分頁、檔案樹可用方向鍵走、可多選與拖曳搬檔；編輯器是 Monaco，Git 面板含 worktree）｜CC代理｜額度（＋用量統計）｜AGY 反代｜語音轉文字｜翻譯與 TTS｜系統監控（含使用時長／風扇控制／效能調整）｜HF模型｜設定。
 
 模組職責、資料流與 store key 一覽在 [CONTEXT.md](./CONTEXT.md) 的「架構」一節；
 每個模組的實作限制在 [CLAUDE.md](./CLAUDE.md) 的「地雷」。
@@ -27,7 +27,15 @@
 - 所有外部輸入（使用者輸入、API 回應、檔案內容）都要驗證；例外不可靜默吞掉，邊界回結構化錯誤。
 - console 只記可公開的狀態摘要：**不得記錄 API response body、token、外部錯誤原文或本機憑證內容**
   （詳見 CLAUDE.md「安全底線」，回歸測試 `test-error-hygiene.js`）。
-- 設定走 electron-store IPC 且 key 僅 allowlist；聊天／終端機／AGY／語音輸入／用量統計各有獨立 store 與 IPC。
+- 設定走 electron-store IPC 且 key 僅 allowlist；聊天／終端機／工作區／AGY／語音輸入／用量統計各有獨立 store 與 IPC。
+- **UI 一律禁用強調條／裝飾條**（方框左邊一條粗粗的彩色條，例如 `border-left: 3px solid <accent>` 或
+  標題前的色票偽元素）。強調走完整 1px 邊框、底色 tint 或字級／顏色本身，新樣式不准長出這種條。
+- **說明文字精簡**：空狀態 ≤ 12 字、hint 只留「這是什麼」不教操作；改文案後要 grep 測試腳本
+  同步斷言字串。防誤解的最短說法（數字為什麼長這樣）不準刪光。
+  反過來，**測試不可以用「字數大於 N」當斷言**——文案一收乾淨就變假紅燈，要驗的是有沒有講原因。
+- **刪功能時把「定義／exports／IPC 白名單／preload／renderer 呼叫點」一起掃**：
+  `module.exports` 留一個沒定義的名字＝該模組載入期就 ReferenceError，整組 IPC 回通用錯誤，
+  而 `node --check` 與單元測試全綠（要 electron 才 require 得起來）。
 
 ## 4. 建置與預覽
 
@@ -75,6 +83,8 @@ App 內有自動更新（設定 → 基本），**它完全靠這條流程產出
   「讓機器做某件事」的功能要用第三方工具量結果，不能只看 App 自己回報的狀態。
 - **使用者同時在用電腦時**，桌面 QA 只能用 CDP／視窗 API 背景操作；
   不可移動滑鼠、發全域快捷鍵或搶前景焦點。語音輸入測試一定要把 `insert` 換成 stub。
+  唯一的例外是讀剪貼簿（`navigator.clipboard.readText()` 沒有焦點就丟 `NotAllowedError`），
+  這種測試要在檔頭寫明「會把視窗叫到最前面」（`e2e-ux-tweaks-cdp.js`）。
 - **CDP 測試只可用自己 spawn 的 `child.pid` 搭 `taskkill /PID /T` 收尾**，禁止 `/IM VoiceInk.exe`；
   一律用暫存 `--user-data-dir`，並用 `[data-id="…"]` 指涉自己建的資料（不可用「第一列」或總數）。
 
