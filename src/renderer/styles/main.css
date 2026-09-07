@@ -3257,6 +3257,15 @@ body:has(.ws-monaco .find-widget.visible) .workbench-hover-container {
   background-color: var(--surface-hover);
 }
 
+/* .gitignore 排除的：淡一階，但別淡到讀不出檔名 */
+.ws-tree-row.is-ignored {
+  color: var(--text-tertiary);
+}
+
+.ws-tree-row.is-ignored:hover {
+  color: var(--text-secondary);
+}
+
 .ws-tree-row.is-dir {
   font-weight: 600;
 }

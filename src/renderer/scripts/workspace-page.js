@@ -657,7 +657,7 @@ async function appendLevel(project, relPath, host, depth, seq, request) {
 
 /**
  * @param {{ id: string, name: string }} project
- * @param {{ name: string, rel: string, dir: boolean }} entry
+ * @param {{ name: string, rel: string, dir: boolean, ignored?: boolean }} entry
  * @param {number} depth
  * @returns {HTMLElement}
  */
@@ -669,6 +669,11 @@ function buildTreeRow(project, entry, depth) {
   row.dataset.rel = entry.rel
   row.dataset.depth = String(depth)
   if (entry.dir) row.dataset.dir = '1'
+  // 被 .gitignore 排除的變暗：看得到、點得開，但一眼知道提交不會帶到
+  if (entry.ignored) {
+    row.classList.add('is-ignored')
+    row.title = `${entry.rel}（被 .gitignore 排除，不會提交）`
+  }
   // 鍵盤只在樹**整體**進出一次（roving tabindex）：每一列都能 Tab 進去的話，
   // 幾百列的樹會讓 Tab 鍵完全沒用。
   row.tabIndex = -1
