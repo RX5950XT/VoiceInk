@@ -22,7 +22,7 @@ async function main() {
     handleEditorKeydown: noop, initFindWidget: () => ({ openFind: noop, closeFind: noop }),
     parseUnifiedDiff: () => [], renderDiffLines: noop,
     loadMonaco: async () => null, ensureEditor: noop, showMonacoTab: noop, runAction: () => false,
-    disposeModel: noop, retargetModel: noop, revealLine: noop, cursorInfo: () => null, currentValue: () => null,
+    disposeModel: noop, disposeModelsExcept: noop, retargetModel: noop, revealLine: noop, cursorInfo: () => null, currentValue: () => null,
     pushValue: noop, showDiff: noop,
     gitStatusShared: async () => ({ ok: false }), invalidateGitStatus: noop,
     CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init?.detail } },

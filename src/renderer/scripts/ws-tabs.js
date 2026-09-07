@@ -2,15 +2,16 @@ import { electronAPI, showToast, setChatPaneMode } from './app.js'
 import { renderMarkdown } from './markdown.js'
 import { showMenu } from './ws-menu.js'
 import { gitStatusShared, invalidateGitStatus } from './ws-git-status.js'
-import { updateGutter, updateIdeStatus, handleEditorKeydown, initFindWidget } from './ws-ide.js'
+import { updateGutter, updateIdeStatus, handleEditorKeydown, initFindWidget, getLanguageName } from './ws-ide.js'
 import { parseUnifiedDiff, renderDiffLines } from './ws-diff.js'
 import {
   loadMonaco, ensureEditor, showTab as showMonacoTab, runAction,
-  disposeModel, retargetModel, revealLine, cursorInfo, currentValue, pushValue, showDiff,
+  disposeModel, disposeModelsExcept, retargetModel, revealLine, cursorInfo, currentValue, pushValue, showDiff,
   selectionInfo, diffGoTo, diffChangeCount, diffCursor
 } from './ws-monaco.js'
 import { paintAiSession } from './ws-ai-session.js'
 import { nextZoom } from './ws-zoom.js'
+import { toolIcon } from './ws-tool-icons.js'
 import {
   addComment, listComments, removeComment, clearComments, countComments,
   formatComments, sendToChat
@@ -83,8 +84,6 @@ const el = {}
  * @type {any}
  */
 let monaco = null
-/** 編輯器內容變動時要回呼的那支（在 `initWsTabs` 裡才組得出來） */
-let notifyEditorChange = () => {}
 /** 試載過了沒（失敗只試一次，不要每開一個檔就再等一輪逾時） */
 let monacoTried = false
 /** 還沒跳到的那一行（Monaco 掛好之前先記著） */
@@ -1149,14 +1148,57 @@ async function useMonaco(tab) {
 }
 
 /**
- * Monaco 改了內容 → 同步回 textarea，再走原本那條變動流程。
- * 這樣「髒了沒」「草稿存檔」「外部變更偵測」全部一行都不用改。
+ * 那份影子 `<textarea>` 的延後同步。
+ *
+ * Monaco 在的時候它才是內容來源，textarea 只是「存檔／草稿／尋找取代退路」在讀的
+ * 一份影子。每敲一個字就把整份倒過去，大檔案就是每個字複製好幾 MB——
+ * 停下來再倒一次就夠（存檔與切分頁那兩條路都不靠它，各自有更新的來源）。
+ */
+let shadowValue = null
+let shadowTimer = 0
+
+/** @param {string} value */
+function scheduleShadowSync(value) {
+  shadowValue = value
+  if (shadowTimer) return
+  shadowTimer = window.setTimeout(flushShadowSync, 200)
+}
+
+function flushShadowSync() {
+  window.clearTimeout(shadowTimer)
+  shadowTimer = 0
+  if (shadowValue === null) return
+  const text = /** @type {HTMLTextAreaElement | null} */ (el.editorText)
+  if (text) text.value = shadowValue
+  shadowValue = null
+}
+
+/** 換分頁時取消：那一份是上一個檔案的內容，倒進去等於把畫面上的檔案換掉 */
+function cancelShadowSync() {
+  window.clearTimeout(shadowTimer)
+  shadowTimer = 0
+  shadowValue = null
+}
+
+/**
+ * Monaco 改了內容。「髒了沒」「草稿存檔」照舊，只有那份影子 textarea 與
+ * 行號欄／狀態列改成不再每個字重算一遍（見 `scheduleShadowSync`）。
  * @param {string} value
  */
 function onMonacoValue(value) {
-  const text = /** @type {HTMLTextAreaElement | null} */ (el.editorText)
-  if (text) text.value = value
-  notifyEditorChange()
+  scheduleShadowSync(value)
+  const tab = findTab(activeId)
+  if (tab && tab.kind === 'editor') {
+    if (typeof tab.savedContent !== 'string') tab.savedContent = tab.content || ''
+    const changed = value !== tab.content
+    tab.content = value
+    const dirty = value !== tab.savedContent
+    if (dirty !== tab.dirty) {
+      tab.dirty = dirty
+      renderTabs()
+    }
+    if (changed) schedulePersistTabs()
+  }
   paintMonacoStatus()
 }
 
@@ -1198,6 +1240,7 @@ function paintEditor(tab) {
   if (el.unsupported) el.unsupported.hidden = true
   if (el.ideStatusbar) el.ideStatusbar.hidden = false
 
+  cancelShadowSync()
   text.value = tab.content || ''
   text.readOnly = Boolean(tab.readonly)
   void useMonaco(tab)
@@ -1216,22 +1259,33 @@ function paintEditor(tab) {
   }
   if (el.editorSaveBtn) el.editorSaveBtn.hidden = Boolean(tab.readonly)
 
-  if (el.ideGutter) updateGutter(text, el.ideGutter)
-  updateIdeStatus({
-    textarea: text,
-    relPath: tab.relPath || '',
-    cursorPosEl: el.ideCursorPos,
-    selectionEl: el.ideSelection,
-    fileInfoEl: el.ideFileInfo,
-    encodingEl: el.ideEncoding,
-    langEl: el.ideLang
-  })
+  // Monaco 接手之後行號欄是 hidden 的，狀態列也由 `paintMonacoStatus` 蓋過去：
+  // 這兩支各要把整份內容掃一遍（組全部行號、兩次 `split('\n')`、一顆 `Blob`），
+  // 大檔案切個分頁就白花好幾十毫秒。只有退回 textarea 的那條路需要它們。
+  if (!monaco) {
+    if (el.ideGutter) updateGutter(text, el.ideGutter)
+    updateIdeStatus({
+      textarea: text,
+      relPath: tab.relPath || '',
+      cursorPosEl: el.ideCursorPos,
+      selectionEl: el.ideSelection,
+      fileInfoEl: el.ideFileInfo,
+      encodingEl: el.ideEncoding,
+      langEl: el.ideLang
+    })
+  } else {
+    if (el.ideLang) el.ideLang.textContent = getLanguageName(tab.relPath || '')
+    if (el.ideEncoding) el.ideEncoding.textContent = 'UTF-8'
+  }
 
   paintPreview(tab)
 }
 
 /** 預覽區目前的縮放倍率（Ctrl+滾輪）。整個工作區共用一顆，換分頁不會突然跳回 100% */
 let previewZoom = 1
+
+/** 預覽區現在畫的是哪一份（分頁 id ＋ 來源字串），一樣就不重畫 */
+let previewKey = { id: '', source: null }
 
 /**
  * 預覽區的 Ctrl+滾輪縮放。容器只有一個，所以 listener 也只掛一次。
@@ -1284,9 +1338,16 @@ function paintPreview(tab) {
   container.hidden = on
   box.hidden = !on
   if (!on) {
-    if (text && el.ideGutter) updateGutter(text, el.ideGutter)
+    if (!monaco && text && el.ideGutter) updateGutter(text, el.ideGutter)
     return
   }
+
+  // 已經是同一個分頁、同一份內容就不重畫。以前每次切回來都要重跑一次
+  // Markdown 解析／重建 iframe／把整份 PDF 從 base64 解出來再重新排版一次。
+  // 比的是內容字串本身（不是長度）：同長度的修改也要重畫。
+  const source = tab.pdf || tab.audio || tab.video || tab.image || (tab.content || '')
+  if (previewKey.id === tab.id && previewKey.source === source && box.firstChild) return
+  previewKey = { id: tab.id, source }
 
   if (tab.pdf) {
     void paintPdf(tab, box)
@@ -1321,11 +1382,11 @@ function paintPreview(tab) {
     frame.className = 'ws-editor-frame'
     frame.setAttribute('sandbox', 'allow-scripts')
     frame.setAttribute('title', '本機 HTML 預覽')
-    frame.srcdoc = text?.value || tab.content || ''
+    frame.srcdoc = source
     box.replaceChildren(frame)
     return
   }
-  box.replaceChildren(renderMarkdown(text?.value || tab.content || ''))
+  box.replaceChildren(renderMarkdown(source))
 }
 
 /** pdf.js 只在真的開了 PDF 才載（那支 min 檔快 500KB，不該進開機路徑） */
@@ -1449,9 +1510,12 @@ async function saveActiveFile(force = false) {
     return
   }
   saved = result.data
-  if (findTab(activeId) === tab) tab.content = text.value
+  // **要重讀一次現在的內容**：等 main 寫檔的期間使用者可能又打了字，
+  // 直接把 content 塞回去等於把那幾個字吃掉（回歸 test-workspace-state.js）。
+  const after = monaco ? currentValue() : text.value
+  if (findTab(activeId) === tab && typeof after === 'string') tab.content = after
   tab.savedContent = content
-  tab.dirty = tab.content !== content
+  tab.dirty = (tab.content || '') !== content
   tab.mtimeMs = saved?.mtimeMs || Date.now()
   if (findTab(activeId) === tab) hideExtBanner()
   renderTabs()
@@ -1650,6 +1714,7 @@ async function paintDiffBody(tab) {
   if (el.diffContent) el.diffContent.hidden = true
   el.diffMonaco.hidden = false
   showDiff(monaco, el.diffMonaco, {
+    id: tab.id,
     original: tab.versions.original,
     modified: tab.versions.modified,
     relPath: tab.relPath || ''
@@ -2048,6 +2113,25 @@ const NEW_ITEMS = [
   { preset: 'grok', label: 'Grok' }
 ]
 
+/**
+ * 選單的一列：圖示 ＋ 文字。圖示名字不認得時只畫文字（不要留一個空方框）。
+ * @param {string} icon
+ * @param {string} label
+ * @returns {HTMLButtonElement}
+ */
+function newMenuItem(icon, label) {
+  const btn = document.createElement('button')
+  btn.type = 'button'
+  btn.className = 'ws-new-item'
+  btn.setAttribute('role', 'menuitem')
+  const svg = toolIcon(icon)
+  if (svg) btn.appendChild(svg)
+  const text = document.createElement('span')
+  text.textContent = label
+  btn.appendChild(text)
+  return btn
+}
+
 /** @type {HTMLElement | null} */
 let menuEl = null
 
@@ -2085,11 +2169,7 @@ function toggleMenu() {
   admin.append(adminInput, document.createTextNode('以系統管理員身分執行'))
 
   for (const item of NEW_ITEMS) {
-    const btn = document.createElement('button')
-    btn.type = 'button'
-    btn.className = 'ws-new-item'
-    btn.setAttribute('role', 'menuitem')
-    btn.textContent = item.label
+    const btn = newMenuItem(item.preset, item.label)
     btn.addEventListener('click', () => {
       const asAdmin = adminInput.checked
       closeMenu()
@@ -2103,22 +2183,14 @@ function toggleMenu() {
   menuEl.appendChild(sep)
 
   // 「自訂…」是選 shell 與工作目錄的唯一入口（側欄那顆「＋ 終端機」收掉之後）
-  const customBtn = document.createElement('button')
-  customBtn.type = 'button'
-  customBtn.className = 'ws-new-item'
+  const customBtn = newMenuItem('custom', '終端機（自訂…）')
   customBtn.id = 'wsNewCustomTerm'
-  customBtn.setAttribute('role', 'menuitem')
-  customBtn.textContent = '終端機（自訂…）'
   customBtn.addEventListener('click', () => {
     closeMenu()
     void import('./terminal-page.js').then((mod) => mod.openNewTerminalDialog(project?.path || ''))
   })
 
-  const browserBtn = document.createElement('button')
-  browserBtn.type = 'button'
-  browserBtn.className = 'ws-new-item'
-  browserBtn.setAttribute('role', 'menuitem')
-  browserBtn.textContent = '瀏覽器'
+  const browserBtn = newMenuItem('browser', '瀏覽器')
   browserBtn.addEventListener('click', () => {
     closeMenu()
     void openBrowserTab()
@@ -2326,6 +2398,11 @@ export async function setActiveProject(next) {
     // 丟掉的話那個工作階段就再也叫不出來了（側欄已經沒有清單接住它）
     tabs = tabs.filter((t) => t.kind === 'terminal')
   }
+  // 分頁清單換掉了，上一個專案的 Monaco model 沒人收——每切一次專案就多留
+  // 一整份檔案內容（草稿在上面 `persistTabsNow` 的 `stash()` 已經收走了）
+  disposeModelsExcept(tabs.map((t) => t.id))
+  // 還沒倒回去的那份影子是上一個專案的內容，別讓它落到新專案的畫面上
+  cancelShadowSync()
   activeId = ''
   if (!keepTerminal) {
     renderTabs()
@@ -2473,7 +2550,6 @@ export function initWsTabs() {
     // Monaco 開著時游標／行數以它為準（textarea 藏起來後不會再動）
     paintMonacoStatus()
   }
-  notifyEditorChange = onEditorChange
 
   const findController = initFindWidget({
     textarea: /** @type {HTMLTextAreaElement} */ (el.editorText),

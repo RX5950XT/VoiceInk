@@ -751,6 +751,10 @@ async function main() {
     // ===== [N] 檔案樹：增量展開、鍵盤導覽 =====
     await cdp.eval(`document.querySelector('.ws-right-tab[data-panel="files"]').click()`)
     await waitInPage(cdp, `document.querySelectorAll('#wsTree .ws-tree-row').length >= 2`, 8000)
+    // 樹是「先畫根層、再非同步補子層」（`renderTree` 中間還要等一趟 `git status`）：
+    // `rows >= 2` 只代表根層畫好了。這裡要等 [B] 展開的 src 真的把子層補回來，
+    // 否則下面那個「收合」會收到空氣，接著那一下反而變成展開又收起來。
+    await waitInPage(cdp, `document.querySelector('#wsTree .ws-tree-row[data-rel="src/app.js"]')`, 8000)
     // 收合 src（[B] 已經把它展開了），順便在 README 那一列做記號：
     // 展開如果是「整棵重畫」，這個記號會不見。
     await cdp.eval(`(() => {

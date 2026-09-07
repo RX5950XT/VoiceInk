@@ -3,6 +3,48 @@
 > 只留「還沒做完的」與「最近幾輪做了什麼、驗到什麼」。更早的逐項紀錄查 git log。
 > 規則見 [CLAUDE.md](../CLAUDE.md)（＝AGENTS.md），架構見 [CONTEXT.md](../CONTEXT.md)，教訓見 [lessons.md](./lessons.md)。
 
+## 2026-09-07 — 大檔不卡頓、輸入法對位、選單圖示
+
+- [x] 分頁列「＋」選單八個項目各一顆 16px 單色圖示（`ws-tool-icons.js`，零 innerHTML）
+- [x] 終端機中文輸入法：`syncImeCaret` 在 `focus`／`compositionstart`／每次 `fitPane` 把 xterm
+      那個隱形 `<textarea>` 挪到游標那一格；`.composition-view` 改成終端機反白
+- [x] 終端機體驗：排隊輸出接成一段再寫、欄列數沒變就不送 resize、ResizeObserver 合併到下一幀
+- [x] 大檔案／預覽變更：`showDiff` 每分頁快取兩顆 model、`showTab` 改用 `modelText` WeakMap 比對、
+      Monaco 在時跳過行號欄與狀態列、預覽比內容字串本身決定重不重畫
+- [x] 打字不再每個字搬一整份檔案（影子 textarea 改成停手 200ms 才同步）
+- [x] 切專案 `disposeModelsExcept`：model 不再只增不減
+- [x] 紅燈驗證、單元測試、打包版 CDP 實測
+
+**回顧** — 這一輪的成本全在「每次都重做」，不是「做得慢」：
+
+1. **`showDiff` 每次切回來重建兩顆 model**：Monaco 得把兩份檔案重新斷行、重算差異。
+   紅燈：舊版三次呼叫建了 6 顆（新版 2 顆）。
+2. **`showTab` 用 `getValue()` 比對**＝每次切分頁把整份檔案再複製一次。改用 `modelText` 這份 WeakMap。
+3. **每敲一鍵做好幾趟 O(檔案大小)**：整份倒進影子 textarea、兩次全文比對、`updateGutter` 組全部行號、
+   `updateIdeStatus` 兩次 `split('\n')` ＋一顆 `Blob`——而且後兩支在 Monaco 接手後根本沒人看。
+4. **切專案沒收 model**：`tabs` 換掉了但 model 照分頁 id 存著，每切一次就多留一整份檔案內容。
+   實測 3 顆 → 0 顆，來回三趟都是 0。
+5. **輸入法候選字視窗**：xterm 把那個隱形 `<textarea>` 丟在 `left: -9999em`，只有游標移動才挪回來，
+   所以剛切回終端機時系統看到的輸入框在畫面外，候選字視窗被夾到螢幕角落。
+
+另外 `e2e-workspace-cdp` 的 [N] 亮紅：不是產品壞掉，是那支測試在樹還沒補完子層時就讀狀態
+（`renderTree` 中間要等一趟 `git status`，`rows >= 2` 只代表根層畫好了）。效能一改快就露出來了 →
+把等待條件改成等 `src/app.js` 那一列出現。HEAD 版 162/0、修完也是 162/0。
+
+自己踩到一次：把存檔後的 `tab.content = text.value` 改成 `= content`（想省一次全文複製），
+結果把「等 main 寫檔期間又打的字」吃掉——`test-workspace-state.js` 的「存檔守衛」當場紅燈。
+改成存完再讀一次現在的內容（`monaco ? currentValue() : text.value`）。
+
+驗證：`test-workspace` 225/0、`-ui` 92/0、`-state`／`-nav`／`-editor` PASS、
+**`test-workspace-perf` 10/0**（新增）、`test-terminal` 60/0、**`test-terminal-ui` 7/0**（新增）、
+`test-markdown` 23/0、`test-error-hygiene` 82/0；`npm run electron:pack` exit 0；
+打包版 **`probe-workspace-perf.js` 18/18**（新增：1.4MB／4 萬行的檔，編輯器⇄diff 來回 5 趟
+`createModel` 一顆都沒多建；輸入法輸入框量得到在游標那一格；切專案 model 3 → 0）、
+`e2e-terminal-cdp` 46/0、`e2e-workspace-cdp` 162/0、`e2e-cdp-smoke` 22/22、`e2e-visual-cdp`。
+
+**沒做**：`@xterm/addon-webgl`（對 xterm 6.0 只有 beta，拿整個終端機賭一顆 beta renderer 不值得）；
+`updateGutter` 在退回 `<textarea>` 的那條路上仍是 O(行數)，只是不再每個字重組。
+
 ## 2026-09-07 — 長文翻譯修復
 
 - [x] 重現雲端分段、20 秒逾時與輸出截斷

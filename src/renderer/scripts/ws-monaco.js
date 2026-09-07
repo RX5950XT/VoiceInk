@@ -25,6 +25,20 @@ let loading = null
 const models = new Map()
 
 /**
+ * model → 它現在裝的內容。
+ *
+ * 沒有這一份的話，每次切分頁都得 `model.getValue()` 才知道內容有沒有變——那是
+ * 把整個檔案再複製一份出來只為了比對，大檔案切個分頁就是好幾 MB 的垃圾。
+ * 這裡存的是字串**參考**（JS 字串不可變），不佔額外記憶體。
+ *
+ * @type {WeakMap<any, string>}
+ */
+const modelText = new WeakMap()
+
+/** @type {Map<string, { original: any, modified: any, originalText: string, modifiedText: string }>} */
+const diffModels = new Map()
+
+/**
  * 載入 Monaco。**惰性**：只有真的開了編輯器分頁才會走到這裡
  * （那是 16MB 的 AMD 包，不該進開機路徑）。
  *
@@ -150,7 +164,12 @@ const OPTIONS = {
 export function ensureEditor(monaco, host, onChange, onCursor) {
   if (editor) return editor
   editor = monaco.editor.create(host, { ...OPTIONS, value: '', language: 'plaintext' })
-  editor.onDidChangeModelContent(() => onChange(editor.getValue()))
+  editor.onDidChangeModelContent(() => {
+    const value = editor.getValue()
+    const model = editor.getModel()
+    if (model) modelText.set(model, value)
+    onChange(value)
+  })
   editor.onDidChangeCursorSelection(() => onCursor())
   return editor
 }
@@ -166,14 +185,20 @@ export function showTab(monaco, tab) {
   if (!editor) return
   let model = models.get(tab.id)
   const language = languageFor(monaco, tab.relPath || '')
+  const content = tab.content || ''
   if (!model || model.isDisposed()) {
-    model = monaco.editor.createModel(tab.content || '', language)
+    model = monaco.editor.createModel(content, language)
     models.set(tab.id, model)
+    modelText.set(model, content)
   } else {
-    if (model.getValue() !== (tab.content || '')) model.setValue(tab.content || '')
-    monaco.editor.setModelLanguage(model, language)
+    // 比對走 `modelText`（見上面）：`getValue()` 會把整份檔案再複製一次
+    if (modelText.get(model) !== content) {
+      model.setValue(content)
+      modelText.set(model, content)
+    }
+    if (model.getLanguageId() !== language) monaco.editor.setModelLanguage(model, language)
   }
-  editor.setModel(model)
+  if (editor.getModel() !== model) editor.setModel(model)
   editor.updateOptions({ readOnly: Boolean(tab.readonly) })
 }
 
@@ -189,9 +214,15 @@ export function showTab(monaco, tab) {
 export function retargetModel(oldId, newId) {
   if (oldId === newId) return
   const model = models.get(oldId)
-  if (!model) return
-  models.delete(oldId)
-  models.set(newId, model)
+  const pair = diffModels.get(oldId)
+  if (model) {
+    models.delete(oldId)
+    models.set(newId, model)
+  }
+  if (pair) {
+    diffModels.delete(oldId)
+    diffModels.set(newId, pair)
+  }
 }
 
 /**
@@ -202,6 +233,31 @@ export function disposeModel(tabId) {
   const model = models.get(tabId)
   models.delete(tabId)
   if (model && !model.isDisposed()) model.dispose()
+  const pair = diffModels.get(tabId)
+  diffModels.delete(tabId)
+  if (pair) {
+    if (!pair.original.isDisposed()) pair.original.dispose()
+    if (!pair.modified.isDisposed()) pair.modified.dispose()
+  }
+}
+
+/**
+ * 只留下這些分頁的 model，其餘全收掉。
+ *
+ * 切專案時 `tabs` 整個換掉，但這裡的 model 是照分頁 id 存的，沒人來收——
+ * 每切一次專案就多留一整份檔案內容在記憶體裡，開一整天只增不減。
+ *
+ * @param {Iterable<string>} keepIds
+ */
+export function disposeModelsExcept(keepIds) {
+  const keep = new Set(keepIds)
+  for (const id of [...models.keys(), ...diffModels.keys()]) {
+    if (!keep.has(id)) disposeModel(id)
+  }
+  // 顯示中的那份被收掉的話，兩顆編輯器都要放手（不然它們抓著 disposed model）
+  if (editor && editor.getModel()?.isDisposed()) editor.setModel(null)
+  const shown = diffEditor?.getModel()
+  if (shown && (shown.original?.isDisposed() || shown.modified?.isDisposed())) diffEditor.setModel(null)
 }
 
 /**
@@ -284,14 +340,38 @@ export function showDiff(monaco, host, data) {
     })
   }
   const language = languageFor(monaco, data.relPath)
-  const old = diffEditor.getModel()
-  diffEditor.setModel({
-    original: monaco.editor.createModel(data.original || '', language),
-    modified: monaco.editor.createModel(data.modified || '', language)
-  })
-  // 換掉的那兩顆要自己收，`setModel` 不會幫忙
-  old?.original?.dispose()
-  old?.modified?.dispose()
+  const original = data.original || ''
+  const modified = data.modified || ''
+  // 每個 diff 分頁留自己那兩顆 model。以前是每次切回來就重建一對，
+  // Monaco 得把兩份檔案重新斷行、重新算一次差異——大檔案切分頁就是這樣卡住的。
+  let pair = diffModels.get(data.id)
+  if (pair && (pair.original.isDisposed() || pair.modified.isDisposed())) pair = undefined
+  if (!pair) {
+    pair = {
+      original: monaco.editor.createModel(original, language),
+      modified: monaco.editor.createModel(modified, language),
+      originalText: original,
+      modifiedText: modified
+    }
+    diffModels.set(data.id, pair)
+  } else {
+    if (pair.originalText !== original) {
+      pair.original.setValue(original)
+      pair.originalText = original
+    }
+    if (pair.modifiedText !== modified) {
+      pair.modified.setValue(modified)
+      pair.modifiedText = modified
+    }
+    if (pair.original.getLanguageId() !== language) {
+      monaco.editor.setModelLanguage(pair.original, language)
+      monaco.editor.setModelLanguage(pair.modified, language)
+    }
+  }
+  const shown = diffEditor.getModel()
+  if (shown?.original !== pair.original || shown?.modified !== pair.modified) {
+    diffEditor.setModel({ original: pair.original, modified: pair.modified })
+  }
 }
 
 

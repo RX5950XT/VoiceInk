@@ -136,7 +136,16 @@ tag 要與 `package.json` 的 version 一致。
 - 對話與終端機的 `projectId` 是**可選**欄位（缺值＝未分類，卡 `^[A-Za-z0-9_-]{1,64}$`）；`workspaces.json` 的路徑不存在只標 `missing`。
 - 搜尋只收字串不收 regex，四個上限（命中 200／掃 8000 檔／單檔 1MB／15 秒）少一個都會凍住 UI；快速開檔與搜尋共用同一份 `walk`，模糊比對沒命中要回 `null` 不是 `-1`。
 - **圖片先看副檔名回 `data:` URI**，不可走「二進位檔」那條（PNG 含 NUL 會被判成不能編輯）。Electron 43 **沒有內建 PDF 檢視器**，只能用 pdf.js 畫 canvas，且 `workerSrc` 不能給空字串。
-- **Monaco 只能走 AMD 的 `min/vs`**（ESM 那份有 98 個 `import './x.css'`）；`build.files` 只放行 `monaco-editor/min/**`；codicon 是 `data:` 字型、Worker 是 blob（CSP 那兩條少一條就是「看起來壞掉但不報錯」，**沒有 Worker 時 diff 算不出來**）。那份 `<textarea>` 還在而且雙向同步（存檔／草稿／外部變更全讀它）；跳行要等 model 掛上（`pendingGoto`）。
+- **Monaco 只能走 AMD 的 `min/vs`**（ESM 那份有 98 個 `import './x.css'`）；`build.files` 只放行 `monaco-editor/min/**`；codicon 是 `data:` 字型、Worker 是 blob（CSP 那兩條少一條就是「看起來壞掉但不報錯」，**沒有 Worker 時 diff 算不出來**）。那份 `<textarea>` 還在（存檔／草稿／尋找取代退路讀它），但 Monaco 在時**只用防抖同步**——
+  每敲一個字整份倒過去，2MB 的檔就是每個字搬 2MB；跳行要等 model 掛上（`pendingGoto`）。
+- **大檔案的成本都在「每次都重做」，不是「做得慢」**：`showTab` 不可以用 `getValue()` 比對（那是把整份再複製一次，
+  改用 `modelText` 這份 WeakMap）；`showDiff` 每個分頁留自己那兩顆 model（舊版每次切回來重建一對，Monaco 得重新
+  斷行＋重算差異）；Monaco 接手後 `updateGutter`／`updateIdeStatus` 是白工（行號欄 hidden、狀態列被 `paintMonacoStatus`
+  蓋掉），兩支各要掃完整份內容；預覽（Markdown／HTML／PDF）要比**內容字串本身**決定重不重畫，比長度會漏掉同長度的修改。
+- **切專案要 `disposeModelsExcept`**：`tabs` 換掉了，但 model 是照分頁 id 存的，沒人收＝每切一次就多留一整份
+  檔案內容。收之前 `persistTabsNow()` 的 `stash()` 已經把草稿拿走了，順序不可以顛倒。
+- **存檔後要重讀一次現在的內容**（`monaco ? currentValue() : text.value`）：等 main 寫檔的期間使用者可能又打了字，
+  直接把送出去的那份塞回 `tab.content` 會把那幾個字吃掉。回歸 `test-workspace-state.js` 的「存檔守衛」。
 - 內建瀏覽器是 `<webview>`：`webviewTag` **只開在主視窗**、guest 不掛 preload、popup 在 app 層用 `web-contents-created` ＋ `setWindowOpenHandler` 收斂。網址正規化要先照原樣解析、**協定不是 http(s) 才**補 `http://`（`localhost:5173` 會被當成協定）。本機 HTML 預覽用 `srcdoc` ＋ `sandbox="allow-scripts"`，**不給 `allow-same-origin`**。
 - 分頁拖曳是 pointer 跟手＋FLIP（不是 HTML5 DnD），transform 只吃 X、讓位距離用量出來的 gap、要加 `scrollLeft` 變化量；檔案樹的拖曳**刻意**用 HTML5 DnD（兩邊取捨不同，不要統一）。切分頁的 click 掛在 `.ws-tab-open` 不是 `.ws-tab`。
 - 檔案樹展開／收合只動自己那一列後面的子樹（整棵重畫會把捲動位置跳回最上面）。
@@ -151,6 +160,13 @@ tag 要與 `package.json` 的 version 一致。
 - shell 與啟動指令只收 key（固定表），cwd 走系統對話框再 `statSync().isDirectory()`。
 - **管理員終端機**：ConPTY 開不出提權 shell，改用 `Start-Process -Verb RunAs` 再開一份自己代開。host 的 socket 一 close 就 kill 掉所有管理員 shell；一顆 host 服務全部階段（UAC 只跳一次）；host 模式要 `app.setPath('userData', ...temp...)`（提權程序寫進主 userData 會讓檔案擁有者變管理員）。
 - `term.open()` 前要先讓那一格可見（`display:none` 會開出 0×0）；「人在不在看」要看 `#termMain` 不是 `termHost`。
+- **輸入法的候選字視窗跟著那個隱形 `<textarea>` 走**：xterm 平常把它丟在 `left: -9999em`，只有 `onCursorMove` 才挪回來，
+  所以剛開分頁／剛切回來時系統看到的輸入框在畫面外，候選字視窗會被夾到螢幕角落。`syncImeCaret` 在 `focus`、
+  `compositionstart` 與每次 `fitPane` 各對一次位置；**`compositionupdate` 刻意不接**（組字中途由 xterm 自己撐寬度）。
+  `.composition-view` 預設是寫死的黑底白字，要改成終端機的反白。
+- **排隊的輸出要接成一段再寫**：AI CLI 串流一秒上百個小封包，逐段 `await term.write()` ＝每段排一次 timer；
+  合併時 `seq <= 目前` 的片段仍然要丟掉（快照重疊）。`fitCurrent` 欄列數沒變就不要往 main 送 resize，
+  ResizeObserver 也要合併到下一幀。
 - **PTY 不在 App 裡**：`terminal/host.js` 是獨立宿主，執行環境（Electron exe ＋ node-pty ＋ 七支 host 檔）整套複製到 `<userData>/terminal-host/runtime-<內容雜湊>/`——安裝目錄的檔案被更新覆寫時，跑著的 shell 才不會被拖下水。`before-quit` 只 `disconnect()`，**不可以改回 `killAll()`**。
 - **一份執行環境 248MB**：`stageRuntime` 每次改版就多一份，舊的要清掉（能用 `r+` 開啟該份 exe ＝沒人在跑）；建到一半失敗要把 staging 整個刪掉。
 - **系統工具一律指名 `%SystemRoot%\System32`**：PATH 上常擺著 Git Bash 的 MSYS `whoami.exe`／`icacls.exe`，裸名會抓錯那支（libuv 的搜尋順序只看 PATH，不含 System32），症狀是「PowerShell 跑得過、Git Bash 跑不過」。
@@ -277,8 +293,8 @@ tag 要與 `package.json` 的 version 一致。
 | 範圍 | 指令 |
 |---|---|
 | 開發沙箱 | `probe-dev-sandbox.js`（**實測**沙箱讀得到你的模型與供應商，而你正在用的那份一個位元組都沒動；動 `dev-sandbox.js` 前後都要跑）|
-| 專案工作區 | `test-workspace.js`／`-nav`／`-ui`／`-state` ＋ `e2e-workspace-cdp.js`（暫存 user-data-dir ＋自種專案）；動 Monaco 前後跑 `probe-workspace-monaco.js`，動 PDF 前跑 `probe-workspace-pdf.js` |
-| 終端機 | `test-terminal.js` ＋ `e2e-terminal.js`（真 ConPTY）＋ `e2e-terminal-cdp.js` ＋ `test-terminal-host.js`（獨立宿主）；動宿主或 `build.files`／`asarUnpack` 前後跑 `probe-terminal-restart.js`（**打包版**真的關 App、覆寫安裝檔再開回來）；管理員 `probe-terminal-admin.js`（免 UAC）／`probe-terminal-admin-elevate.js`（**跳一次 UAC**）|
+| 專案工作區 | `test-workspace.js`／`-nav`／`-ui`／`-state`／`-perf` ＋ `e2e-workspace-cdp.js`（暫存 user-data-dir ＋自種專案）；動 Monaco 前後跑 `probe-workspace-monaco.js`，動 PDF 前跑 `probe-workspace-pdf.js`；動編輯器／diff／預覽／專案切換前後跑 `probe-workspace-perf.js`（**打包版**開 1.4MB／4 萬行的檔，數 `createModel` 有沒有重做、量輸入法游標位置、驗專案隔離） |
+| 終端機 | `test-terminal.js` ＋ `test-terminal-ui.js`（輸出合併、輸入法對位）＋ `e2e-terminal.js`（真 ConPTY）＋ `e2e-terminal-cdp.js` ＋ `test-terminal-host.js`（獨立宿主）；動宿主或 `build.files`／`asarUnpack` 前後跑 `probe-terminal-restart.js`（**打包版**真的關 App、覆寫安裝檔再開回來）；管理員 `probe-terminal-admin.js`（免 UAC）／`probe-terminal-admin-elevate.js`（**跳一次 UAC**）|
 | 聊天／Markdown | `e2e-chat.js`（mock SSE）＋ `e2e-chat-cdp.js` ＋ `test-markdown.js` |
 | HF模型 | `test-hfmodels.js` ＋ `probe-hf-router.js`（動 runtime 前跑）／`probe-hf-hub.js`／`probe-hf-detail.js`（打真 HF）＋ `e2e-hfmodels.js` ＋ `e2e-hf-cdp.js` |
 | CC代理／閘道 | `test-ccswitch.js` ＋ `e2e-ccswitch-cdp.js`；端點 `probe-ccswitch-endpoints.js`／模型 `probe-ccswitch-models.js`／Codex 參數 `probe-ccswitch-codex.js`；閘道 `test-ccswitch-gateway.js` ＋ `e2e-ccswitch-gateway.js` |

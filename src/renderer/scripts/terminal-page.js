@@ -155,6 +155,35 @@ function themeColors() {
 }
 
 /**
+ * 把 xterm 那份隱形的輸入框挪到游標所在的那一格。
+ *
+ * 中文（或任何輸入法）的候選字視窗是 OS 依「現在的輸入框在哪」畫出來的。
+ * xterm 平常把那個 `<textarea>` 丟在畫面外（`left: -9999em`），只有游標移動時
+ * 才順手挪回游標上——所以剛開分頁、剛切回終端機、還沒打出第一個字之前，
+ * 系統看到的輸入框在畫面外，候選字視窗就被夾到螢幕角落去了。
+ *
+ * 聚焦與開始組字時各對一次位置就夠：組字中途 xterm 自己會跟著調（那時它會
+ * 把寬度撐到組字文字的寬度，這裡不要插手）。
+ *
+ * @param {Terminal} term
+ */
+function syncImeCaret(term) {
+  const area = term.textarea
+  const screen = /** @type {HTMLElement | null} */ (term.element?.querySelector('.xterm-screen'))
+  if (!area || !screen || !term.cols || !term.rows) return
+  const cellW = screen.clientWidth / term.cols
+  const cellH = screen.clientHeight / term.rows
+  if (!cellW || !cellH) return
+  const buffer = term.buffer.active
+  const col = Math.min(buffer.cursorX, term.cols - 1)
+  area.style.left = `${Math.round(col * cellW)}px`
+  area.style.top = `${Math.round(buffer.cursorY * cellH)}px`
+  area.style.width = `${Math.max(Math.round(cellW), 1)}px`
+  area.style.height = `${Math.max(Math.round(cellH), 1)}px`
+  area.style.lineHeight = `${Math.round(cellH)}px`
+}
+
+/**
  * @param {string} id
  * @returns {Pane}
  */
@@ -190,6 +219,12 @@ function createPane(id) {
     if (event.type === 'keydown') term.input('\x1b[13;2u', true)
     return false
   })
+  // 輸入法的候選字視窗要跟著游標，不要跑到螢幕角落（見 `syncImeCaret`）。
+  // `compositionupdate` 刻意不接：組字中途由 xterm 自己撐寬度，接了會被我們縮回一格。
+  const placeIme = () => syncImeCaret(term)
+  term.textarea?.addEventListener('focus', placeIme)
+  term.textarea?.addEventListener('compositionstart', placeIme)
+
   // 一般終端機的習慣：選起來就進剪貼簿、右鍵就貼上
   pane.addEventListener('mouseup', (event) => {
     if (event.button !== 0) return
@@ -288,6 +323,7 @@ async function openSession(id, isActive = () => true) {
 function fitPane(entry) {
   try {
     entry.fit.fit()
+    syncImeCaret(entry.term)
   } catch {
     // 分頁還沒顯示、量不到尺寸；下次切過來會再 fit 一次
   }
@@ -296,8 +332,22 @@ function fitPane(entry) {
 function fitCurrent() {
   const entry = panes.get(currentId)
   if (!entry || !hostEl || hostEl.classList.contains('hidden')) return
+  const before = `${entry.term.cols}x${entry.term.rows}`
   fitPane(entry)
+  // 拖側欄寬度時 ResizeObserver 一秒送幾十次，欄列數其實大多沒變：
+  // 每一次都往 main 送 resize 等於連累 ConPTY 一起重排。
+  if (`${entry.term.cols}x${entry.term.rows}` === before) return
   void electronAPI.terminal.resize(currentId, entry.term.cols, entry.term.rows)
+}
+
+/** ResizeObserver 一次拖曳會噴幾十發；合併到下一幀再量一次就夠 */
+let fitFrame = 0
+function scheduleFit() {
+  if (fitFrame) return
+  fitFrame = requestAnimationFrame(() => {
+    fitFrame = 0
+    fitCurrent()
+  })
 }
 
 // ===== 新終端機 =====
@@ -390,10 +440,19 @@ async function drainOutput(entry) {
   entry.writing = true
   try {
     while (entry.queue.length) {
-      const payload = entry.queue.shift()
-      if (!payload || payload.seq <= entry.seq) continue
-      await writeOutput(entry, payload.data)
-      entry.seq = payload.seq
+      // 排隊的片段先接成一段再寫。AI CLI 串流時一秒有上百個小封包，
+      // 逐段等 xterm 解析完＝每段都排一次 timer，畫面就是一格一格地跳。
+      let seq = entry.seq
+      let data = ''
+      while (entry.queue.length) {
+        const payload = entry.queue.shift()
+        if (!payload || payload.seq <= seq) continue
+        data += payload.data
+        seq = payload.seq
+      }
+      if (!data) break
+      await writeOutput(entry, data)
+      entry.seq = seq
     }
   } finally {
     entry.writing = false
@@ -467,7 +526,7 @@ export function initTerminalPage() {
   electronAPI.terminal.onStatus(onStatus)
 
   // 視窗或側欄寬度變了就重新量欄列數；xterm 不會自己跟著容器縮放
-  resizeObserver = new ResizeObserver(() => fitCurrent())
+  resizeObserver = new ResizeObserver(() => scheduleFit())
   if (hostEl) resizeObserver.observe(hostEl)
 
   void (async () => {
