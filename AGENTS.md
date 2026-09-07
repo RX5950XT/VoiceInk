@@ -164,6 +164,11 @@ tag 要與 `package.json` 的 version 一致。
   所以剛開分頁／剛切回來時系統看到的輸入框在畫面外，候選字視窗會被夾到螢幕角落。`syncImeCaret` 在 `focus`、
   `compositionstart` 與每次 `fitPane` 各對一次位置；**`compositionupdate` 刻意不接**（組字中途由 xterm 自己撐寬度）。
   `.composition-view` 預設是寫死的黑底白字，要改成終端機的反白。
+- **對好位置還不夠，那個 `<textarea>` 還必須真的被畫出來**：xterm 給它 `opacity: 0`，
+  而 `opacity: 0` 的東西 Chromium 不畫，Windows 就問不到「游標的方框在哪」，注音的組字與
+  候選字視窗會退回預設位置（視窗右下角）。要改用**透明的文字／游標／底色**藏
+  （`color`／`caret-color`／`background-color` 都要 transparent，缺 `background-color`
+  會露出白方塊）。回歸 `probe-terminal-ime.js`。
 - **排隊的輸出要接成一段再寫**：AI CLI 串流一秒上百個小封包，逐段 `await term.write()` ＝每段排一次 timer；
   合併時 `seq <= 目前` 的片段仍然要丟掉（快照重疊）。`fitCurrent` 欄列數沒變就不要往 main 送 resize，
   ResizeObserver 也要合併到下一幀。
@@ -295,7 +300,7 @@ tag 要與 `package.json` 的 version 一致。
 |---|---|
 | 開發沙箱 | `probe-dev-sandbox.js`（**實測**沙箱讀得到你的模型與供應商，而你正在用的那份一個位元組都沒動；動 `dev-sandbox.js` 前後都要跑）|
 | 專案工作區 | `test-workspace.js`／`-nav`／`-ui`／`-state`／`-perf` ＋ `e2e-workspace-cdp.js`（暫存 user-data-dir ＋自種專案）；動 Monaco 前後跑 `probe-workspace-monaco.js`，動 PDF 前跑 `probe-workspace-pdf.js`；動編輯器／diff／預覽／專案切換前後跑 `probe-workspace-perf.js`（**打包版**開 1.4MB／4 萬行的檔，數 `createModel` 有沒有重做、量輸入法游標位置、驗專案隔離） |
-| 終端機 | `test-terminal.js` ＋ `test-terminal-ui.js`（輸出合併、輸入法對位）＋ `e2e-terminal.js`（真 ConPTY）＋ `e2e-terminal-cdp.js` ＋ `test-terminal-host.js`（獨立宿主）＋ `test-terminal-links.js` ＋ `probe-terminal-links.js`（真 xterm 座標，`npx electron`）；動宿主或 `build.files`／`asarUnpack` 前後跑 `probe-terminal-restart.js`（**打包版**真的關 App、覆寫安裝檔再開回來）；管理員 `probe-terminal-admin.js`（免 UAC）／`probe-terminal-admin-elevate.js`（**跳一次 UAC**）|
+| 終端機 | `test-terminal.js` ＋ `test-terminal-ui.js`（輸出合併、輸入法對位）＋ `probe-terminal-ime.js`（**打包版**真的走一次 Chromium 輸入法組字）＋ `e2e-terminal.js`（真 ConPTY）＋ `e2e-terminal-cdp.js` ＋ `test-terminal-host.js`（獨立宿主）＋ `test-terminal-links.js` ＋ `probe-terminal-links.js`（真 xterm 座標，`npx electron`）；動宿主或 `build.files`／`asarUnpack` 前後跑 `probe-terminal-restart.js`（**打包版**真的關 App、覆寫安裝檔再開回來）；管理員 `probe-terminal-admin.js`（免 UAC）／`probe-terminal-admin-elevate.js`（**跳一次 UAC**）|
 | 聊天／Markdown | `e2e-chat.js`（mock SSE）＋ `e2e-chat-cdp.js` ＋ `test-markdown.js` |
 | HF模型 | `test-hfmodels.js` ＋ `probe-hf-router.js`（動 runtime 前跑）／`probe-hf-hub.js`／`probe-hf-detail.js`（打真 HF）＋ `e2e-hfmodels.js` ＋ `e2e-hf-cdp.js` |
 | CC代理／閘道 | `test-ccswitch.js` ＋ `e2e-ccswitch-cdp.js`；端點 `probe-ccswitch-endpoints.js`／模型 `probe-ccswitch-models.js`／Codex 參數 `probe-ccswitch-codex.js`；閘道 `test-ccswitch-gateway.js` ＋ `e2e-ccswitch-gateway.js` |

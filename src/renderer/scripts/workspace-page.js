@@ -1,6 +1,7 @@
 import { electronAPI, showToast, setChatPaneMode } from './app.js'
 import { createListReorder } from './list-reorder.js'
 import { terminalStatuses } from './ws-terminal-status.js'
+import { toolIcon, terminalStateIcon } from './ws-tool-icons.js'
 import {
   initWsTabs,
   openEditorTab,
@@ -123,17 +124,39 @@ function paintProjectStatuses() {
     if (!host) continue
     const sessions = terminalStatuses().filter((item) => item.projectId === row.dataset.id)
     host.replaceChildren()
-    if (!sessions.length) host.textContent = '沒有運行中的終端機'
-    for (const item of sessions) {
-      const line = document.createElement('span')
-      line.className = 'proj-session-status'
-      line.dataset.state = item.state
-      line.dataset.id = item.id
-      line.textContent = `${item.title} · ${item.stateLabel}`
-      line.title = `${line.textContent}（依此 App 的終端機活動判定）`
-      host.appendChild(line)
+    if (!sessions.length) {
+      const empty = document.createElement('span')
+      empty.className = 'proj-status-empty'
+      empty.textContent = '沒有終端機'
+      host.appendChild(empty)
+      continue
     }
+    for (const item of sessions) host.appendChild(buildSessionChip(item))
   }
+}
+
+/**
+ * 側欄上的一顆終端機：左邊是那一家 CLI 的標誌，右邊是執行狀態的圖示
+ * （跑的時候轉圈圈，停下來是一個靜止的標示）。
+ *
+ * **只有圖示不放文字**：一個專案同時開三四顆很正常，每顆再帶一行
+ * 「Claude Code · VoiceInk · 暫無輸出」的話，側欄整個被狀態文字塞滿，
+ * 而專案名稱反而看不見。完整的一句話留在 `title` 裡。
+ *
+ * @param {{ id: string, title: string, preset?: string, state: string, stateLabel: string, exitCode?: number | null }} item
+ * @returns {HTMLElement}
+ */
+function buildSessionChip(item) {
+  const chip = document.createElement('span')
+  chip.className = 'proj-session-status'
+  chip.dataset.state = item.state
+  chip.dataset.id = item.id
+  const logo = toolIcon(item.preset || 'shell') || toolIcon('shell')
+  if (logo) chip.appendChild(logo)
+  const state = terminalStateIcon(item)
+  if (state) chip.appendChild(state)
+  chip.title = `${item.title} · ${item.stateLabel}（依此 App 的終端機活動判定）`
+  return chip
 }
 
 const TERMS_COLLAPSED_KEY = 'wsProjTermsCollapsed'
@@ -208,24 +231,21 @@ function buildListItem(item) {
   title.className = 'chat-list-title'
   title.textContent = item.name
 
-  const meta = document.createElement('span')
-  meta.className = 'chat-list-meta proj-meta'
+  // 路徑刻意不畫在側欄上：一個專案就是一個標題，剩下的空間留給終端機狀態。
+  // 完整路徑滑到標題上就看得到（右鍵選單裡也有「在檔案總管開啟」）。
+  title.title = item.path
+
+  const status = document.createElement('span')
+  status.className = 'proj-status'
+  open.append(title)
   if (item.missing) {
     const warn = document.createElement('span')
     warn.className = 'proj-missing'
     warn.textContent = '找不到'
-    warn.title = '這個資料夾現在不存在'
-    meta.appendChild(warn)
+    warn.title = `這個資料夾現在不存在：${item.path}`
+    open.appendChild(warn)
   }
-  const pathEl = document.createElement('span')
-  pathEl.className = 'proj-path'
-  pathEl.textContent = shortenPath(item.path)
-  pathEl.title = item.path
-  meta.appendChild(pathEl)
-
-  const status = document.createElement('span')
-  status.className = 'proj-status'
-  open.append(title, meta, status)
+  open.appendChild(status)
   open.addEventListener('click', () => void selectProject(item.id))
 
   row.append(open, buildTermsToggle(row, item.id))
@@ -258,16 +278,6 @@ async function launchProjectTerminal(item, admin = false) {
   } catch {
     // call 已顯示提示
   }
-}
-
-/**
- * 只留最後兩層，側欄放不下整條路徑。
- * @param {string} value
- * @returns {string}
- */
-function shortenPath(value) {
-  const parts = String(value || '').split(/[\\/]/).filter(Boolean)
-  return parts.length <= 2 ? String(value || '') : `…\\${parts.slice(-2).join('\\')}`
 }
 
 /**

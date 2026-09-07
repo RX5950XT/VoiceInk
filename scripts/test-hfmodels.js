@@ -605,6 +605,22 @@ async function asyncSections() {
   }
 }
 
+// ── 離開分頁不可以把 router 關掉 ──
+// 聊天、翻譯、ASR 都靠同一顆 router；切個分頁就把模型卸載掉，等於每次回來重載十幾秒。
+// 只有使用者自己按停止（`stopRuntime`）、換模型資料夾、重新套用參數、關 App 才收。
+{
+  const pageSrc = fs.readFileSync(path.join(ROOT, 'src/renderer/scripts/hf-page.js'), 'utf8')
+  const leave = pageSrc.slice(pageSrc.indexOf('export function stop()'), pageSrc.indexOf('export function dispose()'))
+  ok('離開 HF 分頁不會停掉 router', leave.length > 0 && !leave.includes('stopRuntime'), leave.trim())
+  const appSrc = fs.readFileSync(path.join(ROOT, 'src/renderer/scripts/app.js'), 'utf8')
+  ok('切分頁只呼叫 hfPage.stop()，沒有別的收尾', /hfPage\?\.stop\(\)/.test(appSrc)
+    && !/hfPage\?\.dispose\(\)/.test(appSrc))
+  const mainSrc = fs.readFileSync(path.join(ROOT, 'src/main/hfmodels/index.js'), 'utf8')
+  ok('main 這邊停 router 的地方只有四處（停止鈕／換資料夾／套參數／關 App）',
+    mainSrc.split('runtime.stop').length - 1 === 4,
+    String(mainSrc.split('runtime.stop').length - 1))
+}
+
 asyncSections()
   .catch((error) => {
     failed++
