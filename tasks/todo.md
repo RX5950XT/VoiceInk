@@ -3,7 +3,74 @@
 > 只留「還沒做完的」與「最近幾輪做了什麼、驗到什麼」。更早的逐項紀錄查 git log。
 > 規則見 [CLAUDE.md](../CLAUDE.md)（＝AGENTS.md），架構見 [CONTEXT.md](../CONTEXT.md)，教訓見 [lessons.md](./lessons.md)。
 
+## 2026-09-07 — 長文翻譯修復
+
+- [x] 重現雲端分段、20 秒逾時與輸出截斷
+- [x] 雲端整篇送出（IPC 上限 20 萬字），本地保留 280／600 字分段；雲端長文等待 10 分鐘、live 保留 20 秒
+- [x] 移除雲端的本地模型鎖；共用既有 reader 限制回應 4MB；body 逾時、空譯文與輸出截斷回固定錯誤
+- [x] 回歸測試、打包與背景實測
+
+**回顧**：`node scripts/test-translate-long.js` PASS（先驗到分段、卸載阻塞、過大回應紅燈再修）；
+`test-error-hygiene.js` 82/0、`test-model-scope.js` 31/0、`test-strip-prompt-leak.js` ALL PASS。
+`npm run electron:pack` exit 0；`node scripts/probe-translate-long.js` 最終打包版真流量：
+12,554 字、35 段核對標記完整、3,957 字中文譯文、9 秒完成。使用隔離 userData，未修改正在使用的安裝版。
+模型仍有各自的上下文／輸出容量上限；本次未重跑本地 GPU 推論，保留既有本地切段與解碼策略。
+
+## 2026-09-07 — 終端機換行與字級
+
+- [x] Shift+Enter 傳送獨立按鍵訊號，Enter 保持送出；字級 13 → 17
+- [x] 先驗回歸紅燈，再修正、打包及背景 CDP 驗證
+
+回顧：`node scripts/test-terminal.js` 60 passed／0 failed；`node scripts/e2e-terminal-cdp.js` 42 passed／0 failed。
+修復前確認 Shift+Enter 送出 CR、字級 13；修復後只送一次 CSI u、Enter 保持 CR、字級 17，三種視窗寬度無溢出。
+`npm run electron:pack` exit 0，asar 內終端機程式與原始碼逐位元一致；各家 AI CLI 的輸入畫面未逐一驗證。
+首次打包因舊版回歸程序仍占用 DLL 失敗，收尾後將失敗產物移至 `dist/pack-failed-shift-enter` 再重建成功。
+
+## 2026-09-07 — 終端機切換閃爍與最新訊息
+
+- [x] 保留跨專案的 xterm 畫面，避免先清空再重建，防止慢回應切回舊分頁
+- [x] 切換終端機／回到工作區時捲到底部
+- [x] 先驗回歸紅燈，完成狀態測試、打包及背景 CDP 驗證
+
+回顧：`node scripts/e2e-terminal-cdp.js` 舊版 43 passed／3 failed，新版 46 passed／0 failed；
+確認跨專案保留同一個 DOM 與 xterm 實例、回到終端機的捲動位置等於輸出底部，背景狀態與三種視窗寬度正常。
+`node scripts/test-terminal.js` 60／0、`test-workspace-ui.js` 79／0、`test-workspace-state.js`、`test-workspace-nav.js`、`test-workspace-editor.js` PASS。
+`npm run electron:pack` exit 0；asar 內兩支修改的 renderer 與原始碼逐位元一致。
+
+## 2026-09-07 — 終端機跨 App 重啟持續運行
+
+- [x] 獨立背景 runtime 放在 `<userData>/terminal-host/runtime-<內容雜湊>/`，安裝檔案被替換仍繼續運行
+- [x] 共用既有 PTY／管理員宿主，加入具名管道認證連線、重新接回與輸出保留
+- [x] App 關閉只斷開連線，明確關閉終端機才結束程序；重開自動還原分頁
+- [x] 紅燈回歸、一般／管理員宿主、重啟及更新路徑實測；打包、背景 UI 驗證與文件交接
+
+**回顧** — 三個只有打包版／別的 shell 才抓得到的問題：
+
+1. **`fs.cpSync` 讀不了 asar**（`copyFileSync` 可以）：宿主複製 node-pty 時留下半套 `node_modules`，
+   從源碼跑的 `test-terminal-host.js` 全綠，打包版卻靜靜地開不起終端機（證據是 staging 目錄裡
+   `node_modules/@lydell` 是空的）→ `asarUnpack` 的 `@lydell/node-pty-*` 改成 `node-pty*`
+   （少一個字元就漏掉 JS 那份），路徑一律過 `unpacked()`。
+2. **裸名 `whoami.exe`／`icacls.exe` 會抓到 Git Bash 的 MSYS 版**（libuv 的搜尋順序只看 PATH，
+   不含 System32）：同一支測試在 PowerShell 綠、Git Bash 紅 → 一律指名 `%SystemRoot%\System32`。
+   紅燈驗法是把 `PATH` 清空跑 `connection(dir, true)`。
+3. **CDP 點側欄按鈕會被吞掉**：模組還沒掛上監聽時點下去，清單就永遠不重畫 → 改成「點到列出來為止」。
+
+另外補了兩件會長大的事：舊版執行環境（一份 248MB）在下次 `stageRuntime` 清掉；
+staging 建到一半失敗整個刪掉。
+
+驗證：`test-terminal-host.js` 8/8、`test-terminal.js` 60/0、`e2e-terminal.js` 27/0（`npx electron`）、
+`e2e-terminal-cdp.js` 46/0、`probe-terminal-admin.js` 6/0、
+**`probe-terminal-restart.js` 打包版 5/5**（真的關掉 App → 覆寫 `VoiceInk.exe`／`app.asar`／PTY 原生檔
+→ 重開；shell PID 不變、關閉期間磁碟心跳持續、分頁與輸出自動還原、只有明確刪除才結束程序）。
+`test-error-hygiene` 82/0、`test-ipc-invoke` 11/0、`test-workspace` 219/0、`-ui` 79/0、`-state`／`-nav` PASS。
+`npm run electron:pack` exit 0。
+**沒做**：宿主的自動更新（改了 host 檔就換一份執行環境，舊宿主要等使用者關掉那些終端機才會退場）；
+舊版 App 已經開著的終端機無法搬進宿主。
+
 ## 待辦
+
+
+
 
 從 2026-09-05 的「最近更改修復與整體驗收」留下來的；前四項在第九～十二輪已大致涵蓋，
 但沒有逐項對照驗收過，保留在這裡當清單。
@@ -105,3 +172,12 @@
 | 2026-08-31 | 系統監控改版（總覽⊕硬體資訊、四項壓力測試）；ccswitch 供應商頁重構；語音輸入 HUD ＋雲端 ASR 修復；三個子分頁各自的模型選單 |
 | 2026-08-30 | 新分頁「系統監控」；語音輸入（復刻並超越 Typeless）；整合 cc-switch；v1.9.0 發行 |
 | 2026-08-29 | UI／Design Token 全面打磨（Aurora 雙色主題、字體層級、12px 圓角、WCAG AA）；`custom-select.js` 共用下拉 |
+
+## 2026-09-07 — 專案與分頁運行狀態
+- [x] 查終端機狀態流，沿用 main 判定並區分靜默與完成
+- [x] 專案側欄列名稱與狀態，分頁補文字且就地更新
+- [x] 回歸驗證與免安裝打包
+
+回顧：`node scripts/test-terminal.js` 60 passed／0 failed；`node scripts/test-workspace-ui.js` 79 passed／0 failed。
+`node scripts/e2e-terminal-cdp.js` 舊版 34 passed／2 failed，新版擴充跨專案與靜默檢查後 40 passed／0 failed；背景截圖確認側欄與分頁文字可見。
+`npm run electron:pack -- --config.directories.output=C:/Users/rx595/AppData/Local/Temp/voiceink-status-pack-20260907` 成功；更新至 `dist/win-unpacked`，exe／asar 雜湊一致。只顯示本 App 終端機狀態；靜默顯示「暫無輸出」，不當成任務完成。

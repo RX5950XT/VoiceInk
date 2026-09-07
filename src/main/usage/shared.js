@@ -276,6 +276,7 @@ module.exports = {
   createWindow,
   normalizeAccount,
   readJsonFile,
+  readResponseText,
   readJwtClaims,
   fetchJson,
   publicError

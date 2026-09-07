@@ -14,7 +14,7 @@ nav：聊天（預設，**工作區與終端機同一頁**）｜CC代理｜額�
 | 模組 | 一句話 |
 |---|---|
 | 聊天 | 多組供應商（`chatProviders`），雲端翻譯共用同一份清單；會話存 `chats.json`，圖片存 `chat-images/` |
-| 終端機 | `@lydell/node-pty` ConPTY ＋ xterm.js，開在工作區的分頁列上；可用管理員身分（提權 host 代開）|
+| 終端機 | `@lydell/node-pty` ConPTY ＋ xterm.js，開在工作區的分頁列上；PTY 由 userData 裡的獨立宿主持有（更新／關 App 只斷線）；可用管理員身分（提權 host 代開）|
 | 專案工作區 | `src/main/workspace/`：專案＝本機資料夾（`workspaces.json`）；中間分頁列（終端機／Monaco 編輯器／`<webview>` 瀏覽器），右側欄＝檔案總管／Git／AI 記錄／監聽埠 |
 | HF模型 | 在 HF 搜 GGUF → 下載 → llama-server **router 模式** 一顆程序管全部模型 → 出現在聊天選單 |
 | CC代理 | `src/main/ccswitch/`：供應商 tile 改 `~/.claude/settings.json` 的 `env`／MCP／CLI 版本；非 Anthropic 格式經本機閘道轉協議 |
@@ -93,7 +93,8 @@ tag 要與 `package.json` 的 version 一致。
 
 ### 打包／建置
 
-- 保留 `asar.smartUnpack: false`；`asarUnpack` 要含 sherpa-onnx*、`@node-llama-cpp/win-x64`、`@reflink`、Antigravity `.ps1`、`sysmon/probe.ps1`、`screentime/observer.ps1`、`uiohook-napi`、`@lydell/node-pty-win32-x64`。
+- 保留 `asar.smartUnpack: false`；`asarUnpack` 要含 sherpa-onnx*、`@node-llama-cpp/win-x64`、`@reflink`、Antigravity `.ps1`、`sysmon/probe.ps1`、`screentime/observer.ps1`、`uiohook-napi`、`@lydell/node-pty*`（`node-pty` 的 JS 與 `node-pty-win32-x64` 兩份都要）。
+- **`fs.cpSync` 讀不了 asar 裡的東西**（`copyFileSync` 可以）：終端機宿主複製 node-pty 時只會留下半套 `node_modules`，開發版全綠、打包版靜靜地開不起終端機。要複製整個資料夾就先 `asarUnpack`，路徑再換成 `app.asar.unpacked`。回歸只有 `probe-terminal-restart.js` 抓得到。
 - **外部程序（PowerShell、conhost）執行不了 asar 內檔案**，路徑要換成 `app.asar.unpacked`。
 - **`node-llama-cpp/llama` 整包排掉會讓打包版的本地 LLM 靜默失效**（runtime 讀 `binariesGithubRelease.json`）：排除後要 include 回那支 json。動 `build.files` 前後跑 `probe-packed-local-llm.js`。
 - 打包跑的是 `src/` 原始碼；**新增任何產物資料夾都要記得排除**（`dist-hud/` 曾讓 asar 525MB → 1.46GB，`native/` 漏排時 asar 631MB **打包直接失敗**在 `EBUSY: unlink app.asar`）。
@@ -150,6 +151,10 @@ tag 要與 `package.json` 的 version 一致。
 - shell 與啟動指令只收 key（固定表），cwd 走系統對話框再 `statSync().isDirectory()`。
 - **管理員終端機**：ConPTY 開不出提權 shell，改用 `Start-Process -Verb RunAs` 再開一份自己代開。host 的 socket 一 close 就 kill 掉所有管理員 shell；一顆 host 服務全部階段（UAC 只跳一次）；host 模式要 `app.setPath('userData', ...temp...)`（提權程序寫進主 userData 會讓檔案擁有者變管理員）。
 - `term.open()` 前要先讓那一格可見（`display:none` 會開出 0×0）；「人在不在看」要看 `#termMain` 不是 `termHost`。
+- **PTY 不在 App 裡**：`terminal/host.js` 是獨立宿主，執行環境（Electron exe ＋ node-pty ＋ 七支 host 檔）整套複製到 `<userData>/terminal-host/runtime-<內容雜湊>/`——安裝目錄的檔案被更新覆寫時，跑著的 shell 才不會被拖下水。`before-quit` 只 `disconnect()`，**不可以改回 `killAll()`**。
+- **一份執行環境 248MB**：`stageRuntime` 每次改版就多一份，舊的要清掉（能用 `r+` 開啟該份 exe ＝沒人在跑）；建到一半失敗要把 staging 整個刪掉。
+- **系統工具一律指名 `%SystemRoot%\System32`**：PATH 上常擺著 Git Bash 的 MSYS `whoami.exe`／`icacls.exe`，裸名會抓錯那支（libuv 的搜尋順序只看 PATH，不含 System32），症狀是「PowerShell 跑得過、Git Bash 跑不過」。
+- 已結束的終端機**保留畫面**（`finished` map），狀態是 `exited` 不是 `stopped`；`stopped` ＝這次還沒開過。明確刪除（`forget`）才真的收掉，宿主也才會閒置自關。
 - `.chat-list-item` 三邊共用，選擇器一定要限定 `#chatList`／`#projList`。側欄寬度走 `--chat-sidebar-w`（`main.css` 有三處要各留 `var()`）。
 
 ### HF模型與本地 LLM
@@ -273,7 +278,7 @@ tag 要與 `package.json` 的 version 一致。
 |---|---|
 | 開發沙箱 | `probe-dev-sandbox.js`（**實測**沙箱讀得到你的模型與供應商，而你正在用的那份一個位元組都沒動；動 `dev-sandbox.js` 前後都要跑）|
 | 專案工作區 | `test-workspace.js`／`-nav`／`-ui`／`-state` ＋ `e2e-workspace-cdp.js`（暫存 user-data-dir ＋自種專案）；動 Monaco 前後跑 `probe-workspace-monaco.js`，動 PDF 前跑 `probe-workspace-pdf.js` |
-| 終端機 | `test-terminal.js` ＋ `e2e-terminal.js`（真 ConPTY）＋ `e2e-terminal-cdp.js`；管理員 `probe-terminal-admin.js`（免 UAC）／`probe-terminal-admin-elevate.js`（**跳一次 UAC**）|
+| 終端機 | `test-terminal.js` ＋ `e2e-terminal.js`（真 ConPTY）＋ `e2e-terminal-cdp.js` ＋ `test-terminal-host.js`（獨立宿主）；動宿主或 `build.files`／`asarUnpack` 前後跑 `probe-terminal-restart.js`（**打包版**真的關 App、覆寫安裝檔再開回來）；管理員 `probe-terminal-admin.js`（免 UAC）／`probe-terminal-admin-elevate.js`（**跳一次 UAC**）|
 | 聊天／Markdown | `e2e-chat.js`（mock SSE）＋ `e2e-chat-cdp.js` ＋ `test-markdown.js` |
 | HF模型 | `test-hfmodels.js` ＋ `probe-hf-router.js`（動 runtime 前跑）／`probe-hf-hub.js`／`probe-hf-detail.js`（打真 HF）＋ `e2e-hfmodels.js` ＋ `e2e-hf-cdp.js` |
 | CC代理／閘道 | `test-ccswitch.js` ＋ `e2e-ccswitch-cdp.js`；端點 `probe-ccswitch-endpoints.js`／模型 `probe-ccswitch-models.js`／Codex 參數 `probe-ccswitch-codex.js`；閘道 `test-ccswitch-gateway.js` ＋ `e2e-ccswitch-gateway.js` |

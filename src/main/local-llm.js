@@ -18,6 +18,7 @@ const { stripThink, stripTranslationNoise, findRepetitionLoop } = require('./tra
 const { detectGpuCapability } = require('./gpu-capability')
 const { prependCudaBinToPath } = require('./cuda-env')
 const { ensureLlamaAddon } = require('./llama-addon')
+const { readResponseText } = require('./usage/shared')
 
 const LANGUAGE_NAMES = {
   'zh-TW': '繁體中文（台灣）',
@@ -47,6 +48,7 @@ function isLinguaforge(key) {
 const MAX_TOKENS_LIVE = 256
 const MAX_TOKENS_FILE = 1024
 const CLOUD_TIMEOUT_MS = 20000
+const CLOUD_ARTICLE_TIMEOUT_MS = 600000
 
 // ─── LinguaForge v5e 出貨解碼（evaluate.py / INTEGRATION.md）────────────────
 // transformers 主路徑：beam=4 + length_penalty=1.2 + 雙 EOS + 依目標語 DECODE
@@ -793,6 +795,7 @@ async function translateCloud(text, targetLang, cfg, context = {}, options = {})
   if (!cfg.modelId) throw new Error('尚未選擇雲端翻譯模型，請在翻譯頁上方選一顆')
   // 雲端無 modelKey（非 LinguaForge 訓練格式）→ 傳 null 走通用指令
   const messages = [{ role: 'system', content: buildSystemPrompt(null, targetLang, options.mode) }]
+  if (options.mode !== 'live') messages[0].content += '完整翻譯全文，保留段落、標題與清單；不要摘要或省略內容。'
   const pair = buildContextPair(context)
   if (pair) {
     messages.push({ role: 'user', content: pair.prevSrc })
@@ -800,9 +803,10 @@ async function translateCloud(text, targetLang, cfg, context = {}, options = {})
   }
   messages.push({ role: 'user', content: text })
 
-  // 逾時保護：翻譯全走 serial chain，unload/engine 生命週期又 await 該 chain，
-  // 沒有 timeout 的話 API 卡死會連帶鎖死「停止」與模型卸載
+  // 長文容許較久等待；即時字幕維持短期限。
   let res
+  let rawBody
+  const timeoutMs = options.mode === 'live' ? CLOUD_TIMEOUT_MS : CLOUD_ARTICLE_TIMEOUT_MS
   try {
     res = await fetch(`${cfg.apiUrl.replace(/\/+$/, '')}/chat/completions`, {
       method: 'POST',
@@ -812,7 +816,7 @@ async function translateCloud(text, targetLang, cfg, context = {}, options = {})
       },
       body: JSON.stringify({
         model: cfg.modelId,
-        max_tokens: resolveMaxTokens(text, options.mode, false),
+        ...(options.mode === 'live' ? { max_tokens: MAX_TOKENS_LIVE } : {}),
         temperature: 0,
         // 翻譯不要思考內容，不跟聊天頁的 chatThinking 共用。
         // 用 `exclude` 不用 `enabled: false`：後者對「強制思考」的模型會被直接拒絕
@@ -822,15 +826,20 @@ async function translateCloud(text, targetLang, cfg, context = {}, options = {})
         reasoning: { exclude: true },
         messages
       }),
-      signal: AbortSignal.timeout(CLOUD_TIMEOUT_MS)
+      signal: AbortSignal.timeout(timeoutMs)
     })
+    // timeout 也可能在收到 headers 後讀 body 時發生。
+    rawBody = await readResponseText(res, 4 * 1024 * 1024)
   } catch (e) {
-    if (e.name === 'TimeoutError' || e.name === 'AbortError') {
-      throw new Error(`翻譯逾時（${CLOUD_TIMEOUT_MS / 1000}s）`)
+    if (e.code === 'RESPONSE_TOO_LARGE') {
+      await res?.body?.cancel().catch(() => {})
+      throw new Error('翻譯 API 回應過大，已停止讀取')
     }
-    throw e
+    if (e.name === 'TimeoutError' || e.name === 'AbortError') {
+      throw new Error(`翻譯逾時（${timeoutMs / 1000} 秒），供應商尚未完成回應`)
+    }
+    throw new Error('翻譯連線中斷，請稍後再試')
   }
-  const rawBody = await res.text()
   let data = null
   try {
     data = rawBody ? JSON.parse(rawBody) : null
@@ -844,7 +853,12 @@ async function translateCloud(text, targetLang, cfg, context = {}, options = {})
     console.error(`[translate] API error: HTTP ${res.status}`)
     throw new Error(`翻譯 API 錯誤: ${res.status}`)
   }
-  return stripTranslationNoise(stripThink(data?.choices?.[0]?.message?.content || ''), text)
+  const choice = data?.choices?.[0]
+  if (choice?.finish_reason === 'length') throw new Error('翻譯達到模型的輸出上限，全文尚未翻完，請改用輸出容量較大的模型')
+  if (typeof choice?.message?.content !== 'string' || !choice.message.content.trim()) {
+    throw new Error('翻譯 API 未回傳譯文')
+  }
+  return stripTranslationNoise(stripThink(choice.message.content), text)
 }
 
 /**
@@ -902,7 +916,7 @@ async function translate(store, text, targetLang, opts = {}) {
   // 縱深：renderer 應已擋；此處再擋一次避免任何路徑把 ♪♪♪／…… 送進小模型
   if (!hasLinguisticContent(text)) return text
 
-  return withTranslateLock(async () => {
+  const run = async () => {
     const context = {
       previousSource: opts.previousSource || '',
       previousTranslation: opts.previousTranslation || ''
@@ -943,7 +957,9 @@ async function translate(store, text, targetLang, opts = {}) {
       return result
     }
     return targetLang === 'zh-TW' ? s2twp(result) : result
-  })
+  }
+  // 只有本地推論共用 session；等待雲端不可卡住本地推論與卸載。
+  return translator === 'local' ? withTranslateLock(run) : run()
 }
 
 module.exports = {

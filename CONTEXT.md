@@ -23,7 +23,8 @@ src/main/
   chat-store.js / chat-images.js / chat-models.js   會話持久化、圖片附件、/models 掃描（與 ccswitch 共用）
   ipc-invoke.js       九組模組 IPC 的共用外殼 makeInvoke()：主視窗守衛 ＋ { ok, data|error } ＋ userMessage 白名單
   terminal/           ConPTY：pty.js、status.js（OSC 133 ＋ 靜默雙軌，純函式）、store.js（固定表）、
-                      ipc.js、admin.js／admin-host.js（管理員終端機的提權 host）
+                      ipc.js、admin.js／admin-host.js（管理員終端機的提權 host）、
+                      host.js／host-runtime.js／host-client.js／service.js（**PTY 住在 App 外的獨立宿主**）
   workspace/          專案工作區：store.js（workspaces.json）、files.js（**唯一的檔案系統入口**，resolveIn）、
                       git.js（porcelain=v2 -z 解析＋commit／push／審閱）、agents.js（本機 AI session）、
                       worktree.js、watch.js（一次看一個專案的 recursive watcher）、index.js、ipc.js
@@ -84,6 +85,24 @@ AGY 設定、終端機、聊天、語音輸入紀錄**刻意不進** `STORE_ALLO
 翻譯與 TTS 頁不在這組（維持全域 key）。
 
 ## 最近變更
+
+### 2026-09-07 — 終端機跨 App 重啟持續運行
+
+- **PTY 搬出 App**：`terminal/service.js` 是 main 的門面，真正持有 ConPTY 的是 `terminal/host.js`，
+  跑在 `<userData>/terminal-host/runtime-<內容雜湊>/`——那份執行環境是 Electron exe ＋ node-pty ＋
+  七支 host 檔的整套複製，**不在安裝目錄裡**，所以更新覆寫安裝檔時跑著的 shell 不受影響。
+- 連線走具名管道（`\\.\pipe\voiceink-terminal-v1-<root 雜湊>`）＋ 64 hex 通行證（`connection.json`，
+  目錄 ACL 只給本人／SYSTEM／Administrators），封包是有上限的 JSON 行，壞封包直接斷線。
+- `before-quit` 只 `disconnect()`；已結束的終端機保留畫面（狀態 `exited`），
+  明確刪除才 `forget`（結束程序、移除畫面），宿主沒有連線也沒有工作階段時 5 秒自關。
+- 管理員終端機沿用同一條路：宿主用 `configureRuntime()` 讓提權 host 也從那份執行環境啟動。
+- 舊版執行環境會在下次 `stageRuntime` 清掉（能用 `r+` 開啟該份 exe ＝沒人在跑），一份 248MB。
+
+### 2026-09-07 — 終端機切換
+
+- 跨專案保留既有 xterm 實例與輸出；切到目標終端機前不先顯示空白頁，等待期間暫停舊畫面的鍵盤操作。
+- 切換終端機、從其他頁回到工作區時直接捲到底部；相同主題不重套，慢回應不能搶回已切走的分頁。
+- Shift+Enter 傳送 CSI u 換行按鍵，Enter 維持送出；終端機字級為 17。
 
 ### 2026-09-07 — 沙箱測試、文件精簡、`git status` 共用快取
 

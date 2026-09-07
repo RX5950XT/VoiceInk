@@ -35,6 +35,7 @@ async function refreshModelBar() {
   const status = await electronAPI.models.status()
   modelOpts = translateOptions(status.models || {}, settings)
   fillSelect(select, modelOpts, currentTranslateValue(settings))
+  updateCharCount()
   const hint = document.getElementById('translateModelHint')
   if (hint) {
     const msg = readinessHint(select, modelOpts)
@@ -47,7 +48,7 @@ async function refreshModelBar() {
 /**
  * 單次送模型的字數上限：本地 context 2048 tokens（prompt + 輸出）共用。
  * 通用預設 600；LinguaForge 對齊出貨用 280（main 亦會再切 ≤280）。
- * IPC 硬防線 1500 字；輸入總長不設限，超過即自動分段依序翻譯。
+ * 雲端整篇送出；本地超過上限才自動分段依序翻譯。
  */
 const CHUNK_CHARS_GENERIC = 600
 const CHUNK_CHARS_LINGUAFORGE = 280
@@ -339,6 +340,7 @@ async function refreshUiState() {
  * 依當前本地翻譯模型選分段上限（LinguaForge 對齊出貨 250–300）
  */
 function resolveChunkChars() {
+  if (settings?.translator === 'cloud') return Infinity
   const key = settings?.localTranslateModel
   // 兩個量化（Q8／Q4）是同一顆模型，切段長度相同
   return String(key || '').startsWith('linguaforge08')
