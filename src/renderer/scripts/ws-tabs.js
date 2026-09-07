@@ -10,6 +10,7 @@ import {
   selectionInfo, diffGoTo, diffChangeCount, diffCursor
 } from './ws-monaco.js'
 import { paintAiSession } from './ws-ai-session.js'
+import { nextZoom } from './ws-zoom.js'
 import {
   addComment, listComments, removeComment, clearComments, countComments,
   formatComments, sendToChat
@@ -1204,6 +1205,40 @@ function paintEditor(tab) {
   paintPreview(tab)
 }
 
+/** 預覽區目前的縮放倍率（Ctrl+滾輪）。整個工作區共用一顆，換分頁不會突然跳回 100% */
+let previewZoom = 1
+
+/**
+ * 預覽區的 Ctrl+滾輪縮放。容器只有一個，所以 listener 也只掛一次。
+ *
+ * PDF 不走這裡——CSS 放大 canvas 只是把點陣拉糊，它自己用更大的 scale 重畫。
+ *
+ * @param {HTMLElement} box
+ */
+function ensurePreviewZoom(box) {
+  if (!box.dataset.zoomReady) {
+    box.dataset.zoomReady = '1'
+    // 不 preventDefault 的話 Chromium 會去縮放整個視窗，連側欄一起變大
+    box.addEventListener('wheel', (event) => {
+      if (!event.ctrlKey || box.querySelector('.ws-pdf-canvas')) return
+      event.preventDefault()
+      previewZoom = nextZoom(previewZoom, event.deltaY)
+      applyPreviewZoom(box)
+    }, { passive: false })
+  }
+  applyPreviewZoom(box)
+}
+
+/**
+ * @param {HTMLElement} box
+ */
+function applyPreviewZoom(box) {
+  const zoomed = previewZoom !== 1
+  // `zoom` 連字級、間距一起放大（`transform: scale` 不會撐開捲動範圍，放大後看不到右半邊）
+  box.style.zoom = zoomed ? String(previewZoom) : ''
+  box.classList.toggle('is-zoomed', zoomed)
+}
+
 /**
  * @param {WsTab} tab
  */
@@ -1215,6 +1250,7 @@ function paintPreview(tab) {
 
   const on = Boolean(tab.preview)
   const ext = extOf(tab.relPath || '')
+  ensurePreviewZoom(box)
   const previewOnly = Boolean((tab.image || tab.pdf || tab.audio || tab.video) && ext !== 'svg')
   if (el.editorFindBtn) {
     el.editorFindBtn.hidden = previewOnly
@@ -1319,12 +1355,21 @@ async function paintPdf(tab, box) {
     canvas.className = 'ws-pdf-canvas'
     box.replaceChildren(bar, canvas)
 
+    // 每份 PDF 自己的倍率：CSS 放大 canvas 只會糊掉，這裡是用更大的 scale 重畫
+    let zoom = 1
+    canvas.addEventListener('wheel', (event) => {
+      if (!event.ctrlKey) return
+      event.preventDefault()
+      zoom = nextZoom(zoom, event.deltaY)
+      void draw()
+    }, { passive: false })
+
     const draw = async () => {
       label.textContent = `第 ${page} / ${doc.numPages} 頁`
       prev.disabled = page <= 1
       next.disabled = page >= doc.numPages
       const rendered = await doc.getPage(page)
-      const viewport = rendered.getViewport({ scale: 1.5 })
+      const viewport = rendered.getViewport({ scale: 1.5 * zoom })
       canvas.width = viewport.width
       canvas.height = viewport.height
       const ctx = canvas.getContext('2d')

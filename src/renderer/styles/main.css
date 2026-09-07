@@ -2436,6 +2436,18 @@ body:has(.ws-monaco .find-widget.visible) .workbench-hover-container {
   overflow-y: auto;
 }
 
+/* 放大後內容會比容器寬，沒有橫向捲軸等於右半邊直接看不到 */
+.ws-editor-preview.is-zoomed {
+  overflow: auto;
+}
+
+/* Ctrl+滾輪放大時要放開圖片的上限：`zoom` 會把「100%」一起縮，
+   不解開的話圖片永遠剛好填滿容器，看起來完全沒放大 */
+.ws-editor-preview.is-zoomed .ws-editor-img {
+  max-width: none;
+  max-height: none;
+}
+
 .ws-editor-preview[hidden] {
   display: none;
 }
