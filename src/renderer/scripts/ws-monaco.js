@@ -232,12 +232,23 @@ export function retargetModel(oldId, newId) {
 export function disposeModel(tabId) {
   const model = models.get(tabId)
   models.delete(tabId)
+  // **先讓編輯器放手再 dispose**：dispose 只是把 model 標成死的，
+  // 它那份 PieceTree（1.4MB 的檔就是 1.4MB）要等沒人參考才會被回收——
+  // 而編輯器切到別的分頁時不會自己把上一顆放掉，等於每關一個大檔就漏一份。
+  if (editor && editor.getModel() === model) editor.setModel(null)
   if (model && !model.isDisposed()) model.dispose()
   const pair = diffModels.get(tabId)
   diffModels.delete(tabId)
   if (pair) {
+    const shown = diffEditor?.getModel()
+    if (shown && (shown.original === pair.original || shown.modified === pair.modified)) {
+      diffEditor.setModel(null)
+    }
     if (!pair.original.isDisposed()) pair.original.dispose()
     if (!pair.modified.isDisposed()) pair.modified.dispose()
+    // 這兩份字串是 diff 的來源（各一整份檔案），留著就是白佔
+    pair.originalText = ''
+    pair.modifiedText = ''
   }
 }
 
@@ -258,6 +269,28 @@ export function disposeModelsExcept(keepIds) {
   if (editor && editor.getModel()?.isDisposed()) editor.setModel(null)
   const shown = diffEditor?.getModel()
   if (shown && (shown.original?.isDisposed() || shown.modified?.isDisposed())) diffEditor.setModel(null)
+}
+
+/**
+ * 一個編輯器分頁都不剩了 → 把兩顆編輯器本身也收掉。
+ *
+ * model 收掉之後，編輯器空殼還抓著自己那份檢視狀態、裝飾、行高快取與 DOM
+ * （並排 diff 更貴，它有兩份）。下次要用時 `ensureEditor`／`showDiff` 會重建，
+ * 那是幾十毫秒的事——換掉「開著一整天只增不減」划得來。
+ *
+ * Monaco 的**程式碼本身**（那 16MB 的 AMD 包）不在這裡面，它載了就一直在。
+ */
+export function releaseEditors() {
+  if (editor) {
+    editor.setModel(null)
+    editor.dispose()
+    editor = null
+  }
+  if (diffEditor) {
+    diffEditor.setModel(null)
+    diffEditor.dispose()
+    diffEditor = null
+  }
 }
 
 /**

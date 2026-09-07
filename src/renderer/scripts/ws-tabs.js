@@ -7,7 +7,7 @@ import { parseUnifiedDiff, renderDiffLines } from './ws-diff.js'
 import {
   loadMonaco, ensureEditor, showTab as showMonacoTab, runAction,
   disposeModel, disposeModelsExcept, retargetModel, revealLine, cursorInfo, currentValue, pushValue, showDiff,
-  selectionInfo, diffGoTo, diffChangeCount, diffCursor
+  selectionInfo, diffGoTo, diffChangeCount, diffCursor, releaseEditors
 } from './ws-monaco.js'
 import { paintAiSession } from './ws-ai-session.js'
 import { nextZoom } from './ws-zoom.js'
@@ -851,6 +851,15 @@ export async function closeTab(id) {
   }
   tabs = tabs.filter((item) => item.id !== id)
   disposeModel(id)
+  // 這個分頁抓著的內容（草稿影子、預覽的 iframe／影片）要當場放掉，
+  // 不然關掉之後它們還在背景吃資源，記憶體也回不去
+  if (previewKey.id === id && el.editorPreview) {
+    releasePreviewMedia(el.editorPreview)
+    el.editorPreview.replaceChildren()
+    previewKey = { id: '', source: null }
+  }
+  // 一個分頁都不剩了：畫面上那幾格還抓著整份檔案，要當場放掉
+  if (!tabs.length) resetEditorSurface()
   if (activeId === id) {
     activeId = ''
     const next = tabs[tabs.length - 1]
@@ -1134,13 +1143,15 @@ async function useMonaco(tab) {
     monacoTried = true
     monaco = await loadMonaco()
     if (!monaco) return
-    ensureEditor(monaco, el.monacoHost, onMonacoValue, paintMonacoStatus)
     // Monaco 起來了才把原本那組藏起來（載入中仍然看得到內容）
     el.monacoHost.hidden = false
     if (el.ideGutter) el.ideGutter.hidden = true
     if (el.editorText) el.editorText.hidden = true
     if (el.editorFindBtn) el.editorFindBtn.title = '尋找 (Ctrl+F)'
   }
+  // 每次都問一遍：分頁全關掉時 `releaseEditors` 會把編輯器本身收掉，
+  // 只在第一次建的話，關光之後再開檔就會是一片空白（`showTab` 直接 return）
+  ensureEditor(monaco, el.monacoHost, onMonacoValue, paintMonacoStatus)
   if (findTab(activeId) !== tab) return
   showMonacoTab(monaco, tab)
   applyGoto()
@@ -1291,6 +1302,51 @@ let previewIsPdf = false
 let previewKey = { id: '', source: null }
 
 /**
+ * 預覽區裡「看不到也還在跑」的東西要收掉。
+ *
+ * `<iframe>` 的腳本、`<video>`／`<audio>` 的緩衝與播放，被 `hidden` 蓋住之後
+ * 一樣照跑——切到別的分頁、甚至把分頁關掉，它們都還在背景吃 CPU 與網路。
+ * 純 DOM 的預覽（Markdown、圖片、SVG）與畫好的 PDF canvas 不會，留著下次切回來
+ * 就不用重畫（PDF 尤其貴，要把整份 base64 再解一次）；那些等分頁真的關掉再一起收。
+ *
+ * @param {HTMLElement} box
+ */
+function releasePreviewMedia(box) {
+  if (!box.querySelector('iframe, video, audio')) return
+  for (const media of box.querySelectorAll('video, audio')) {
+    /** @type {HTMLMediaElement} */ (media).pause()
+    media.removeAttribute('src')
+    /** @type {HTMLMediaElement} */ (media).load()
+  }
+  box.replaceChildren()
+  previewKey = { id: '', source: null }
+}
+
+/**
+ * 分頁關掉（或整個工作區清空）時，把畫面上那份內容真的放掉。
+ *
+ * 這裡的每一格都抓著一整份檔案：`<textarea>` 那份影子、還沒倒過去的 `shadowValue`、
+ * 預覽區比對用的 `previewKey.source`。分頁物件被丟掉了，這幾格沒人清，
+ * 1.4MB 的檔就這樣一直留在記憶體裡。
+ */
+function resetEditorSurface() {
+  cancelShadowSync()
+  const text = /** @type {HTMLTextAreaElement | null} */ (el.editorText)
+  if (text) text.value = ''
+  if (el.editorPreview) {
+    releasePreviewMedia(el.editorPreview)
+    el.editorPreview.replaceChildren()
+  }
+  previewKey = { id: '', source: null }
+  if (el.ideGutter) el.ideGutter.replaceChildren()
+  // 自繪的逐行 diff：一份大變更就是好幾萬個 DOM 節點，沒人收就一直掛著
+  if (el.diffContent) el.diffContent.replaceChildren()
+  // 一個分頁都不剩了，兩顆 Monaco 編輯器空殼也沒必要留（下次開檔會重建）
+  if (monaco) releaseEditors()
+  hideExtBanner()
+}
+
+/**
  * 預覽區的 Ctrl+滾輪縮放。容器只有一個，所以 listener 也只掛一次。
  *
  * PDF 不走這裡——CSS 放大 canvas 只是把點陣拉糊，它自己用更大的 scale 重畫。
@@ -1343,6 +1399,7 @@ function paintPreview(tab) {
   container.hidden = on
   box.hidden = !on
   if (!on) {
+    releasePreviewMedia(box)
     if (!monaco && text && el.ideGutter) updateGutter(text, el.ideGutter)
     return
   }
@@ -2408,14 +2465,19 @@ export async function setActiveProject(next) {
   // 分頁清單換掉了，上一個專案的 Monaco model 沒人收——每切一次專案就多留
   // 一整份檔案內容（草稿在上面 `persistTabsNow` 的 `stash()` 已經收走了）
   disposeModelsExcept(tabs.map((t) => t.id))
-  // 還沒倒回去的那份影子是上一個專案的內容，別讓它落到新專案的畫面上
-  cancelShadowSync()
+  // 還沒倒回去的那份影子是上一個專案的內容，別讓它落到新專案的畫面上；
+  // 預覽區的 iframe／影片也要收（切走了還在背景跑）
+  resetEditorSurface()
   activeId = ''
   if (!keepTerminal) {
     renderTabs()
     showSurface('empty')
   }
   if (!next) return true
+  // Monaco 是 16MB 的 AMD 包：第一個檔案要等它載完（實測 1.4MB 的檔 2964ms，
+  // 之後同一個檔只要 158ms——差的幾乎全是這一次載入）。有專案在手就趁閒置先載，
+  // 載不起來照樣退回 `<textarea>`，所以這裡不理結果。
+  window.requestIdleCallback?.(() => { void loadMonaco() }, { timeout: 5000 })
   // 保留舊畫面到目標準備好，但等待期間不能把按鍵送給舊終端機。
   if (el.termHost) el.termHost.inert = true
   try {
