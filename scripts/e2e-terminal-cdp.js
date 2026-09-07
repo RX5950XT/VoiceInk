@@ -289,10 +289,12 @@ async function main() {
       `document.querySelector('.ws-tab.is-active .ws-tab-state')?.classList.contains('ws-tab-state-running') === true`,
       6000
     ), await cdp.eval(`document.querySelector('.ws-tab.is-active .ws-tab-open')?.title || '(無)'`))
-    ok('分頁與專案都直接顯示名稱和運行文字', await cdp.eval(`(() => {
+    ok('分頁顯示運行文字，側欄那顆晶片轉圈圈（側欄只放圖示，名稱在 title 裡）', await cdp.eval(`(() => {
       const tab = document.querySelector('.ws-tab.is-active .ws-tab-status-label')
       const row = document.querySelector('#projList .proj-session-status[data-id="${createdId}"]')
-      return tab?.textContent === '運行中' && row?.dataset.state === 'running' && row.textContent.includes(${JSON.stringify(created.title)})
+      return tab?.textContent === '運行中' && row?.dataset.state === 'running'
+        && !!row.querySelector('.ws-status-icon.state-running.is-spin')
+        && row.textContent === '' && row.title.includes(${JSON.stringify(created.title)})
     })()`))
     if (process.env.VOICEINK_STATUS_SCREENSHOT) {
       const shot = await cdp.send('Page.captureScreenshot', { format: 'png' })
@@ -306,7 +308,7 @@ async function main() {
     ), await cdp.eval(`document.querySelector('.ws-tab.is-active .ws-tab-open')?.title || '(無)'`))
     ok('停止輸出後兩處同步完成，保留原本分頁與專案節點', await cdp.eval(`(() => {
       const row = document.querySelector('#projList .proj-session-status[data-id="${createdId}"]')
-      return row?.textContent.includes('已完成') && document.querySelector('.ws-tab.is-active .ws-tab-status-label')?.textContent === '已完成'
+      return !!row?.querySelector('.ws-status-icon.state-done') && document.querySelector('.ws-tab.is-active .ws-tab-status-label')?.textContent === '已完成'
         && window.__statusTab === document.querySelector('.ws-tab.is-active')
         && window.__statusProject === document.querySelector('#projList [data-id="w_status_test"]')
     })()`))
@@ -314,7 +316,7 @@ async function main() {
     await cdp.eval(`window.electronAPI.terminal.write(${JSON.stringify(createdId)}, 'Start-Sleep -Seconds 8\\r')`)
     ok('指令仍活著但沒有輸出時，不誤報已完成', await waitInPage(cdp,
       `document.querySelector('.ws-tab.is-active .ws-tab-status-label')?.textContent === '暫無輸出'
-        && document.querySelector('#projList .proj-session-status[data-id="${createdId}"]')?.textContent.includes('暫無輸出')`, 7000))
+        && !!document.querySelector('#projList .proj-session-status[data-id="${createdId}"] .ws-status-icon.state-idle')`, 7000))
     await waitInPage(cdp, `document.querySelector('.ws-tab.is-active .ws-tab-status-label')?.textContent === '已完成'`, 10000)
 
     await cdp.eval(`window.electronAPI.terminal.write(${JSON.stringify(createdId)}, 'ping -n 6 127.0.0.1\\r')`)
@@ -332,7 +334,7 @@ async function main() {
       return own?.dataset.state === 'running' && !other
     })()`))
     ok('背景專案完成時側欄即時更新', await waitInPage(cdp,
-      `document.querySelector('#projList .proj-session-status[data-id="${createdId}"]')?.textContent.includes('已完成')`))
+      `!!document.querySelector('#projList .proj-session-status[data-id="${createdId}"] .ws-status-icon.state-done')`))
     await cdp.eval(`document.querySelector('#projList [data-id="w_status_test"] .chat-list-open').click()`)
     ok('切回專案還原分頁狀態', await waitInPage(cdp,
       `document.querySelector('.ws-tab[data-id="${createdId}"] .ws-tab-status-label')?.textContent === '已完成'`))

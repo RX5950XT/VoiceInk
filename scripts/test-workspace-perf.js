@@ -229,7 +229,7 @@ this.api = { updateGutter }`, context)
   }
   vm.createContext(context)
   vm.runInContext(`${readModule('src/renderer/scripts/ws-tool-icons.js')}
-this.api = { toolIcon, toolIconNames }`, context)
+this.api = { toolIcon, toolIconNames, stateIconName }`, context)
 
   const tabsSource = fs.readFileSync(path.join(__dirname, '../src/renderer/scripts/ws-tabs.js'), 'utf8')
   const block = tabsSource.slice(tabsSource.indexOf('const NEW_ITEMS'), tabsSource.indexOf('const NEW_ITEMS') + 600)
@@ -242,6 +242,22 @@ this.api = { toolIcon, toolIconNames }`, context)
   }
   assert.equal(context.api.toolIcon('沒這個'), null, '不認得的名字要回 null，不要塞空方框')
   ok(`「＋」選單 ${presets.length + 2} 個項目都有圖示`)
+
+  // 側欄的狀態只剩圖示（沒有文字），對錯一個就等於在騙人：跑著的說跑完了、失敗的說成功。
+  const cases = [
+    [{ state: 'running' }, 'state-running'],
+    [{ state: 'idle', exitCode: null }, 'state-idle'],
+    [{ state: 'idle' }, 'state-idle'],
+    [{ state: 'idle', exitCode: 0 }, 'state-done'],
+    [{ state: 'idle', exitCode: 1 }, 'state-fail'],
+    [{ state: 'exited', exitCode: 0 }, 'state-exited'],
+    [{ state: 'stopped' }, 'state-exited']
+  ]
+  for (const [item, expected] of cases) {
+    assert.equal(context.api.stateIconName(item), expected, `${JSON.stringify(item)} 應該畫 ${expected}`)
+    assert.ok(context.api.toolIcon(expected), `${expected} 沒有對應的圖示`)
+  }
+  ok(`${cases.length} 種執行狀態各對到自己的圖示`)
 }
 
 console.log(`\n${passed} passed, 0 failed`)

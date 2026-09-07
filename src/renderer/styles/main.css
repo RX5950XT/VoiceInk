@@ -1955,6 +1955,25 @@ option:disabled {
   display: block;
 }
 
+/* xterm 把那個真正接鍵盤的 `<textarea>` 設成 `opacity: 0`。位置我們已經對到游標上了
+   （`syncImeCaret`），但 `opacity: 0` 的東西**不會被畫出來**——Windows 的輸入法
+   （注音）是跟 Chromium 要「游標現在的方框在哪」才決定候選字與組字視窗要開在哪，
+   要不到就退回預設位置，也就是視窗右下角。所以這裡讓它照樣看不見、但確實被畫：
+   文字與游標都透明、底色透明，改用 `color` 而不是 `opacity` 藏。
+   （`background-color` 一定要寫：textarea 預設是白底，拿掉 opacity 會露出白方塊。）*/
+.term-pane .xterm .xterm-helper-textarea {
+  opacity: 1;
+  color: transparent;
+  caret-color: transparent;
+  background-color: transparent;
+}
+
+/* 選起來的反白也要藏（xterm 會短暫把打進去的字留在 value 裡） */
+.term-pane .xterm .xterm-helper-textarea::selection {
+  background-color: transparent;
+  color: transparent;
+}
+
 /* 輸入法組字中的那幾個字（xterm 自己畫在游標上）。預設是寫死的黑底白字，
    在淺色主題會變成一塊突兀的黑方塊——改成終端機的反白，就是一般終端機的樣子。
    位置由 `syncImeCaret` 對齊，候選字視窗才不會被系統夾到螢幕角落。 */
@@ -2122,22 +2141,63 @@ option:disabled {
   color: var(--text-secondary);
 }
 
+/* 開著的終端機：每顆一個小晶片＝「哪一家 CLI」＋「現在在幹嘛」，一律只放圖示。 */
 .proj-status {
-  display: grid;
-  gap: 2px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
   min-width: 0;
+  margin-top: 3px;
+}
+
+.proj-status-empty {
   font-size: 11px;
-  color: var(--text-secondary);
+  color: var(--text-tertiary);
 }
 
 .proj-session-status {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 5px;
+  border-radius: var(--radius-sm);
+  background-color: var(--surface-subtle);
+  color: var(--text-secondary);
 }
 
-.proj-session-status[data-state="running"] {
+.proj-session-status .ws-tool-icon {
+  width: 13px;
+  height: 13px;
+  color: inherit;
+}
+
+/* 狀態那顆比標誌小一點：標誌是主角，狀態是註記 */
+.ws-status-icon {
+  width: 11px;
+  height: 11px;
+  stroke-width: 2;
+  color: var(--text-tertiary);
+}
+
+.ws-status-icon.state-running {
+  color: var(--accent-primary);
+}
+
+.ws-status-icon.state-done {
   color: var(--success);
+}
+
+.ws-status-icon.state-fail {
+  color: var(--danger);
+}
+
+.ws-status-icon.is-spin {
+  animation: ws-status-spin 0.9s linear infinite;
+  transform-origin: 50% 50%;
+}
+
+@keyframes ws-status-spin {
+  to { transform: rotate(360deg); }
 }
 
 .ws-tab-state-exited {
@@ -4101,17 +4161,15 @@ body:has(.ws-monaco .find-widget.visible) .workbench-hover-container {
   min-width: 0;
 }
 
-/* 路徑只佔一行（以前 overflow-wrap: anywhere 會折成三行，整塊變得很高） */
-.proj-path {
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .proj-list-item .chat-list-open {
   gap: 1px;
   padding: 6px 10px;
+}
+
+/* 專案名稱是這一塊的標題：比對話列表更亮、更粗，一眼看得出分組從哪裡開始 */
+.proj-list-item .chat-list-title {
+  font-weight: 650;
+  color: var(--text-primary);
 }
 
 /* 終端機清單收起／展開：箭頭常駐（hover 才出現的操作等於沒有） */
@@ -4130,12 +4188,10 @@ body:has(.ws-monaco .find-widget.visible) .workbench-hover-container {
   display: none;
 }
 
-.proj-list-item .proj-meta {
-  font-size: 10px;
-}
-
 .proj-missing {
   flex: none;
+  align-self: flex-start;
+  margin-top: 2px;
   padding: 1px 6px;
   border-radius: 999px;
   font-size: 10px;
