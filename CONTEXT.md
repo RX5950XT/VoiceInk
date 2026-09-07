@@ -53,7 +53,7 @@ src/renderer/scripts/
   usage-page.js  code-usage-page.js  agy-page.js  stt-page.js  transcribe.js  live-caption.js  vad.js
   translate-page.js  dictation.js  model-picker.js  custom-select.js（共用 ARIA listbox）
   workspace-page.js（專案側欄＋右側欄四面板＋檔案樹）  ws-tabs.js（分頁列＋編輯器＋內建瀏覽器）
-  ws-monaco.js  ws-ai-session.js  ws-review.js  ws-git-status.js（git status 共用快取）
+  ws-monaco.js  ws-ai-session.js  ws-review.js  ws-git-status.js（git status 共用快取）  ws-tool-icons.js（「＋」選單圖示）
   list-reorder.js  grid-reorder.js  hf-page.js  sysmon-fans.js  sysmon-oc.js  sysmon-screentime.js
 
 native/  dictation-hook/（WH_KEYBOARD_LL → resources/hook/）  sysmon-sensors/（→ resources/sensors/）
@@ -85,6 +85,25 @@ AGY 設定、終端機、聊天、語音輸入紀錄**刻意不進** `STORE_ALLO
 翻譯與 TTS 頁不在這組（維持全域 key）。
 
 ## 最近變更
+
+### 2026-09-07 — 大檔不卡頓、輸入法對位、選單圖示
+
+- **大檔案的成本都在「每次都重做」**：`showDiff` 改成每個分頁留自己那兩顆 model（舊版每次切回來重建一對，
+  Monaco 得重新斷行＋重算差異）；`showTab` 不再用 `getValue()` 比對（改用 `modelText` 這份 WeakMap，
+  省掉每次切分頁把整份檔案再複製一次）；Monaco 接手後 `updateGutter`／`updateIdeStatus` 直接跳過
+  （行號欄 hidden、狀態列由 `paintMonacoStatus` 蓋掉，那兩支各要掃完整份內容）；預覽（Markdown／HTML／PDF）
+  比內容字串本身決定重不重畫，PDF 不再每次切回來重解一次 base64。
+- **打字不再每個字搬一整份檔案**：Monaco 在的時候那份影子 `<textarea>` 改成停手 200ms 才同步
+  （`scheduleShadowSync`／`cancelShadowSync`），存檔與切分頁各自有更新的來源（`currentValue()`、`tab.content`）。
+- **切專案會 `disposeModelsExcept`**：以前 model 照分頁 id 存著沒人收，每切一次專案就多留一整份檔案內容。
+  實測 `probe-workspace-perf.js`：切走時 3 顆 → 0 顆，來回三趟都是 0。
+- **終端機輸入法**：`syncImeCaret` 在 `focus`、`compositionstart` 與每次 `fitPane` 把 xterm 那個隱形
+  `<textarea>` 挪到游標那一格（xterm 平常丟在 `left: -9999em`，只有游標移動時才挪，所以候選字視窗會被
+  系統夾到螢幕角落）；`.composition-view` 改成終端機的反白，不再是寫死的黑底白字。
+- **終端機輸出合併寫入**：排隊的片段接成一段再寫（AI CLI 串流一秒上百個小封包，逐段 await 等於每段排一次 timer）；
+  `fitCurrent` 欄列數沒變就不送 resize，ResizeObserver 合併到下一幀。
+- 分頁列「＋」選單八個項目各有一顆 16px 單色圖示（`ws-tool-icons.js`，零 innerHTML）。
+- 新測試：`test-workspace-perf.js`、`test-terminal-ui.js`、`probe-workspace-perf.js`（打包版 18/18）。
 
 ### 2026-09-07 — 終端機跨 App 重啟持續運行
 

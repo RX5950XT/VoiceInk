@@ -75,13 +75,21 @@ export function getLanguageName(relPath) {
 export function updateGutter(textarea, gutter) {
   if (!textarea || !gutter) return
   const lineCount = (textarea.value.split('\n').length) || 1
-  let numbers = ''
-  for (let i = 1; i <= lineCount; i += 1) {
-    numbers += `${i}\n`
+  // 行數沒變就別重組：那串行號跟檔案一樣長，每敲一個字重建一次
+  // 等於在幾萬行的檔案上每個字重畫一整欄。
+  if (gutter.dataset.lines !== String(lineCount)) {
+    let numbers = ''
+    for (let i = 1; i <= lineCount; i += 1) {
+      numbers += `${i}\n`
+    }
+    gutter.textContent = numbers
+    gutter.dataset.lines = String(lineCount)
   }
-  gutter.textContent = numbers
   gutter.scrollTop = textarea.scrollTop
 }
+
+/** 「幾行、幾 KB」算一次要掃完整份內容，游標移動時沒必要重算 */
+let lastFileInfo = { value: null, text: '' }
 
 /**
  * 更新 IDE 底部狀態列
@@ -123,10 +131,12 @@ export function updateIdeStatus({
   }
 
   if (fileInfoEl) {
-    const totalLines = value.split('\n').length
-    const bytes = new Blob([value]).size
-    const sizeKb = (bytes / 1024).toFixed(1)
-    fileInfoEl.textContent = `${totalLines} 行 (${sizeKb} KB)`
+    if (lastFileInfo.value !== value) {
+      const totalLines = value.split('\n').length
+      const bytes = new Blob([value]).size
+      lastFileInfo = { value, text: `${totalLines} 行 (${(bytes / 1024).toFixed(1)} KB)` }
+    }
+    fileInfoEl.textContent = lastFileInfo.text
   }
 
   if (encodingEl) {
