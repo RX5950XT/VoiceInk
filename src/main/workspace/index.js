@@ -59,7 +59,14 @@ const projectPath = (projectId) => rootOf(projectId)
 // ===== 檔案 =====
 
 async function listDir(projectId, relPath) {
-  return files.listDir(await rootOf(projectId), relPath)
+  const root = await rootOf(projectId)
+  const listed = await files.listDir(root, relPath)
+  // 被 .gitignore 排除的在樹上要看得出來（renderer 把它變暗）
+  const ignored = await git.ignoredPaths(root, listed.entries.map((entry) => entry.rel))
+  for (const entry of listed.entries) {
+    if (ignored.has(entry.rel)) entry.ignored = true
+  }
+  return listed
 }
 
 async function readFile(projectId, relPath) {

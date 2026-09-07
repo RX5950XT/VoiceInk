@@ -1094,6 +1094,33 @@ console.log('\n[T] git worktree 的解析與分支名白名單')
   }
 }
 
+
+  // ===== [T] 被 .gitignore 排除的路徑（檔案樹要把它變暗） =====
+  console.log('\n[T] check-ignore')
+  {
+    const { execFile } = require('child_process')
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'ws-ignore-'))
+    const plain = await fsp.mkdtemp(path.join(os.tmpdir(), 'ws-plain-'))
+    const runGit = (args) =>
+      new Promise((resolve) => execFile('git', args, { cwd: dir }, () => resolve()))
+    await runGit(['init'])
+    await fsp.writeFile(path.join(dir, '.gitignore'), 'dist/\n*.log\n', 'utf8')
+    await fsp.writeFile(path.join(dir, 'keep.js'), '', 'utf8')
+    await fsp.writeFile(path.join(dir, 'debug.log'), '', 'utf8')
+    await fsp.writeFile(path.join(dir, 'tracked.log'), '', 'utf8')
+    await fsp.mkdir(path.join(dir, 'dist'))
+    await runGit(['add', '-f', 'tracked.log'])
+    const hit = await git.ignoredPaths(dir, ['keep.js', 'debug.log', 'dist', 'tracked.log', '.gitignore'])
+    ok('被 .gitignore 排除的檔案回得來', hit.has('debug.log'), [...hit].join(','))
+    ok('被排除的資料夾也回得來', hit.has('dist'), [...hit].join(','))
+    ok('沒被排除的不會誤標', !hit.has('keep.js') && !hit.has('.gitignore'))
+    ok('已經追蹤的不算被排除', !hit.has('tracked.log'))
+    ok('非 git 資料夾回空集合', (await git.ignoredPaths(plain, ['x.log'])).size === 0)
+    ok('空清單不跑 git', (await git.ignoredPaths(dir, [])).size === 0)
+    await fsp.rm(dir, { recursive: true, force: true })
+    await fsp.rm(plain, { recursive: true, force: true })
+  }
+
 console.log(`\n${passed} passed, ${failed} failed`)
   process.exit(failed === 0 ? 0 : 1)
 }

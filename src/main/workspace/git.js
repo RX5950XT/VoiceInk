@@ -41,9 +41,10 @@ function fail(code, message) {
  * 執行一次 git。回 `{ code, stdout, stderr }`，**呼叫端只准看 code 與 stdout**。
  * @param {string} cwd
  * @param {string[]} args
+ * @param {string} [input] 要寫進 stdin 的內容（給 `--stdin` 那類指令用）
  * @returns {Promise<{ code: number, stdout: string, stderr: string }>}
  */
-function run(cwd, args) {
+function run(cwd, args, input) {
   return new Promise((resolve, reject) => {
     let child
     try {
@@ -64,6 +65,11 @@ function run(cwd, args) {
     } catch {
       reject(fail('GIT_MISSING', '找不到 git，請先安裝'))
       return
+    }
+    if (typeof input === 'string') {
+      // 對面先結束時 stdin 會 EPIPE，沒接住整個 process 會掛掉
+      child.stdin.on('error', () => {})
+      child.stdin.end(input)
     }
     let stdout = ''
     let stderr = ''
@@ -97,6 +103,33 @@ function run(cwd, args) {
       resolve({ code: code === null ? -1 : code, stdout, stderr })
     })
   })
+}
+
+/**
+ * 這一批路徑裡，哪些被 `.gitignore` 排除（＝提交不會帶到）。
+ *
+ * 用 `git check-ignore` 而不是 `git status --ignored`：後者要掃整個 repo，
+ * 光 `node_modules` 就幾萬筆，展開一層資料夾不值得付那個錢。
+ * **不加 `--no-index`**——已經追蹤中的檔案本來就會提交，不算被排除。
+ *
+ * 非 git 資料夾、沒裝 git、git 出錯一律回空集合：檔案樹照常顯示，只是不變暗。
+ *
+ * @param {string} cwd
+ * @param {string[]} rels
+ * @returns {Promise<Set<string>>}
+ */
+async function ignoredPaths(cwd, rels) {
+  if (!Array.isArray(rels) || !rels.length) return new Set()
+  let result
+  try {
+    // `-z` 同時把**輸入**也改成 NUL 分隔，檔名裡有換行或引號都不會解錯
+    result = await run(cwd, ['check-ignore', '-z', '--stdin'], rels.join('\0'))
+  } catch {
+    return new Set()
+  }
+  // 0 = 有命中、1 = 都沒命中，其餘（128：不是 repo）當作沒有
+  if (result.code !== 0 && result.code !== 1) return new Set()
+  return new Set(result.stdout.split('\0').filter(Boolean))
 }
 
 /**
@@ -637,6 +670,7 @@ module.exports = {
   MAX_BRANCHES,
   TIMEOUT_MS,
   checkRef,
+  ignoredPaths,
   parseNumstat,
   branches,
   compareBranch,
