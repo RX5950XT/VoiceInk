@@ -1942,7 +1942,12 @@ option:disabled {
   flex: 1;
   min-height: 0;
   padding: 4px;
-  overflow: hidden;
+  /* `clip` 不是 `hidden`：`hidden` 是「可以捲、只是沒有捲軸」的捲動容器。
+     打中文時 xterm 會把那個隱形 `<textarea>` 撐到整段組字文字的寬度（實測 988px），
+     一超過終端機右緣，Chromium 就會為了「把游標捲進視野」自己捲這一格
+     （實測 scrollLeft 177.7px）——使用者看到的就是整個終端機畫面往左滑掉，
+     候選字視窗也跟著被推到視窗右下角。`clip` 完全不能捲，這件事就不可能發生。 */
+  overflow: clip;
 }
 
 .term-pane {

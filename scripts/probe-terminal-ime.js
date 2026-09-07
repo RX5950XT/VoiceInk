@@ -254,6 +254,32 @@ async function main() {
         `偏移 ${off.toFixed(1)}px`)
     }
 
+    // [D] 組字文字比終端機還寬時，畫面不可以整個往左滑。
+    // xterm 會把隱形 `<textarea>` 撐到整段組字的寬度；只要祖先裡有一格是
+    // `overflow: hidden`（那是「可以捲、只是沒捲軸」），Chromium 就會為了把
+    // 游標捲進視野而捲它——使用者看到的是終端機突然往左移，候選字視窗也被推到右下角。
+    const paneLeftBefore = await cdp.eval(`document.querySelector('.term-pane.is-active').getBoundingClientRect().left`)
+    await cdp.send('Input.imeSetComposition', {
+      text: '這是一段非常非常長的中文組字內容用來測試到底會不會把整個終端機畫面往左邊推過去看看結果如何再多打一些字讓它超過右邊界',
+      selectionStart: 60, selectionEnd: 60
+    })
+    await sleep(700)
+    const wide = JSON.parse(String(await cdp.eval(`JSON.stringify((() => {
+      const area = document.querySelector('.term-pane.is-active .xterm-helper-textarea')
+      const scrolled = []
+      for (let el = area; el && el !== document.documentElement; el = el.parentElement) {
+        if (el.scrollLeft) scrolled.push((el.id ? '#' + el.id : el.tagName.toLowerCase()) + '=' + Math.round(el.scrollLeft))
+      }
+      return { scrolled, areaWidth: area.getBoundingClientRect().width, paneLeft: document.querySelector('.term-pane.is-active').getBoundingClientRect().left }
+    })())`)))
+    ok('[D] 組字文字比終端機寬時，沒有任何祖先被橫向捲走',
+      wide.scrolled.length === 0, `寬度 ${Math.round(wide.areaWidth)}px，捲走的：${wide.scrolled.join(', ') || '(無)'}`)
+    ok('[D] 而且終端機畫面沒有往左移',
+      Math.abs(wide.paneLeft - paneLeftBefore) < 1,
+      `${Math.round(paneLeftBefore)} → ${Math.round(wide.paneLeft)}`)
+    await cdp.send('Input.imeSetComposition', { text: '注音', selectionStart: 2, selectionEnd: 2 })
+    await sleep(300)
+
     await cdp.send('Input.insertText', { text: '注音' })
     await sleep(1200)
     const committed = await cdp.eval(`(() => {
