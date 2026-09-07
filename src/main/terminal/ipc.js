@@ -43,6 +43,14 @@ function registerTerminalIpc({ ipcMain, service, isMainSender, dialog, getWindow
     invoke(event, () => service.killSession(id))
   ))
 
+  // 畫面上的連結：hover 先問哪些路徑真的存在，點下去才用檔案總管開
+  ipcMain.handle('terminal:resolveLinks', (event, id, texts) => (
+    invoke(event, () => service.resolveLinks(id, texts))
+  ))
+  ipcMain.handle('terminal:revealLink', (event, id, text) => (
+    invoke(event, () => service.revealLink(id, text))
+  ))
+
   // 工作目錄一律由系統對話框選，renderer 不自己組路徑字串
   ipcMain.handle('terminal:pickDirectory', (event) => invoke(event, async () => {
     const win = getWindow()

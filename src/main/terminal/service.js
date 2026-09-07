@@ -2,6 +2,7 @@
 
 const store = require('./store')
 const terminal = require('./pty')
+const links = require('./links')
 const { HostClient } = require('./host-client')
 
 let client
@@ -49,6 +50,8 @@ module.exports = {
   openSession,
   deleteSession,
   writeSession,
+  resolveLinks: links.resolveLinks,
+  revealLink: links.revealLink,
   resizeSession: (id, cols, rows) => getClient().request('resize', { sessionId: String(id || ''), cols, rows }),
   killSession: (id) => getClient().request('kill', { sessionId: String(id || '') }),
   disconnect() { client?.disconnect(); client = null }

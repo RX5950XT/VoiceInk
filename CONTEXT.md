@@ -23,7 +23,8 @@ src/main/
   chat-store.js / chat-images.js / chat-models.js   會話持久化、圖片附件、/models 掃描（與 ccswitch 共用）
   ipc-invoke.js       九組模組 IPC 的共用外殼 makeInvoke()：主視窗守衛 ＋ { ok, data|error } ＋ userMessage 白名單
   terminal/           ConPTY：pty.js、status.js（OSC 133 ＋ 靜默雙軌，純函式）、store.js（固定表）、
-                      ipc.js、admin.js／admin-host.js（管理員終端機的提權 host）、
+                      ipc.js、links.js（畫面上的網址／路徑，主行程驗存在再開）、
+                      admin.js／admin-host.js（管理員終端機的提權 host）、
                       host.js／host-runtime.js／host-client.js／service.js（**PTY 住在 App 外的獨立宿主**）
   workspace/          專案工作區：store.js（workspaces.json）、files.js（**唯一的檔案系統入口**，resolveIn）、
                       git.js（porcelain=v2 -z 解析＋commit／push／審閱）、agents.js（本機 AI session）、
@@ -85,6 +86,17 @@ AGY 設定、終端機、聊天、語音輸入紀錄**刻意不進** `STORE_ALLO
 翻譯與 TTS 頁不在這組（維持全域 key）。
 
 ## 最近變更
+
+### 2026-09-08 — 終端機裡的連結
+
+- **網址點了開內建瀏覽器分頁，路徑點了開檔案總管**：走 xterm 自己的 `registerLinkProvider`
+  （沒裝 addon-web-links——路徑那半本來就得自己寫）。掃描與折行接合在 `term-link-scan.js`（純字串），
+  掛載與 IPC 在 `term-links.js`，路徑解析在 `terminal/links.js`。
+- **候選字要先問主行程「這個真的存在嗎」**，不存在就不畫底線：不然畫面上每個含斜線的字都變成假連結。
+  相對路徑以**這個階段開起來時的 cwd** 為基準（PTY 之後 `cd` 去哪主行程看不到）。
+- `provideLinks` 拿到的是**整份緩衝區的 1-based 列號**（不是畫面上的第幾列），回去的 range 同一套；
+  折行的一列要往回接成整條邏輯行再掃。實測 `probe-terminal-links.js`（真 xterm、真滑鼠事件）。
+- 新測試：`test-terminal-links.js`（32 項）、`probe-terminal-links.js`（4 項）。
 
 ### 2026-09-07 — 大檔不卡頓、輸入法對位、選單圖示
 

@@ -1,5 +1,6 @@
 import { electronAPI, showToast, setChatPaneMode } from './app.js'
 import { terminalStatusLabel, setTerminalStatuses } from './ws-terminal-status.js'
+import { registerTermLinks } from './term-links.js'
 import {
   initWsTabs, showSurface, trackTerminal, paintTerminalTab, currentProjectId
 } from './ws-tabs.js'
@@ -235,6 +236,7 @@ function createPane(id) {
   const fit = new FitAddon()
   term.loadAddon(fit)
   term.open(pane)
+  registerTermLinks(term, id)
   initTerminalDrop(pane, term, id)
   term.onData((data) => {
     void electronAPI.terminal.write(id, data)
