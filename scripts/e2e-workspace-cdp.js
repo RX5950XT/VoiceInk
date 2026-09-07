@@ -768,15 +768,15 @@ async function main() {
 
     // ===== [N] 檔案樹：增量展開、鍵盤導覽 =====
     await cdp.eval(`document.querySelector('.ws-right-tab[data-panel="files"]').click()`)
-    await waitInPage(cdp, `document.querySelectorAll('#wsTree .ws-tree-row').length >= 2`, 8000)
+    // 「有兩列」不代表畫完了：renderTree 刻意不先清空，等 git status 的那段時間
+    // 畫面上還是**舊的**一棵樹（src 畫成收合的）。在舊樹上動手，下面的收合會被跳過，
+    // 再一次點擊就變成收合而不是展開。等到樹真的反映展開狀態才算畫完。
+    ok('[N] 進場時檔案樹已經畫到最新（src 是展開的）',
+      await waitInPage(cdp, `document.querySelector('#wsTree .ws-tree-row[data-rel="src/app.js"]')`, 10000))
     // 收合 src（[B] 已經把它展開了），順便在 README 那一列做記號：
     // 展開如果是「整棵重畫」，這個記號會不見。
-    await cdp.eval(`(() => {
-      const src = document.querySelector('#wsTree .ws-tree-row[data-rel="src"]')
-      if (src && src.getAttribute('aria-expanded') === 'true') src.click()
-      return true
-    })()`)
-    await sleep(400)
+    await cdp.eval(`document.querySelector('#wsTree .ws-tree-row[data-rel="src"]').click()`)
+    await waitInPage(cdp, `!document.querySelector('#wsTree .ws-tree-row[data-rel="src/app.js"]')`, 8000)
     await cdp.eval(`(() => {
       document.querySelector('#wsTree .ws-tree-row[data-rel="README.md"]').dataset.probe = '1'
       return true

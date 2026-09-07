@@ -839,7 +839,9 @@ async function toggleDir(project, rel, row) {
   const depth = Number(row.dataset.depth || 0)
   const caret = row.querySelector('.ws-tree-caret')
   const next = row.nextElementSibling
-  if (expanded.has(rel)) {
+  // 以「這一列現在畫成什麼樣」為準，不是 `expanded`：重畫是非同步的（要先等 git status），
+  // 那段時間畫面上還是舊的一棵樹。照 `expanded` 判斷的話，使用者看到 ▸ 點下去卻是收起來。
+  if (row.getAttribute('aria-expanded') === 'true') {
     expanded.delete(rel)
     if (next && next.classList.contains('ws-tree-children')) next.remove()
     row.setAttribute('aria-expanded', 'false')
