@@ -99,6 +99,7 @@ tag 要與 `package.json` 的 version 一致。
 - **`node-llama-cpp/llama` 整包排掉會讓打包版的本地 LLM 靜默失效**（runtime 讀 `binariesGithubRelease.json`）：排除後要 include 回那支 json。動 `build.files` 前後跑 `probe-packed-local-llm.js`。
 - 打包跑的是 `src/` 原始碼；**新增任何產物資料夾都要記得排除**（`dist-hud/` 曾讓 asar 525MB → 1.46GB，`native/` 漏排時 asar 631MB **打包直接失敗**在 `EBUSY: unlink app.asar`）。
 - **`app.asar` 被別的程式抓著 → 產出的 asar 會安靜錯位**（每個檔案拿到前一個的內容，整頁 SyntaxError，electron-builder **exit 0**）。兇手實測是 `Orca.exe`（連 `%TEMP%` 也監看）。解法：打包到工作區外 → `cd` 到暫存目錄跑 `npx @electron/asar extract-file <app.asar> package.json` 驗過（**這指令會把檔案寫進當下工作目錄**，在專案根目錄跑會蓋掉自己的 `package.json`）→ `robocopy /MIR /XF app.asar` 覆寫回去，asar 用 `[IO.File]::Open(dst,'Open','Write','Read')` 就地覆寫＋`SetLength`，**`VoiceInk.exe` 一定要一起換**（完整性雜湊嵌在它裡面）。
+- **「工作區外」是指 `D:\Workspace` 之外**（實測：打到 `D:/Workspace/vi-pack-…` 一樣錯位，打到 `D:/vi-build-…` 才乾淨）；**打包期間不可以動到任何會被打包的檔案**——連改一行 `CLAUDE.md` 都會讓後面每個檔案位移（實測四次：中途編輯過的三次全錯位，全程沒碰的兩次乾淨）；**驗證要抽一支 renderer 的 `.js`**，只驗 `package.json` 過得了關卻仍然是錯的（`extract-file` 的路徑要用反斜線）。症狀：App 開得起來但整頁功能沒反應，console 一堆 `SyntaxError: Unexpected token '}'`，而且指的是你根本沒改過的檔案。
 - `electron:pack` 中途失敗會留下壞掉的 `dist/win-unpacked`（症狀：啟動無 log、CDP 埠連不上）：**整個刪掉重打**。
 - **`latest.yml` 只在 `build.publish` 有設定時才產出**；**`nsis.artifactName` 不能改回預設**（預設帶空白，上傳 GitHub 會被改名成點分隔版 → 下載 404）。回歸 `test-updater.js` 的 [E]。
 - **`electron:pack`（dir target）的預覽版永遠檢查不到更新，那不是 bug**（只有 nsis／appx 才寫 `app-update.yml`）；**不可以把 error 當成測試通過**。`autoInstallOnAppQuit` 在本 App 無效——`installOnQuit()` 要在 `app.exit(0)` 前一行。
@@ -304,7 +305,7 @@ tag 要與 `package.json` 的 version 一致。
 | 範圍 | 指令 |
 |---|---|
 | 開發沙箱 | `probe-dev-sandbox.js`（**實測**沙箱讀得到你的模型與供應商，而你正在用的那份一個位元組都沒動；動 `dev-sandbox.js` 前後都要跑）|
-| 專案工作區 | `test-workspace.js`／`-nav`／`-ui`／`-state`／`-perf` ＋ `e2e-workspace-cdp.js`（暫存 user-data-dir ＋自種專案）；動 Monaco 前後跑 `probe-workspace-monaco.js`，動 PDF 前跑 `probe-workspace-pdf.js`；動編輯器／diff／預覽／專案切換前後跑 `probe-workspace-perf.js`（**打包版**開 1.4MB／4 萬行的檔，數 `createModel` 有沒有重做、量輸入法游標位置、驗專案隔離） |
+| 專案工作區 | `test-workspace.js`／`-nav`／`-ui`／`-state`／`-perf` ＋ `e2e-workspace-cdp.js`（暫存 user-data-dir ＋自種專案）；動 Monaco 前後跑 `probe-workspace-monaco.js`，動 PDF 前跑 `probe-workspace-pdf.js`；動編輯器／diff／預覽／專案切換前後跑 `probe-workspace-perf.js`（**打包版**開 1.4MB／4 萬行的檔，數 `createModel` 有沒有重做、量輸入法游標位置、驗專案隔離）；動大檔開關與記憶體前後跑 `probe-workspace-bigfile.js`（**打包版**量 1.4MB／4 萬行的開檔毫秒數、並排變更毫秒數，以及關掉之後堆積回不回得去、預覽的 iframe 有沒有被收掉） |
 | 終端機 | `test-terminal.js` ＋ `test-terminal-ui.js`（輸出合併、輸入法對位）＋ `probe-terminal-ime.js`（**打包版**真的走一次 Chromium 輸入法組字）＋ `e2e-terminal.js`（真 ConPTY）＋ `e2e-terminal-cdp.js` ＋ `test-terminal-host.js`（獨立宿主）＋ `test-terminal-links.js` ＋ `probe-terminal-links.js`（真 xterm 座標，`npx electron`）；動宿主或 `build.files`／`asarUnpack` 前後跑 `probe-terminal-restart.js`（**打包版**真的關 App、覆寫安裝檔再開回來）；管理員 `probe-terminal-admin.js`（免 UAC）／`probe-terminal-admin-elevate.js`（**跳一次 UAC**）|
 | 聊天／Markdown | `e2e-chat.js`（mock SSE）＋ `e2e-chat-cdp.js` ＋ `test-markdown.js` |
 | HF模型 | `test-hfmodels.js` ＋ `probe-hf-router.js`（動 runtime 前跑）／`probe-hf-hub.js`／`probe-hf-detail.js`（打真 HF）＋ `e2e-hfmodels.js` ＋ `e2e-hf-cdp.js` |

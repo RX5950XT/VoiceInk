@@ -87,6 +87,27 @@ AGY 設定、終端機、聊天、語音輸入紀錄**刻意不進** `STORE_ALLO
 
 ## 最近變更
 
+### 2026-09-08 — 大檔關掉要放手、貼上不再被截半、輸入法方框
+
+- **關掉大檔之後記憶體回得去**：`disposeModel` 先讓編輯器 `setModel(null)` 再 dispose
+  （不放手的話那份 PieceTree 沒人回收）；分頁關掉時把預覽區的 `<iframe>`／`<video>`
+  收掉（以前關了還在背景跑腳本與緩衝）、`<textarea>` 影子與 `previewKey.source` 清空。
+  實測 `probe-workspace-bigfile.js`。
+- **選了專案就趁閒置先載 Monaco**：第一個大檔以前要等 16MB 的 AMD 包（實測 2964ms），
+  暖機之後只剩開檔本身（實測 158ms）。載不起來照樣退回 `<textarea>`。
+- **貼上超過 8192 字不再被安靜截半**：`terminal-page.js` 改走 `term-write-chunks.js`
+  切段＋每個工作階段一條寫入鏈（IPC 是非同步的，連發會亂序）。
+- **輸入法候選字視窗跑掉的真正原因是 `.xterm-helpers` 的 `left: auto`**（xterm.css 只寫了
+  `top: 0`）：Electron 的 Blink 會把它算成非 0，隱形輸入框整個被推離游標。改成明寫
+  `left: 0`，並把上一版「`opacity: 1` ＋一堆 transparent」的作法收回去——那個作法會讓
+  Chromium 把那個輸入框的原生游標畫出來，就是畫面右下角那個會閃的白方塊。
+- **Ctrl+G 開出來的記事本會跳到最前面**：PTY 收到 `\x07` 時 main 起一支一次性 PowerShell
+  盯著新視窗，出現就 `AttachThreadInput` ＋ `SetForegroundWindow`（`terminal/foreground.js`）。
+  ConPTY 沒有視窗、跑 shell 的又是 App 外的獨立宿主，兩個都不是前景，Windows 才不讓它跳。
+- **修好 v1.16.0 就漏掉的第四份清單**：`resolveLinks`／`revealLink` 沒進 `main.js` 的
+  `registerTerminalIpc({ service })` 列舉，終端機連結整個安靜地沒作用。
+  `test-terminal-links.js` 現在從 `ipc.js` 反推該有哪些方法，四份清單一起對。
+
 ### 2026-09-08 — 終端機裡的連結
 
 - **網址點了開內建瀏覽器分頁，路徑點了開檔案總管**：走 xterm 自己的 `registerLinkProvider`
