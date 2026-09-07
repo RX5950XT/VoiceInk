@@ -3,6 +3,7 @@
 const store = require('./store')
 const terminal = require('./pty')
 const links = require('./links')
+const foreground = require('./foreground')
 const { HostClient } = require('./host-client')
 
 let client
@@ -52,7 +53,8 @@ module.exports = {
   writeSession,
   resolveLinks: links.resolveLinks,
   revealLink: links.revealLink,
+  raiseChildWindow: foreground.raiseChildWindow,
   resizeSession: (id, cols, rows) => getClient().request('resize', { sessionId: String(id || ''), cols, rows }),
   killSession: (id) => getClient().request('kill', { sessionId: String(id || '') }),
-  disconnect() { client?.disconnect(); client = null }
+  disconnect() { foreground.stop(); client?.disconnect(); client = null }
 }

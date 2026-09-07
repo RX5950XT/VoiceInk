@@ -207,13 +207,18 @@ async function main() {
     const before = JSON.parse(String(beforeCaret))
     const paint = JSON.parse(String(await cdp.eval(`JSON.stringify((() => {
       const cs = getComputedStyle(document.querySelector('.term-pane.is-active .xterm-helper-textarea'))
-      return { opacity: cs.opacity, color: cs.color, bg: cs.backgroundColor, caret: cs.caretColor }
+      const helpers = getComputedStyle(document.querySelector('.term-pane.is-active .xterm-helpers'))
+      return { opacity: cs.opacity, caret: cs.caretColor, helpersLeft: helpers.left }
     })())`)))
-    // `opacity: 0` 的東西不會被畫，Windows 就問不到游標方框，組字視窗會掉到視窗右下角。
-    // 所以要「照樣看不見、但確實被畫」：opacity 留 1，靠透明的文字／底色藏起來。
-    ok('[B] 隱形輸入框是被畫出來的（不是 opacity:0），底色與文字都透明',
-      paint.opacity === '1' && /rgba\(0, 0, 0, 0\)|transparent/.test(paint.bg)
-        && /rgba\(0, 0, 0, 0\)|transparent/.test(paint.color),
+    // 候選字視窗跑掉的原因不是 opacity，是 xterm.css 的 `.xterm-helpers` 只寫了 `top: 0`：
+    // `left: auto` 在 Electron 的 Blink 會算出非 0 的值，把隱形輸入框整個推離游標。
+    // 明寫 `left: 0` 之後位置就對了，輸入框照 xterm 原本的 `opacity: 0` 藏著就好——
+    // 反過來把它畫出來（上一版的作法）會讓 Chromium 偶爾畫出它的原生游標，
+    // 也就是畫面右下角那個會閃的白方塊。
+    ok('[B] `.xterm-helpers` 有明寫 left: 0（候選字視窗位置的根因）',
+      paint.helpersLeft === '0px', JSON.stringify(paint))
+    ok('[B] 隱形輸入框照 xterm 原本的方式藏著，而且不畫原生游標',
+      paint.opacity === '0' && /rgba\(0, 0, 0, 0\)|transparent/.test(paint.caret),
       JSON.stringify(paint))
     const offBefore = Math.hypot(before.area.left - before.caret.x, before.area.top - before.caret.y)
     ok('[B] 還沒開始組字，隱形輸入框就已經在游標上（候選字視窗的位置靠它）',

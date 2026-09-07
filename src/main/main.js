@@ -1560,7 +1560,12 @@ registerTerminalIpc({
     openSession: (...args) => loadTerminal().openSession(...args),
     writeSession: (...args) => loadTerminal().writeSession(...args),
     resizeSession: (...args) => loadTerminal().resizeSession(...args),
-    killSession: (...args) => loadTerminal().killSession(...args)
+    killSession: (...args) => loadTerminal().killSession(...args),
+    // 畫面上的連結（v1.16.0 加的）：漏在這份逐一列舉的白名單裡，`terminal:resolveLinks`
+    // 就只會回通用錯誤——路徑候選全部驗不過，等於整個連結功能安靜地沒作用。
+    resolveLinks: (...args) => loadTerminal().resolveLinks(...args),
+    revealLink: (...args) => loadTerminal().revealLink(...args),
+    raiseChildWindow: (...args) => loadTerminal().raiseChildWindow(...args)
   },
   isMainSender: assertMainWindowSender,
   dialog,

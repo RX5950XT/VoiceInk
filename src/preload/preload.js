@@ -194,6 +194,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     pickDirectory: () => ipcRenderer.invoke('terminal:pickDirectory'),
     resolveLinks: (id, texts) => ipcRenderer.invoke('terminal:resolveLinks', id, texts),
     revealLink: (id, text) => ipcRenderer.invoke('terminal:revealLink', id, text),
+    /** 終端機裡即將開出來的視窗（Ctrl+G 的記事本）抬到最前面 */
+    raiseChildWindow: () => ipcRenderer.invoke('terminal:raiseChildWindow'),
     /** @param {(payload: { id: string, seq: number, data: string }) => void} callback */
     onData: (callback) => {
       const handler = (_event, payload) => callback(payload)

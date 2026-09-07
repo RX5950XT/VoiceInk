@@ -279,6 +279,42 @@ async function main() {
       firstOutput.buffer.trim().length > 3 && firstOutput.asyncWrites === 0,
       JSON.stringify(firstOutput))
 
+    // ===== 貼上超過單次上限 =====
+    // main 單次只收 8192 字，超過的部分以前是**安靜 slice 掉**：貼一段長文字進 AI CLI
+    // 就這樣被截半。這裡貼一整條 9000 多字的指令，讓 PowerShell 自己把長度印出來——
+    // 只看畫面上的字數證明不了（80×24 的畫面本來就裝不下 9000 個字）。
+    const pasted = await cdp.eval(`(async () => {
+      const paneId = ${JSON.stringify(createdId)}
+      const term = window.__testTerminals && window.__testTerminals.get(paneId)
+      if (!term) return { found: '', paneId }
+      const want = 9000
+      term.paste("Write-Host ('" + 'A'.repeat(want) + "').Length")
+      await new Promise((r) => setTimeout(r, 1200))
+      await window.electronAPI.terminal.write(paneId, '\\r')
+      const screen = () => {
+        const buffer = term.buffer.active
+        let all = ''
+        for (let y = 0; y < buffer.length; y += 1) all += (buffer.getLine(y)?.translateToString(true) ?? '') + '\\n'
+        return all
+      }
+      let found = ''
+      for (let i = 0; i < 40; i += 1) {
+        await new Promise((r) => setTimeout(r, 250))
+        // PowerShell 把長度印在自己一行，但那一行後面常常還黏著上一次繪製留下的 A
+        const m = screen().match(/\\n\\s*(\\d{3,6})(?!\\d)/)
+        if (m) { found = m[1]; break }
+      }
+      const tail = screen().replace(/A+/g, (m) => '<' + m.length + 'A>').trim().slice(-300)
+      // 收尾：被截半的貼上會讓 PowerShell 停在續行提示上，後面每一項都會跟著爛。
+      // 不管有沒有過，都送一次 Ctrl+C 把那一行取消掉。
+      await window.electronAPI.terminal.write(paneId, String.fromCharCode(3))
+      await new Promise((r) => setTimeout(r, 800))
+      return { found, want, paneId, tail }
+    })()`)
+    ok('貼上 9000 字沒有被截掉（main 單次上限 8192）',
+      pasted.found === '9000', JSON.stringify(pasted))
+
+
     // ===== 狀態徽章 =====
     // shell integration 的第一個標記要先落地，再送指令才判得準
     await sleep(2000)

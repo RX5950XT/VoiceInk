@@ -12,6 +12,7 @@
 const path = require('path')
 const os = require('os')
 const fs = require('fs')
+const { pathToFileURL } = require('url')
 
 const ROOT = path.join(__dirname, '..')
 const links = require(path.join(ROOT, 'src/main/terminal/links.js'))
@@ -135,11 +136,49 @@ async function main() {
     const service = fs.readFileSync(path.join(ROOT, 'src/main/terminal/service.js'), 'utf8')
     const ipc = fs.readFileSync(path.join(ROOT, 'src/main/terminal/ipc.js'), 'utf8')
     const preload = fs.readFileSync(path.join(ROOT, 'src/preload/preload.js'), 'utf8')
-    for (const name of ['resolveLinks', 'revealLink']) {
-      ok(`service 匯出 ${name}`, new RegExp(`\\b${name}:`).test(service))
-      ok(`ipc 列舉 terminal:${name}`, ipc.includes(`'terminal:${name}'`))
-      ok(`preload 白名單有 terminal:${name}`, preload.includes(`'terminal:${name}'`))
+    // main.js 那份 `registerTerminalIpc({ service: { ... } })` 才是**第四份**清單，
+    // 也是最容易漏的一份：v1.16.0 的 resolveLinks／revealLink 就漏在這裡——
+    // service 有、ipc 有、preload 有，只有 main.js 沒接，整個連結功能安靜地不作用。
+    // 所以不要列固定名單，直接從 ipc.js 反推「有哪些 service.X 真的被用到」。
+    const mainJs = fs.readFileSync(path.join(ROOT, 'src/main/main.js'), 'utf8')
+    const block = mainJs.slice(mainJs.indexOf('registerTerminalIpc('))
+    const serviceBlock = block.slice(0, block.indexOf('isMainSender'))
+    const used = [...new Set([...ipc.matchAll(/service\.(\w+)\(/g)].map((m) => m[1]))]
+    ok('ipc.js 至少用到 9 支 service 方法', used.length >= 9, used.join(' '))
+    for (const name of used) {
+      ok(`service 匯出 ${name}`, new RegExp(`\\b${name}[,:]`).test(service))
+      ok(`main.js 的白名單接得到 ${name}`, new RegExp(`\\b${name}:`).test(serviceBlock))
     }
+    const channels = [...new Set([...ipc.matchAll(/ipcMain\.handle\('(terminal:\w+)'/g)].map((m) => m[1]))]
+    for (const channel of channels) {
+      ok(`preload 白名單有 ${channel}`, preload.includes(`'${channel}'`))
+    }
+  }
+
+  // ===== 貼上不可以被安靜截掉 =====
+  console.log('\n[送進 PTY 的切段]')
+  {
+    const { splitForPty, MAX_WRITE_CHARS } = await import(
+      pathToFileURL(path.join(ROOT, 'src/renderer/scripts/term-write-chunks.js')).href
+    )
+    const pty = require(path.join(ROOT, 'src/main/terminal/pty.js'))
+    ok('切段上限跟 main 的 MAX_WRITE_CHARS 同一個數字', MAX_WRITE_CHARS === pty.MAX_WRITE_CHARS,
+      `${MAX_WRITE_CHARS} vs ${pty.MAX_WRITE_CHARS}`)
+    const long = 'a'.repeat(MAX_WRITE_CHARS * 2 + 7)
+    const parts = splitForPty(long)
+    ok('超長字串切成多段', parts.length === 3, `${parts.length} 段`)
+    ok('每一段都在上限內', parts.every((one) => one.length <= MAX_WRITE_CHARS))
+    ok('接回去跟原字串一模一樣（不再被截半）', parts.join('') === long)
+    ok('沒超過上限就不切', splitForPty('hello').length === 1)
+    ok('空字串不產生任何一段', splitForPty('').length === 0)
+    // 代理對剛好卡在邊界：切一半送出去，兩邊都是無效的半個字元
+    const pair = 'x'.repeat(MAX_WRITE_CHARS - 1) + '\u{1F600}' + 'y'
+    const cut = splitForPty(pair)
+    const noSplitPair = cut.every((one) => {
+      const last = one.charCodeAt(one.length - 1)
+      return !(last >= 0xd800 && last <= 0xdbff)
+    })
+    ok('代理對不會被從中間剖開', noSplitPair && cut.join('') === pair)
   }
 
   console.log(`\n${passed} passed, ${failed} failed`)
