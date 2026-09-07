@@ -282,14 +282,32 @@ async function main() {
         bubbles: true, cancelable: true, clientX: 120, clientY: 120
       }))
       return JSON.stringify({
-        buttons: row.querySelectorAll('.chat-list-btn').length,
+        buttons: [...row.querySelectorAll('.chat-list-btn')].map((one) => one.className),
         menu: [...document.querySelectorAll('.ws-menu-item')].map((one) => one.textContent)
       })
     })()`)
-    ok('[B] 專案列移除舊按鈕', String(projectMenu).includes('"buttons":0'), projectMenu)
+    ok('[B] 專案列上只剩終端機清單的收合鈕',
+      String(projectMenu).includes('"buttons":["chat-list-btn proj-terms-toggle"]'), projectMenu)
     ok('[B] 專案列右鍵會開選單',
       String(projectMenu).includes('在此開啟終端機') && String(projectMenu).includes('重新命名'), projectMenu)
     await cdp.eval(`document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))`)
+    // 收合是用 CSS display 藏的：只斷言 class 抓不到打錯的變數名，要量得到高度歸零
+    const termsFold = await cdp.eval(`(() => {
+      const row = document.querySelector('#projList [data-id="${PROJECT_ID}"]')
+      const btn = row?.querySelector('.proj-terms-toggle')
+      const status = row?.querySelector('.proj-status')
+      if (!btn || !status) return JSON.stringify({ err: 'no-toggle' })
+      const before = status.offsetHeight
+      btn.click()
+      const collapsed = status.offsetHeight
+      const stored = localStorage.getItem('wsProjTermsCollapsed') || ''
+      btn.click()
+      return JSON.stringify({ before, collapsed, stored, after: status.offsetHeight })
+    })()`)
+    const fold = JSON.parse(String(termsFold))
+    ok('[B] 終端機清單收得起來也展得開',
+      fold.before > 0 && fold.collapsed === 0 && fold.after === fold.before, termsFold)
+    ok('[B] 收合狀態有存起來', String(fold.stored).includes(PROJECT_ID), termsFold)
     const treeReady = await waitInPage(cdp, `document.querySelectorAll('#wsTree .ws-tree-row').length >= 2`, 10000)
     ok('[B] 檔案總管列得出東西', treeReady)
     const names = await cdp.eval(

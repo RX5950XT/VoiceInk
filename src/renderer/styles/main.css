@@ -4078,6 +4078,22 @@ body:has(.ws-monaco .find-widget.visible) .workbench-hover-container {
   padding: 6px 10px;
 }
 
+/* 終端機清單收起／展開：箭頭常駐（hover 才出現的操作等於沒有） */
+.proj-terms-toggle {
+  flex: none;
+  align-self: flex-start;
+  margin: 6px 6px 0 0;
+}
+
+/* 轉的是按鈕本身：`.chat-list-btn` 已經有 var(--transition)（含 transform） */
+.proj-list-item.terms-collapsed .proj-terms-toggle {
+  transform: rotate(-90deg);
+}
+
+.proj-list-item.terms-collapsed .proj-status {
+  display: none;
+}
+
 .proj-list-item .proj-meta {
   font-size: 10px;
 }
