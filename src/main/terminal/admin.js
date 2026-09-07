@@ -37,6 +37,7 @@ let starting = null
 /** @type {NodeJS.Timeout | null} */
 let connectTimer = null
 let buf = ''
+let runtime = null
 
 /**
  * PowerShell 的 `-ArgumentList`：陣列元素含空白時不會自己加引號，而這段字串又
@@ -109,7 +110,8 @@ function handleLine(line) {
   if (msg?.ev === 'ready') return
   const term = terms.get(typeof msg?.id === 'string' ? msg.id : '')
   if (!term) return
-  if (msg.ev === 'data' && typeof msg.data === 'string') term.onData?.(msg.data)
+  if (msg.ev === 'spawned' && Number.isSafeInteger(msg.pid) && msg.pid > 0) term.pid = msg.pid
+  else if (msg.ev === 'data' && typeof msg.data === 'string') term.onData?.(msg.data)
   else if (msg.ev === 'exit') {
     terms.delete(msg.id)
     term.onExit?.({ exitCode: Number.isFinite(msg.code) ? msg.code : 0 })
@@ -121,6 +123,7 @@ function handleLine(line) {
  * @returns {{ execPath: string, appPath: string, isPackaged: boolean }}
  */
 function hostEnv() {
+  if (runtime) return { execPath: runtime.exe, appPath: runtime.entry, isPackaged: false, runAsNode: true }
   const { app } = require('electron')
   // 開發模式一律指專案根（有 package.json 的那一層），不用 app.getAppPath()——
   // 用 electron 直接跑單一腳本時它會是腳本所在的目錄，host 就載不到 main.js
@@ -193,6 +196,15 @@ function ensureHost() {
       const args = env.isPackaged
         ? [`--terminal-admin-host=${pipeName}`]
         : [env.appPath, `--terminal-admin-host=${pipeName}`]
+      let launchExe = env.execPath
+      let launchArgs = args
+      if (env.runAsNode) {
+        // ShellExecute 提權不保證繼承自訂環境變數，在提權後明確設定 Node 模式。
+        const command = "$env:ELECTRON_RUN_AS_NODE = '1'; $env:ELECTRON_NO_ASAR = '1'; & "
+          + [env.execPath, ...args].map(value => `'${value.replace(/'/g, "''")}'`).join(' ')
+        launchExe = 'powershell.exe'
+        launchArgs = ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')]
+      }
       let child
       try {
         child = spawn('powershell.exe', [
@@ -200,7 +212,7 @@ function ensureHost() {
           '-NonInteractive',
           '-ExecutionPolicy', 'Bypass',
           '-Command',
-          `Start-Process -FilePath '${env.execPath.replace(/'/g, "''")}' -ArgumentList (${psArgList(args)}) -Verb RunAs -WindowStyle Hidden`
+          `Start-Process -FilePath '${launchExe.replace(/'/g, "''")}' -ArgumentList (${psArgList(launchArgs)}) -Verb RunAs -WindowStyle Hidden`
         ], { windowsHide: true, stdio: 'ignore' })
       } catch {
         fail('無法啟動管理員終端機。')
@@ -250,6 +262,7 @@ function spawnAdmin(meta, cols, rows) {
   })
 
   return {
+    get pid() { return term.pid || null },
     onData(fn) { term.onData = fn },
     onExit(fn) { term.onExit = fn },
     write(data) {
@@ -276,4 +289,4 @@ function shutdown() {
   cleanup()
 }
 
-module.exports = { spawnAdmin, shutdown, psArgList, _terms: terms }
+module.exports = { spawnAdmin, shutdown, psArgList, configureRuntime(value) { runtime = value }, _terms: terms }

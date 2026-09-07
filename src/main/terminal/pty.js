@@ -72,6 +72,8 @@ let emit = null
 
 /** @type {Map<string, LiveSession>} */
 const live = new Map()
+/** 已結束的畫面也留著，直到使用者明確關掉該終端機。 */
+const finished = new Map()
 
 /** @type {NodeJS.Timeout | null} */
 let tickTimer = null
@@ -104,7 +106,7 @@ function clampDim(value, max, fallback) {
  * @param {string} id
  */
 function publishStatus(id) {
-  const session = live.get(id)
+  const session = live.get(id) || finished.get(id)
   if (!emit) return
   emit('terminal:status', {
     id,
@@ -188,7 +190,7 @@ function spawnSession(meta, cols, rows) {
       cols,
       rows,
       cwd: meta.cwd,
-      env: { ...process.env, TERM: 'xterm-256color' }
+      env: shellEnvironment()
     })
 
   /** @type {LiveSession} */
@@ -225,6 +227,7 @@ function spawnSession(meta, cols, rows) {
     }
     status.onExit(session.tracker, exitCode)
     live.delete(meta.id)
+    if (!session.forgotten) finished.set(meta.id, session)
     publishStatus(meta.id)
   })
 
@@ -239,7 +242,7 @@ function spawnSession(meta, cols, rows) {
 async function listSessions() {
   const items = await store.list()
   return items.map((item) => {
-    const session = live.get(item.id)
+    const session = live.get(item.id) || finished.get(item.id)
     return {
       ...item,
       state: session ? session.tracker.state : 'stopped',
@@ -268,7 +271,7 @@ function renameSession(id, title) {
  * @param {string} id
  */
 async function deleteSession(id) {
-  killSession(id)
+  forgetSession(id)
   await store.remove(String(id || ''))
   return true
 }
@@ -283,29 +286,66 @@ async function deleteSession(id) {
  */
 async function openSession(id, cols, rows) {
   const key = String(id || '')
+  const meta = await store.get(key)
+  if (!meta) {
+    const error = new Error('NO_SESSION')
+    error.code = 'NO_SESSION'
+    error.userMessage = '找不到這個工作階段'
+    throw error
+  }
+  return openSessionWithMeta(meta, cols, rows)
+}
+
+/** 背景宿主使用 main 已讀取的 metadata，不另外開 electron-store。 */
+function openSessionWithMeta(meta, cols, rows) {
+  const key = meta.id
   const c = clampDim(cols, MAX_COLS, 80)
   const r = clampDim(rows, MAX_ROWS, 24)
-  let session = live.get(key)
+  let session = live.get(key) || finished.get(key)
   if (!session) {
-    const meta = await store.get(key)
-    if (!meta) {
-      const error = new Error('NO_SESSION')
-      error.code = 'NO_SESSION'
-      error.userMessage = '找不到這個工作階段'
-      throw error
-    }
     session = spawnSession(meta, c, r)
     publishStatus(key)
   } else if (session.cols !== c || session.rows !== r) {
     resizeSession(key, c, r)
   }
+  // 快照已含 pendingOut，先派送並增加 seq，接回的 renderer 才不會重複那一段。
+  if (session.flushTimer) {
+    clearTimeout(session.flushTimer)
+    flush(session)
+  }
   return {
     id: key,
+    pid: session.term.pid || null,
     state: session.tracker.state,
     exitCode: session.tracker.exitCode,
     seq: session.seq,
     buffer: session.buffer
   }
+}
+
+/** 宿主的 Node 模式只給宿主自己用，不污染使用者啟動的程式。 */
+function shellEnvironment() {
+  const env = { ...process.env, TERM: 'xterm-256color' }
+  delete env.ELECTRON_RUN_AS_NODE
+  delete env.ELECTRON_NO_ASAR
+  return env
+}
+
+function sessionStates() {
+  return [...live.values(), ...finished.values()].map((session) => ({
+    id: session.id, state: session.tracker.state, exitCode: session.tracker.exitCode,
+    pid: session.term.pid || null
+  }))
+}
+
+function forgetSession(id) {
+  const session = live.get(id) || finished.get(id)
+  if (!session) return false
+  session.forgotten = true
+  killSession(id)
+  live.delete(id)
+  finished.delete(id)
+  return true
 }
 
 /**
@@ -363,7 +403,7 @@ function killSession(id) {
 
 /** `before-quit` 要呼叫，否則殘留 conhost／OpenConsole 程序 */
 function killAll() {
-  for (const id of [...live.keys()]) killSession(id)
+  for (const id of [...live.keys(), ...finished.keys()]) forgetSession(id)
   // 提權 host 是獨立程序，斷線它才會把管理員 shell 收乾淨再自己結束
   require('./admin').shutdown()
   if (tickTimer) {
@@ -395,6 +435,10 @@ module.exports = {
   renameSession,
   deleteSession,
   openSession,
+  openSessionWithMeta,
+  shellEnvironment,
+  sessionStates,
+  forgetSession,
   writeSession,
   resizeSession,
   killSession,

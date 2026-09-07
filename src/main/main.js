@@ -196,6 +196,7 @@ const THEME_VALUES = new Set(['dark', 'light'])
 
 const TRANSLATE_TARGET_LANGS = new Set(['zh-TW', 'zh-CN', 'en', 'ja', 'ko'])
 const MAX_TRANSLATE_CHARS = 1500
+const MAX_CLOUD_TRANSLATE_CHARS = 200000
 const DEFAULT_LLM_KEY = 'linguaforge08q4'
 const DEFAULT_ASR_MODEL_KEY = 'qwen3asr'
 /** 已下架的模型 key → 接替者（讀到舊值就當成新值，不必寫回）；表在 models.js */
@@ -300,7 +301,7 @@ async function loadDictation() {
  */
 function loadTerminal() {
   if (!terminalMod) {
-    terminalMod = require('./terminal/pty')
+    terminalMod = require('./terminal/service')
     terminalMod.setEmitter((channel, payload) => {
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload)
     })
@@ -1378,15 +1379,18 @@ ipcMain.handle('translate', async (event, text, targetLang, opts) => {
   if (typeof text !== 'string') throw new Error('翻譯文字必須是字串')
   const trimmed = text.trim()
   if (!trimmed) return ''
-  if (trimmed.length > MAX_TRANSLATE_CHARS) {
-    throw new Error(`文字過長（上限 ${MAX_TRANSLATE_CHARS} 字），請縮短後再翻譯`)
+  // 來源由 main 的設定決定，不能信任 renderer 指定的模式。
+  const scope = modelScope.isScope(opts?.scope) && opts.scope !== 'dictation' ? opts.scope : ''
+  const translator = scope ? modelScope.readLlm(store, scope).mode : store.get('translator', 'local')
+  const maxChars = translator === 'cloud' ? MAX_CLOUD_TRANSLATE_CHARS : MAX_TRANSLATE_CHARS
+  if (trimmed.length > maxChars) {
+    throw new Error(`文字過長（上限 ${maxChars} 字），請縮短後再翻譯`)
   }
   const lang = typeof targetLang === 'string' ? targetLang : 'zh-TW'
   if (!TRANSLATE_TARGET_LANGS.has(lang)) {
     throw new Error(`不支援的目標語言: ${lang}`)
   }
   // scope 是白名單：renderer 只能說「我是哪一頁」，模型與金鑰仍由 main 從 store 取
-  const scope = modelScope.isScope(opts?.scope) && opts.scope !== 'dictation' ? opts.scope : ''
   return loadLocalLlm().translate(store, trimmed, lang, { ...(opts || {}), scope })
 })
 
@@ -1929,8 +1933,8 @@ app.on('before-quit', (e) => {
   }
   e.preventDefault()
   isQuitting = true
-  // 終端機先收：每個工作階段都是一顆真的 conhost，不砍就會留在工作管理員裡
-  if (terminalMod) terminalMod.killAll()
+  // 終端機由獨立宿主持有；更新／結束 App 只斷線，明確關閉分頁才結束程序。
+  if (terminalMod) terminalMod.disconnect()
   // 系統監控有三顆子程序（probe.ps1／nvidia-smi／感測器 sidecar），少收一顆就變孤兒。
   // **這條是 await 得到的**：風扇的手動 PWM 留在晶片裡，沒等它交還就退出等於把風扇
   // 釘在最後的轉速（事後 SetDefault 也救不回來，只有重開機）。

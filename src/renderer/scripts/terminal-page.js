@@ -1,4 +1,5 @@
 import { electronAPI, showToast, setChatPaneMode } from './app.js'
+import { terminalStatusLabel, setTerminalStatuses } from './ws-terminal-status.js'
 import {
   initWsTabs, showSurface, trackTerminal, paintTerminalTab, currentProjectId
 } from './ws-tabs.js'
@@ -19,13 +20,6 @@ import { FitAddon } from '../../../node_modules/@xterm/addon-fit/lib/addon-fit.m
  * **側欄沒有終端機清單**（那裡只列專案）：狀態徽章、未讀點、改名與刪除
  * 全在 `ws-tabs.js` 的分頁上，這裡只把 main 的狀態推過去。
  */
-
-const STATE_LABELS = {
-  running: '運行中',
-  idle: '已完成',
-  exited: '已結束',
-  stopped: '未啟動'
-}
 
 let initialized = false
 let hostEl = null
@@ -91,11 +85,7 @@ function showError(message) {
  * @returns {string}
  */
 function stateLabel(item) {
-  const base = STATE_LABELS[item.state] || item.state
-  if (item.state === 'idle' && Number.isFinite(item.exitCode) && item.exitCode !== 0) {
-    return `${base} · 離開碼 ${item.exitCode}`
-  }
-  return base
+  return terminalStatusLabel(item)
 }
 
 /**
@@ -117,6 +107,7 @@ function pushTabState(id) {
 
 /** 全部推一次（清單重讀之後） */
 function pushAllTabStates() {
+  setTerminalStatuses(items)
   for (const item of items) pushTabState(item.id)
 }
 
@@ -182,7 +173,7 @@ function createPane(id) {
     convertEol: false,
     cursorBlink: true,
     fontFamily: '"Cascadia Mono", "Cascadia Code", Consolas, "微軟正黑體", monospace',
-    fontSize: 13,
+    fontSize: 17,
     scrollback: 5000,
     theme: themeColors()
   })
@@ -191,6 +182,13 @@ function createPane(id) {
   term.open(pane)
   term.onData((data) => {
     void electronAPI.terminal.write(id, data)
+  })
+  term.attachCustomKeyEventHandler((event) => {
+    if (event.key !== 'Enter' || !event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || event.isComposing) return true
+    event.preventDefault()
+    // CSI u 保留 Shift 修飾鍵，讓 AI CLI 分辨換行與送出。
+    if (event.type === 'keydown') term.input('\x1b[13;2u', true)
+    return false
   })
   // 一般終端機的習慣：選起來就進剪貼簿、右鍵就貼上
   pane.addEventListener('mouseup', (event) => {
@@ -233,7 +231,8 @@ function showHost(on) {
  * 點側欄某一列：沒開過就開一顆 pty，開過就把畫面切回來。
  * @param {string} id
  */
-async function openSession(id) {
+async function openSession(id, isActive = () => true) {
+  const projectId = currentProjectId()
   // 聊天與工作區同頁：點終端機就是切到工作區主區（同步切 DOM，xterm 才量得到尺寸）
   setChatPaneMode('workspace')
   currentId = id
@@ -246,6 +245,9 @@ async function openSession(id) {
   if (!entry) entry = createPane(id)
   else for (const [key, pane] of panes) pane.pane.classList.toggle('is-active', key === id)
   fitPane(entry)
+  entry.term.scrollToBottom()
+  const isCurrent = () => currentId === id && currentProjectId() === projectId
+    && panes.get(id) === entry && !hostEl.classList.contains('hidden') && isActive()
 
   if (fresh) {
     try {
@@ -260,15 +262,21 @@ async function openSession(id) {
       entry.ready = true
       await drainOutput(entry)
     } catch {
+      const active = isCurrent()
       disposePane(id)
-      currentId = ''
-      showHost(false)
+      if (active) {
+        currentId = ''
+        showHost(false)
+      }
       await reloadList()
       return
     }
   }
 
+  if (!isCurrent()) return
+  entry.term.scrollToBottom()
   entry.term.focus()
+  try { localStorage.setItem('termLastSession', id) } catch { /* 版面偏好不影響工作階段 */ }
   // 分頁列要有這一格（還原專案分頁時也走這裡）
   trackTerminal(id, items.find((item) => item.id === id)?.title || '終端機')
   await reloadList()
@@ -413,7 +421,7 @@ function onStatus(payload) {
     return
   }
   const wasRunning = item.state === 'running'
-  item.state = payload.state === 'exited' && !panes.has(payload.id) ? 'stopped' : payload.state
+  item.state = payload.state
   item.exitCode = payload.exitCode
   // 跑完的當下不在看它 → 亮未讀點（這是「哪個代理做完了」的提示）。
   // 「不在看」包含兩種：看的是別的工作階段，或終端機主區沒開著
@@ -431,6 +439,7 @@ function onStatus(payload) {
     document.dispatchEvent(new CustomEvent('ws:terminal-idle', { detail: { id: payload.id } }))
   }
   pushTabState(payload.id)
+  setTerminalStatuses(items)
 }
 
 export function initTerminalPage() {
@@ -466,10 +475,25 @@ export function initTerminalPage() {
       catalog = await call(electronAPI.terminal.catalog(), '讀取設定失敗')
       cwdInput.value = catalog.homeDir || ''
       await reloadList()
+      await restorePreviousTerminals()
     } catch {
       // 訊息已顯示
     }
   })()
+}
+
+async function restorePreviousTerminals() {
+  if (currentId || !items.length) return
+  let lastId = ''
+  try { lastId = localStorage.getItem('termLastSession') || '' } catch { /* 改用清單最後一個 */ }
+  const last = items.find(item => item.id === lastId) || items[items.length - 1]
+  const workspace = await import('./workspace-page.js')
+  if (currentId || await workspace.restoreLastProject(last.projectId)) return
+  if (currentProjectId()) return
+  const unassigned = items.filter(item => !item.projectId)
+  for (const item of unassigned) trackTerminal(item.id, item.title)
+  const target = unassigned.find(item => item.id === last.id) || unassigned[unassigned.length - 1]
+  if (target) await openSession(target.id)
 }
 
 /**
@@ -502,29 +526,25 @@ export async function runInNewTerminal(title, command) {
  * 給 `ws-tabs.js` 用：切到（或開啟）某個工作階段。
  * @param {string} id
  */
-export async function openTerminalSession(id) {
+export async function openTerminalSession(id, isActive = () => true) {
   initTerminalPage()
-  await openSession(id)
-}
-
-/**
- * 關掉一個終端機**分頁**：只收掉畫面那一格，工作階段本身還在側欄裡活著
- * （下次點側欄會重新掛上，scrollback 由 main 那邊留著）。
- * @param {string} id
- */
-export function detachTerminalPane(id) {
-  disposePane(id)
-  if (currentId === id) currentId = ''
+  await openSession(id, isActive)
 }
 
 export function refreshTerminalPage() {
   initTerminalPage()
   // 主題可能在別頁被切過
   const colors = themeColors()
-  for (const entry of panes.values()) entry.term.options.theme = colors
+  for (const entry of panes.values()) {
+    if (Object.entries(colors).some(([key, value]) => entry.term.options.theme[key] !== value)) entry.term.options.theme = colors
+  }
   // 回到這一頁＝看到了目前這個階段，未讀點該清掉
   if (currentId) unread.delete(currentId)
   void reloadList()
   // 分頁剛顯示，這一幀才量得到尺寸
-  requestAnimationFrame(() => fitCurrent())
+  panes.get(currentId)?.term.scrollToBottom()
+  requestAnimationFrame(() => {
+    fitCurrent()
+    panes.get(currentId)?.term.scrollToBottom()
+  })
 }

@@ -1,5 +1,6 @@
 import { electronAPI, showToast, setChatPaneMode } from './app.js'
 import { createListReorder } from './list-reorder.js'
+import { terminalStatuses } from './ws-terminal-status.js'
 import {
   initWsTabs,
   openEditorTab,
@@ -113,6 +114,26 @@ function renderList() {
     return
   }
   for (const item of projects) el.list.appendChild(buildListItem(item))
+  paintProjectStatuses()
+}
+
+function paintProjectStatuses() {
+  for (const row of el.list?.querySelectorAll('.proj-list-item') || []) {
+    const host = row.querySelector('.proj-status')
+    if (!host) continue
+    const sessions = terminalStatuses().filter((item) => item.projectId === row.dataset.id)
+    host.replaceChildren()
+    if (!sessions.length) host.textContent = '沒有運行中的終端機'
+    for (const item of sessions) {
+      const line = document.createElement('span')
+      line.className = 'proj-session-status'
+      line.dataset.state = item.state
+      line.dataset.id = item.id
+      line.textContent = `${item.title} · ${item.stateLabel}`
+      line.title = `${line.textContent}（依此 App 的終端機活動判定）`
+      host.appendChild(line)
+    }
+  }
 }
 
 /**
@@ -150,7 +171,9 @@ function buildListItem(item) {
   pathEl.title = item.path
   meta.appendChild(pathEl)
 
-  open.append(title, meta)
+  const status = document.createElement('span')
+  status.className = 'proj-status'
+  open.append(title, meta, status)
   open.addEventListener('click', () => void selectProject(item.id))
 
   row.append(open)
@@ -175,6 +198,7 @@ async function launchProjectTerminal(item, admin = false) {
     const created = await call(electronAPI.terminal.create({
       preset: 'shell',
       cwd: item.path,
+      projectId: item.id,
       admin
     }), '建立終端機失敗')
     const mod = await import('./terminal-page.js')
@@ -392,6 +416,7 @@ async function selectProject(id) {
   }
   if (!activated || seq !== projectSeq) return false
   currentId = project.id
+  try { localStorage.setItem('wsLastProject', project.id) } catch { /* 版面偏好不影響專案資料 */ }
   expanded = new Set()
   selected = new Set()
   anchorRel = ''
@@ -2090,6 +2115,7 @@ export function initWorkspacePage() {
   el.searchResults = document.getElementById('wsSearchResults')
 
   initGitSections()
+  document.addEventListener('ws:terminal-status', paintProjectStatuses)
   el.newBtn?.addEventListener('click', () => void addProject())
   initProjectDrop()
   document.querySelectorAll('.ws-right-tab').forEach((btn) => {
@@ -2158,4 +2184,16 @@ export function refreshWorkspacePage() {
   initWorkspacePage()
   announceProject()
   void reloadList().then(() => renderPanel()).catch(() => {})
+}
+
+/** App 重開時還原上次的專案；等待期間若使用者已切換，就以使用者為準。 */
+export async function restoreLastProject(fallbackId = '') {
+  initWorkspacePage()
+  if (projectSeq) return true
+  await reloadList()
+  if (projectSeq) return true
+  let id = fallbackId
+  try { id = localStorage.getItem('wsLastProject') || id } catch { /* 沿用終端機的專案 */ }
+  const target = projects.find(item => item.id === id && !item.missing)
+  return target ? selectProject(target.id) : false
 }

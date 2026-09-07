@@ -65,3 +65,6 @@ resources/hook/
 
 # 打包用的臨時輸出（dist/win-unpacked 被別的程式鎖住時的替代路徑）
 dist-hud/
+
+# Claude Code 的工作區（worktrees 動輒好幾份，不進版控）
+.claude/

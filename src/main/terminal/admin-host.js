@@ -34,7 +34,7 @@ function run(pipeName) {
     return
   }
   const pty = require('@lydell/node-pty')
-  const { shellCommand, _clampDim: clampDim } = require('./pty')
+  const { shellCommand, shellEnvironment, _clampDim: clampDim } = require('./pty')
 
   /** @type {Map<string, import('@lydell/node-pty').IPty>} */
   const terms = new Map()
@@ -78,14 +78,18 @@ function run(pipeName) {
           cols: clampDim(msg.cols, 1000, 80),
           rows: clampDim(msg.rows, 500, 24),
           cwd: store.normalizeCwd(msg.cwd),
-          env: { ...process.env, TERM: 'xterm-256color' }
+          env: shellEnvironment()
         })
       } catch {
         send({ ev: 'exit', id, code: 1 })
         return
       }
       terms.set(id, term)
-      term.onData((data) => send({ ev: 'data', id, data }))
+      let announced = false
+      term.onData((data) => {
+        if (!announced) { announced = true; send({ ev: 'spawned', id, pid: term.pid }) }
+        send({ ev: 'data', id, data })
+      })
       term.onExit(({ exitCode }) => {
         terms.delete(id)
         send({ ev: 'exit', id, code: exitCode })

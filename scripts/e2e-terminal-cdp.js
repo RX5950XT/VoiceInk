@@ -20,6 +20,15 @@ const PORT = 9247
 const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
 const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-e2e-terminal-'))
 fs.writeFileSync(path.join(USER_DATA_DIR, 'config.json'), JSON.stringify({ sysmonSensors: false }))
+const PROJECT_DIR = path.join(USER_DATA_DIR, 'project')
+fs.mkdirSync(PROJECT_DIR)
+fs.mkdirSync(path.join(USER_DATA_DIR, 'other-project'))
+fs.writeFileSync(path.join(USER_DATA_DIR, 'workspaces.json'), JSON.stringify({
+  projects: [
+    { id: 'w_status_test', name: '狀態測試', path: PROJECT_DIR, createdAt: Date.now() },
+    { id: 'w_status_other', name: '另一個專案', path: path.join(USER_DATA_DIR, 'other-project'), createdAt: Date.now() }
+  ]
+}))
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -152,6 +161,13 @@ async function main() {
     await cdp.eval(`(async () => {
   const { Terminal } = await import('../../node_modules/@xterm/xterm/lib/xterm.mjs')
       const originalWrite = Terminal.prototype.write
+      const originalOpen = Terminal.prototype.open
+      Terminal.prototype.open = function (...args) {
+        window.__testTerminal = this
+        window.__testTerminals ||= new Map()
+        window.__testTerminals.set(args[0].dataset.id, this)
+        return originalOpen.apply(this, args)
+      }
       window.__termAsyncWrites = 0
       Terminal.prototype.write = function (...args) {
         window.__termAsyncWrites += 1
@@ -181,6 +197,10 @@ async function main() {
       await cdp.eval(`typeof window.__termLoadError === 'undefined'`))
 
     // ===== 新終端機（走分頁列的「＋」）=====
+    await cdp.eval(`document.getElementById('sidebarModeProjects').click()`)
+    await waitInPage(cdp, `!!document.querySelector('#projList [data-id="w_status_test"]')`)
+    await cdp.eval(`document.querySelector('#projList [data-id="w_status_test"] .chat-list-open').click()`)
+    await sleep(1000)
     const shells = await cdp.eval(`(async () => {
       document.getElementById('wsNewBtn').click()
       await new Promise((r) => setTimeout(r, 300))
@@ -223,6 +243,26 @@ async function main() {
     createdId = created.id
     ok('建立後彈窗關閉、畫布顯示', created.dialogClosed && created.hostVisible, JSON.stringify(created))
     ok('xterm 真的掛上去了', created.panes === 1 && created.rows === 1, JSON.stringify(created))
+    const keyboard = await cdp.eval(`(() => {
+      const term = window.__testTerminal
+      const sent = []
+      const capture = term.onData(data => sent.push(data))
+      const fire = (type, shiftKey) => term.textarea.dispatchEvent(new KeyboardEvent(type, {
+        key: 'Enter', code: 'Enter', keyCode: 13, which: 13, shiftKey, bubbles: true, cancelable: true
+      }))
+      fire('keydown', true)
+      fire('keypress', true)
+      fire('keyup', true)
+      const shifted = sent.splice(0)
+      fire('keydown', false)
+      fire('keyup', false)
+      capture.dispose()
+      return { shifted, enter: sent, font: term.options.fontSize }
+    })()`)
+    ok('Shift+Enter 只送一次換行按鍵，不誤送 Enter',
+      JSON.stringify(keyboard.shifted) === JSON.stringify(['\x1b[13;2u']), JSON.stringify(keyboard))
+    ok('Enter 維持送出，字級加大 4 至 17',
+      JSON.stringify(keyboard.enter) === JSON.stringify(['\r']) && keyboard.font === 17, JSON.stringify(keyboard))
 
     // 回歸：背景頁的 DOM 不會繪製 xterm；確認 prompt 已到 main buffer，且 renderer
     // 沒走會被背景 timer 節流的非同步 write。舊版在這裡會至少呼叫一次 write。
@@ -242,18 +282,65 @@ async function main() {
     // ===== 狀態徽章 =====
     // shell integration 的第一個標記要先落地，再送指令才判得準
     await sleep(2000)
+    await cdp.eval(`window.__statusTab = document.querySelector('.ws-tab.is-active'); window.__statusProject = document.querySelector('#projList [data-id="w_status_test"]')`)
     await cdp.eval(`window.electronAPI.terminal.write(${JSON.stringify(createdId)}, 'ping -n 5 127.0.0.1\\r')`)
     ok('送出指令後分頁的狀態燈變成「運行中」', await waitInPage(
       cdp,
       `document.querySelector('.ws-tab.is-active .ws-tab-state')?.classList.contains('ws-tab-state-running') === true`,
       6000
     ), await cdp.eval(`document.querySelector('.ws-tab.is-active .ws-tab-open')?.title || '(無)'`))
+    ok('分頁與專案都直接顯示名稱和運行文字', await cdp.eval(`(() => {
+      const tab = document.querySelector('.ws-tab.is-active .ws-tab-status-label')
+      const row = document.querySelector('#projList .proj-session-status[data-id="${createdId}"]')
+      return tab?.textContent === '運行中' && row?.dataset.state === 'running' && row.textContent.includes(${JSON.stringify(created.title)})
+    })()`))
+    if (process.env.VOICEINK_STATUS_SCREENSHOT) {
+      const shot = await cdp.send('Page.captureScreenshot', { format: 'png' })
+      fs.writeFileSync(process.env.VOICEINK_STATUS_SCREENSHOT, Buffer.from(shot.data, 'base64'))
+    }
 
     ok('跑完變成「已完成」', await waitInPage(
       cdp,
       `document.querySelector('.ws-tab.is-active .ws-tab-open').title.includes('已完成')`,
       20000
     ), await cdp.eval(`document.querySelector('.ws-tab.is-active .ws-tab-open')?.title || '(無)'`))
+    ok('停止輸出後兩處同步完成，保留原本分頁與專案節點', await cdp.eval(`(() => {
+      const row = document.querySelector('#projList .proj-session-status[data-id="${createdId}"]')
+      return row?.textContent.includes('已完成') && document.querySelector('.ws-tab.is-active .ws-tab-status-label')?.textContent === '已完成'
+        && window.__statusTab === document.querySelector('.ws-tab.is-active')
+        && window.__statusProject === document.querySelector('#projList [data-id="w_status_test"]')
+    })()`))
+
+    await cdp.eval(`window.electronAPI.terminal.write(${JSON.stringify(createdId)}, 'Start-Sleep -Seconds 8\\r')`)
+    ok('指令仍活著但沒有輸出時，不誤報已完成', await waitInPage(cdp,
+      `document.querySelector('.ws-tab.is-active .ws-tab-status-label')?.textContent === '暫無輸出'
+        && document.querySelector('#projList .proj-session-status[data-id="${createdId}"]')?.textContent.includes('暫無輸出')`, 7000))
+    await waitInPage(cdp, `document.querySelector('.ws-tab.is-active .ws-tab-status-label')?.textContent === '已完成'`, 10000)
+
+    await cdp.eval(`window.electronAPI.terminal.write(${JSON.stringify(createdId)}, 'ping -n 6 127.0.0.1\\r')`)
+    await cdp.eval(`(() => {
+      window.__retainedPane = document.querySelector('.term-pane[data-id="${createdId}"]')
+      window.__retainedTerm = window.__testTerminals.get(${JSON.stringify(createdId)})
+      window.__retainedTerm._core._writeBuffer.writeSync('\\r\\n' + Array.from({ length: 150 }, (_, i) => 'switch-line-' + i).join('\\r\\n'))
+      window.__retainedTerm.scrollToTop()
+    })()`)
+    ok('切換前確實有舊訊息可捲動', await cdp.eval('window.__retainedTerm.buffer.active.baseY > 0 && window.__retainedTerm.buffer.active.viewportY === 0'))
+    await cdp.eval(`document.querySelector('#projList [data-id="w_status_other"] .chat-list-open').click()`)
+    ok('切到另一個專案仍看得到背景運行狀態，沒有串到別的專案', await waitInPage(cdp, `(() => {
+      const own = document.querySelector('#projList [data-id="w_status_test"] .proj-session-status')
+      const other = document.querySelector('#projList [data-id="w_status_other"] .proj-session-status')
+      return own?.dataset.state === 'running' && !other
+    })()`))
+    ok('背景專案完成時側欄即時更新', await waitInPage(cdp,
+      `document.querySelector('#projList .proj-session-status[data-id="${createdId}"]')?.textContent.includes('已完成')`))
+    await cdp.eval(`document.querySelector('#projList [data-id="w_status_test"] .chat-list-open').click()`)
+    ok('切回專案還原分頁狀態', await waitInPage(cdp,
+      `document.querySelector('.ws-tab[data-id="${createdId}"] .ws-tab-status-label')?.textContent === '已完成'`))
+    ok('跨專案切回沿用同一個終端機畫面，不重建 xterm', await cdp.eval(`
+      document.querySelector('.term-pane[data-id="${createdId}"]') === window.__retainedPane
+      && window.__testTerminals.get(${JSON.stringify(createdId)}) === window.__retainedTerm`))
+    ok('切回專案直接顯示最下面的最新訊息', await cdp.eval(`
+      window.__retainedTerm.buffer.active.viewportY === window.__retainedTerm.buffer.active.baseY`))
 
     // ===== 未讀點之一：人在別的主區（對話）時跑完 =====
     // 合頁後沒有「別的分頁」：切到某個對話＝使用者離開終端機主區。
@@ -346,6 +433,10 @@ async function main() {
     const kept = await cdp.eval(`(async () => {
       const rows = () => document.querySelector('.term-pane[data-id="${createdId}"] .xterm-rows')
       const before = rows().textContent.length
+      const term = window.__testTerminals.get(${JSON.stringify(createdId)})
+      term._core._writeBuffer.writeSync('\\r\\n' + Array.from({ length: 100 }, (_, i) => 'latest-line-' + i).join('\\r\\n'))
+      term.scrollToTop()
+      const wasScrolledUp = term.buffer.active.baseY > 0 && term.buffer.active.viewportY === 0
       document.querySelector('.nav-tab[data-page="usage"]').click()
       await new Promise((r) => setTimeout(r, 500))
       // 終端機跟聊天同頁：點分頁切回終端機主區
@@ -354,9 +445,10 @@ async function main() {
       document.querySelector('.ws-tab[data-id="${createdId}"] .ws-tab-open')?.click()
       await new Promise((r) => setTimeout(r, 600))
       const pane = document.querySelector('.term-pane[data-id="${createdId}"]')
-      return { before, after: rows().textContent.length, active: pane.classList.contains('is-active') }
+      return { before, after: rows().textContent.length, active: pane.classList.contains('is-active'), bottom: wasScrolledUp && term.buffer.active.viewportY === term.buffer.active.baseY }
     })()`)
     ok('切走再切回來畫面沒被重畫', kept.after >= kept.before && kept.active, JSON.stringify(kept))
+    ok('離開其他頁再回終端機直接捲到底部', kept.bottom, JSON.stringify(kept))
 
     // ===== 改名（分頁右鍵 → 就地改名）=====
     const renamed = await cdp.eval(`(async () => {

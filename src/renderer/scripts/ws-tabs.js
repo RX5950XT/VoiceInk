@@ -128,6 +128,7 @@ function shortTitle(value) {
  * @param {'terminal' | 'editor' | 'browser' | 'diff' | 'ai-session' | 'empty'} kind
  */
 export function showSurface(kind) {
+  if (el.termHost) el.termHost.inert = false
   el.termHost?.classList.toggle('hidden', kind !== 'terminal')
   el.termEmpty?.classList.toggle('hidden', kind !== 'empty')
   if (el.editor) el.editor.hidden = kind !== 'editor'
@@ -347,6 +348,12 @@ function renderTabs() {
     label.className = 'ws-tab-label'
     label.textContent = shortTitle(tab.title)
     open.appendChild(label)
+    if (tab.kind === 'terminal') {
+      const status = document.createElement('span')
+      status.className = 'ws-tab-status-label'
+      status.textContent = tab.stateLabel || '已停止'
+      open.appendChild(status)
+    }
     if (tab.dirty) {
       const dot = document.createElement('span')
       dot.className = 'ws-tab-dirty'
@@ -730,6 +737,7 @@ function stash() {
  * @param {string} id
  */
 async function activate(id) {
+  const generation = projectSwitch
   const tab = findTab(id)
   if (!tab) return
   if (id !== activeId) stash()
@@ -739,7 +747,9 @@ async function activate(id) {
   if (tab.kind === 'terminal') {
     // 終端機那一格由 terminal-page 管；它會自己 showSurface('terminal')
     const mod = await import('./terminal-page.js')
-    await mod.openTerminalSession(tab.id)
+    if (generation !== projectSwitch || activeId !== id || findTab(id) !== tab) return
+    await mod.openTerminalSession(tab.id, () => generation === projectSwitch && activeId === id && findTab(id) === tab)
+    if (generation !== projectSwitch || activeId !== id || findTab(id) !== tab) return
   } else if (tab.kind === 'editor') {
     paintEditor(tab)
     showSurface('editor')
@@ -914,10 +924,25 @@ export function paintTerminalTab(id, meta) {
   tab.cwd = meta.cwd
   tab.unread = meta.unread
   if (before === `${tab.title}|${tab.state}|${tab.unread}|${tab.stateLabel}`) return
-  // 改名中不重畫：提示字元標記三秒會重送九次，重畫會把輸入框整顆換掉
-  // （側欄那條「不可以 renderList()」的教訓，在分頁上一模一樣）
-  if (renamingId) return
-  renderTabs()
+  const row = el.strip?.querySelector(`.ws-tab[data-id="${CSS.escape(id)}"]`)
+  const open = row?.querySelector('.ws-tab-open')
+  if (open) {
+    open.title = tabTooltip(tab)
+    const led = open.querySelector('.ws-tab-state')
+    if (led) led.className = `ws-tab-state ws-tab-state-${tab.state}`
+    const status = open.querySelector('.ws-tab-status-label')
+    if (status) status.textContent = tab.stateLabel
+    const label = open.querySelector('.ws-tab-label')
+    if (label && renamingId !== id) label.textContent = shortTitle(tab.title)
+    open.querySelector('.ws-tab-unread')?.remove()
+    if (tab.unread) {
+      const dot = document.createElement('span')
+      dot.className = 'ws-tab-unread'
+      dot.title = '狀態已更新，還沒看過'
+      dot.setAttribute('aria-label', '有新輸出')
+      open.appendChild(dot)
+    }
+  }
   schedulePersistTabs()
 }
 
@@ -2120,7 +2145,7 @@ async function restoreProjectTabs(proj, generation) {
       tabs = tabs.filter((t) => t.kind === 'terminal')
       renderTabs()
       const carried = tabs[0]
-      if (carried) void activate(carried.id)
+      if (carried) await activate(carried.id)
       else showSurface('empty')
       return
     }
@@ -2225,9 +2250,10 @@ async function restoreProjectTabs(proj, generation) {
     }
     renderTabs()
     const targetActive = saved.activeId && findTab(saved.activeId) ? saved.activeId : (tabs[0]?.id || '')
-    if (targetActive) void activate(targetActive)
+    if (targetActive) await activate(targetActive)
     else showSurface('empty')
   } catch {
+    if (generation !== projectSwitch) return
     renderTabs()
     showSurface('empty')
   }
@@ -2245,12 +2271,10 @@ export async function setActiveProject(next) {
   }
   if (generation !== projectSwitch) return false
   const hadProject = Boolean(project?.id)
+  const keepTerminal = Boolean(next && findTab(activeId)?.kind === 'terminal')
   project = next
   if (hadProject) {
-    // 每個專案有自己一組分頁：離開時把終端機那幾格從畫面上摘掉
-    // （**只摘畫面**，pty 與 scrollback 都還在 main，切回來會原樣接上）
-    await detachAllTerminals()
-    if (generation !== projectSwitch) return false
+    // 分頁清單各自還原，xterm 留在 terminal-page，避免切回時重播整份畫面。
     tabs = []
   } else {
     // 還沒選過專案時開的終端機沒有地方存，跟著進第一個選中的專案——
@@ -2258,10 +2282,18 @@ export async function setActiveProject(next) {
     tabs = tabs.filter((t) => t.kind === 'terminal')
   }
   activeId = ''
-  renderTabs()
-  showSurface('empty')
+  if (!keepTerminal) {
+    renderTabs()
+    showSurface('empty')
+  }
   if (!next) return true
-  await restoreProjectTabs(next, generation)
+  // 保留舊畫面到目標準備好，但等待期間不能把按鍵送給舊終端機。
+  if (el.termHost) el.termHost.inert = true
+  try {
+    await restoreProjectTabs(next, generation)
+  } finally {
+    if (generation === projectSwitch && el.termHost) el.termHost.inert = false
+  }
   return generation === projectSwitch
 }
 
@@ -2271,14 +2303,6 @@ export async function setActiveProject(next) {
  */
 export function currentProjectId() {
   return project?.id || ''
-}
-
-/** 把目前這組終端機分頁的畫面收掉（工作階段本身不動） */
-async function detachAllTerminals() {
-  const ids = tabs.filter((t) => t.kind === 'terminal').map((t) => t.id)
-  if (!ids.length) return
-  const mod = await import('./terminal-page.js')
-  for (const id of ids) mod.detachTerminalPane(id)
 }
 
 export function initWsTabs() {

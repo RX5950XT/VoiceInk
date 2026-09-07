@@ -157,8 +157,9 @@ app.whenReady().then(async () => {
 
     const listAfterKill = await terminal.listSessions()
     ok('殺掉 pty 但側欄那一列還在', listAfterKill.some((s) => s.id === meta.id))
-    ok('沒在跑的階段狀態是 stopped',
-      listAfterKill.find((s) => s.id === meta.id)?.state === 'stopped')
+    // 結束的畫面要留到使用者明確刪除，所以是 exited 不是 stopped（stopped ＝這次還沒開過）
+    ok('關掉的階段保留已結束狀態，畫面留著',
+      listAfterKill.find((s) => s.id === meta.id)?.state === 'exited')
 
     await terminal.deleteSession(meta.id)
     const listAfterDelete = await terminal.listSessions()
