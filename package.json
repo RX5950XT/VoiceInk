@@ -1,6 +1,6 @@
 {
   "name": "voiceink",
-  "version": "1.14.0",
+  "version": "1.15.0",
   "description": "VoiceInk - Windows Desktop Speech-to-Text Application",
   "main": "src/main/main.js",
   "scripts": {
@@ -60,6 +60,8 @@
     ],
     "files": [
       "**/*",
+      "!.claude/**",
+      "!start.log",
       "!**/node_modules/@node-llama-cpp/win-x64-cuda-ext/**",
       "!**/node_modules/@node-llama-cpp/win-arm64/**",
       "!**/node_modules/node-llama-cpp/llama/**",

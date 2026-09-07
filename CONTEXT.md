@@ -6,7 +6,7 @@
 ## 專案概況
 
 VoiceInk：Windows Electron AI 工作台。Vanilla JS + Vite（無前端框架），Electron 43.4.1 ＋ Node.js 22。
-已發行 **v1.13.0**（工作區換上 Monaco／worktree／檔案狀態；前幾版為 App 內自動更新、管理員終端機、
+目前版本 **v1.15.0**（終端機拖入檔案、右鍵貼上修正、忽略檔案標示及預覽縮放；前幾版為 App 內自動更新、管理員終端機、
 全域語音輸入、系統監控、HF模型、CC 代理工作台）。
 
 nav 九頁：聊天（預設，**專案工作區與終端機都在同一頁**）｜CC代理（`data-page` 仍是 `ccswitch`）｜額度｜
