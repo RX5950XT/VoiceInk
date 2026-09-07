@@ -192,6 +192,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     resize: (id, cols, rows) => ipcRenderer.invoke('terminal:resize', id, cols, rows),
     kill: (id) => ipcRenderer.invoke('terminal:kill', id),
     pickDirectory: () => ipcRenderer.invoke('terminal:pickDirectory'),
+    resolveLinks: (id, texts) => ipcRenderer.invoke('terminal:resolveLinks', id, texts),
+    revealLink: (id, text) => ipcRenderer.invoke('terminal:revealLink', id, text),
     /** @param {(payload: { id: string, seq: number, data: string }) => void} callback */
     onData: (callback) => {
       const handler = (_event, payload) => callback(payload)
