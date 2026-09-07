@@ -3,6 +3,40 @@
 > 只留「還沒做完的」與「最近幾輪做了什麼、驗到什麼」。更早的逐項紀錄查 git log。
 > 規則見 [CLAUDE.md](../CLAUDE.md)（＝AGENTS.md），架構見 [CONTEXT.md](../CONTEXT.md)，教訓見 [lessons.md](./lessons.md)。
 
+## 2026-09-07 — v1.15.0 整合發行
+
+- [ ] 提交終端機修改，合併尚未整合的分支
+- [ ] 更新版本、排除工作樹打包、完成受影響測試
+- [ ] 建置及驗證安裝檔，推送 master／tag 並發行三個更新檔
+
+## 2026-09-07 — 終端機拖入檔案路徑
+
+- [x] 沿用 preload 路徑取得及 xterm 貼上，支援圖片、多檔與空白路徑
+- [x] 驗證拖放只貼一次、不送出指令
+- [x] 更新免安裝打包並以背景 CDP 驗收
+
+回顧：`node scripts/test-terminal-drop.js` PASS（PowerShell／cmd 引號、多檔、控制字元及長度上限）；
+`test-terminal.js` 60/0、`test-terminal-ui.js` 7/0。
+`npm run electron:pack -- --config.directories.output=C:/Users/rx595/AppData/Local/Temp/voiceink-drop-pack-verified-20260907` exit 0；
+三支 main／preload／terminal 原始碼與 asar 逐位元一致，已更新 `dist/win-unpacked` 並核對 asar 雜湊。
+`PROBE_DROP=1 PROBE_CLI=1 node scripts/probe-terminal-paste.js` 最終打包版 PASS：
+以 CDP 拖入本機圖片與文字檔，完整路徑只收到一次，中文／空白／單引號完整，沒有 Enter，後續打字正常。
+圖片以本機路徑交給 CLI；本輪未驗證各家 AI CLI 是否將它顯示為圖片附件。
+
+## 2026-09-07 — 終端機右鍵重複貼上
+
+- [x] 接續紀錄：已在 Claude Code 重現右鍵同時貼上及回報滑鼠事件，修正與打包完成
+- [x] 核對打包內程式與現有修正一致；一般終端機右鍵只貼一次，後續鍵盤輸入正常
+- [x] 驗證模擬 AI CLI 的 bracketed paste、選取文字與游標輸入框右鍵，記錄驗收結果
+
+回顧：本輪 `node scripts/test-terminal.js` 60 passed／0 failed；`node scripts/test-terminal-ui.js` 7 passed／0 failed。
+`node scripts/probe-terminal-paste.js` 三種打包版情境皆 PASS：一般 shell、
+`PROBE_CLI=1 PROBE_BRACKETED=1 PROBE_ON_TEXTAREA=1`、
+`PROBE_CLI=1 PROBE_BRACKETED=1 PROBE_SELECTED=1 PROBE_LONG=1`。
+每次讀剪貼簿一次、貼上一次、沒有右鍵滑鼠回報，後續 `z` 輸入正常；模擬 CLI 實際 stdin 也只有一份貼上。
+既有 `dist/win-unpacked/resources/app.asar` 內 `terminal-page.js` 與原始碼逐位元一致，沿用前輪打包產物。
+前輪紀錄含真 Claude Code 的修復前失敗與修復後 PASS；本輪未重跑真 Claude／Codex，也未發行。
+
 ## 2026-09-07 — 大檔不卡頓、輸入法對位、選單圖示
 
 - [x] 分頁列「＋」選單八個項目各一顆 16px 單色圖示（`ws-tool-icons.js`，零 innerHTML）

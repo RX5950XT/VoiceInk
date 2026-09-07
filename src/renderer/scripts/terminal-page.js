@@ -187,6 +187,32 @@ function syncImeCaret(term) {
  * @param {string} id
  * @returns {Pane}
  */
+function initTerminalDrop(pane, term, id) {
+  pane.addEventListener('dragover', (event) => {
+    if (!Array.from(event.dataTransfer?.types ?? []).includes('Files')) return
+    event.preventDefault()
+    event.stopPropagation()
+    event.dataTransfer.dropEffect = 'copy'
+  })
+  pane.addEventListener('drop', (event) => {
+    const files = Array.from(event.dataTransfer?.files ?? [])
+    if (!files.length) return
+    event.preventDefault()
+    event.stopPropagation()
+    const paths = files.map((file) => electronAPI.getPathForFile(file))
+    if (paths.some((path) => !path || /[\x00-\x1f\x7f"]/.test(path))) {
+      showToast('無法取得可貼上的本機路徑，請從檔案總管拖入', 'error')
+      return
+    }
+    const cmd = items.find((item) => item.id === id)?.shell === 'cmd'
+    const text = paths.map((path) => cmd ? `"${path}"` : `'${path.replace(/'/g, "''")}'`).join(' ') + ' '
+    // main 單次限 8192 字，另留 bracketed paste 前後標記的 12 字。
+    if (text.length > 8180) { showToast('拖入的路徑太多，請分批拖入', 'error'); return }
+    term.paste(text)
+    term.focus()
+  })
+}
+
 function createPane(id) {
   const pane = document.createElement('div')
   pane.className = 'term-pane'
@@ -209,6 +235,7 @@ function createPane(id) {
   const fit = new FitAddon()
   term.loadAddon(fit)
   term.open(pane)
+  initTerminalDrop(pane, term, id)
   term.onData((data) => {
     void electronAPI.terminal.write(id, data)
   })
@@ -231,6 +258,17 @@ function createPane(id) {
     const selection = term.getSelection()
     if (selection) void navigator.clipboard.writeText(selection).catch(() => {})
   })
+  // 右鍵是終端機自己的（貼上），不可以同時當成滑鼠事件轉給 CLI：AI CLI 開著 SGR 滑鼠回報時
+  // 會收到右鍵，然後自己再貼一次系統剪貼簿——使用者看到的就是同一段貼了兩份。
+  // 攔在 capture：xterm 的滑鼠處理掛在 pane 底下的 screen 元素上。
+  for (const type of ['mousedown', 'mouseup']) {
+    pane.addEventListener(type, (event) => {
+      if (event.button !== 2) return
+      // 連 native 的焦點轉移一起擋：不然 textarea 會 blur 一次，CLI 收到假的失焦／回焦重畫
+      event.preventDefault()
+      event.stopPropagation()
+    }, true)
+  }
   pane.addEventListener('contextmenu', (event) => {
     event.preventDefault()
     navigator.clipboard.readText().then((text) => { if (text) term.paste(text) }, () => {})
