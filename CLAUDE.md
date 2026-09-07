@@ -169,6 +169,11 @@ tag 要與 `package.json` 的 version 一致。
   候選字視窗會退回預設位置（視窗右下角）。要改用**透明的文字／游標／底色**藏
   （`color`／`caret-color`／`background-color` 都要 transparent，缺 `background-color`
   會露出白方塊）。回歸 `probe-terminal-ime.js`。
+- **`.term-host` 的 `overflow` 必須是 `clip` 不是 `hidden`**：`hidden` 是「可以捲、只是沒有
+  捲軸」的捲動容器。組字時 xterm 會把那個隱形 `<textarea>` 撐到整段組字文字的寬度（實測
+  988px），一超過終端機右緣，Chromium 就自己捲它把游標帶進視野（實測 `scrollLeft` 177.7px）
+  ——使用者看到的是整個終端機畫面往左滑掉，候選字視窗也跟著被推到視窗右下角。`clip` 完全
+  不能捲，而且不會把溢出往上傳給祖先。回歸 `probe-terminal-ime.js` 的 [D]。
 - **排隊的輸出要接成一段再寫**：AI CLI 串流一秒上百個小封包，逐段 `await term.write()` ＝每段排一次 timer；
   合併時 `seq <= 目前` 的片段仍然要丟掉（快照重疊）。`fitCurrent` 欄列數沒變就不要往 main 送 resize，
   ResizeObserver 也要合併到下一幀。
