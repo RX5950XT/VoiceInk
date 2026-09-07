@@ -131,6 +131,8 @@ const OPTIONS = {
   scrollBeyondLastLine: false,
   renderLineHighlight: 'line',
   smoothScrolling: true,
+  // Ctrl+滾輪縮放字級（monaco 自己就有，不必自己算倍率）
+  mouseWheelZoom: true,
   fontLigatures: false,
   fixedOverflowWidgets: true,
   tabSize: 2

@@ -178,7 +178,40 @@ function gitStatusCacheChecks() {
   })()
 }
 
-runAgentPathChecks().then(gitStatusCacheChecks).then(() => {
+/**
+ * Ctrl+滾輪縮放：倍率算法（`ws-zoom.js`）＋三個接線點（程式碼／預覽／PDF）。
+ */
+function zoomChecks() {
+  console.log('\n[E] Ctrl+滾輪縮放')
+  const vm = require('node:vm')
+  const source = fs.readFileSync(path.join(ROOT, 'src/renderer/scripts/ws-zoom.js'), 'utf8')
+    .replace(/^export /gm, '')
+  const context = {}
+  vm.createContext(context)
+  vm.runInContext(`${source}\nthis.api = { nextZoom, ZOOM_MIN, ZOOM_MAX }`, context)
+  const { nextZoom, ZOOM_MIN, ZOOM_MAX } = context.api
+
+  check('往上滾放大', nextZoom(1, -120) > 1)
+  check('往下滾縮小', nextZoom(1, 120) < 1)
+  check('放大再縮小回得到原點', nextZoom(nextZoom(1, -120), 120) === 1)
+  check('一直放大會停在上限', [...Array(80)].reduce((z) => nextZoom(z, -120), 1) === ZOOM_MAX)
+  check('一直縮小會停在下限', [...Array(80)].reduce((z) => nextZoom(z, 120), 1) === ZOOM_MIN)
+  check('沒有滾動就不動', nextZoom(1.3, 0) === 1.3)
+  check('壞掉的倍率當成 100%', nextZoom(NaN, -120) > 1 && nextZoom(0, 0) === 1)
+
+  const monaco = fs.readFileSync(path.join(ROOT, 'src/renderer/scripts/ws-monaco.js'), 'utf8')
+  check('程式碼與 diff 共用的選項打開 mouseWheelZoom', /mouseWheelZoom:\s*true/.test(monaco))
+
+  const zoomFn = tabs.slice(tabs.indexOf('function ensurePreviewZoom'), tabs.indexOf('function paintPreview'))
+  check('預覽只在按著 Ctrl 時縮放', /event\.ctrlKey/.test(zoomFn))
+  check('預覽要吃掉事件，不然整個視窗跟著縮',
+    /preventDefault\(\)/.test(zoomFn) && /passive: false/.test(zoomFn))
+  check('PDF 不走 CSS 放大（會糊掉）', /ws-pdf-canvas'\)\) return/.test(zoomFn))
+  check('PDF 改用更大的 scale 重畫', /scale: 1\.5 \* zoom/.test(tabs))
+  check('放大時要放開圖片的尺寸上限', /\.ws-editor-preview\.is-zoomed \.ws-editor-img/.test(css))
+}
+
+runAgentPathChecks().then(gitStatusCacheChecks).then(zoomChecks).then(() => {
   console.log(`\n${passed} passed, ${failed} failed`)
   process.exitCode = failed ? 1 : 0
 }).catch((error) => {
