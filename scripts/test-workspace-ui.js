@@ -206,7 +206,11 @@ function zoomChecks() {
   check('預覽只在按著 Ctrl 時縮放', /event\.ctrlKey/.test(zoomFn))
   check('預覽要吃掉事件，不然整個視窗跟著縮',
     /preventDefault\(\)/.test(zoomFn) && /passive: false/.test(zoomFn))
-  check('PDF 不走 CSS 放大（會糊掉）', /ws-pdf-canvas'\)\) return/.test(zoomFn))
+  check('PDF 不走 CSS 放大（會糊掉）', /!previewIsPdf/.test(zoomFn))
+  const paintFn = tabs.slice(tabs.indexOf('function paintPreview'), tabs.indexOf('/** pdf.js'))
+  check('切成 PDF 前就標記，才不會沿用上一份的 CSS 倍率',
+    paintFn.indexOf('previewIsPdf = Boolean(tab.pdf)') >= 0 &&
+    paintFn.indexOf('previewIsPdf = Boolean(tab.pdf)') < paintFn.indexOf('ensurePreviewZoom(box)'))
   check('PDF 改用更大的 scale 重畫', /scale: 1\.5 \* zoom/.test(tabs))
   check('放大時要放開圖片的尺寸上限', /\.ws-editor-preview\.is-zoomed \.ws-editor-img/.test(css))
 }

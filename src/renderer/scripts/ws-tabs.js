@@ -1284,6 +1284,9 @@ function paintEditor(tab) {
 /** 預覽區目前的縮放倍率（Ctrl+滾輪）。整個工作區共用一顆，換分頁不會突然跳回 100% */
 let previewZoom = 1
 
+/** 現在預覽的是不是 PDF。PDF 用重畫的 scale，外層 CSS zoom 要留在 1，不然兩層倍率相乘 */
+let previewIsPdf = false
+
 /** 預覽區現在畫的是哪一份（分頁 id ＋ 來源字串），一樣就不重畫 */
 let previewKey = { id: '', source: null }
 
@@ -1299,7 +1302,7 @@ function ensurePreviewZoom(box) {
     box.dataset.zoomReady = '1'
     // 不 preventDefault 的話 Chromium 會去縮放整個視窗，連側欄一起變大
     box.addEventListener('wheel', (event) => {
-      if (!event.ctrlKey || box.querySelector('.ws-pdf-canvas')) return
+      if (!event.ctrlKey || previewIsPdf) return
       event.preventDefault()
       previewZoom = nextZoom(previewZoom, event.deltaY)
       applyPreviewZoom(box)
@@ -1312,7 +1315,7 @@ function ensurePreviewZoom(box) {
  * @param {HTMLElement} box
  */
 function applyPreviewZoom(box) {
-  const zoomed = previewZoom !== 1
+  const zoomed = previewZoom !== 1 && !previewIsPdf
   // `zoom` 連字級、間距一起放大（`transform: scale` 不會撐開捲動範圍，放大後看不到右半邊）
   box.style.zoom = zoomed ? String(previewZoom) : ''
   box.classList.toggle('is-zoomed', zoomed)
@@ -1329,6 +1332,8 @@ function paintPreview(tab) {
 
   const on = Boolean(tab.preview)
   const ext = extOf(tab.relPath || '')
+  // 先標記再套倍率：paintPdf 是非同步的，等 canvas 出現才判斷會慢一拍
+  previewIsPdf = Boolean(tab.pdf)
   ensurePreviewZoom(box)
   const previewOnly = Boolean((tab.image || tab.pdf || tab.audio || tab.video) && ext !== 'svg')
   if (el.editorFindBtn) {
@@ -1382,6 +1387,8 @@ function paintPreview(tab) {
     frame.className = 'ws-editor-frame'
     frame.setAttribute('sandbox', 'allow-scripts')
     frame.setAttribute('title', '本機 HTML 預覽')
+    // 這份預覽刻意沒有 Ctrl+滾輪縮放：wheel 事件在 iframe 自己的 document 裡，
+    // 不會冒泡到外層 .ws-editor-preview。要接得到就得往使用者的 HTML 裡塞腳本，不值得。
     frame.srcdoc = source
     box.replaceChildren(frame)
     return
