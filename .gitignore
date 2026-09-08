@@ -7,7 +7,8 @@ dist-electron/
 # dist/win-unpacked 被別的程式鎖住時，會暫時打包到這裡（見 CONTEXT.md）
 dist-preview/
 out/
-build/
+build/*
+!build/installer.nsh
 release/
 
 # Vite

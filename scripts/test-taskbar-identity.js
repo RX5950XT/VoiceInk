@@ -3,9 +3,10 @@
 /**
  * 工作列身分與圖示的回歸測試。
  *
- * 擋兩個實際發生過的症狀：
+ * 擋三個實際發生過的症狀：
  *  - 更新後工作列多出第二顆 VoiceInk（app 沒設 AppUserModelID，跟 NSIS 捷徑上的對不起來）
  *  - 那顆的圖示一片白（frameless 視窗沒給 icon，Windows 拿不到視窗圖示）
+ *  - 視窗圖示明明是對的，工作列還是一張白紙（更新換掉 exe，捷徑裡的時間戳過期）
  *
  * 用法：node scripts/test-taskbar-identity.js [專案根目錄]
  */
@@ -13,6 +14,7 @@
 const fs = require('fs')
 const path = require('path')
 const assert = require('assert')
+const { spawnSync } = require('child_process')
 
 const root = process.argv[2] ? path.resolve(process.argv[2]) : path.join(__dirname, '..')
 const main = fs.readFileSync(path.join(root, 'src/main/main.js'), 'utf8')
@@ -69,4 +71,25 @@ assert.ok(
 // 系統工具要指名 System32（PATH 上可能是 MSYS 的同名執行檔）
 assert.ok(/System32', 'reg\.exe'/.test(main), '[E] reg.exe 要用 System32 的絕對路徑')
 
-console.log('test-taskbar-identity: 全部通過（[A][B][C][D][E]）')
+// [F] 更新時 electron-builder 會保留舊捷徑（keepShortcuts），但安裝資料夾與 exe 的時間戳
+// 已經變了，捷徑 IDList 裡記的那份就過期 —— Windows 解析不到目標，工作列與開始功能表
+// 直接退回一張白紙。自訂 NSIS 腳本要在每次安裝把兩份捷徑重寫一次並補回 AUMID。
+const nshPath = path.join(root, 'build/installer.nsh')
+assert.ok(fs.existsSync(nshPath), '[F] 少了 build/installer.nsh（更新後捷徑不重寫＝工作列一張白紙）')
+const nsh = fs.readFileSync(nshPath, 'utf8')
+assert.ok(/!macro\s+customInstall/.test(nsh), '[F] installer.nsh 少了 customInstall（那是唯一會在更新時跑到的掛勾）')
+const nshBody = nsh.slice(nsh.indexOf('!macro customInstall'))
+assert.ok(/\$newStartMenuLink/.test(nshBody), '[F] 沒有重寫開始功能表捷徑')
+assert.ok(/User Pinned\\TaskBar/.test(nshBody), '[F] 沒有重寫已釘選的工作列捷徑（工作列顯示的就是那一份）')
+// 重寫完一定要接著補 AUMID，否則更新後工作列會多長一顆
+assert.ok(
+  /CreateShortCut[\s\S]{0,400}WinShell::SetLnkAUMI/.test(nsh),
+  '[F] 重寫捷徑之後沒有補回 AUMID'
+)
+// build/ 整個被 .gitignore 擋掉，這支要特別放行，不然打包機器上根本沒有這個檔。
+// 只比對 .gitignore 的字串不夠——`build/` 這種擋整個資料夾的規則，後面再寫 `!build/installer.nsh`
+// 也放行不了（git 不會走進被擋掉的資料夾），要問 git 本人。
+const ignored = spawnSync('git', ['check-ignore', '-q', 'build/installer.nsh'], { cwd: root })
+assert.notStrictEqual(ignored.status, 0, '[F] build/installer.nsh 仍然被 .gitignore 擋掉（要改成 build/* ＋ !build/installer.nsh）')
+
+console.log('test-taskbar-identity: 全部通過（[A][B][C][D][E][F]）')
