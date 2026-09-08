@@ -280,6 +280,7 @@ tag 要與 `package.json` 的 version 一致。
 - 批次改 CSS 前先確認選擇器不是某條多選擇器規則的結尾（曾把共用規則的 `background` 一起刪掉，全 App 玻璃面板變透明）。
 - 彈窗：body 要掛上共用的 `overflow-y: auto` 規則、內容區要自己補 `padding: 4px 24px 0`。
 - **全 App 禁用強調條／裝飾條**（方框左邊一條粗彩色條、標題前色票偽元素都算），強調走 1px 邊框或底色 tint。
+- **不可以用 `window.confirm`／`prompt`／`alert`**（樣式不搭，而且會把整個 renderer 卡住）：一律用 `app-dialog.js` 的 `askConfirm`／`askInput`／`showAlert`，訊息走 `textContent`（檔名、分支名、上游錯誤都是外部輸入）。就地二次確認（按鈕變紅勾）仍然是刪除的首選，這三支給「需要打字」或「非刪除」的情況。
 - 規格表與長條圖標籤不准 `text-overflow: ellipsis`（截掉那筆等於沒有那筆資料），要 `overflow-wrap: anywhere`；`<dl>` 多欄流版每組 dt/dd 要包一層 `<div>`。**hover 才出現的操作等於沒有**。
 - 說明文字：空狀態 ≤12 字、hint 只留「這是什麼」；**測試不可以用「字數大於 N」當斷言**；改文案要 grep 測試腳本；但「防誤解」的最短說法（dwm VRAM、磁碟測速含快取、風扇下限）不準刪光。
 - 設定頁只管「裝了什麼、怎麼推論、雲端端點」，選哪一顆模型在功能頁選；未安裝的本地模型仍要留在選單裡標「（未安裝）」。
@@ -321,4 +322,5 @@ tag 要與 `package.json` 的 version 一致。
 | 語音輸入 | `test-dictation.js` ＋ `e2e-dictation.js`（insert 是 stub）＋ `e2e-dictation-cdp.js`；熱鍵 `probe-dictation-hook.js`／`probe-uiohook.js`／`probe-dictation-latency.js`／`probe-dictation-live.js`（**會搶焦點**）|
 | ASR／即時字幕 | `e2e-llama-asr.js`／`e2e-asr-threads.js`／`e2e-stt-cdp.js`／`probe-cloud-asr.js`（真金鑰打真上游）；`test-vad.js` ＋ `e2e-live-pipeline.js` ＋ `e2e-live-cdp.js` |
 | 翻譯 | `probe-prompt-path.js`（prompt 逐 token）＋ `verify-chat-wrapper-fix.js` ＋ `probe-packed-local-llm.js`（動 `build.files` 前後）＋ `probe-translate-lang.js` |
+| 彈窗 | `e2e-app-dialog-cdp.js`（自己開 vite ＋ electron，**會叫到最前面**：驗確認／輸入／告知三種都是 `app-dialog` 且套到玻璃樣式、Esc 與取消回得對、節點會收掉）|
 | 跨模組 | `test-taskbar-identity.js`（工作列身分與圖示）／`test-error-hygiene.js`（錯誤衛生）／`test-ipc-invoke.js`（IPC 外殼）／`e2e-tray-cdp.js`（常駐）／`test-updater.js` ＋ `e2e-update-cdp.js`（會連 GitHub）／`e2e-visual-cdp.js`（七頁 × 主題 × 三尺寸）／`e2e-ux-tweaks-cdp.js`（**會叫到最前面**）／`e2e-cdp-smoke.js` |

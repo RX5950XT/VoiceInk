@@ -1,6 +1,7 @@
 import { electronAPI, showToast, setChatPaneMode } from './app.js'
 import { renderMarkdown } from './markdown.js'
 import { showMenu } from './ws-menu.js'
+import { askInput } from './app-dialog.js'
 import { gitStatusShared, invalidateGitStatus } from './ws-git-status.js'
 import { updateGutter, updateIdeStatus, handleEditorKeydown, initFindWidget, getLanguageName } from './ws-ide.js'
 import { parseUnifiedDiff, renderDiffLines } from './ws-diff.js'
@@ -1849,7 +1850,7 @@ function paintReviewCount(tab) {
  *
  * 釘的是**右邊那一側**的行號（改完之後的樣子）——AI 手上那份就是這一版。
  */
-function addReviewComment() {
+async function addReviewComment() {
   const tab = findTab(activeId)
   if (!tab || tab.kind !== 'diff' || !tab.projectId || !tab.relPath) return
   const at = diffCursor()
@@ -1857,7 +1858,10 @@ function addReviewComment() {
     showToast('先在右邊那一側點一下要講的那幾行', 'error')
     return
   }
-  const text = window.prompt(`對 ${tab.relPath} 第 ${at.line} 行的意見`, '')
+  const text = await askInput('這幾行的意見', {
+    desc: `${tab.relPath} 第 ${at.line} 行`,
+    confirmText: '加進去'
+  })
   if (text === null) return
   if (!addComment(tab.projectId, {
     relPath: tab.relPath,
@@ -2775,7 +2779,7 @@ export function initWsTabs() {
   }
   el.diffPrevBtn?.addEventListener('click', () => goDiff('previous'))
   el.diffNextBtn?.addEventListener('click', () => goDiff('next'))
-  el.diffCommentBtn?.addEventListener('click', addReviewComment)
+  el.diffCommentBtn?.addEventListener('click', () => void addReviewComment())
   el.diffCommentsBtn?.addEventListener('click', () => {
     if (!el.reviewPanel) return
     el.reviewPanel.hidden = !el.reviewPanel.hidden

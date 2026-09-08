@@ -10,6 +10,7 @@ import { showToast, electronAPI, cleanIpcError, openSettingsPage, setChatPaneMod
 import { renderMarkdown } from './markdown.js'
 import { mergeVisibleOrder } from './usage-reorder.js'
 import { createListReorder } from './list-reorder.js'
+import { askConfirm } from './app-dialog.js'
 
 const DEFAULT_CHAT_API_URL = 'https://openrouter.ai/api/v1'
 const DEFAULT_CHAT_MODEL = 'google/gemini-3-flash-preview'
@@ -169,7 +170,7 @@ export function initChatPage() {
   addModelBtn?.addEventListener('click', () => appendModelRow('', { focus: true }))
   providerSelect?.addEventListener('change', handleProviderSwitch)
   addProviderBtn?.addEventListener('click', handleAddProvider)
-  deleteProviderBtn?.addEventListener('click', handleDeleteProvider)
+  deleteProviderBtn?.addEventListener('click', () => void handleDeleteProvider())
   providerNameInput?.addEventListener('input', syncProviderName)
   scanModelsBtn?.addEventListener('click', handleScanModels)
   scanSearchInput?.addEventListener('input', renderScanList)
@@ -1427,11 +1428,16 @@ function handleAddProvider() {
   providerNameInput?.select()
 }
 
-function handleDeleteProvider() {
+async function handleDeleteProvider() {
   const provider = providerDraft.find((p) => p.id === draftId)
   if (!provider) return
   const label = provider.name || '未命名供應商'
-  if (!window.confirm(`刪除供應商「${label}」？API Key 與模型清單一併移除。`)) return
+  const yes = await askConfirm(`刪除供應商「${label}」？`, {
+    desc: 'API Key 與模型清單一併移除。',
+    confirmText: '刪除',
+    danger: true
+  })
+  if (!yes) return
   providerDraft = providerDraft.filter((p) => p.id !== draftId)
   draftId = providerDraft[0]?.id || ''
   renderProviderSelect()
