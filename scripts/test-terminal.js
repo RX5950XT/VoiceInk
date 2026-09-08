@@ -230,5 +230,19 @@ console.log('\n[admin 欄位]')
   ok('沒有 admin 欄位的舊資料是 false', items[2].admin === false)
 }
 
+// ===== 抬視窗（Ctrl+G 開出來的記事本）=====
+// 只驗「那支 PowerShell 起得來、C# 編得過、重複呼叫不會疊出第二支」。
+// **不讓它真的抬任何視窗**——測試期間搶前景焦點會打斷正在用電腦的人，所以馬上收掉。
+console.log('\n[抬視窗]')
+{
+  const fg = require(path.join(ROOT, 'src/main/terminal/foreground.js'))
+  const started = fg.raiseChildWindow()
+  ok('起得了等待器', started === true)
+  ok('已經有一個在等就沿用，不再開一支', fg.raiseChildWindow() === true)
+  fg.stop()
+  ok('stop() 之後不留東西', fg.raiseChildWindow() === true)
+  fg.stop()
+}
+
 console.log(`\n${passed} passed, ${failed} failed`)
 process.exit(failed === 0 ? 0 : 1)

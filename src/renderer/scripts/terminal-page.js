@@ -1,6 +1,7 @@
 import { electronAPI, showToast, setChatPaneMode } from './app.js'
 import { terminalStatusLabel, setTerminalStatuses } from './ws-terminal-status.js'
 import { registerTermLinks } from './term-links.js'
+import { splitForPty } from './term-write-chunks.js'
 import {
   initWsTabs, showSurface, trackTerminal, paintTerminalTab, currentProjectId
 } from './ws-tabs.js'
@@ -184,6 +185,30 @@ function syncImeCaret(term) {
   area.style.lineHeight = `${Math.round(cellH)}px`
 }
 
+/** @type {Map<string, Promise<any>>} 每個工作階段一條寫入鏈 */
+const writeChains = new Map()
+
+/**
+ * 把使用者打的（或貼的）東西送進 PTY，超過單次上限就切段（見 `term-write-chunks.js`）。
+ *
+ * 一定要排隊：`terminal.write` 是非同步的 IPC，直接連發第二段可能先到，
+ * 貼上的內容就會前後顛倒。
+ *
+ * @param {string} id
+ * @param {string} data
+ */
+function writeToPty(id, data) {
+  if (!data) return
+  // Ctrl+G（BEL）＝ Claude Code 要開外部編輯器（Windows 上是記事本）。
+  // 那個視窗會開在 App 後面（見 main 的 `terminal/foreground.js`），先請 main 準備抬它。
+  if (data.includes('\x07')) void electronAPI.terminal.raiseChildWindow?.()
+  let chain = writeChains.get(id) || Promise.resolve()
+  for (const piece of splitForPty(data)) {
+    chain = chain.then(() => electronAPI.terminal.write(id, piece)).catch(() => {})
+  }
+  writeChains.set(id, chain)
+}
+
 /**
  * @param {string} id
  * @returns {Pane}
@@ -207,8 +232,6 @@ function initTerminalDrop(pane, term, id) {
     }
     const cmd = items.find((item) => item.id === id)?.shell === 'cmd'
     const text = paths.map((path) => cmd ? `"${path}"` : `'${path.replace(/'/g, "''")}'`).join(' ') + ' '
-    // main 單次限 8192 字，另留 bracketed paste 前後標記的 12 字。
-    if (text.length > 8180) { showToast('拖入的路徑太多，請分批拖入', 'error'); return }
     term.paste(text)
     term.focus()
   })
@@ -239,7 +262,7 @@ function createPane(id) {
   registerTermLinks(term, id)
   initTerminalDrop(pane, term, id)
   term.onData((data) => {
-    void electronAPI.terminal.write(id, data)
+    writeToPty(id, data)
   })
   term.attachCustomKeyEventHandler((event) => {
     if (event.key !== 'Enter' || !event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || event.isComposing) return true
@@ -289,6 +312,7 @@ function disposePane(id) {
   const entry = panes.get(id)
   if (!entry) return
   panes.delete(id)
+  writeChains.delete(id)
   entry.term.dispose()
   entry.pane.remove()
 }

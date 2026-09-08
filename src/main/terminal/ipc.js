@@ -51,6 +51,12 @@ function registerTerminalIpc({ ipcMain, service, isMainSender, dialog, getWindow
     invoke(event, () => service.revealLink(id, text))
   ))
 
+  // 終端機裡叫出來的 GUI 程式（Ctrl+G 的記事本）要跳到最前面，不然它開在 App 後面。
+  // 沒有參數：renderer 只能說「等一下有視窗要出來」，抬哪一個由 main 自己認。
+  ipcMain.handle('terminal:raiseChildWindow', (event) => (
+    invoke(event, () => service.raiseChildWindow())
+  ))
+
   // 工作目錄一律由系統對話框選，renderer 不自己組路徑字串
   ipcMain.handle('terminal:pickDirectory', (event) => invoke(event, async () => {
     const win = getWindow()

@@ -46,6 +46,30 @@ CDP 均以 `VOICEINK_EXE=dist/bug-audit/pack/win-unpacked/VoiceInk.exe` 指定�
 > 只留「還沒做完的」與「最近幾輪做了什麼、驗到什麼」。更早的逐項紀錄查 git log。
 > 規則見 [CLAUDE.md](../CLAUDE.md)（＝AGENTS.md），架構見 [CONTEXT.md](../CONTEXT.md)，教訓見 [lessons.md](./lessons.md)。
 
+## 2026-09-08 — 大檔開關的效能與記憶體、終端機三件事
+
+- [x] 量出基準線（`probe-workspace-bigfile.js`，打包版 1.4MB／4 萬行）
+- [x] 關掉分頁後真的放手：`disposeModel` 先 `setModel(null)`、預覽的 iframe／影片收掉、
+      影子 textarea 與 `previewKey.source` 清空、最後一個分頁關掉時連編輯器空殼一起 dispose
+- [x] 選了專案就趁閒置先載 Monaco（第一個大檔不用等 16MB 的 AMD 包）
+- [x] 貼上超過 8192 字不再被安靜截半（`term-write-chunks.js` ＋每階段一條寫入鏈）
+- [x] 輸入法候選字視窗的根因：`.xterm-helpers` 的 `left: auto`（收回上一版的 `opacity: 1` 作法）
+- [x] Ctrl+G 開出來的記事本抬到最前面（`terminal/foreground.js`）
+- [x] 補回 v1.16.0 漏掉的第四份清單：`resolveLinks`／`revealLink` 沒進 `main.js` 的 service 白名單
+- [ ] Ctrl+G 抬視窗只驗到「PowerShell 起得來、C# 編得過、不會疊出第二支」；
+      真的把記事本抬到前面會搶前景焦點，沒有在使用者用電腦時實測
+
+回顧（全部打包版實測，`VOICEINK_EXE=D:/vi-build-680e-4/win-unpacked/VoiceInk.exe`）：
+`probe-workspace-bigfile.js` 12/12——開檔前 9.8MB → 開著大檔＋diff 66.9MB → 全關掉 21.2MB（掉了 45.7MB），
+第二輪開關只多 0.8MB（沒有每開一次漏一份）；Monaco 已在時開 1.4MB 的檔 157ms，並排變更 826ms。
+修之前（v1.16.1）：關掉後 iframe 還在跑，堆積回不去（21.5MB 沒放掉）。
+`probe-terminal-ime.js` 10/10、`probe-workspace-perf.js` 18/18、`e2e-terminal-cdp.js` 47/47
+（含新加的「貼上 9000 字」——讓 PowerShell 自己印出長度，只看畫面字數證明不了；
+同一份測試在修復前的打包版上只有這一條紅，畫面停在 PowerShell 的續行提示）。
+單元：`test-terminal.js` 63/0、`test-terminal-links.js` 71/0、`test-workspace.js` 225/0、
+`test-workspace-ui.js` 93/0、`test-error-hygiene.js` 82/0、`test-ipc-invoke.js` 11/0、
+`test-terminal-drop.js`／`test-terminal-ui.js`／`test-terminal-host.js`／`test-workspace-state.js` PASS。
+
 ## 2026-09-07 — v1.15.0 整合發行
 
 - [x] 提交終端機修改，合併尚未整合的分支
