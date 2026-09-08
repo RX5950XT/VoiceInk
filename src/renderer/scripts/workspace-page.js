@@ -1,5 +1,6 @@
 import { electronAPI, showToast, setChatPaneMode } from './app.js'
 import { createListReorder } from './list-reorder.js'
+import { askConfirm, askInput, showAlert } from './app-dialog.js'
 import { terminalStatuses } from './ws-terminal-status.js'
 import { toolIcon, terminalStateIcon } from './ws-tool-icons.js'
 import {
@@ -1200,7 +1201,7 @@ function openTreeMenu(project, entry, event) {
  * @param {boolean} dir
  */
 async function createEntry(project, relDir, dir) {
-  const name = window.prompt(dir ? '新資料夾的名稱' : '新檔案的名稱', '')
+  const name = await askInput(dir ? '新資料夾的名稱' : '新檔案的名稱', { confirmText: '建立' })
   if (name === null) return
   const seq = projectSeq
   try {
@@ -1222,7 +1223,7 @@ async function createEntry(project, relDir, dir) {
  * @param {{ name: string, rel: string }} entry
  */
 async function renameEntry(project, entry) {
-  const name = window.prompt('新的名稱', entry.name)
+  const name = await askInput('新的名稱', { value: entry.name, confirmText: '改名' })
   if (name === null || name === entry.name) return
   const seq = projectSeq
   try {
@@ -1246,7 +1247,12 @@ async function renameEntry(project, entry) {
  */
 async function removeEntry(project, entry) {
   const what = entry.dir ? '這個資料夾與裡面所有東西' : '這個檔案'
-  if (!window.confirm(`確定要刪除 ${entry.rel} 嗎？\n會刪掉${what}，而且救不回來。`)) return
+  const yes = await askConfirm(`確定要刪除 ${entry.rel} 嗎？`, {
+    desc: `會刪掉${what}，而且救不回來。`,
+    confirmText: '刪除',
+    danger: true
+  })
+  if (!yes) return
   const seq = projectSeq
   try {
     await call(electronAPI.workspace.removeEntry(project.id, entry.rel), '刪不掉')
@@ -1269,7 +1275,12 @@ async function removeEntry(project, entry) {
 async function removeMany(project, rels) {
   const preview = rels.slice(0, 8).join(NEWLINE)
   const more = rels.length > 8 ? `${NEWLINE}…還有 ${rels.length - 8} 個` : ''
-  if (!window.confirm(`確定要刪除這 ${rels.length} 個嗎？救不回來。${NEWLINE}${NEWLINE}${preview}${more}`)) return
+  const yes = await askConfirm(`確定要刪除這 ${rels.length} 個嗎？`, {
+    desc: `救不回來。${NEWLINE}${NEWLINE}${preview}${more}`,
+    confirmText: '刪除',
+    danger: true
+  })
+  if (!yes) return
   const seq = projectSeq
   let done = 0
   for (const rel of rels) {
@@ -1789,9 +1800,13 @@ async function renderWorktrees() {
 async function addWorktree() {
   const project = currentProject()
   if (!project) return
-  const name = window.prompt('新工作樹的分支名稱（同時也是資料夾名）', '')
+  const name = await askInput('新工作樹的分支名稱', { desc: '同時也是資料夾名。', confirmText: '下一步' })
   if (name === null) return
-  const base = window.prompt('從哪個分支或 commit 開？留空＝目前的 HEAD', '') ?? ''
+  const base = (await askInput('從哪個分支或 commit 開？', {
+    desc: '留空＝目前的 HEAD。',
+    placeholder: 'HEAD',
+    confirmText: '建立'
+  })) ?? ''
   try {
     const made = await call(electronAPI.workspace.worktreeAdd(project.id, name, base.trim()), '建不出工作樹')
     showToast(`已建立 ${made.branch}`)
@@ -1818,10 +1833,15 @@ async function removeWorktree(project, tree) {
   }
   if (!state.removable) {
     const detail = state.samples?.length ? `${NEWLINE}${state.samples.join(NEWLINE)}` : ''
-    window.alert(`移不掉：${state.reason}${detail}`)
+    await showAlert('移不掉這棵工作樹', { desc: `${state.reason}${detail}` })
     return
   }
-  if (!window.confirm(`確定要移除工作樹 ${tree.branch || tree.path} 嗎？${NEWLINE}裡面沒有未提交的變更，移掉之後那個資料夾就不見了。`)) return
+  const yes = await askConfirm(`確定要移除工作樹 ${tree.branch || tree.path} 嗎？`, {
+    desc: '裡面沒有未提交的變更，移掉之後那個資料夾就不見了。',
+    confirmText: '移除',
+    danger: true
+  })
+  if (!yes) return
   try {
     await call(electronAPI.workspace.worktreeRemove(project.id, tree.path), '移不掉')
     showToast('已移除工作樹')

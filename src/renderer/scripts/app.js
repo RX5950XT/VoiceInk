@@ -11,6 +11,7 @@ import {
 } from './chat-page.js'
 import { DEFAULT_ASR_API_URL, DEFAULT_ASR_MODEL } from './api.js'
 import { initCustomSelects, syncCustomSelects } from './custom-select.js'
+import { askConfirm } from './app-dialog.js'
 
 /** @type {typeof import('./live-caption.js') | null} */
 let liveCaption = null
@@ -1347,11 +1348,16 @@ function handleAddAsrCloud() {
   asrCloudNameInput?.select()
 }
 
-function handleDeleteAsrCloud() {
+async function handleDeleteAsrCloud() {
   const cur = asrCloudsDraft.find((c) => c.id === asrCloudDraftId)
   if (!cur) return
   const label = cur.name || '未命名設定'
-  if (!window.confirm(`刪除設定「${label}」？API Key 與模型清單一併移除。`)) return
+  const yes = await askConfirm(`刪除設定「${label}」？`, {
+    desc: 'API Key 與模型清單一併移除。',
+    confirmText: '刪除',
+    danger: true
+  })
+  if (!yes) return
   asrCloudsDraft = asrCloudsDraft.filter((c) => c.id !== asrCloudDraftId)
   asrCloudDraftId = asrCloudsDraft[0]?.id || ''
   renderAsrCloudSelect()
@@ -1398,7 +1404,7 @@ async function loadSettingsForm() {
     asrCloudSelect?.addEventListener('change', handleAsrCloudSwitch)
     asrAddModelBtn?.addEventListener('click', () => appendAsrModelRow('', { focus: true }))
     asrAddCloudBtn?.addEventListener('click', handleAddAsrCloud)
-    asrDeleteCloudBtn?.addEventListener('click', handleDeleteAsrCloud)
+    asrDeleteCloudBtn?.addEventListener('click', () => void handleDeleteAsrCloud())
     segmentsInited = true
   } else {
     setSegmentValue('llmGpuSegment', llmGpuSeg)

@@ -4809,6 +4809,21 @@ label.chat-model-flag {
   backdrop-filter: blur(2px);
 }
 
+/* app-dialog.js 動態建的那三種（確認／輸入／告知）：一句話 + 兩顆按鈕，
+   760px 會讓一行字孤零零漂在一片空白裡。 */
+.app-dialog.app-dialog-compact {
+  width: min(440px, 92vw);
+}
+
+/* 訊息常常帶檔案清單或 git 的原因，換行要留著 */
+.dialog-desc-multiline {
+  white-space: pre-line;
+}
+
+.simple-dialog-body {
+  padding: 4px 24px 0;
+}
+
 .dialog-head {
   padding: 20px 24px 12px;
 }
@@ -4854,6 +4869,7 @@ label.chat-model-flag {
 .cc-dialog-body,
 .chat-scan-body,
 .usage-dialog-body,
+.simple-dialog-body,
 .hf-dialog-body {
   flex: 1 1 auto;
   min-height: 0;

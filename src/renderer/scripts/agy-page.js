@@ -1,4 +1,5 @@
 import { electronAPI, showToast } from './app.js'
+import { askConfirm } from './app-dialog.js'
 
 /**
  * AGY 反向代理頁。
@@ -749,7 +750,11 @@ async function copyValue(kind) {
 
 async function regenerateKey() {
   // 換金鑰會讓所有已接上的客戶端立刻失效，先確認
-  if (!window.confirm('重新產生 API Key 會讓現有客戶端全部失效，確定要換嗎？')) return
+  const yes = await askConfirm('要換一把新的 API Key 嗎？', {
+    desc: '現有客戶端會全部立刻失效，得重新填一次。',
+    confirmText: '重新產生'
+  })
+  if (!yes) return
   await withBusy(async () => {
     const next = await callAgy('regenerateKey')
     if (next) showToast('已產生新的 API Key', 'success')
@@ -778,7 +783,8 @@ async function saveSettings() {
 }
 
 async function clearLogs() {
-  if (!window.confirm('清空所有流量日誌？此動作無法復原。')) return
+  const yes = await askConfirm('清空所有流量日誌？', { desc: '此動作無法復原。', confirmText: '清空', danger: true })
+  if (!yes) return
   await withBusy(async () => {
     const result = await callAgy('clearLogs')
     if (result?.ok) showToast('流量日誌已清空', 'success')
