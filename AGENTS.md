@@ -110,6 +110,7 @@ tag 要與 `package.json` 的 version 一致。
 - `whenReady` 立刻 `show: true` 建窗、不 await store；ASR／LLM／額度／AGY 第一次用到才 require。
 - **Windows 的視窗身分要自己宣告**：`app.setAppUserModelId('com.voiceink.app')`（＝`build.appId`，NSIS 捷徑上寫的就是它）要排在搶鎖**之前**。不設的話 Windows 自己從執行檔路徑推一個，跟捷徑對不起來——更新後（安裝程式重開 App，不是從捷徑點的）工作列會多長一顆；而 frameless 主視窗沒有 `icon:` 就沒有自己的 HICON，那顆就是**一片白**（實測 `WM_GETICON` small／big 都是 0）。兩件事都要做。
 - **改 AUMID 會連帶換掉開機自啟動在登錄檔的值名稱**（`setLoginItemSettings` 寫的值名就是 AUMID，而 `getLoginItemSettings` **沒有 `name` 參數**）：舊版寫的 `electron.app.VoiceInk` 會變孤兒——開機照樣自己啟動，但設定頁顯示「未開啟」而且關不掉。要用 `migrateLoginItemName()` 搬過來。回歸 `test-taskbar-identity.js`。
+- **更新會把捷徑放到過期**：electron-builder 更新時走 keepShortcuts 刻意不重建捷徑，但更新會把安裝資料夾與 `VoiceInk.exe` 整個換掉——`.lnk` 的 IDList 記著舊的時間戳，Windows 解析不到目標，工作列與開始功能表就退回「一張白紙加捷徑箭頭」。**視窗自己的 HICON 是對的**（`WM_GETICON` 拿得到圖），所以照著程式碼查永遠查不到。解法是 `build/installer.nsh` 的 `customInstall`：每次安裝把「本來就存在」的開始功能表／桌面／已釘選那三份重寫一次並補回 AUMID（`build/` 整個被 `.gitignore` 擋掉，那支要 `!build/installer.nsh` 放行）。回歸 `probe-taskbar-icon.js`（比對捷徑與 exe 解析到的是不是同一格系統影像清單）。
 - **常駐三件套缺一不可**：`requestSingleInstanceLock()`；沒搶到鎖的用 **`app.quit()` 不是 `app.exit()`**；`whenReady` 也要 `if (!hasInstanceLock) return`。`close` 攔截必須放行 `isQuitting`。管理員終端機的 `--terminal-admin-host=` 要攔在搶鎖**之前**。
 - **`document.hidden` 同時代表「被完全遮住」**，所以**不可以**關 `setBackgroundThrottling`（實測會讓它恆為 false）。常駐時只有計時器被節流（89ms → 19828ms），main→renderer 派送仍是 0～1ms。
 - `before-quit` 要收：終端機 `killAll()`、sysmon 三顆、`llama-asr.unload()`、`dictationHud.close()`、`agy.shutdown()`（**不是 `stop()`**）、`oc.shutdown()`／風扇排在 `sensors.stop()` 之前；`workspace:flushDrafts` 要排在 `killAll()` **之前**（存不起來時要能取消結束）。
@@ -323,4 +324,4 @@ tag 要與 `package.json` 的 version 一致。
 | ASR／即時字幕 | `e2e-llama-asr.js`／`e2e-asr-threads.js`／`e2e-stt-cdp.js`／`probe-cloud-asr.js`（真金鑰打真上游）；`test-vad.js` ＋ `e2e-live-pipeline.js` ＋ `e2e-live-cdp.js` |
 | 翻譯 | `probe-prompt-path.js`（prompt 逐 token）＋ `verify-chat-wrapper-fix.js` ＋ `probe-packed-local-llm.js`（動 `build.files` 前後）＋ `probe-translate-lang.js` |
 | 彈窗 | `e2e-app-dialog-cdp.js`（自己開 vite ＋ electron，**會叫到最前面**：驗確認／輸入／告知三種都是 `app-dialog` 且套到玻璃樣式、Esc 與取消回得對、節點會收掉）|
-| 跨模組 | `test-taskbar-identity.js`（工作列身分與圖示）／`test-error-hygiene.js`（錯誤衛生）／`test-ipc-invoke.js`（IPC 外殼）／`e2e-tray-cdp.js`（常駐）／`test-updater.js` ＋ `e2e-update-cdp.js`（會連 GitHub）／`e2e-visual-cdp.js`（七頁 × 主題 × 三尺寸）／`e2e-ux-tweaks-cdp.js`（**會叫到最前面**）／`e2e-cdp-smoke.js` |
+| 跨模組 | `test-taskbar-identity.js`（工作列身分與圖示）＋ `probe-taskbar-icon.js`（量安裝好的捷徑解析得到 App 圖示；動 `build/installer.nsh` 前後跑）／`test-error-hygiene.js`（錯誤衛生）／`test-ipc-invoke.js`（IPC 外殼）／`e2e-tray-cdp.js`（常駐）／`test-updater.js` ＋ `e2e-update-cdp.js`（會連 GitHub）／`e2e-visual-cdp.js`（七頁 × 主題 × 三尺寸）／`e2e-ux-tweaks-cdp.js`（**會叫到最前面**）／`e2e-cdp-smoke.js` |
