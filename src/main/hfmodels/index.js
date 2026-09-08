@@ -475,6 +475,8 @@ async function install(repoId, variantId) {
   const { variants } = await inspect(repoId)
   const variant = variants.find((v) => v.id === variantId)
   if (!variant) throw new Error('找不到這個模型變體')
+  if (!catalog.isComplete(variant)) throw new Error('模型分片不完整，請選擇其他變體')
+  if (installs.has(variant.id)) throw new Error('這個模型正在下載中')
   if (library.has(variant.id)) throw new Error('這個模型已經在模型庫裡了')
 
   const controller = new AbortController()

@@ -52,10 +52,12 @@ function decodeFrame(buf) {
  */
 function createWebServer(deps = {}) {
   const onNotify = deps.onNotify || (() => {})
-  const port = deps.port || WS_PORT
+  const port = deps.port ?? WS_PORT
   const host = deps.host || '127.0.0.1'
   /** @type {import('http').Server | null} */
   let server = null
+  let starting = null
+  let operations = Promise.resolve()
   /** @type {Set<import('net').Socket>} */
   const sockets = new Set()
   let lastError = ''
@@ -90,7 +92,15 @@ function createWebServer(deps = {}) {
   }
 
   function start() {
-    if (server) return Promise.resolve({ ok: true, port })
+    if (starting) return starting
+    const result = operations.then(listen)
+    starting = result
+    operations = result.catch(() => {}).then(() => { if (starting === result) starting = null })
+    return result
+  }
+
+  function listen() {
+    if (server) return Promise.resolve({ ok: true, port: server.address().port })
     lastError = ''
     return new Promise((resolve) => {
       const httpServer = http.createServer((_req, res) => {
@@ -118,12 +128,19 @@ function createWebServer(deps = {}) {
       httpServer.listen(port, host, () => {
         server = httpServer
         lastError = ''
-        resolve({ ok: true, port })
+        resolve({ ok: true, port: httpServer.address().port })
       })
     })
   }
 
   function stop() {
+    starting = null
+    const result = operations.then(close)
+    operations = result.catch(() => {})
+    return result
+  }
+
+  function close() {
     for (const socket of sockets) {
       try { socket.destroy() } catch { /* ignore */ }
     }

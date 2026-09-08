@@ -5,7 +5,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const vm = require('node:vm')
-const source = fs.readFileSync(path.join(__dirname, '../src/main/main.js'), 'utf8')
+const source = fs.readFileSync(path.join(__dirname, '../src/main/main.js'), 'utf8').replace(/\r\n/g, '\n')
 const body = source.slice(source.indexOf('function attachWindowSecurity('), source.indexOf('/**\n * 儲存的視窗位置'))
 const handlers = {}
 const context = { URL, isDev: false, shell: { openExternal: async () => {} } }

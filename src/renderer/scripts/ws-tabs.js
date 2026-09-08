@@ -1289,6 +1289,8 @@ let previewIsPdf = false
 
 /** 預覽區現在畫的是哪一份（分頁 id ＋ 來源字串），一樣就不重畫 */
 let previewKey = { id: '', source: null }
+/** 非同步預覽的世代；切換分頁後，舊的 PDF 結果不能蓋回來 */
+let previewGeneration = 0
 
 /**
  * 預覽區的 Ctrl+滾輪縮放。容器只有一個，所以 listener 也只掛一次。
@@ -1353,9 +1355,10 @@ function paintPreview(tab) {
   const source = tab.pdf || tab.audio || tab.video || tab.image || (tab.content || '')
   if (previewKey.id === tab.id && previewKey.source === source && box.firstChild) return
   previewKey = { id: tab.id, source }
+  const generation = ++previewGeneration
 
   if (tab.pdf) {
-    void paintPdf(tab, box)
+    void paintPdf(tab, box, generation)
     return
   }
   if (tab.audio) {
@@ -1411,8 +1414,13 @@ let pdfLib = null
  *
  * @param {WsTab} tab
  * @param {HTMLElement} box
+ * @param {number} generation
  */
-async function paintPdf(tab, box) {
+async function paintPdf(tab, box, generation) {
+  const source = tab.pdf || ''
+  const isCurrent = () => generation === previewGeneration
+    && previewKey.id === tab.id
+    && previewKey.source === source
   box.replaceChildren(hint('PDF 載入中…'))
   try {
     if (!pdfLib) {
@@ -1424,10 +1432,12 @@ async function paintPdf(tab, box) {
         import.meta.url
       ).href
     }
+    if (!isCurrent()) return
     const bin = atob(tab.pdf || '')
     const bytes = new Uint8Array(bin.length)
     for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i)
     const doc = await pdfLib.getDocument({ data: bytes, isEvalSupported: false }).promise
+    if (!isCurrent()) { await doc.destroy(); return }
     let page = 1
 
     const bar = document.createElement('div')
@@ -1457,22 +1467,44 @@ async function paintPdf(tab, box) {
       void draw()
     }, { passive: false })
 
+    let drawGeneration = 0
+    let renderTask = null
     const draw = async () => {
-      label.textContent = `第 ${page} / ${doc.numPages} 頁`
-      prev.disabled = page <= 1
-      next.disabled = page >= doc.numPages
-      const rendered = await doc.getPage(page)
-      const viewport = rendered.getViewport({ scale: 1.5 * zoom })
-      canvas.width = viewport.width
-      canvas.height = viewport.height
-      const ctx = canvas.getContext('2d')
-      if (ctx) await rendered.render({ canvasContext: ctx, viewport }).promise
+      const drawId = ++drawGeneration
+      try {
+        const pageNumber = page
+        if (!isCurrent()) return
+        label.textContent = `第 ${pageNumber} / ${doc.numPages} 頁`
+        prev.disabled = pageNumber <= 1
+        next.disabled = pageNumber >= doc.numPages
+        const rendered = await doc.getPage(pageNumber)
+        if (!isCurrent() || drawId !== drawGeneration) return
+        if (renderTask) {
+          renderTask.cancel()
+          await renderTask.promise.catch(error => {
+            if (error.name !== 'RenderingCancelledException') throw error
+          })
+        }
+        if (!isCurrent() || drawId !== drawGeneration) return
+        const viewport = rendered.getViewport({ scale: 1.5 * zoom })
+        canvas.width = viewport.width
+        canvas.height = viewport.height
+        const ctx = canvas.getContext('2d')
+        if (ctx) {
+          renderTask = rendered.render({ canvasContext: ctx, viewport })
+          await renderTask.promise
+        }
+      } catch (error) {
+        if (error.name !== 'RenderingCancelledException' && isCurrent() && drawId === drawGeneration) {
+          box.replaceChildren(hint('這份 PDF 打不開。'))
+        }
+      }
     }
     prev.addEventListener('click', () => { page -= 1; void draw() })
     next.addEventListener('click', () => { page += 1; void draw() })
     await draw()
   } catch {
-    box.replaceChildren(hint('這份 PDF 打不開。'))
+    if (isCurrent()) box.replaceChildren(hint('這份 PDF 打不開。'))
   }
 }
 

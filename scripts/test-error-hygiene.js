@@ -105,6 +105,42 @@ async function testCloudAsr() {
       `訊息=${message}`)
   }
 
+  // fetch 失敗時的 error.message 也屬外部可控字串（自訂端點／代理可以原樣回音金鑰）。
+  // 不能把它拼進使用者可見的 Error。
+  const originalFetch = globalThis.fetch
+  try {
+    globalThis.fetch = async () => { throw new Error(`socket failed: ${SECRETS[0]}`) }
+    const store = {
+      get: (key, fallback) => ({
+        asrApiUrl: 'https://speech.example/v1',
+        asrApiKey: 'sk-local-user-key',
+        asrModelId: 'openai/whisper-1'
+      }[key] ?? fallback)
+    }
+    let message = ''
+    try {
+      await cloudAsr.transcribeAudio({
+        buffer: cloudAsr.float32ToWav(new Float32Array(1600), 16000),
+        format: 'wav',
+        store
+      })
+      message = '(沒有丟例外)'
+    } catch (e) {
+      message = e.message
+    }
+    ok('連線例外不透傳外部 error.message', leaks(message).length === 0,
+      `洩漏 ${JSON.stringify(leaks(message))}｜訊息=${message}`)
+    ok('連線例外仍有固定可行動說明', message === '雲端 ASR 連線失敗，請檢查 API URL 與網路狀態', message)
+    globalThis.fetch = async () => ({ ok: true, text: async () => { throw new Error(SECRETS[0]) } })
+    try {
+      await cloudAsr.transcribeAudio({ buffer: Buffer.from('audio'), format: 'wav', store })
+      message = '(沒有丟例外)'
+    } catch (error) { message = error.message }
+    ok('回應本文讀取失敗也不能外洩金鑰', leaks(message).length === 0 && /雲端 ASR/.test(message), message)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+
   // 純函式層：classifyHttpError 已不接受 body 參數（modelId 有預設值，不算進 arity）
   ok('classifyHttpError 只吃 status（簽章不再收 body）', cloudAsr.classifyHttpError.length === 1,
     `arity=${cloudAsr.classifyHttpError.length}`)

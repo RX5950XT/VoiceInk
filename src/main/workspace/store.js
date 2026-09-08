@@ -268,7 +268,10 @@ async function addDropped(paths) {
     try {
       const view = await create({ path: raw })
       if (known.has(keyOf(view.path))) skipped += 1
-      else added.push(view)
+      else {
+        added.push(view)
+        known.add(keyOf(view.path))
+      }
     } catch (error) {
       // 不是目錄、不存在 → 略過；上限是使用者要知道的事，照樣拋
       if (error && error.code === 'PROJECT_LIMIT') throw error

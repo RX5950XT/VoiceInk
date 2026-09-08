@@ -148,6 +148,18 @@ async function main() {
     assert.strictEqual(log.Duration, 42)
   })
 
+  await check('網站跨整點按秒切桶，59:59 仍保留最後一秒', () => {
+    for (const [second, expected] of [[30, [30, 30]], [59, [1, 59]]]) {
+      const url = `https://boundary-${second}.example/`
+      write.addUrlBrowseTime(db, { url, title: '', duration: 60,
+        activeAt: new Date(2026, 8, 4, 23, 59, second) })
+      const rows = db.prepare(`SELECT LogTime, Duration FROM WebBrowseLogModels
+        WHERE UrlId = (SELECT ID FROM WebUrlModels WHERE Url = ?) ORDER BY LogTime`).all(url)
+      assert.deepStrictEqual(rows.map((r) => r.Duration), expected)
+      assert.deepStrictEqual(rows.map((r) => r.LogTime), ['2026-09-04 23:00:00', '2026-09-05 00:00:00'])
+    }
+  })
+
   await check('CSV 會跳脫逗號與引號，並用 CRLF', () => {
     const text = csv.toCsv(['名稱', '備註'], [['Edge', 'a,b'], ['x', 'say "hi"']])
     assert.ok(text.includes('"a,b"'))

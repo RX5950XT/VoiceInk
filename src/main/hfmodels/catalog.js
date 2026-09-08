@@ -164,7 +164,8 @@ function isComplete(variant) {
   const seen = new Set()
   for (const file of variant.files) {
     const shard = parseShard(file.name)
-    if (shard) seen.add(shard.index)
+    if (!shard || shard.total !== variant.shardCount || shard.index < 1 || shard.index > shard.total) return false
+    seen.add(shard.index)
   }
   return seen.size === variant.shardCount
 }

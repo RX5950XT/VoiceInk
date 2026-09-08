@@ -36,8 +36,11 @@ function createGpuFeed(deps = {}) {
   let cards = new Map()
   let lastAt = 0
   let intervalSec = 2
+  let restartTimer = null
 
   function stopChild() {
+    clearTimeout(restartTimer)
+    restartTimer = null
     const dying = child
     child = null
     if (!dying) return
@@ -47,6 +50,8 @@ function createGpuFeed(deps = {}) {
   function launch() {
     stopChild()
     buf = ''
+    available = false
+    cards = new Map()
     let proc
     try {
       proc = spawnFn('nvidia-smi', [
@@ -62,6 +67,7 @@ function createGpuFeed(deps = {}) {
 
     proc.stdout?.setEncoding('utf8')
     proc.stdout?.on('data', (chunk) => {
+      if (child !== proc) return
       buf += chunk
       let idx
       while ((idx = buf.indexOf('\n')) >= 0) {
@@ -77,20 +83,29 @@ function createGpuFeed(deps = {}) {
       if (buf.length > 64 * 1024) buf = ''
     })
     // 沒裝驅動時 spawn 直接 ENOENT，這是正常路徑，不是錯誤
-    proc.on('error', () => { available = false; child = null })
+    proc.on('error', () => {
+      if (child !== proc) return
+      available = false
+      child = null
+    })
     proc.on('close', () => {
       if (child !== proc) return
       child = null
+      available = false
       // nvidia-smi 在驅動重載時會自己退出；服務還開著就再試一次
-      if (running) setTimeout(() => { if (running) launch() }, 5000)
+      if (running) restartTimer = setTimeout(() => {
+        restartTimer = null
+        if (running) launch()
+      }, 5000)
     })
   }
 
   return {
     /** @param {number} [seconds] */
     start(seconds) {
-      intervalSec = Math.max(1, Math.min(10, Math.trunc(Number(seconds) || 2)))
-      if (running) return
+      const nextInterval = Math.max(1, Math.min(10, Math.trunc(Number(seconds) || 2)))
+      if (running && intervalSec === nextInterval) return
+      intervalSec = nextInterval
       running = true
       launch()
     },

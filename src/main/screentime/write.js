@@ -151,12 +151,8 @@ function addUrlBrowseTime(db, rec) {
  */
 function addUrlAt(db, rec, dateTime, duration) {
   if (duration <= 0) return 0
-  if (dateTime.getMinutes() === 59 && dateTime.getSeconds() === 59) {
-    const next = new Date(dateTime.getFullYear(), dateTime.getMonth(), dateTime.getDate(), dateTime.getHours() + 1)
-    return addUrlAt(db, rec, next, duration)
-  }
   const logTime = new Date(dateTime.getFullYear(), dateTime.getMonth(), dateTime.getDate(), dateTime.getHours())
-  const nowMax = Math.max(1, (60 - dateTime.getMinutes()) * 60)
+  const nowMax = (60 - dateTime.getMinutes()) * 60 - dateTime.getSeconds()
   let nowDur = duration
   let nextDur = 0
   if (duration > MAX_HOUR) {

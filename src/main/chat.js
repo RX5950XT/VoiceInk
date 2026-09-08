@@ -374,9 +374,8 @@ async function readSseStream(res, onDelta, onActivity, maxBuffer = MAX_SSE_BUFFE
   let content = ''
   for (;;) {
     const { done, value } = await reader.read()
-    if (done) break
-    onActivity()
-    buffer += decoder.decode(value, { stream: true })
+    if (!done) onActivity()
+    buffer += done ? decoder.decode() + "\n" : decoder.decode(value, { stream: true })
     if (buffer.length > maxBuffer) {
       await reader.cancel().catch(() => {})
       return content.slice(0, MAX_INPUT_CHARS)
@@ -400,6 +399,7 @@ async function readSseStream(res, onDelta, onActivity, maxBuffer = MAX_SSE_BUFFE
         }
       }
     }
+    if (done) break
   }
   return content
 }

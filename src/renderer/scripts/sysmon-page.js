@@ -58,6 +58,7 @@ const state = {
 const history = new Map()
 /** @type {(() => void) | null} */
 let unsubscribe = null
+let refreshGeneration = 0
 /** @type {HTMLElement[]} 虛擬捲動的節點池 */
 const rowPool = []
 
@@ -2461,6 +2462,8 @@ let sensorsInFlight = false
 export function refreshSysmonPage() {
   initSysmonPage()
   state.active = true
+  const generation = ++refreshGeneration
+  switchSubtab(state.subtab)
   if (!unsubscribe) {
     unsubscribe = electronAPI.sysmon.onEvent((payload) => {
       if (payload.type === 'sample') onSample(payload.data)
@@ -2474,7 +2477,7 @@ export function refreshSysmonPage() {
   loadInventory()
   // 壓力測試的真相在 main（離開分頁時被停掉了），按鈕要跟它對齊而不是各記一份
   electronAPI.sysmon.stressStatus().then((res) => {
-    if (!res?.ok) return
+    if (!res?.ok || !state.active || generation !== refreshGeneration) return
     const cpu = $('sysmonCpuStressStart')
     const cpuStop = $('sysmonCpuStressStop')
     const mem = $('sysmonMemStressStart')
@@ -2494,13 +2497,14 @@ export function refreshSysmonPage() {
     }
   })
   electronAPI.sysmon.status().then(async (res) => {
-    if (!res?.ok) return
+    if (!res?.ok || !state.active || generation !== refreshGeneration) return
     showSensorNote(res.data.sensors)
     // 感測器即開即用：沒起來就自己啟用，不再要使用者按按鈕。
     // 使用者在 UAC 按過「否」（`sysmonSensors === false`）就尊重他，維持關閉。
     const sensors = res.data.sensors
     if (!sensors.installed || sensors.state === 'on' || sensors.state === 'starting') return
     const auto = await electronAPI.store.get('sysmonSensors', true)
+    if (!state.active || generation !== refreshGeneration) return
     state.sensorsAuto = auto !== false
     if (state.sensorsAuto) enableSensors()
   })
@@ -2509,8 +2513,11 @@ export function refreshSysmonPage() {
 export function cooldownSysmonPage() {
   if (!state.active) return
   state.active = false
+  refreshGeneration++
   stopStress()
   hideFanPanel()
+  hideOcPanel()
+  hideScreentimePanel()
   // 壓力測試跑在 main，離開分頁不主動收的話它會在背景一直燒到 5 分鐘上限
   electronAPI.sysmon.cpuStress(false, 1)
   electronAPI.sysmon.memStress(false, 1)

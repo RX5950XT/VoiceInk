@@ -579,7 +579,11 @@ console.log('\n[H0] 模型掃描')
   ok('codex 的掃描端點帶 client_version', Boolean(codexTarget?.url.includes('client_version=')))
   ok('codex 標記要專屬標頭', codexTarget?.codex === true)
   const customAnthropic = modelsScan.resolveScanTarget({ presetId: 'custom', apiFormat: 'anthropic', baseUrl: 'https://api.example.com' })
-  ok('自訂 anthropic 打 /v1/models', customAnthropic?.url === 'https://api.example.com/v1/models' && customAnthropic?.auth === 'x-api-key')
+  ok('自訂 anthropic 預設走 Bearer', customAnthropic?.url === 'https://api.example.com/v1/models' && customAnthropic?.auth === 'bearer')
+  const customAnthropicApiKey = modelsScan.resolveScanTarget({
+    presetId: 'custom', apiFormat: 'anthropic', authField: 'ANTHROPIC_API_KEY', baseUrl: 'https://api.example.com'
+  })
+  ok('自訂 anthropic 可選 x-api-key', customAnthropicApiKey?.auth === 'x-api-key')
   const customChat = modelsScan.resolveScanTarget({ presetId: 'custom', apiFormat: 'openai_chat', baseUrl: 'https://api.example.com/v1/' })
   ok('自訂 openai 打 /models（尾斜線清掉）', customChat?.url === 'https://api.example.com/v1/models')
   ok('自訂沒填端點回 null', modelsScan.resolveScanTarget({ presetId: 'custom', apiFormat: 'anthropic', baseUrl: '' }) === null)
@@ -660,6 +664,18 @@ async function runModelsScan() {
   )
   ok('x-api-key 家的金鑰走 x-api-key 標頭', seen[0]?.headers['x-api-key'] === 'sk-oc')
   ok('x-api-key 家不送 Bearer', seen[0]?.headers.Authorization === undefined)
+
+  // 自訂 Anthropic 端點的鑑別要跟使用者選的金鑰欄位一致。
+  seen.length = 0
+  await modelsScan.scanProviderModels(
+    {
+      presetId: 'custom', apiFormat: 'anthropic', authField: 'ANTHROPIC_AUTH_TOKEN',
+      baseUrl: 'https://custom.example.com', apiKey: 'sk-custom'
+    },
+    { fetchImpl: respondWith({ data: [{ id: 'custom-model' }] }) }
+  )
+  ok('自訂 anthropic 的 AUTH_TOKEN 走 Bearer', seen[0]?.headers.Authorization === 'Bearer sk-custom')
+  ok('自訂 anthropic 的 AUTH_TOKEN 不送 x-api-key', seen[0]?.headers['x-api-key'] === undefined)
 
   // 測試按鈕只送最小請求，並且只回報狀態，不讀上游錯誤本文
   seen.length = 0

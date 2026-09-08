@@ -37,7 +37,7 @@ function acquireFn() {
  * 這一筆要打哪個 models 端點、帶什麼鑑別。
  * 回 null＝這家不支援掃描（UI 要把掃描按鈕收掉）。
  *
- * @param {{ presetId?: string, apiFormat?: string, baseUrl?: string }} provider
+ * @param {{ presetId?: string, apiFormat?: string, baseUrl?: string, authField?: string }} provider
  * @returns {{ url: string, auth: 'bearer' | 'x-api-key' | 'cli' | 'none', codex: boolean } | null}
  */
 function resolveScanTarget(provider) {
@@ -53,7 +53,8 @@ function resolveScanTarget(provider) {
   if (provider.apiFormat === 'openai_chat' || provider.apiFormat === 'openai_responses') {
     return { url: `${base}/models`, auth: 'bearer', codex: false }
   }
-  return { url: `${base}/v1/models`, auth: 'x-api-key', codex: false }
+  const auth = provider?.authField === 'ANTHROPIC_API_KEY' ? 'x-api-key' : 'bearer'
+  return { url: `${base}/v1/models`, auth, codex: false }
 }
 
 /**

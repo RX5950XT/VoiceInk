@@ -90,7 +90,14 @@ class Cdp {
   send(method, params = {}) {
     const id = ++this.id
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject })
+      const timer = setTimeout(() => {
+        this.pending.delete(id)
+        reject(new Error(`CDP 逾時：${method}`))
+      }, 30000)
+      this.pending.set(id, {
+        resolve: value => { clearTimeout(timer); resolve(value) },
+        reject: error => { clearTimeout(timer); reject(error) }
+      })
       this.ws.send(JSON.stringify({ id, method, params }))
     })
   }
@@ -221,11 +228,31 @@ async function main() {
   seedWorkspacesJson()
 
   const child = spawn(EXE, [
+    '--hidden',
+    '--inspect=127.0.0.1:9275',
     `--remote-debugging-port=${PORT}`,
     `--user-data-dir=${USER_DATA_DIR}`,
     '--disable-backgrounding-occluded-windows'
   ], { stdio: 'ignore' })
   let cdp = null
+  let mainCdp = null
+  const capture = (rect) => mainCdp.eval(`process.mainModule.require('electron').BrowserWindow.getAllWindows()
+    .find(win => /index\\.html/.test(win.webContents.getURL())).webContents
+    .capturePage(${JSON.stringify(rect)}, { stayHidden: true, stayAwake: true }).then(image => image.toPNG().toString('base64'))`)
+  async function settleHover(rect) {
+    for (let i = 0; i < 20; i++) {
+      await capture(rect)
+      const settled = await cdp.eval(`(() => {
+        const visible = [...document.querySelectorAll('.monaco-hover')].filter(node => !node.classList.contains('hidden'))
+        return visible.every(node => getComputedStyle(node).opacity === '1')
+          && document.getAnimations().filter(animation => animation.effect?.target?.closest('.find-widget, .monaco-hover'))
+            .every(animation => animation.playState !== 'running')
+      })()`)
+      if (settled) return
+      await sleep(100)
+    }
+    throw new Error('提示框動畫沒有結束')
+  }
 
   try {
     const pages = await waitTargets()
@@ -234,6 +261,7 @@ async function main() {
     cdp = new Cdp(mainPage.webSocketDebuggerUrl)
     await cdp.connect()
     await cdp.send('Runtime.enable')
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false })
     await sleep(1500)
     // 感測器 sidecar 會跳 UAC，測試一律先關掉
     await cdp.eval(`window.electronAPI.store.set('sysmonSensors', false)`)
@@ -675,6 +703,15 @@ async function main() {
     ok('[K] 有頁數列', await cdp.eval(`/第 1 \\/ \\d+ 頁/.test(document.querySelector('.ws-pdf-page')?.textContent || '')`))
     ok('[K] PDF 分頁不給存檔',
       await cdp.eval(`document.getElementById('wsEditorSaveBtn').offsetHeight === 0`))
+    const pdfWidth = await cdp.eval(`document.querySelector('.ws-pdf-canvas').width`)
+    for (let i = 0; i < 5; i++) {
+      await cdp.eval(`document.querySelector('.ws-pdf-canvas').dispatchEvent(new WheelEvent('wheel',
+        { ctrlKey: true, deltaY: -120, bubbles: true, cancelable: true }))`)
+    }
+    ok('[K] 連續縮放完成，PDF 沒有被錯誤提示取代', await waitInPage(cdp,
+      `document.querySelector('.ws-pdf-canvas')?.width > ${pdfWidth}`, 8000))
+    ok('[K] PDF 外層沒有再乘一次縮放', await cdp.eval(
+      `['', '1', 'normal'].includes(document.getElementById('wsEditorPreview').style.zoom)`))
 
     // ===== [L] 分頁右鍵選單與拖曳排序 =====
     const order0 = await cdp.eval(`[...document.querySelectorAll('#wsTabStrip .ws-tab')].map((t) => t.dataset.id)`)
@@ -952,12 +989,21 @@ async function main() {
     }
     ok('[R2] 滑過條件按鈕時尋找列位置不閃跳', hoverStable, hoverStable ? '' : JSON.stringify(hoverFrames))
     let hoverPixelsStable = false
+    let hoverCaptureRect
     if (hoverTarget) {
       await cdp.eval(`document.querySelector('#wsMonacoHost .find-widget.visible .find-part .monaco-custom-toggle')?.focus()`)
       await sleep(700)
+      const targets = await getJson('http://127.0.0.1:9275/json/list')
+      mainCdp = new Cdp(targets[0].webSocketDebuggerUrl)
+      await mainCdp.connect()
+      hoverCaptureRect = await cdp.eval(`(() => {
+        const rect = document.querySelector('#wsMonacoHost .find-widget.visible').getBoundingClientRect()
+        return { x: Math.floor(rect.left), y: Math.floor(rect.top), width: Math.ceil(rect.width), height: Math.ceil(rect.height) + 70 }
+      })()`)
+      await settleHover(hoverCaptureRect)
       const screenshots = []
       for (let i = 0; i < 4; i += 1) {
-        screenshots.push((await cdp.send('Page.captureScreenshot', { format: 'png' })).data)
+        screenshots.push(await capture(hoverCaptureRect))
         await sleep(100)
       }
       hoverPixelsStable = screenshots.every((one) => one === screenshots[0])
@@ -982,6 +1028,7 @@ async function main() {
         type: 'mouseMoved', x: closeHoverTarget.x, y: closeHoverTarget.y
       })
       await sleep(700)
+      await settleHover(hoverCaptureRect)
       for (let i = 0; i < 6; i += 1) {
         closeHoverFrames.push(await cdp.eval(`(() => {
           const hovers = [...document.querySelectorAll('.monaco-hover')]
@@ -1439,6 +1486,7 @@ async function main() {
       String(toChat).includes('src/app.js:2'), String(toChat))
 
   } finally {
+    mainCdp?.close()
     cdp?.close()
     stopTestApp(child)
     for (let i = 0; i < 5; i++) {

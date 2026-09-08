@@ -157,6 +157,22 @@ async function caseA() {
   server.close()
 }
 
+async function caseA2() {
+  console.log('\n[A2] 串流結尾沒有換行')
+  const server = await startServer((req, res) => {
+    sseHead(res)
+    // 相容直接 end、沒有補上最後一個換行的上游。
+    res.end(sseChunk('最後一段').replace(/\n+$/, ''))
+  })
+  chat.setStore(makeStore({ chatApiUrl: server.url }))
+  const conv = await chatStore.create()
+  const result = await chat.send({ reqId: 'a2', conversationId: conv.id, text: '尾端測試' }, makeSender())
+  ok('沒有結尾換行仍保留最後一段', result.ok && result.content === '最後一段', JSON.stringify(result))
+  const saved = await chatStore.get(conv.id)
+  ok('沒有結尾換行仍會存檔', saved.messages.at(-1)?.content === '最後一段', JSON.stringify(saved.messages))
+  server.close()
+}
+
 async function caseB() {
   console.log('\n[B] 中斷後部分內容仍存檔')
   const server = await startServer((req, res) => {
@@ -946,6 +962,7 @@ async function main() {
   await app.whenReady()
   try {
     await caseA()
+    await caseA2()
     await caseB()
     caseC()
     await caseD()

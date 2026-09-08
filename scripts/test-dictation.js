@@ -107,6 +107,9 @@ section('C. 自動學詞（diff）')
   const identical = text.learnPairs('完全一樣', '完全一樣')
   check('沒有差異就沒有詞對', identical.length === 0)
 
+  const hugeRewrite = text.learnPairs('A', '這是一整段不該變成字典的改寫')
+  check('長度差太多不學成詞對', hugeRewrite.length === 0, hugeRewrite)
+
   const long = text.learnPairs('a'.repeat(500), 'b'.repeat(500))
   check('超長輸入直接放棄學詞', long.length === 0)
 

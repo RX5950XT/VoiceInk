@@ -11,7 +11,7 @@ const state = {
   range: 'day',
   date: isoDate(new Date()),
   drillStamp: '',
-  loading: false
+  generation: 0
 }
 
 const $ = (id) => document.getElementById(id)
@@ -36,7 +36,12 @@ function parseIso(s) {
 function shiftDate(delta) {
   const d = parseIso(state.date)
   if (state.range === 'week') d.setDate(d.getDate() + delta * 7)
-  else if (state.range === 'month') d.setMonth(d.getMonth() + delta)
+  else if (state.range === 'month') {
+    const day = d.getDate()
+    d.setDate(1)
+    d.setMonth(d.getMonth() + delta)
+    d.setDate(Math.min(day, new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()))
+  }
   else if (state.range === 'year') d.setFullYear(d.getFullYear() + delta)
   else d.setDate(d.getDate() + delta)
   state.date = isoDate(d)
@@ -64,8 +69,7 @@ function markTabs(rootId, attr, value) {
 }
 
 async function refresh() {
-  if (state.loading) return
-  state.loading = true
+  const generation = ++state.generation
   const label = $('stimeDateLabel')
   if (label) label.textContent = dateLabel()
   markTabs('stimeKind', 'kind', state.kind)
@@ -75,6 +79,7 @@ async function refresh() {
       electronAPI.screentime.status(),
       electronAPI.screentime.stats({ kind: state.kind, range: state.range, date: state.date })
     ])
+    if (generation !== state.generation) return
     renderNote(st?.ok ? st.data : null)
     const data = stats?.ok ? stats.data : null
     renderCards(data)
@@ -83,8 +88,8 @@ async function refresh() {
     renderList($('stimeCats'), data?.categories || [])
     if (state.drillStamp) await refreshDrill()
     else hideDrill()
-  } finally {
-    state.loading = false
+  } catch {
+    if (generation === state.generation) renderNote(null)
   }
 }
 
@@ -211,10 +216,13 @@ function onBarClick(data, index) {
 }
 
 async function refreshDrill() {
+  const generation = state.generation
+  const stamp = state.drillStamp
   const wrap = $('stimeDrillWrap')
   const title = $('stimeDrillTitle')
   if (title) title.textContent = state.drillStamp
   const res = await electronAPI.screentime.drill({ kind: state.kind, stamp: state.drillStamp })
+  if (generation !== state.generation || stamp !== state.drillStamp) return
   renderList($('stimeDrill'), res?.ok ? res.data : [])
   wrap?.classList.remove('hidden')
 }
@@ -288,5 +296,6 @@ export function showScreentimePanel() {
 }
 
 export function hideScreentimePanel() {
+  state.generation++
   state.drillStamp = ''
 }

@@ -20,6 +20,7 @@ const INTERVALS = Object.freeze({ fast: 1000, normal: 2000, slow: 5000 })
 const DEFAULT_INTERVAL_KEY = 'normal'
 /** 一輪 ~310ms，逾時給到 8 秒純粹是防它真的卡死 */
 const TICK_TIMEOUT_MS = 8000
+const STATIC_TIMEOUT_MS = 45_000
 const READY_TIMEOUT_MS = 15_000
 const RESTART_BASE_MS = 1000
 const RESTART_MAX_MS = 30_000
@@ -72,6 +73,7 @@ function createSampler(deps = {}) {
   /** @type {any} */
   let staticInfo = null
   let staticRequested = false
+  let staticPending = false
   /** @type {Map<number, (value: any) => void>} */
   const detailWaiters = new Map()
 
@@ -116,7 +118,7 @@ function createSampler(deps = {}) {
   }
 
   function requestTick() {
-    if (!running || !child) return
+    if (!running || !child || !parser.ready() || staticPending) return
     // 背壓：上一輪沒回來就跳過，不排隊
     if (inFlight) return
     seq += 1
@@ -147,6 +149,9 @@ function createSampler(deps = {}) {
   function handleFrame(frame) {
     if (frame.kind === 'static') {
       staticInfo = metrics.parseStatic(frame.rows)
+      staticPending = false
+      watchdog = clearTimer(watchdog)
+      requestTick()
       return
     }
     if (frame.kind === 'detail') {
@@ -176,6 +181,16 @@ function createSampler(deps = {}) {
       // 第一輪沒有差值可算，畫面別把一整排 0 當成「機器很閒」
       warmup: diff.processes.length > 0 && diff.processes.every((p) => p.cpu === 0)
     })
+    if (!staticRequested && running && child) {
+      staticRequested = true
+      staticPending = true
+      watchdog = setTimeout(() => {
+        onError({ code: 'SYSMON_TIMEOUT', message: '系統資訊查詢逾時，已重新啟動取樣器' })
+        stopChild()
+        scheduleRestart()
+      }, STATIC_TIMEOUT_MS)
+      send(`static ${++seq}`)
+    }
   }
 
   function parseDetail(rows) {
@@ -205,6 +220,7 @@ function createSampler(deps = {}) {
     stdoutBuf = ''
     inFlight = false
     staticRequested = false
+    staticPending = false
     prevTick = null
     prevCpus = null
 
@@ -233,6 +249,7 @@ function createSampler(deps = {}) {
 
     proc.stdout?.setEncoding('utf8')
     proc.stdout?.on('data', (chunk) => {
+      if (child !== proc) return
       stdoutBuf += chunk
       let idx
       while ((idx = stdoutBuf.indexOf('\n')) >= 0) {
@@ -240,10 +257,9 @@ function createSampler(deps = {}) {
         stdoutBuf = stdoutBuf.slice(idx + 1)
         const frame = parser.push(line)
         if (frame) handleFrame(frame)
-        else if (parser.ready() && !staticRequested) {
-          // 只送一次：這個分支每讀一行就會走到，沒有旗標會連送幾百個 static
-          staticRequested = true
-          send(`static ${++seq}`)
+        else if (line.trim() === '#READY') {
+          clearTimeout(readyTimer)
+          requestTick()
         }
       }
       // 一列都收不完就無限長 → 上游壞掉時不要把記憶體吃光
@@ -251,27 +267,27 @@ function createSampler(deps = {}) {
     })
     // stderr 只在開發時有用；內容可能含路徑，不往 renderer 送
     proc.stderr?.resume()
-    proc.on('error', () => {
+    const handleError = () => {
       if (child !== proc) return
       onError({ code: 'SYSMON_SPAWN_FAILED', message: '無法啟動系統監控取樣器' })
       stopChild()
       scheduleRestart()
-    })
+    }
+    proc.on('error', handleError)
+    proc.stdin?.on('error', handleError)
     proc.on('close', () => {
       clearTimeout(readyTimer)
       if (child !== proc) return
       child = null
       inFlight = false
+      watchdog = clearTimer(watchdog)
       if (running) {
         onError({ code: 'SYSMON_EXITED', message: '系統監控取樣器已結束，正在重新啟動' })
         scheduleRestart()
       }
     })
 
-    // 第一輪立刻要，不要讓使用者盯著空畫面等一個 interval
-    setTimeout(() => {
-      if (child === proc) requestTick()
-    }, 0)
+    // READY 後先取樣，再查靜態資訊；兩種指令共用同一條串行管線。
     scheduleNextTick()
   }
 

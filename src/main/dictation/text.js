@@ -214,7 +214,7 @@ function learnPairs(raw, cleaned, dict = []) {
       continue
     }
     // 長度差太多多半是「整句改寫」而不是「同一個詞的寫法不同」
-    if (Math.abs(from.length - to.length) > Math.max(from.length, to.length)) continue
+    if (Math.abs(from.length - to.length) > Math.min(from.length, to.length) * 2) continue
     if (targets.has(from)) continue
     pairs.push({ from, to })
   }

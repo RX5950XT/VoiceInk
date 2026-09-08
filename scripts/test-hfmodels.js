@@ -164,6 +164,14 @@ try {
 
     ok('分片齊全', catalog.isComplete(q8) === true)
     ok('缺一片就不算齊', catalog.isComplete({ files: [q8.files[0]], shardCount: 2 }) === false)
+    ok('分片編號不能從 2 開始', catalog.isComplete({
+      files: [
+        { name: 'model-00002-of-00003.gguf' },
+        { name: 'model-00003-of-00003.gguf' },
+        { name: 'model-00004-of-00003.gguf' }
+      ],
+      shardCount: 3
+    }) === false)
   }
 
   console.log('\n[D] 執行參數決策')

@@ -1,5 +1,48 @@
 # tasks/todo.md — 規劃與回顧
 
+## 2026-09-08 — 全專案 bug 掃描與修復
+
+- [x] 盤點所有模組與既有測試，建立安全的測試基準
+- [x] 追查失敗與資料流，先重現再修復確認的 bug
+- [x] 執行受影響回歸、建置與隔離打包版驗收
+- [x] 記錄修復證據與未能驗證的範圍
+
+修復回顧：
+
+- 聊天：相容沒有結尾換行的 SSE，最後一段中文仍送到畫面並存入會話。
+- CC 代理：自訂 Anthropic 模型掃描依 authField 使用 Bearer 或 x-api-key。
+- 雲端 ASR：連線及讀取本文失敗不透傳外部錯誤；逾時涵蓋完整回應讀取。
+- 語音字典：修正永遠不會成立的長度守衛，避免把整句改寫當成新詞。
+- HF 模型：驗證分片編號與總數，缺片拒絕下載；查詢完成後再次檢查下載狀態，阻止同時寫入同一模型。
+- 工作區：同批重複資料夾不重算；Git 中文檔案用 UTF-8 位元組套上限；檔案樹先驗證拖放再清除狀態，恢復搬檔。
+- PDF：舊的非同步預覽不蓋掉新內容；切去文字編輯器時仍完成隱藏預覽；連續縮放取消並等待上一輪繪圖，處理繪圖失敗。
+- 系統監控：等待取樣器 READY，第一筆取樣與較慢的靜態查詢依序執行；處理舊程序輸出與 stdin 錯誤；GPU 停止會取消重啟，切換間隔確實生效。
+- 使用時長：跨小時依秒數分配；月底換月不跳過二月；快速切換採最後一次結果；離頁清除輪詢與晚到回應。WebSocket 啟停依序完成，停止後不再重試啟動。
+- 時長寫入：資料庫暫時鎖住時保留待寫紀錄，下次補寫，不再清掉尚未存下的秒數。此佇列只保留於本次執行，未涵蓋持續鎖檔後強制結束的跨重啟恢復。
+- 測試工具：修正 CRLF 擷取問題；工作區與使用時長使用隱藏視窗；截圖改用 Electron capturePage(stayHidden/stayAwake)，只比對提示框附近並等待淡入完成。
+
+驗證（記錄在 `dist/bug-audit/`）：
+
+| 指令／檢查 | 實際結果 |
+|---|---|
+| `node scripts/test-*.js`（逐支執行全部 45 支） | 全部 exit 0；涵蓋 AGY、CC 代理、用量、字典、HF、ASR／翻譯、工作區、終端機、sysmon、IPC、更新及文字處理 |
+| `node scripts/test-audit-boundaries.js --baseline` / 不帶 `--baseline` | HEAD 的 4 個案例失敗；修復後 4 個案例通過 |
+| `node --check`（全部 171 支 src JS） | 171 通過；最後新增的時長修正另重驗兩支 |
+| `electron.exe scripts/e2e-chat.js`（Start-Process 等待結束） | 140 passed, 0 failed；本機 mock SSE／隔離會話 |
+| `electron.exe scripts/e2e-sysmon.js`（Start-Process 等待結束） | 修前 60/1（SYSMON_TIMEOUT）；修後 61/0，真 PowerShell 與程序清理 |
+| `npm run electron:pack -- --config.directories.output=dist/bug-audit/pack` | exit 0；asar 的全部 171 支 JS 與來源逐位元一致，package 1.16.1 |
+| `node scripts/e2e-workspace-cdp.js` | 最終打包版 167 passed, 0 failed，含 PDF 連續縮放、真實搬檔、Monaco、Git 與背景截圖 |
+| `node scripts/e2e-terminal-cdp.js` | 46 passed, 0 failed |
+| `node scripts/e2e-visual-cdp.js` | ALL PASS 71 visual checks（深／淺色、三種尺寸、九頁） |
+| `node scripts/e2e-sysmon-cdp.js` | 112 passed, 0 failed |
+| `node scripts/e2e-screentime-cdp.js` | 最終打包版 19 passed, 0 failed |
+| `VOICEINK_EXE=dist/win-unpacked/VoiceInk.exe node scripts/e2e-visual-cdp.js` | 更新正式預覽後，71 項再次通過 |
+| `git diff --check` | exit 0 |
+
+CDP 均以 `VOICEINK_EXE=dist/bug-audit/pack/win-unpacked/VoiceInk.exe` 指定隔離建置；沒有桌面滑鼠或全域按鍵操作。最後確認原預覽已關閉，將通過驗收的檔案更新至 `dist/win-unpacked`，exe 與 asar 的 SHA-256 和驗證版本相同；正在執行的安裝版保留。
+
+驗證範圍限制：未對各家外部供應商付費 API、真實語音輸入插入、大型 GPU 模型推論、提權風扇／超頻及 NSIS 安裝更新做本輪實測。未 commit、push 或發行；本輪測試通過不代表能保證所有可能輸入都沒有 bug。
+
 > 只留「還沒做完的」與「最近幾輪做了什麼、驗到什麼」。更早的逐項紀錄查 git log。
 > 規則見 [CLAUDE.md](../CLAUDE.md)（＝AGENTS.md），架構見 [CONTEXT.md](../CONTEXT.md)，教訓見 [lessons.md](./lessons.md)。
 

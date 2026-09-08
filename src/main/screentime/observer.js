@@ -41,9 +41,14 @@ function createObserver(deps = {}) {
       child = null
       return
     }
-    child.stdout.setEncoding('utf8')
-    child.stdout.on('data', onData)
-    child.on('exit', () => { child = null })
+    const proc = child
+    const failed = () => { if (child === proc) stop() }
+    proc.stdout.setEncoding('utf8')
+    proc.stdout.on('data', (chunk) => { if (child === proc) onData(chunk) })
+    proc.stderr.resume()
+    proc.stdin.on('error', failed)
+    proc.on('error', failed)
+    proc.on('exit', () => { if (child === proc) child = null })
   }
 
   function onData(chunk) {

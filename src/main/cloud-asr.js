@@ -242,6 +242,7 @@ async function transcribeAudio(opts) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
   let res
+  let raw
   try {
     res = await fetch(url, {
       method: 'POST',
@@ -252,17 +253,16 @@ async function transcribeAudio(opts) {
       body: JSON.stringify(body),
       signal: controller.signal
     })
+    raw = await res.text()
   } catch (e) {
     if (e && /** @type {{ name?: string }} */ (e).name === 'AbortError') {
       throw new Error('雲端 ASR 逾時，請稍後再試或縮短音訊')
     }
-    const msg = (e && /** @type {Error} */ (e).message) || String(e)
-    throw new Error(`雲端 ASR 連線失敗：${msg.slice(0, 120)}`)
+    throw new Error('雲端 ASR 連線失敗，請檢查 API URL 與網路狀態')
   } finally {
     clearTimeout(timer)
   }
 
-  const raw = await res.text()
   if (!res.ok) {
     console.error(`[cloud-asr] API error: HTTP ${res.status}`)
     throw classifyHttpError(res.status, cfg.modelId)

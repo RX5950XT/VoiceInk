@@ -36,6 +36,8 @@ function createScreentimeService(deps = {}) {
   let activeSeconds = 0
   let activeStarted = null
   let sleeping = false
+  // ponytail: 暫時鎖檔只在本次執行期間重試；跨重啟恢復需持久化待寫紀錄。
+  let pendingApps = []
 
   const observer = createObserver({ onTick: handleTick, spawnFn: deps.spawnFn })
   const web = createWebServer({
@@ -44,6 +46,8 @@ function createScreentimeService(deps = {}) {
     host: deps.host
   })
   let retryTimer = null
+  let running = false
+  let generation = 0
 
   function handleTick(info) {
     if (!db) return
@@ -71,19 +75,28 @@ function createScreentimeService(deps = {}) {
 
   function flushApp(keep) {
     if (db && activeName && activeSeconds > 0 && activeStarted) {
-      try {
-        write.updateAppDuration(db, activeName, activeSeconds, activeStarted, activePath)
-      } catch { /* 防毒鎖檔：下一輪再寫 */ }
+      pendingApps.push([activeName, activeSeconds, activeStarted, activePath])
     }
     if (keep && activeName) {
       activeSeconds = 0
       activeStarted = nowFn()
-      return
+    } else {
+      activeName = ''
+      activePath = ''
+      activeSeconds = 0
+      activeStarted = null
     }
-    activeName = ''
-    activePath = ''
-    activeSeconds = 0
-    activeStarted = null
+    let saved = 0
+    try {
+      for (const record of pendingApps) {
+        write.updateAppDuration(db, ...record)
+        saved++
+      }
+    } catch {
+      console.warn('[screentime] 應用時長尚未寫入，保留並稍後重試')
+    } finally {
+      if (saved) pendingApps = pendingApps.slice(saved)
+    }
   }
 
   function handleWeb(rec) {
@@ -98,9 +111,10 @@ function createScreentimeService(deps = {}) {
   }
 
   function startWeb() {
-    if (!webEnabled || web.listening) return
+    if (!running || !webEnabled) return
+    const requestGeneration = generation
     web.start().then((res) => {
-      if (res.ok) return
+      if (res.ok || !running || requestGeneration !== generation) return
       retryTimer = setTimeout(() => {
         retryTimer = null
         startWeb()
@@ -109,7 +123,7 @@ function createScreentimeService(deps = {}) {
   }
 
   function start() {
-    if (!userDataPath) return status()
+    if (!userDataPath || running) return status()
     importInfo = dbMod.ensureImported(userDataPath, {
       sourceDir: deps.sourceDir,
       Database: deps.Database,
@@ -117,6 +131,8 @@ function createScreentimeService(deps = {}) {
     })
     if (!db) db = dbMod.openDb(userDataPath, { Database: deps.Database })
     applyConfig()
+    running = true
+    generation++
     observer.start()
     startWeb()
     watchPower()
@@ -136,6 +152,8 @@ function createScreentimeService(deps = {}) {
   }
 
   function stop() {
+    running = false
+    generation++
     flushApp()
     observer.stop()
     if (retryTimer) { clearTimeout(retryTimer); retryTimer = null }

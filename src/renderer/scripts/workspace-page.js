@@ -998,8 +998,9 @@ async function onTreeDrop(event, project, entry) {
   clearDropMarks()
   const toDir = dropDirOf(entry)
   const list = dragging
+  const canDrop = list.length > 0 && canDropInto(toDir)
   dragging = []
-  if (!list.length || !canDropInto(toDir)) return
+  if (!canDrop) return
 
   const seq = projectSeq
   let moved = 0

@@ -470,7 +470,9 @@ async function showAt(cwd, rev, relPath) {
   const res = await run(cwd, ['show', `${rev}:${relPath.replace(/\\/g, '/')}`])
   if (res.code !== 0) return { text: '', truncated: false }
   // 截斷過的內容不可以直接拿去並排：後面那一大段會被畫成「整段刪掉」
-  if (res.stdout.length > MAX_DIFF_BYTES) return { text: '', truncated: true }
+  if (Buffer.byteLength(res.stdout, 'utf8') > MAX_DIFF_BYTES) {
+    return { text: '', truncated: true }
+  }
   return { text: res.stdout, truncated: false }
 }
 
