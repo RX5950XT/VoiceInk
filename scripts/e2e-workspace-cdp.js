@@ -450,11 +450,36 @@ async function main() {
         `document.getElementById('wsGitBranch').textContent.includes('main')`, 10000)
       ok('[E] 讀得到分支名', branchOk,
         String(await cdp.eval(`document.getElementById('wsGitBranch').textContent`)))
+      // 列上的檔名拆成「檔名」與「所在資料夾」兩段（面板只有 280px），
+      // 完整的相對路徑在整列的 title 上——要比對路徑就看那裡。
       const changed = await cdp.eval(
-        `[...document.querySelectorAll('#wsGitFiles .ws-git-name')].map((n) => n.textContent)`
+        `[...document.querySelectorAll('#wsGitFiles .ws-git-row')].map((n) => n.title)`
       )
       ok('[E] 列得出未提交的變更', changed.includes('src/app.js'), JSON.stringify(changed))
       ok('[E] 剛存過的 README.md 也算一筆變更', changed.includes('README.md'), JSON.stringify(changed))
+
+      // 面板只有 280px：檔名、行數與兩顆動作鈕如果都不准縮，長檔名會把後面的東西
+      // 整排擠出去——畫面上就是文字疊在按鈕上。**只斷言「內容沒有溢出自己那一列」**，
+      // 不斷言「檔名沒被截」：280px 本來就放不下長檔名，完整路徑在那一列的 title 上。
+      const rowFit = await cdp.eval(`(() => {
+        const rows = [...document.querySelectorAll('#wsGitFiles .ws-git-row')]
+        const bad = rows.filter((r) => r.scrollWidth > r.clientWidth + 1)
+        return { total: rows.length, overflow: bad.length, sample: bad[0]?.title || '' }
+      })()`)
+      ok('[E] 沒有任何一列的內容溢出（檔名不會疊到行數或動作鈕上）',
+        rowFit.total > 0 && rowFit.overflow === 0, JSON.stringify(rowFit))
+
+      // 沒撞名的檔案不印所在資料夾（把那一百多 px 讓給檔名）。
+      // 撞名時才印的那一半是原始碼契約，驗在 `test-workspace-ui.js`。
+      const dirs = await cdp.eval(`(() => {
+        const rows = [...document.querySelectorAll('#wsGitFiles .ws-git-row')]
+        return rows.map((r) => ({
+          title: r.title,
+          dir: r.querySelector('.ws-git-dir')?.textContent || ''
+        }))
+      })()`)
+      ok('[E] 沒撞名的檔案不印資料夾（把寬度讓給檔名）',
+        dirs.length > 0 && dirs.every((one) => one.dir === ''), JSON.stringify(dirs))
       const gitSections = await cdp.eval(`(() => {
         const toggles = [...document.querySelectorAll('.ws-git-sec-toggle')]
         const review = document.getElementById('wsGitSecReview')

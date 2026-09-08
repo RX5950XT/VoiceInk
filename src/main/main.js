@@ -39,6 +39,8 @@ const TTS_PREVIEW_TEXT = Object.freeze({
 const { registerUsageIpc } = require('./usage/ipc')
 const { registerAgyIpc } = require('./agy/ipc')
 const { registerTerminalIpc } = require('./terminal/ipc')
+// 只用來驗 store 裡的桌布檔名（不碰 node-pty，載進來不影響啟動時間）
+const termBackground = require('./terminal/background')
 const { registerWorkspaceIpc } = require('./workspace/ipc')
 const { registerSysmonIpc } = require('./sysmon/ipc')
 const { registerHfModelsIpc } = require('./hfmodels/ipc')
@@ -200,12 +202,19 @@ const STORE_ALLOWLIST = new Set([
   'liveAsr',
   'liveLlm',
   'dictationAsr',
-  'dictationLlm'
+  'dictationLlm',
+  // 終端機外觀：配色 key、桌布檔名（**檔名不是路徑**，圖片本體在 <userData>/terminal-bg/）、
+  // 桌布壓暗程度。色表本身在 renderer 的 `term-themes.js`，這裡只認 key。
+  'termTheme',
+  'termBgImage',
+  'termBgOpacity'
 ])
 
 const TRANSLATOR_VALUES = new Set(['cloud', 'local'])
 const ASR_ENGINE_VALUES = new Set(['local', 'cloud'])
 const THEME_VALUES = new Set(['dark', 'light'])
+/** 終端機配色。**要跟 renderer 的 `term-themes.js` 對齊**（那邊才有實際色碼） */
+const TERM_THEME_VALUES = new Set(['black', 'app', 'dracula', 'solarized'])
 
 const TRANSLATE_TARGET_LANGS = new Set(['zh-TW', 'zh-CN', 'en', 'ja', 'ko'])
 const MAX_TRANSLATE_CHARS = 1500
@@ -245,6 +254,18 @@ function sanitizeTtsRate(val) {
   const n = Number(val)
   if (!Number.isFinite(n)) return 0
   return Math.max(-50, Math.min(100, Math.round(n)))
+}
+
+/**
+ * 終端機桌布壓多暗：0（看不到圖）～100（原圖）。預設 20——桌布是氣氛，
+ * 字才是主角，太亮的話一般文字就讀不出來了。
+ * @param {unknown} val
+ * @returns {number}
+ */
+function sanitizeBgOpacity(val) {
+  const n = Number(val)
+  if (!Number.isFinite(n)) return 20
+  return Math.max(0, Math.min(100, Math.round(n)))
 }
 
 /**
@@ -1010,6 +1031,9 @@ ipcMain.handle('store:get', async (event, key, defaultValue) => {
     const list = chat.sanitizePrompts(store.get('chatPrompts', []))
     return list.some((p) => p.id === val) ? val : ''
   }
+  if (key === 'termTheme') return TERM_THEME_VALUES.has(val) ? val : 'black'
+  if (key === 'termBgImage') return termBackground.sanitizeName(val)
+  if (key === 'termBgOpacity') return sanitizeBgOpacity(val)
   if (key === 'chatThinking') return val === true
   if (key === 'dictationEnabled') return val === true
   if (key === 'dictationLang') return DICTATION_LANGS.has(val) ? val : 'zh-TW'
@@ -1074,6 +1098,19 @@ ipcMain.handle('store:set', async (event, key, value) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.setBackgroundColor(t === 'light' ? '#f5f5f5' : '#1a1a1a')
     }
+    return true
+  }
+  if (key === 'termTheme') {
+    store.set(key, TERM_THEME_VALUES.has(value) ? value : 'black')
+    return true
+  }
+  if (key === 'termBgImage') {
+    // renderer 只送得回 `terminal:pickBackground` 給它的檔名；別的一律變成「沒有桌布」
+    store.set(key, termBackground.sanitizeName(value))
+    return true
+  }
+  if (key === 'termBgOpacity') {
+    store.set(key, sanitizeBgOpacity(value))
     return true
   }
   if (key === 'asrApiUrl') {
@@ -1613,7 +1650,11 @@ registerTerminalIpc({
     // 就只會回通用錯誤——路徑候選全部驗不過，等於整個連結功能安靜地沒作用。
     resolveLinks: (...args) => loadTerminal().resolveLinks(...args),
     revealLink: (...args) => loadTerminal().revealLink(...args),
-    raiseChildWindow: (...args) => loadTerminal().raiseChildWindow(...args)
+    raiseChildWindow: (...args) => loadTerminal().raiseChildWindow(...args),
+    // 終端機桌布（三支都要列，漏一支那顆按鈕就只會回通用錯誤）
+    backgroundImage: (...args) => loadTerminal().backgroundImage(...args),
+    adoptBackground: (...args) => loadTerminal().adoptBackground(...args),
+    clearBackground: (...args) => loadTerminal().clearBackground(...args)
   },
   isMainSender: assertMainWindowSender,
   dialog,

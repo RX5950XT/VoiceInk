@@ -501,6 +501,13 @@
                             <button type="button" id="wsGitPushBtn" class="btn btn-secondary btn-sm">推送</button>
                           </div>
                         </div>
+                        <input
+                          type="search"
+                          id="wsGitFilter"
+                          class="input input-sm ws-git-filter"
+                          placeholder="篩選檔名…"
+                          aria-label="篩選變更的檔案"
+                        />
                         <div class="ws-git-files" id="wsGitFiles" aria-label="變更的檔案"></div>
                       </div>
                     </section>
@@ -1978,6 +1985,28 @@
                           <button type="button" id="updateInstallBtn" class="btn btn-primary btn-sm hidden">重新啟動並安裝</button>
                         </div>
                         <p id="updateStatus" class="setting-hint"></p>
+                      </div>
+                      <div class="setting-group">
+                        <label for="termThemeSelect">終端機外觀</label>
+                        <select id="termThemeSelect" class="select select-full" aria-label="終端機配色"></select>
+                        <div class="term-bg-row">
+                          <button type="button" id="termBgPickBtn" class="btn btn-secondary btn-sm">選背景圖…</button>
+                          <button type="button" id="termBgClearBtn" class="btn btn-secondary btn-sm" hidden>移除背景圖</button>
+                          <span id="termBgName" class="setting-value-label"></span>
+                        </div>
+                        <label for="termBgOpacityInput">
+                          背景圖濃度 <span id="termBgOpacityLabel" class="setting-value-label">20%</span>
+                        </label>
+                        <input
+                          type="range"
+                          id="termBgOpacityInput"
+                          class="range-input"
+                          min="0"
+                          max="100"
+                          step="5"
+                          value="20"
+                        />
+                        <p class="setting-hint">濃度只壓背景圖，文字不受影響；太高會蓋掉字。</p>
                       </div>
                     </div>
                   </section>

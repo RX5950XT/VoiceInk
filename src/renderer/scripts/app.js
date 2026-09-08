@@ -12,6 +12,7 @@ import {
 import { DEFAULT_ASR_API_URL, DEFAULT_ASR_MODEL } from './api.js'
 import { initCustomSelects, syncCustomSelects } from './custom-select.js'
 import { askConfirm } from './app-dialog.js'
+import { TERM_THEMES, DEFAULT_TERM_THEME } from './term-themes.js'
 
 /** @type {typeof import('./live-caption.js') | null} */
 let liveCaption = null
@@ -554,6 +555,93 @@ async function loadStartupSettings() {
     // 寫入失敗（權限／政策）就把勾勾轉回實際狀態，不要讓 UI 說謊
     loginInput.checked = result?.openAtLogin === true
     showToast(loginInput.checked ? '已設定開機自動啟動' : '已取消開機自動啟動')
+  })
+}
+
+// ===== 終端機外觀（設定 → 基本；跟主題一樣即時套用，不用按儲存）=====
+
+/** 只綁一次，之後每次進設定頁只重讀值 */
+let termAppearanceBound = false
+
+/** 目前存著的桌布檔名（換圖時要交給 main 把舊的刪掉） */
+let termBgName = ''
+
+/** 改完就叫終端機頁重讀（它自己去跟 main 要 data: URI） */
+function notifyTermAppearance() {
+  window.dispatchEvent(new CustomEvent('voiceink:term-appearance'))
+}
+
+/**
+ * @param {HTMLElement | null} clearBtn
+ * @param {HTMLElement | null} nameEl
+ */
+function paintTermBgState(clearBtn, nameEl) {
+  if (clearBtn) clearBtn.hidden = !termBgName
+  if (nameEl) nameEl.textContent = termBgName ? '已設定' : '未設定'
+}
+
+async function loadTermAppearanceSettings() {
+  const select = /** @type {HTMLSelectElement | null} */ (document.getElementById('termThemeSelect'))
+  const pickBtn = document.getElementById('termBgPickBtn')
+  const clearBtn = document.getElementById('termBgClearBtn')
+  const nameEl = document.getElementById('termBgName')
+  const opacity = /** @type {HTMLInputElement | null} */ (document.getElementById('termBgOpacityInput'))
+  const opacityLabel = document.getElementById('termBgOpacityLabel')
+  if (!select || !opacity) return
+
+  if (!select.options.length) {
+    for (const [key, preset] of Object.entries(TERM_THEMES)) {
+      const option = document.createElement('option')
+      option.value = key
+      option.textContent = preset.label
+      select.appendChild(option)
+    }
+  }
+  select.value = await electronAPI.store.get('termTheme', DEFAULT_TERM_THEME)
+  // options 是這裡才填的，外面那次 syncCustomSelects 還沒東西可包
+  syncCustomSelects()
+  termBgName = String(await electronAPI.store.get('termBgImage', '') || '')
+  const saved = Number(await electronAPI.store.get('termBgOpacity', 20))
+  opacity.value = String(Number.isFinite(saved) ? saved : 20)
+  if (opacityLabel) opacityLabel.textContent = `${opacity.value}%`
+  paintTermBgState(clearBtn, nameEl)
+
+  if (termAppearanceBound) return
+  termAppearanceBound = true
+
+  select.addEventListener('change', async () => {
+    await electronAPI.store.set('termTheme', select.value)
+    notifyTermAppearance()
+  })
+  // 拖曳中就先看到效果，放開才寫進 store（拖一次會觸發幾十個 input）
+  opacity.addEventListener('input', () => {
+    if (opacityLabel) opacityLabel.textContent = `${opacity.value}%`
+  })
+  opacity.addEventListener('change', async () => {
+    await electronAPI.store.set('termBgOpacity', Number(opacity.value))
+    notifyTermAppearance()
+  })
+  pickBtn?.addEventListener('click', async () => {
+    // 路徑不從這裡送：main 開系統對話框、複製檔案，只回一個檔名
+    const result = await electronAPI.terminal.pickBackground(termBgName)
+    if (!result?.ok) {
+      if (result?.error?.message) showToast(result.error.message, 'error')
+      return
+    }
+    if (!result.data) return
+    termBgName = String(result.data)
+    await electronAPI.store.set('termBgImage', termBgName)
+    paintTermBgState(clearBtn, nameEl)
+    notifyTermAppearance()
+    showToast('終端機背景圖已更新')
+  })
+  clearBtn?.addEventListener('click', async () => {
+    await electronAPI.terminal.clearBackground(termBgName)
+    termBgName = ''
+    await electronAPI.store.set('termBgImage', '')
+    paintTermBgState(clearBtn, nameEl)
+    notifyTermAppearance()
+    showToast('已移除終端機背景圖')
   })
 }
 
@@ -1423,6 +1511,7 @@ async function loadSettingsForm() {
   applyTtsVoicesToForm(settings.ttsVoices || DEFAULT_TTS_VOICES)
   syncCustomSelects()
   await loadStartupSettings()
+  await loadTermAppearanceSettings()
   await loadUpdateSettings()
   await loadChatSettings()
 }

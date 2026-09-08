@@ -3670,9 +3670,12 @@ body:has(.ws-monaco .find-widget.visible) .workbench-hover-container {
   background-color: var(--surface-hover);
 }
 
-/* 分組小標（暫存區／變更／未追蹤） */
+/* 分組小標（暫存區／變更／未追蹤／衝突）：標題 ＋ 檔案數 ＋ 整組操作 */
 .ws-git-group {
-  margin: 4px 0 1px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 1px;
   padding: 0 8px;
   font-size: 10px;
   font-weight: 600;
@@ -3680,11 +3683,35 @@ body:has(.ws-monaco .find-widget.visible) .workbench-hover-container {
   letter-spacing: 0.04em;
 }
 
-/* 列上的小動作鈕（暫存／取消／捨棄） */
+.ws-git-group-count {
+  padding: 0 5px;
+  border-radius: 999px;
+  background-color: var(--surface-subtle);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 整組那顆按鈕靠右；`.ws-git-act` 的 margin-left:auto 已經把它推過去了 */
+.ws-git-group-act {
+  font-weight: 500;
+}
+
+/* 篩選框：檔案多到掃不完時才出現（`GIT_FILTER_MIN_FILES`） */
+.ws-git-filter {
+  width: 100%;
+  font-size: 12px;
+}
+
+.ws-git-filter[hidden] {
+  display: none;
+}
+
+/* 列上的小動作鈕（暫存／取消／捨棄）。padding 收窄是為了把寬度讓給檔名——
+   面板只有 280px，兩顆鈕加起來就吃掉三分之一。 */
 .ws-git-act {
   flex: none;
   margin-left: auto;
-  padding: 1px 8px;
+  padding: 1px 5px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   background: transparent;
@@ -3821,10 +3848,81 @@ body:has(.ws-monaco .find-widget.visible) .workbench-hover-container {
   color: var(--danger);
 }
 
+/* 檔名（亮）在前、所在資料夾（淡、可截斷）在後。
+   面板只有 280px，整條路徑印出來會把要認的檔名擠掉，所以只有資料夾那一段准截。 */
 .ws-git-name {
+  flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
   font-family: var(--font-mono);
+}
+
+/* 兩段都要能縮，而且**目錄先被壓掉**（`flex-shrink` 大的先縮）：
+   面板只有 280px，長檔名如果不准縮就會把目錄、行數與動作鈕整排擠到疊在一起。 */
+.ws-git-basename {
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 路徑截的是**開頭**不是結尾（`direction: rtl`）：`src/renderer/scr…` 認不出是哪裡，
+   `…/scripts` 一眼就知道。完整路徑在整列的 title 上。 */
+.ws-git-dir {
+  flex: 0 999 auto;
+  min-width: 0;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+
+/* 這一列改了幾行。等寬數字才不會每次重畫都跳動。 */
+.ws-git-lines {
+  flex: none;
+  display: flex;
+  gap: 4px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ws-git-added {
+  color: var(--success);
+}
+
+.ws-git-removed {
+  color: var(--danger);
+}
+
+/* 分支列：名字 ＋ 領先／落後的 chip（兩個顏色不一樣才分得出要推還是要拉） */
+.ws-git-branch-name {
+  min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.ws-git-chip {
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background-color: var(--surface-subtle);
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.ws-git-chip.is-ahead {
+  color: var(--success);
+}
+
+.ws-git-chip.is-behind {
+  color: var(--warning);
 }
 
 .ws-git-commit {
@@ -5680,9 +5778,35 @@ h6.md-h { font-size: 14px; }
   -webkit-backdrop-filter: blur(22px) saturate(1.08);
 }
 
-/* 終端機的畫布必須不透明：xterm 自己畫每一格，半透明會讓捲動殘影疊在一起。 */
+/* 設定頁的終端機背景圖那一排（選圖／移除／狀態） */
+.term-bg-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 8px 0 4px;
+}
+
+/* 終端機的畫布必須不透明：xterm 自己畫每一格，半透明會讓捲動殘影疊在一起。
+   底色由 `term-themes.js` 依選到的配色寫進 `--term-theme-bg`（沒設定過就退回主題色）。 */
 .term-host {
-  background: var(--term-bg);
+  background: var(--term-theme-bg, var(--term-bg));
+}
+
+/* 桌布自己一層，鋪在 xterm 底下。
+   **只有底被換掉，文字那一層一個字都沒動**：xterm 的字是它自己的 DOM，
+   壓暗的 `opacity` 只作用在這個 `::before` 上，前景色與選取反白照常。
+   有桌布時 `term-themes.js` 會把 xterm 的底色改成 `#00000000` 讓這一層透出來。 */
+.term-host.has-term-bg::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: var(--term-bg-image, none);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  opacity: var(--term-bg-opacity, 0.2);
+  pointer-events: none;
 }
 
 /* Chat：三層 surface，角色靠色溫與細邊而非厚重泡泡。 */

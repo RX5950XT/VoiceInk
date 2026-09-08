@@ -484,6 +484,10 @@ async function selectProject(id) {
   selected = new Set()
   anchorRel = ''
   reviewRef = ''
+  // 換專案＝上一個專案的變更清單與篩選條件全部作廢（留著會拿 A 的字去篩 B 的檔案）
+  gitFilter = ''
+  lastGitStatus = null
+  if (el.gitFilter) /** @type {HTMLInputElement} */ (el.gitFilter).value = ''
   setChatPaneMode('workspace')
   announceProject()
   startWatching(project.id)
@@ -1453,7 +1457,9 @@ async function revealProject() {
 // ===== Git =====
 
 /** 狀態字母 → 中文標籤（`.` 代表這一側沒有變動） */
-const GIT_LABELS = { M: '改', A: '新', D: '刪', R: '改名', C: '複製', U: '衝突', '?': '未追蹤' }
+// `?`（未追蹤）故意只寫一個字：那一組的標題已經寫著「未追蹤」，每一列再寫三個字
+// 只會把檔名的空間吃掉（面板只有 280px）。
+const GIT_LABELS = { M: '改', A: '新', D: '刪', R: '改名', C: '複製', U: '衝突', '?': '新' }
 
 /** 相對時間（log 列用）；只到「天」就夠，再舊直接給日期 */
 function gitTimeOf(at) {
@@ -1470,14 +1476,64 @@ function gitTimeOf(at) {
 }
 
 /**
+ * 一條相對路徑拆成「檔名」與「它在哪個資料夾」。
+ *
+ * 面板很窄（280px），整條路徑印出來只會看到一串省略號中間的目錄名，
+ * 真正要認的檔名反而被擠掉。拆成兩段之後檔名永遠在最左邊。
+ *
+ * @param {string} relPath
+ * @returns {{ name: string, dir: string }}
+ */
+function splitGitPath(relPath) {
+  const text = String(relPath || '')
+  const cut = text.lastIndexOf('/')
+  return cut < 0 ? { name: text, dir: '' } : { name: text.slice(cut + 1), dir: text.slice(0, cut) }
+}
+
+/**
+ * 一列右邊的 `+12 −3`。兩個都是 0（或根本沒數字）就整個不畫——
+ * 印一個「+0 −0」只是佔位，讀的人還得停下來想那是什麼意思。
+ *
+ * @param {{ added?: number, removed?: number, binary?: boolean }} file
+ * @returns {HTMLElement | null}
+ */
+function gitLineCounts(file) {
+  if (file.binary) return null
+  const added = Number(file.added) || 0
+  const removed = Number(file.removed) || 0
+  if (!added && !removed) return null
+  const wrap = document.createElement('span')
+  wrap.className = 'ws-git-lines'
+  wrap.title = `新增 ${added} 行、刪除 ${removed} 行（跟上一次提交比）`
+  if (added) {
+    const plus = document.createElement('span')
+    plus.className = 'ws-git-added'
+    plus.textContent = `+${added}`
+    wrap.appendChild(plus)
+  }
+  if (removed) {
+    const minus = document.createElement('span')
+    minus.className = 'ws-git-removed'
+    minus.textContent = `−${removed}`
+    wrap.appendChild(minus)
+  }
+  return wrap
+}
+
+/**
  * Git 面板的一列。`side` 決定徽章跟動作：staged（取消暫存）、
- * worktree（暫存／捨棄）、untracked（暫存／捨棄）。
+ * worktree（暫存／捨棄）、untracked（暫存／捨棄）、conflict（解決了）。
+ *
+ * 動作鈕**常駐**不做「hover 才出現」：面板很窄，滑鼠沒經過就等於沒有那顆按鈕
+ * （鍵盤與觸控更是完全按不到）。
+ *
  * @param {{ id: string }} project
- * @param {{ path: string, index: string, worktree: string, from: string }} file
- * @param {'staged' | 'worktree' | 'untracked'} side
+ * @param {{ path: string, index: string, worktree: string, from: string, added?: number, removed?: number, binary?: boolean }} file
+ * @param {'staged' | 'worktree' | 'untracked' | 'conflict'} side
+ * @param {Set<string>} [ambiguous] 這份清單裡撞名的檔名（只有這些列會印出所在資料夾）
  * @returns {HTMLElement}
  */
-function gitRow(project, file, side) {
+function gitRow(project, file, side, ambiguous) {
   const row = document.createElement('div')
   row.className = 'ws-git-row'
   row.title = file.from ? `${file.from} → ${file.path}` : file.path
@@ -1486,10 +1542,26 @@ function gitRow(project, file, side) {
   const badge = document.createElement('span')
   badge.className = `ws-git-badge ws-git-${letter === '?' ? 'untracked' : letter.toLowerCase()}`
   badge.textContent = GIT_LABELS[letter] || letter
+
+  const { name: fileName, dir } = splitGitPath(file.path)
   const name = document.createElement('span')
   name.className = 'ws-git-name'
-  name.textContent = file.path
+  const base = document.createElement('span')
+  base.className = 'ws-git-basename'
+  base.textContent = fileName
+  name.appendChild(base)
+  // 目錄**只在檔名撞名時才印**（跟 VS Code 一樣）：那一格扣掉徽章、行數與兩顆動作鈕
+  // 只剩一百多 px，每一列都掛一段路徑的話，被截掉的會是真正要認的檔名
+  // （實測畫面上一排 `e2e-termina…`／`workspac…`，完全認不出是哪一支）。
+  if (dir && ambiguous?.has(fileName)) {
+    const parent = document.createElement('span')
+    parent.className = 'ws-git-dir'
+    parent.textContent = dir
+    name.appendChild(parent)
+  }
   row.append(badge, name)
+  const counts = gitLineCounts(file)
+  if (counts) row.appendChild(counts)
   row.addEventListener('click', () => void openDiffTab(project, file.path, side === 'staged'))
 
   /** 捨棄的 3 秒二次確認（跟聊天刪除同一套：第一下變「確定？」，逾時收） */
@@ -1553,6 +1625,43 @@ function gitRow(project, file, side) {
   return row
 }
 
+/** 篩選框要到這麼多檔案才出現（少於這個數目直接用眼睛掃比較快） */
+const GIT_FILTER_MIN_FILES = 8
+
+/** 篩選框裡打的字（已經轉小寫）。切專案時會清掉。 */
+let gitFilter = ''
+
+/** 上一次讀到的 git status；篩選重畫時拿它，不重跑一次 `git status` */
+let lastGitStatus = null
+
+/**
+ * 面板最上面那一行：分支名 ＋ 領先／落後上游幾筆。
+ *
+ * 以前是把 `main ↑2 ↓1` 接成一個字串塞進去，箭頭跟分支名同一個顏色、
+ * 分不出哪個是要推的哪個是要拉的。改成兩顆各自上色的 chip。
+ *
+ * @param {{ branch?: string, upstream?: string, ahead?: number, behind?: number }} status
+ */
+function paintGitBranch(status) {
+  if (!el.gitBranch) return
+  el.gitBranch.replaceChildren()
+  const name = document.createElement('span')
+  name.className = 'ws-git-branch-name'
+  name.textContent = status.branch || '（detached HEAD）'
+  el.gitBranch.appendChild(name)
+
+  const chip = (text, cls, title) => {
+    const span = document.createElement('span')
+    span.className = `ws-git-chip ${cls}`
+    span.textContent = text
+    span.title = title
+    return span
+  }
+  if (status.ahead) el.gitBranch.appendChild(chip(`↑${status.ahead}`, 'is-ahead', `有 ${status.ahead} 筆還沒推上去`))
+  if (status.behind) el.gitBranch.appendChild(chip(`↓${status.behind}`, 'is-behind', `上游多了 ${status.behind} 筆還沒拉下來`))
+  el.gitBranch.title = status.upstream ? `上游：${status.upstream}` : '沒有設定上游'
+}
+
 async function renderGit() {
   const project = currentProject()
   if (!project || !el.gitFiles) return
@@ -1569,7 +1678,9 @@ async function renderGit() {
   // 讀取期間可能已經換過專案：畫下去等於把 A 的變更清單掛在 B 上
   if (!isCurrentProject(project, seq)) return
   if (!status.repo) {
-    if (el.gitBranch) el.gitBranch.textContent = '不是 git 儲存庫'
+    if (el.gitBranch) el.gitBranch.replaceChildren(document.createTextNode('不是 git 儲存庫'))
+    lastGitStatus = null
+    if (el.gitFilter) el.gitFilter.hidden = true
     el.gitFiles.replaceChildren()
     const note = document.createElement('p')
     note.className = 'ws-tree-note'
@@ -1584,14 +1695,23 @@ async function renderGit() {
     void renderGitLog()
     return
   }
-  if (el.gitBranch) {
-    const bits = [status.branch || '（detached HEAD）']
-    if (status.ahead) bits.push(`↑${status.ahead}`)
-    if (status.behind) bits.push(`↓${status.behind}`)
-    el.gitBranch.textContent = bits.join(' ')
-    el.gitBranch.title = status.upstream ? `上游：${status.upstream}` : '沒有設定上游'
-  }
+  paintGitBranch(status)
+  lastGitStatus = status
+  paintGitFiles(project, status)
+  void renderWorktrees()
+  void renderGitLog()
+  void renderBranches()
+}
 
+/**
+ * 把變更清單畫出來。**篩選只走這一支，不重問 main**：每打一個字就跑一次
+ * `git status`（大 repo 上是好幾百毫秒的子程序）會讓輸入整個卡住。
+ *
+ * @param {{ id: string }} project
+ * @param {{ files: Array<object>, truncated?: boolean }} status
+ */
+function paintGitFiles(project, status) {
+  if (!el.gitFiles) return
   // 衝突（porcelain 的 `u` 記錄）要自己一組排最上面：混在「暫存區」與「變更」
   // 兩組裡的話，同一個檔案會出現兩次，而且看不出它其實是合併沒解完
   const conflicts = status.files.filter((file) => file.index === 'U' || file.worktree === 'U')
@@ -1600,27 +1720,40 @@ async function renderGit() {
   const changed = rest.filter((file) => file.worktree !== '.' && file.worktree !== '?')
   const untracked = rest.filter((file) => file.index === '?' && file.worktree === '?')
 
+  // 篩選框只有在真的有一堆檔案時才有意義；三五個檔案還要先打字反而礙事
+  if (el.gitFilter) el.gitFilter.hidden = status.files.length < GIT_FILTER_MIN_FILES
+  if (el.gitFilter?.hidden) gitFilter = ''
+  const keep = (files) => (gitFilter ? files.filter((file) => file.path.toLowerCase().includes(gitFilter)) : files)
+
+  // 哪些檔名在這份清單裡不只一個（`index.js` 這種）——只有它們需要在列上印出所在資料夾
+  const seen = new Map()
+  for (const file of status.files) {
+    const base = splitGitPath(file.path).name
+    const paths = seen.get(base) || new Set()
+    paths.add(file.path)
+    seen.set(base, paths)
+  }
+  const ambiguous = new Set([...seen].filter(([, paths]) => paths.size > 1).map(([base]) => base))
+
   el.gitFiles.replaceChildren()
-  if (!status.files.length) {
-    const note = document.createElement('p')
-    note.className = 'ws-tree-note'
-    note.textContent = '沒有變更'
-    el.gitFiles.appendChild(note)
-  } else {
-    gitGroup(conflicts, 'conflict', project, el.gitFiles)
-    gitGroup(staged, 'staged', project, el.gitFiles)
-    gitGroup(changed, 'worktree', project, el.gitFiles)
-    gitGroup(untracked, 'untracked', project, el.gitFiles)
+  /** @type {Array<[Array<object>, 'conflict' | 'staged' | 'worktree' | 'untracked']>} */
+  const groups = [
+    [keep(conflicts), 'conflict'],
+    [keep(staged), 'staged'],
+    [keep(changed), 'worktree'],
+    [keep(untracked), 'untracked']
+  ]
+  const shown = groups.reduce((sum, [files]) => sum + files.length, 0)
+  const note = (text) => {
+    const p = document.createElement('p')
+    p.className = 'ws-tree-note'
+    p.textContent = text
+    el.gitFiles.appendChild(p)
   }
-  if (status.truncated) {
-    const note = document.createElement('p')
-    note.className = 'ws-tree-note'
-    note.textContent = '只列出前面一部分'
-    el.gitFiles.appendChild(note)
-  }
-  void renderWorktrees()
-  void renderGitLog()
-  void renderBranches()
+  if (!status.files.length) note('沒有變更')
+  else if (!shown) note(`沒有檔名含「${gitFilter}」的變更`)
+  else for (const [files, side] of groups) gitGroup(files, side, project, el.gitFiles, ambiguous)
+  if (status.truncated) note('只列出前面一部分')
 }
 
 /**
@@ -1868,17 +2001,64 @@ async function adoptWorktree(project, tree) {
   }
 }
 
-/** 三組清單的共用殼（標題由 side 決定） */
-function gitGroup(files, side, project, host) {
+/** 每一組的標題文字 */
+const GIT_GROUP_LABELS = {
+  conflict: '衝突',
+  staged: '暫存區',
+  worktree: '變更',
+  untracked: '未追蹤'
+}
+
+/**
+ * 四組清單的共用殼：標題、這組有幾個檔案、以及整組一次做完的那顆按鈕。
+ *
+ * 「整組暫存／整組取消」是這個面板最常做的兩件事，以前只能一列一列按。
+ * 衝突與未追蹤刻意沒有整組操作：前者一次全 `add` 等於盲簽，後者整組刪救不回來。
+ *
+ * @param {Array<object>} files
+ * @param {'staged' | 'worktree' | 'untracked' | 'conflict'} side
+ * @param {{ id: string }} project
+ * @param {HTMLElement} host
+ * @param {Set<string>} [ambiguous] 撞名的檔名（往下傳給每一列）
+ */
+function gitGroup(files, side, project, host, ambiguous) {
   if (!files.length) return
-  const titleEl = document.createElement('p')
-  titleEl.className = 'ws-git-group'
-  titleEl.textContent = side === 'conflict'
-    ? `衝突（${files.length}）`
-    : side === 'staged' ? '暫存區' : side === 'worktree' ? '變更' : '未追蹤'
-  if (side === 'conflict') titleEl.classList.add('is-conflict')
-  host.appendChild(titleEl)
-  for (const file of files) host.appendChild(gitRow(project, file, side))
+  const head = document.createElement('div')
+  head.className = 'ws-git-group'
+  if (side === 'conflict') head.classList.add('is-conflict')
+
+  const label = document.createElement('span')
+  label.className = 'ws-git-group-label'
+  label.textContent = GIT_GROUP_LABELS[side] || side
+  const count = document.createElement('span')
+  count.className = 'ws-git-group-count'
+  count.textContent = String(files.length)
+  count.title = `${files.length} 個檔案`
+  head.append(label, count)
+
+  const bulk = side === 'staged'
+    ? { text: '整組取消', title: '把這一組整個移出暫存區', run: (id, rel) => electronAPI.workspace.gitUnstage(id, rel) }
+    : side === 'worktree'
+      ? { text: '整組暫存', title: '把這一組整個加入暫存區', run: (id, rel) => electronAPI.workspace.gitStage(id, rel) }
+      : null
+  if (bulk) {
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'ws-git-act ws-git-group-act'
+    btn.textContent = bulk.text
+    btn.title = bulk.title
+    btn.addEventListener('click', async () => {
+      btn.disabled = true
+      // 一個一個送：main 的 stage/unstage 只吃單一相對路徑，而且失敗的那個不該
+      // 把整組拖下水（`allSettled` 不是 `all`）
+      await Promise.allSettled(files.map((file) => bulk.run(project.id, file.path)))
+      void renderGit()
+    })
+    head.appendChild(btn)
+  }
+
+  host.appendChild(head)
+  for (const file of files) host.appendChild(gitRow(project, file, side, ambiguous))
 }
 
 async function renderGitLog() {
@@ -2192,6 +2372,7 @@ export function initWorkspacePage() {
   el.tree = document.getElementById('wsTree')
   el.gitBranch = document.getElementById('wsGitBranch')
   el.gitFiles = document.getElementById('wsGitFiles')
+  el.gitFilter = document.getElementById('wsGitFilter')
   el.gitMessage = document.getElementById('wsGitMessage')
   el.gitLog = document.getElementById('wsGitLog')
   el.worktrees = document.getElementById('wsWorktrees')
@@ -2214,6 +2395,12 @@ export function initWorkspacePage() {
   document.getElementById('wsFilesRevealBtn')?.addEventListener('click', () => void revealProject())
   document.getElementById('wsFilesRefreshBtn')?.addEventListener('click', () => void renderTree())
   document.getElementById('wsGitRefreshBtn')?.addEventListener('click', () => void renderGit())
+  // 篩選只動畫面，不重問 main（狀態已經在手上了，但重畫最省事也最不會不同步）
+  el.gitFilter?.addEventListener('input', () => {
+    gitFilter = String(/** @type {HTMLInputElement} */ (el.gitFilter).value || '').trim().toLowerCase()
+    const project = currentProject()
+    if (project && lastGitStatus) paintGitFiles(project, lastGitStatus)
+  })
   document.getElementById('wsWorktreeAddBtn')?.addEventListener('click', () => void addWorktree())
   document.getElementById('wsGitOpenAllBtn')?.addEventListener('click', () => void openAllChanged())
   document.getElementById('wsAgentsRefreshBtn')?.addEventListener('click', () => void renderAgents())

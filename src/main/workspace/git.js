@@ -237,7 +237,39 @@ async function status(projectId) {
   const res = await run(cwd, ['status', '--porcelain=v2', '-b', '-z'])
   // 不是 repo 不是錯誤，是一種正常狀態（使用者就是加了一個普通資料夾）
   if (res.code !== 0) return { repo: false }
-  return { repo: true, ...parseStatus(res.stdout) }
+  const parsed = parseStatus(res.stdout)
+  await attachLineCounts(cwd, parsed.files)
+  return { repo: true, ...parsed }
+}
+
+/**
+ * 把「這個檔案改了幾行」補到 status 的每一筆上（面板每一列右邊那個 `+12 −3`）。
+ *
+ * 一次 `diff --numstat HEAD` 就夠：它算的是**工作區相對 HEAD**，剛好等於使用者眼裡
+ * 「這個檔案跟上一次提交差多少」，暫存與未暫存的加起來一起算。
+ *
+ * 三件事刻意不做：
+ * - **未追蹤的檔案沒有數字**（git 不會 diff 它，硬要算就得自己讀檔數行——那是整包新檔，
+ *   數字也沒有意義）。
+ * - 全新的 repo 還沒有 HEAD，`diff HEAD` 會失敗——**當成沒有數字，不是錯誤**。
+ * - 一定要 `--no-renames`（見 `parseNumstat`：帶改名偵測會多一格，欄位整排錯位）。
+ *
+ * @param {string} cwd
+ * @param {Array<{ path: string, added?: number, removed?: number, binary?: boolean }>} files
+ * @returns {Promise<void>}
+ */
+async function attachLineCounts(cwd, files) {
+  if (!files.length) return
+  const res = await run(cwd, ['diff', '--numstat', '-z', '--no-renames', 'HEAD', '--'])
+  if (res.code !== 0) return
+  const byPath = new Map(parseNumstat(res.stdout).map((entry) => [entry.path, entry]))
+  for (const file of files) {
+    const stat = byPath.get(file.path)
+    if (!stat) continue
+    file.added = stat.additions
+    file.removed = stat.deletions
+    file.binary = stat.binary
+  }
 }
 
 /**
@@ -674,6 +706,7 @@ module.exports = {
   checkRef,
   ignoredPaths,
   parseNumstat,
+  attachLineCounts,
   branches,
   compareBranch,
   fileVersionsAgainst,

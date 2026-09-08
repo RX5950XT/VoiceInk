@@ -4,6 +4,7 @@ const store = require('./store')
 const terminal = require('./pty')
 const links = require('./links')
 const foreground = require('./foreground')
+const background = require('./background')
 const { HostClient } = require('./host-client')
 
 let client
@@ -54,6 +55,10 @@ module.exports = {
   resolveLinks: links.resolveLinks,
   revealLink: links.revealLink,
   raiseChildWindow: foreground.raiseChildWindow,
+  // 終端機桌布：檔案在 main 手上，renderer 只拿得到 data: URI（見 background.js）
+  backgroundImage: background.dataUri,
+  adoptBackground: background.adopt,
+  clearBackground: background.remove,
   resizeSession: (id, cols, rows) => getClient().request('resize', { sessionId: String(id || ''), cols, rows }),
   killSession: (id) => getClient().request('kill', { sessionId: String(id || '') }),
   disconnect() { foreground.stop(); client?.disconnect(); client = null }

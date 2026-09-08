@@ -2,6 +2,7 @@ import { electronAPI, showToast, setChatPaneMode } from './app.js'
 import { terminalStatusLabel, setTerminalStatuses } from './ws-terminal-status.js'
 import { registerTermLinks } from './term-links.js'
 import { splitForPty } from './term-write-chunks.js'
+import { applyAppearance, normalizeAppearance } from './term-themes.js'
 import {
   initWsTabs, showSurface, trackTerminal, paintTerminalTab, currentProjectId
 } from './ws-tabs.js'
@@ -141,19 +142,45 @@ export async function deleteTerminalSession(id) {
 
 // ===== 終端機本體 =====
 
+/** 目前的終端機外觀（配色 key／桌布檔名／桌布壓暗程度）與桌布的 data: URI */
+let appearance = normalizeAppearance({})
+let backgroundUri = ''
+
 /**
- * xterm 的配色從主題 token 拿，切主題時整批重上。
- * @returns {object}
+ * 讀設定並把外觀套到所有已開的分頁上。設定頁改完會發 `voiceink:term-appearance`
+ * 事件叫這支，切到終端機頁時也會再對一次（主題可能在別頁被切過）。
+ *
+ * 桌布的圖片本體不進 store：這裡拿到的是檔名，data: URI 要跟 main 要。
  */
-function themeColors() {
-  const css = getComputedStyle(document.documentElement)
-  const pick = (name, fallback) => (css.getPropertyValue(name).trim() || fallback)
-  return {
-    background: pick('--term-bg', '#0d1012'),
-    foreground: pick('--term-fg', '#f4f1e8'),
-    cursor: pick('--accent-primary', '#78a3b5'),
-    selectionBackground: pick('--term-selection', 'rgba(120, 163, 181, 0.35)')
+export async function refreshTerminalAppearance() {
+  const [theme, image, opacity] = await Promise.all([
+    electronAPI.store.get('termTheme', 'black'),
+    electronAPI.store.get('termBgImage', ''),
+    electronAPI.store.get('termBgOpacity', 20)
+  ])
+  appearance = normalizeAppearance({ theme, image, opacity })
+  backgroundUri = appearance.image
+    ? String((await electronAPI.terminal.background(appearance.image))?.data || '')
+    : ''
+  paintAppearance()
+}
+
+/** 把目前的外觀刷到 `.term-host` 與每一個已開的 xterm 上 */
+function paintAppearance() {
+  const options = applyAppearance(hostEl, appearance, backgroundUri)
+  for (const entry of panes.values()) {
+    entry.term.options.allowTransparency = options.allowTransparency
+    entry.term.options.theme = options.theme
   }
+  return options
+}
+
+/**
+ * 新開一個分頁時要塞給 xterm 的配色與透明度。
+ * @returns {{ theme: object, allowTransparency: boolean }}
+ */
+function themeOptions() {
+  return applyAppearance(hostEl, appearance, backgroundUri)
 }
 
 /**
@@ -254,7 +281,7 @@ function createPane(id) {
     fontFamily: '"Cascadia Mono", "Cascadia Code", Consolas, "微軟正黑體", monospace',
     fontSize: 17,
     scrollback: 5000,
-    theme: themeColors()
+    ...themeOptions()
   })
   const fit = new FitAddon()
   term.loadAddon(fit)
@@ -267,8 +294,13 @@ function createPane(id) {
   term.attachCustomKeyEventHandler((event) => {
     if (event.key !== 'Enter' || !event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || event.isComposing) return true
     event.preventDefault()
-    // CSI u 保留 Shift 修飾鍵，讓 AI CLI 分辨換行與送出。
-    if (event.type === 'keydown') term.input('\x1b[13;2u', true)
+    // 送 `ESC` ＋ `CR`（＝ Alt+Enter 的序列）。這是 Claude Code 的 `/terminal-setup`
+    // 幫 VSCode／iTerm2 綁的同一個東西，Codex 那些 CLI 也認得。
+    //
+    // **不可以送 CSI u（`\x1b[13;2u`）**：那要終端機與 CLI 先協商過 kitty keyboard
+    // protocol，xterm.js 不會宣告支援、CLI 也就不會啟用，於是那串序列會被當成一般字元，
+    // 輸入框裡直接冒出 `[13;2u`——這就是使用者說的「Shift+Enter 不能換行」。
+    if (event.type === 'keydown') term.input('\x1b\r', true)
     return false
   })
   // 輸入法的候選字視窗要跟著游標，不要跑到螢幕角落（見 `syncImeCaret`）。
@@ -589,6 +621,10 @@ export function initTerminalPage() {
   electronAPI.terminal.onData(onData)
   electronAPI.terminal.onStatus(onStatus)
 
+  // 外觀（配色＋桌布）先讀一次；設定頁存檔後會再發這個事件叫我們重讀
+  void refreshTerminalAppearance()
+  window.addEventListener('voiceink:term-appearance', () => void refreshTerminalAppearance())
+
   // 視窗或側欄寬度變了就重新量欄列數；xterm 不會自己跟著容器縮放
   resizeObserver = new ResizeObserver(() => scheduleFit())
   if (hostEl) resizeObserver.observe(hostEl)
@@ -656,11 +692,8 @@ export async function openTerminalSession(id, isActive = () => true) {
 
 export function refreshTerminalPage() {
   initTerminalPage()
-  // 主題可能在別頁被切過
-  const colors = themeColors()
-  for (const entry of panes.values()) {
-    if (Object.entries(colors).some(([key, value]) => entry.term.options.theme[key] !== value)) entry.term.options.theme = colors
-  }
+  // 主題（App 的深／淺色，或設定頁的終端機外觀）可能在別頁被切過
+  void refreshTerminalAppearance()
   // 回到這一頁＝看到了目前這個階段，未讀點該清掉
   if (currentId) unread.delete(currentId)
   void reloadList()
