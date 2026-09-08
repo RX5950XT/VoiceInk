@@ -145,7 +145,9 @@ function createStressRunner() {
         child = spawn(process.execPath, ['-e', HOG_SOURCE, String(chunkCount)], {
           // stdin 不接管線：接了又不關的話子程序可能卡在等輸入（同 AGY 代跑 CLI 那條教訓）
           stdio: ['ignore', 'pipe', 'ignore'],
-          env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+          // 沒有 NO_COLOR 的話，環境裡有 `FORCE_COLOR` 時 node 會把子程序印出的數字
+          // 包上 ANSI 色碼，父程序 Number() 解出 NaN →「已配置」永遠是 0
+          env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', NO_COLOR: '1', FORCE_COLOR: '0' },
           windowsHide: true
         })
       } catch {

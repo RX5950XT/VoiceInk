@@ -303,7 +303,13 @@ async function testStress() {
   // 記憶體改由 `ELECTRON_RUN_AS_NODE` 子程序去配（Electron 的 V8 sandbox 對整個 process
   // 的 ArrayBuffer 只給到約 8GB，而且停止要能立刻還給作業系統）。node 直跑時
   // `process.execPath` 是 node 本身，一樣開得起來
+  // FORCE_COLOR 逼子程序把「配到幾塊」上色：沒擋掉的話父程序 Number() 解出 NaN，
+  // 已配置永遠是 0（這條在沒設 FORCE_COLOR 的環境裡不會自己現形，所以測試自己設）
+  const prevForceColor = process.env.FORCE_COLOR
+  process.env.FORCE_COLOR = '3'
   const mem = await runner.memory(true, 1)
+  if (prevForceColor === undefined) delete process.env.FORCE_COLOR
+  else process.env.FORCE_COLOR = prevForceColor
   ok('記憶體有配到東西', mem.memory.running && mem.memory.allocatedBytes > 0,
     `${(mem.memory.allocatedBytes / 1024 ** 3).toFixed(2)} GB`)
   ok('回報得出這台機器現在吃得下多少', mem.memory.maxGb >= 1 && mem.memory.totalGb >= 1,
