@@ -242,6 +242,33 @@ console.log('\n[抬視窗]')
   fg.stop()
   ok('stop() 之後不留東西', fg.raiseChildWindow() === true)
   fg.stop()
+
+  // Windows 11 的記事本第二次開檔案會沿用同一個 pid 與同一個 HWND（只多一個分頁），
+  // 舊版只比對 pid 所以永遠抬不到。腳本裡要有標題比對，也要真的把它設成置頂。
+  // 實機那一半在 `probe-terminal-foreground.js`。
+  ok('快照記的是視窗代碼＋標題，不是只有 pid',
+    fg.SCRIPT.includes('$($p.MainWindowHandle)|$($p.MainWindowTitle)'))
+  ok('既有程序換了視窗或標題也算數', fg.SCRIPT.includes('$known[$p.Id] -ne $now'))
+  ok('會重用視窗的編輯器有名單，記事本在裡面', fg.REUSE_WINDOW.includes('notepad'))
+  ok('名單有進腳本', fg.SCRIPT.includes("'notepad'"))
+  ok('真的把視窗設成最上層', fg.SCRIPT.includes('HWND_TOPMOST') && fg.SCRIPT.includes('SetWindowPos'))
+}
+
+// ===== 終端機桌布 =====
+// 檔名是唯一會進 store 的東西，所以那條正規表達式就是這個功能的信任邊界：
+// renderer 只送得回 main 給它的名字，別的一律當成「沒有桌布」。
+console.log('\n[終端機桌布]')
+{
+  const bg = require(path.join(ROOT, 'src/main/terminal/background.js'))
+  ok('正常檔名收得下', bg.sanitizeName('bg-1738888888.png') === 'bg-1738888888.png')
+  ok('路徑穿越擋掉', bg.sanitizeName('../../config.json') === '')
+  ok('帶路徑分隔符擋掉', bg.sanitizeName('sub/bg-1.png') === '')
+  ok('反斜線也擋掉', bg.sanitizeName('..\\bg-1.png') === '')
+  ok('不認得的副檔名擋掉', bg.sanitizeName('bg-1.exe') === '')
+  ok('不是我們產的名字擋掉', bg.sanitizeName('wallpaper.png') === '')
+  ok('非字串擋掉', bg.sanitizeName(null) === '' && bg.sanitizeName({}) === '')
+  ok('上限是 8MB', bg.MAX_BYTES === 8 * 1024 * 1024)
+  ok('只收得到圖片格式', Object.keys(bg.TYPES).every((ext) => ext.startsWith('.')))
 }
 
 console.log(`\n${passed} passed, ${failed} failed`)

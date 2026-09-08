@@ -87,6 +87,23 @@ AGY 設定、終端機、聊天、語音輸入紀錄**刻意不進** `STORE_ALLO
 
 ## 最近變更
 
+### 2026-09-09 — 記事本真的置頂、Shift+Enter、Git 面板重整、終端機桌布
+
+- **Ctrl+G 開的記事本終於每次都跳出來而且置頂**。根因：Windows 11 的記事本第二次開檔案
+  **沿用同一個 pid 與同一個 HWND**（只多一個分頁，實測兩次都是 pid 5380／HWND 394578），
+  而舊的抬窗器是在找「新出現的有視窗 pid」——記事本開過一次之後就永遠命中不了。
+  快照改成記「視窗代碼＋標題」，標題變動只放行 `REUSE_WINDOW` 那幾支會重用視窗的編輯器；
+  抬完加 `SetWindowPos(HWND_TOPMOST)`。新增 `probe-terminal-foreground.js`（舊版紅、新版綠）。
+- **Shift+Enter 換行**：`\x1b[13;2u`（CSI u）改成 `\x1b\r`。CSI u 要 CLI 先啟用 kitty
+  keyboard protocol，xterm.js 不宣告支援，所以那串序列直接被當成字元印進輸入框。
+- **Git 面板重整**（參考 orca 的 `right-sidebar/source-control`）：列改成「檔名（亮）＋所在
+  資料夾（淡）」兩段，右邊補上 `+新增 −刪除`（`status()` 多跑一次 `diff --numstat HEAD`）；
+  分組標頭帶檔案數與「全部暫存／全部取消」；檔案多於 8 個時出現篩選框（只重畫不重問 main）；
+  分支列的 ↑↓ 拆成兩顆各自上色的 chip。動作鈕維持常駐，不做 hover-only。
+- **終端機主題與桌布**（設定 → 基本）：四組配色（全黑＝預設／跟著 App 主題／Dracula／
+  Solarized Dark）＋自選背景圖＋濃度滑桿。圖片複製進 `<userData>/terminal-bg/`，store 只存
+  檔名，renderer 只拿得到 `data:` URI；有桌布時才讓 xterm 的底透明，文字那一層完全沒動。
+
 ### 2026-09-08 — 大檔關掉要放手、貼上不再被截半、輸入法方框
 
 - **關掉大檔之後記憶體回得去**：`disposeModel` 先讓編輯器 `setModel(null)` 再 dispose

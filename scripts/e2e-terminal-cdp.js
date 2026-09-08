@@ -260,7 +260,7 @@ async function main() {
       return { shifted, enter: sent, font: term.options.fontSize }
     })()`)
     ok('Shift+Enter 只送一次換行按鍵，不誤送 Enter',
-      JSON.stringify(keyboard.shifted) === JSON.stringify(['\x1b[13;2u']), JSON.stringify(keyboard))
+      JSON.stringify(keyboard.shifted) === JSON.stringify(['\x1b\r']), JSON.stringify(keyboard))
     ok('Enter 維持送出，字級加大 4 至 17',
       JSON.stringify(keyboard.enter) === JSON.stringify(['\r']) && keyboard.font === 17, JSON.stringify(keyboard))
 

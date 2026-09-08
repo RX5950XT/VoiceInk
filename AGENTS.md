@@ -135,6 +135,13 @@ tag 要與 `package.json` 的 version 一致。
 - **開分頁的每一次 await 之後都要核對 `projectSwitch`，回來還要再 `findTab` 一次**；改名／搬檔後要 `retargetTabs`（分頁 id 內嵌相對路徑，不接的話存檔會把舊檔重新建出來）。
 - `git status` 用 `--porcelain=v2 -b -z`；欄位是**位置**決定的，改名（`2`）那型後面還跟著一格原檔名。衝突（`u`）要自成一組。`git log` 的欄位分隔用 `%x1f`，**不能跟 `-z` 混用**；`for-each-ref` **不吃 `%x1f`**。
 - 跟分支比要比 `merge-base` 不是分支頂端；`--numstat` 一定要配 `--no-renames`。切到非 git 專案時 `renderGit` 的提早 return **要把工作樹、分支下拉、審閱清單三塊都清乾淨**。
+- **Git 面板列上的 `+新增 −刪除` 來自 `status()` 多跑的一次 `diff --numstat -z --no-renames HEAD`**：
+  未追蹤的檔案沒有數字（git 不 diff 它），**全新的 repo 還沒有 HEAD，那一跑會失敗——當成沒數字，不是錯誤**。
+- **篩選框只重畫不重問 main**（`paintGitFiles` 吃 `lastGitStatus`）：每打一個字跑一次 `git status`
+  在大 repo 上是好幾百毫秒的子程序，輸入會整個卡住。換專案要把 `gitFilter`／`lastGitStatus` 一起清掉。
+- **`.ws-git-name` 的 `textContent` 是「檔名＋所在資料夾」兩段接起來**（面板只有 280px，整條路徑會把
+  檔名擠掉）：CDP 測試要比對相對路徑請讀**整列的 `title`**，讀 `.ws-git-name` 會拿到 `app.jssrc`。
+  列上的動作鈕**常駐不做 hover-only**（見「UI／CSS」：hover 才出現的操作等於沒有）。
 - worktree：路徑由 main 組（repo 的兄弟資料夾）、移除拿 `worktree list` 當白名單、不准移主工作樹、不加 `--force`、移除前先 `check`。
 - **資料夾監看一次只看一個專案**；`.git` 底下的變動只當成「Git 狀態變了」；事件要合併；監看不起來安靜退回手動。
 - 對話與終端機的 `projectId` 是**可選**欄位（缺值＝未分類，卡 `^[A-Za-z0-9_-]{1,64}$`）；`workspaces.json` 的路徑不存在只標 `missing`。
@@ -186,6 +193,20 @@ tag 要與 `package.json` 的 version 一致。
 - **系統工具一律指名 `%SystemRoot%\System32`**：PATH 上常擺著 Git Bash 的 MSYS `whoami.exe`／`icacls.exe`，裸名會抓錯那支（libuv 的搜尋順序只看 PATH，不含 System32），症狀是「PowerShell 跑得過、Git Bash 跑不過」。
 - 已結束的終端機**保留畫面**（`finished` map），狀態是 `exited` 不是 `stopped`；`stopped` ＝這次還沒開過。明確刪除（`forget`）才真的收掉，宿主也才會閒置自關。
 - **終端機連結**：`provideLinks` 收到的是**整份緩衝區的 1-based 列號**（不是畫面上第幾列），回去的 range 也是同一套；折行的一列要先往回接成整條邏輯行，非最後一折要補滿 `cols` 格位移才換得回欄位。路徑候選一律先問 main 存不存在再畫底線（不驗＝畫面上每個含斜線的字都變假連結），相對路徑以**階段起始 cwd** 為基準。
+- **Shift+Enter 送的是 `\x1b\r` 不是 CSI u**：`\x1b[13;2u` 要終端機與 CLI 先協商 kitty keyboard
+  protocol，xterm.js 不宣告支援、CLI 也就不會啟用，那串序列會被當成一般字元——使用者看到的是
+  輸入框裡直接冒出 `[13;2u`。`ESC`＋`CR` 是 Claude Code `/terminal-setup` 綁的同一個東西。
+- **Ctrl+G 的抬窗快照要記「視窗代碼＋標題」，不是只記有哪些 pid**：Windows 11 的記事本第二次開
+  檔案會**沿用同一個程序與同一個視窗**（只多一個分頁，實測 pid 5380／HWND 394578 兩次完全相同），
+  只比對 pid 的話記事本開過一次之後就再也抬不到——症狀是「昨天還會跳，今天又不跳了」。
+  標題比對只放行 `REUSE_WINDOW` 那幾支會重用視窗的編輯器（瀏覽器切分頁也一直在改標題）。
+  抬完還要 `SetWindowPos(HWND_TOPMOST)` 才留得住（只 SetForegroundWindow 的話點一下 VoiceInk 就被蓋掉）。
+  回歸 `probe-terminal-foreground.js`；全螢幕獨佔的遊戲在前景時搶不到前景是 Windows 的規則，**斷言只看
+  記事本那個視窗的 `WS_EX_TOPMOST`**，看前景是誰會拿到假紅。
+- **終端機桌布**：圖片本體存 `<userData>/terminal-bg/`，store 只存**檔名**（`termBgImage`，
+  `^bg-\d+\.[a-z]{3,4}$` 擋路徑穿越），renderer 只拿得到 `data:` URI，換圖一律走系統對話框。
+  **只有真的有桌布時才把 xterm 底色改成 `#00000000` ＋ `allowTransparency`**（沒圖時維持不透明，
+  否則捲動殘影會疊在一起）；壓暗的 `opacity` 只作用在 `.term-host::before` 那一層，文字那層一個字都沒動。
 - `.chat-list-item` 三邊共用，選擇器一定要限定 `#chatList`／`#projList`。側欄寬度走 `--chat-sidebar-w`（`main.css` 有三處要各留 `var()`）。
 
 ### HF模型與本地 LLM
@@ -310,7 +331,7 @@ tag 要與 `package.json` 的 version 一致。
 |---|---|
 | 開發沙箱 | `probe-dev-sandbox.js`（**實測**沙箱讀得到你的模型與供應商，而你正在用的那份一個位元組都沒動；動 `dev-sandbox.js` 前後都要跑）|
 | 專案工作區 | `test-workspace.js`／`-nav`／`-ui`／`-state`／`-perf` ＋ `e2e-workspace-cdp.js`（暫存 user-data-dir ＋自種專案）；動 Monaco 前後跑 `probe-workspace-monaco.js`，動 PDF 前跑 `probe-workspace-pdf.js`；動編輯器／diff／預覽／專案切換前後跑 `probe-workspace-perf.js`（**打包版**開 1.4MB／4 萬行的檔，數 `createModel` 有沒有重做、量輸入法游標位置、驗專案隔離）；動大檔開關與記憶體前後跑 `probe-workspace-bigfile.js`（**打包版**量 1.4MB／4 萬行的開檔毫秒數、並排變更毫秒數，以及關掉之後堆積回不回得去、預覽的 iframe 有沒有被收掉） |
-| 終端機 | `test-terminal.js` ＋ `test-terminal-ui.js`（輸出合併、輸入法對位）＋ `probe-terminal-ime.js`（**打包版**真的走一次 Chromium 輸入法組字）＋ `e2e-terminal.js`（真 ConPTY）＋ `e2e-terminal-cdp.js` ＋ `test-terminal-host.js`（獨立宿主）＋ `test-terminal-links.js` ＋ `probe-terminal-links.js`（真 xterm 座標，`npx electron`）；動宿主或 `build.files`／`asarUnpack` 前後跑 `probe-terminal-restart.js`（**打包版**真的關 App、覆寫安裝檔再開回來）；管理員 `probe-terminal-admin.js`（免 UAC）／`probe-terminal-admin-elevate.js`（**跳一次 UAC**）|
+| 終端機 | `test-terminal.js` ＋ `test-terminal-ui.js`（輸出合併、輸入法對位）＋ `probe-terminal-ime.js`（**打包版**真的走一次 Chromium 輸入法組字）＋ `e2e-terminal.js`（真 ConPTY）＋ `e2e-terminal-cdp.js` ＋ `test-terminal-host.js`（獨立宿主）＋ `test-terminal-links.js` ＋ `probe-terminal-links.js`（真 xterm 座標，`npx electron`）；動宿主或 `build.files`／`asarUnpack` 前後跑 `probe-terminal-restart.js`（**打包版**真的關 App、覆寫安裝檔再開回來）；管理員 `probe-terminal-admin.js`（免 UAC）／`probe-terminal-admin-elevate.js`（**跳一次 UAC**）；動 `foreground.js` 前後跑 `probe-terminal-foreground.js`（**會開／關記事本**，重現「記事本已經開著」再開第二次）；動配色或桌布前後跑 `probe-terminal-background.js`（**打包版**量桌布那一層畫不畫得出來、字有沒有被 opacity 一起壓掉、拿掉圖之後底色回不回得到不透明）|
 | 聊天／Markdown | `e2e-chat.js`（mock SSE）＋ `e2e-chat-cdp.js` ＋ `test-markdown.js` |
 | HF模型 | `test-hfmodels.js` ＋ `probe-hf-router.js`（動 runtime 前跑）／`probe-hf-hub.js`／`probe-hf-detail.js`（打真 HF）＋ `e2e-hfmodels.js` ＋ `e2e-hf-cdp.js` |
 | CC代理／閘道 | `test-ccswitch.js` ＋ `e2e-ccswitch-cdp.js`；端點 `probe-ccswitch-endpoints.js`／模型 `probe-ccswitch-models.js`／Codex 參數 `probe-ccswitch-codex.js`；閘道 `test-ccswitch-gateway.js` ＋ `e2e-ccswitch-gateway.js` |

@@ -215,7 +215,42 @@ function zoomChecks() {
   check('放大時要放開圖片的尺寸上限', /\.ws-editor-preview\.is-zoomed \.ws-editor-img/.test(css))
 }
 
-runAgentPathChecks().then(gitStatusCacheChecks).then(zoomChecks).then(() => {
+/**
+ * Git 面板那一列的版面契約。
+ *
+ * 面板只有 280px：徽章、檔名、增刪行數與兩顆動作鈕擠在同一列，任何一段
+ * 「不准縮」都會讓長檔名把後面的東西推到疊在一起（實測畫面上文字壓在按鈕上）。
+ * 這裡把「哪些東西可以縮、誰先縮、什麼時候才印資料夾」釘住。
+ */
+function gitRowLayoutChecks() {
+  console.log('\n[F] Git 面板的列版面')
+  // 目錄只在檔名撞名時才印（跟 VS Code 一樣）——每一列都掛路徑的話，
+  // 被截掉的會是真正要認的檔名
+  check('目錄只在撞名時才印', /ambiguous\?\.has\(fileName\)/.test(workspacePage))
+  check('撞名清單是照「同一個檔名有幾條不同路徑」算的',
+    /paths\.size > 1/.test(workspacePage) && /const ambiguous = new Set\(/.test(workspacePage))
+  check('撞名清單有傳到每一列', /gitRow\(project, file, side, ambiguous\)/.test(workspacePage))
+
+  // 兩段都要能縮，而且目錄先被壓掉
+  const base = css.slice(css.indexOf('.ws-git-basename {'), css.indexOf('.ws-git-dir {'))
+  const dir = css.slice(css.indexOf('.ws-git-dir {'), css.indexOf('.ws-git-lines {'))
+  check('檔名可以縮，不會把後面的東西擠出去', /flex:\s*0 1 auto/.test(base) && /min-width:\s*0/.test(base))
+  check('檔名超長時截斷而不是溢出', /text-overflow:\s*ellipsis/.test(base))
+  check('目錄先被壓掉（flex-shrink 大很多）', /flex:\s*0 999 auto/.test(dir))
+  check('目錄截的是開頭不是結尾（`…/scripts` 才認得出來）', /direction:\s*rtl/.test(dir))
+
+  // 行數那一段不准縮（縮了會變成看不懂的半個數字）
+  const lines = css.slice(css.indexOf('.ws-git-lines {'), css.indexOf('.ws-git-added {'))
+  check('增刪行數不縮', /flex:\s*none/.test(lines))
+  check('行數用等寬數字（重畫時不跳動）', /font-variant-numeric:\s*tabular-nums/.test(lines))
+
+  // 動作鈕常駐，不做 hover-only（CLAUDE.md：hover 才出現的操作等於沒有）
+  const act = css.slice(css.indexOf('.ws-git-act {'), css.indexOf('.ws-git-act:hover'))
+  check('動作鈕常駐（沒有靠 opacity 藏起來）', !/opacity:\s*0/.test(act))
+  check('動作鈕不縮', /flex:\s*none/.test(act))
+}
+
+runAgentPathChecks().then(gitStatusCacheChecks).then(zoomChecks).then(gitRowLayoutChecks).then(() => {
   console.log(`\n${passed} passed, ${failed} failed`)
   process.exitCode = failed ? 1 : 0
 }).catch((error) => {

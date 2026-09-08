@@ -1121,6 +1121,48 @@ console.log('\n[T] git worktree 的解析與分支名白名單')
     await fsp.rm(plain, { recursive: true, force: true })
   }
 
+  // ===== [U] 每一列的 +新增 −刪除（Git 面板右邊那兩個數字） =====
+  // 真的開一個 repo：`--no-renames` 少了會欄位錯位、沒有 HEAD 時不可以整支炸掉，
+  // 這兩件事 mock 一份 numstat 字串是量不出來的。
+  console.log('\n[U] 變更行數')
+  {
+    const { execFile } = require('child_process')
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'ws-lines-'))
+    const runGit = (args) =>
+      new Promise((resolve) => execFile('git', args, { cwd: dir }, () => resolve()))
+    await runGit(['init'])
+    await runGit(['config', 'user.email', 'probe@voiceink.local'])
+    await runGit(['config', 'user.name', 'probe'])
+
+    // 還沒有 HEAD 的全新 repo：不可以拋錯，只是沒有數字
+    await fsp.writeFile(path.join(dir, 'a.txt'), 'x\n', 'utf8')
+    const fresh = [{ path: 'a.txt' }]
+    let threw = false
+    try {
+      await git.attachLineCounts(dir, fresh)
+    } catch {
+      threw = true
+    }
+    ok('沒有 HEAD 時不拋錯', threw === false)
+    ok('沒有 HEAD 時也不亂編數字', fresh[0].added === undefined)
+
+    await fsp.writeFile(path.join(dir, 'a.txt'), '1\n2\n3\n', 'utf8')
+    await fsp.writeFile(path.join(dir, 'gone.txt'), 'bye\n', 'utf8')
+    await runGit(['add', '-A'])
+    await runGit(['commit', '-m', 'init'])
+    // 一個改（+2 −1）、一個刪（−1）、一個全新未追蹤（不會有數字）
+    await fsp.writeFile(path.join(dir, 'a.txt'), '1\n2b\n3\n4\n', 'utf8')
+    await fsp.rm(path.join(dir, 'gone.txt'))
+    await fsp.writeFile(path.join(dir, 'new.txt'), 'hi\n', 'utf8')
+    const rows = [{ path: 'a.txt' }, { path: 'gone.txt' }, { path: 'new.txt' }]
+    await git.attachLineCounts(dir, rows)
+    ok('改過的檔案數得出增刪', rows[0].added === 2 && rows[0].removed === 1, JSON.stringify(rows[0]))
+    ok('刪掉的檔案算全部刪除', rows[1].removed === 1 && rows[1].added === 0, JSON.stringify(rows[1]))
+    ok('未追蹤的沒有數字', rows[2].added === undefined, JSON.stringify(rows[2]))
+    ok('空清單不跑 git', await git.attachLineCounts(dir, []) === undefined)
+    await fsp.rm(dir, { recursive: true, force: true })
+  }
+
 console.log(`\n${passed} passed, ${failed} failed`)
   process.exit(failed === 0 ? 0 : 1)
 }

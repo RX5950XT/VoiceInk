@@ -1,5 +1,63 @@
 # tasks/todo.md — 規劃與回顧
 
+## 2026-09-09 — 記事本置頂、Shift+Enter、Git 面板重整、終端機桌布
+
+- [x] Ctrl+G 的記事本每次都跳出來而且置頂（`terminal/foreground.js`）
+- [x] 終端機 Shift+Enter 換行（`\x1b[13;2u` → `\x1b\r`）
+- [x] Git 面板重整（參考 orca 的 `right-sidebar/source-control`）
+- [x] 終端機配色與桌布（設定 → 基本）
+- [x] 打包版實測與截圖檢查
+
+**回顧** — 這一輪最重要的是第一項的**根因**：
+
+`foreground.js` 原本在找「新出現的、有視窗的 pid」。但 Windows 11 的記事本第二次開檔案
+會**沿用同一個程序、同一個視窗**（只多一個分頁，實測兩次都是 pid 5380／HWND 394578），
+所以那個信號在「記事本已經開著」時永遠不會成立——這就是使用者說的「之前剛改完又變回原樣」。
+快照改成記「視窗代碼＋標題」，標題變動只放行 `REUSE_WINDOW` 那幾支會重用視窗的編輯器
+（瀏覽器切分頁也一直在改標題）；抬完再 `SetWindowPos(HWND_TOPMOST)`。
+
+Shift+Enter 送的 `\x1b[13;2u`（CSI u）要 CLI 先啟用 kitty keyboard protocol，
+xterm.js 不宣告支援，於是那串序列被當成一般字元印進輸入框。改成 `\x1b\r`。
+
+Git 面板：列改成「檔名（亮）＋所在資料夾（淡）」兩段、右邊補 `+新增 −刪除`
+（`status()` 多跑一次 `diff --numstat -z --no-renames HEAD`）、分組標頭帶檔案數與整組暫存／取消、
+超過 8 個檔案時出現篩選框（只重畫不重問 main）、分支的 ↑↓ 拆成兩顆分色 chip。
+**動作鈕維持常駐不做 hover-only**——orca 那邊是 hover 才出現，但本專案的規則相反。
+第一版截圖抓到長檔名把目錄與按鈕擠到疊在一起（`.ws-git-basename` 寫成 `flex: none`），
+改成兩段都能縮、**目錄先被壓掉**（`flex-shrink` 999）。
+
+終端機桌布：圖片本體存 `<userData>/terminal-bg/`，store 只存檔名，renderer 只拿得到 `data:` URI；
+**只有真的有桌布時**才把 xterm 底色改成 `#00000000` ＋ `allowTransparency`（沒圖時維持不透明，
+否則捲動殘影會疊在一起），壓暗的 `opacity` 只作用在 `.term-host::before` 那一層。
+
+驗證（打包版 `VOICEINK_EXE=D:/vi-build-term-git-ui/win-unpacked/VoiceInk.exe`）：
+
+| 指令 | 實際結果 |
+|---|---|
+| `node scripts/probe-terminal-foreground.js` | **舊版 1 failed**（`WS_EX_TOPMOST=False`）→ 新版 2 passed, 0 failed |
+| `node scripts/probe-terminal-background.js` | 12 passed, 0 failed（桌布畫得出來、字仍是不透明的 `rgb(230,230,230)`、拿掉圖底色回到 `#000000`） |
+| `node scripts/test-terminal.js` | 77 passed, 0 failed（`test-error-hygiene.js` 85／`test-ipc-invoke.js` 11 也都 0 failed） |
+| `node scripts/test-workspace.js` | 231 passed, 0 failed（新增 [U] 真 repo 量增刪行數） |
+| `node scripts/test-workspace-ui.js` | 104 passed, 0 failed（新增 [F] Git 列版面契約；把 `flex: 0 1 auto` 改回 `flex: none` 會紅） |
+| `node scripts/e2e-terminal-cdp.js` | 47 passed, 0 failed（Shift+Enter 實測送出 `\x1b\r`） |
+| `node scripts/e2e-workspace-cdp.js` | 169 passed, 0 failed（新增「沒有任何一列的內容溢出」與「沒撞名不印資料夾」） |
+| `node scripts/e2e-visual-cdp.js` | ALL PASS 71 visual checks |
+| `node scripts/e2e-cdp-smoke.js` | 22 passed, 0 failed |
+| asar 抽驗 | `workspace-page.js`／`term-themes.js`／`main.js` 內容正確，沒有錯位 |
+
+**踩到兩個坑**：
+
+1. 第一版的列版面用 `flex: none` 給檔名，長檔名把行數與動作鈕整排擠到疊在一起——
+   單元測試與 e2e 全綠，**是截圖才看出來的**。改成兩段都能縮、目錄先被壓掉，
+   並且目錄只在撞名時才印（第二版又變成一排 `e2e-termina…` 認不出是誰）。
+   這條現在有斷言擋著（`test-workspace-ui.js` 的 [F]、`e2e-workspace-cdp.js` 的 [E]）。
+2. **連續三次打包到同一個輸出目錄，第三次產出的執行檔是壞的**（`Invalid file descriptor
+   to ICU data received`、程序直接 exit `0xC0000003`，而 electron-builder 照樣 exit 0，
+   asar 本身驗過是好的）。照 CLAUDE.md 的做法整個刪掉重打就正常了。
+
+**沒做**：桌布的「選圖」那一步是系統對話框，CDP 測不到（圖片是先擺進 userData 的，
+從 store 存的檔名往後那整條路都是真的）。未 commit 之外的發行動作也沒做。
+
 ## 2026-09-08 — 全專案 bug 掃描與修復
 
 - [x] 盤點所有模組與既有測試，建立安全的測試基準
@@ -56,8 +114,9 @@ CDP 均以 `VOICEINK_EXE=dist/bug-audit/pack/win-unpacked/VoiceInk.exe` 指定�
 - [x] 輸入法候選字視窗的根因：`.xterm-helpers` 的 `left: auto`（收回上一版的 `opacity: 1` 作法）
 - [x] Ctrl+G 開出來的記事本抬到最前面（`terminal/foreground.js`）
 - [x] 補回 v1.16.0 漏掉的第四份清單：`resolveLinks`／`revealLink` 沒進 `main.js` 的 service 白名單
-- [ ] Ctrl+G 抬視窗只驗到「PowerShell 起得來、C# 編得過、不會疊出第二支」；
+- [x] Ctrl+G 抬視窗只驗到「PowerShell 起得來、C# 編得過、不會疊出第二支」；
       真的把記事本抬到前面會搶前景焦點，沒有在使用者用電腦時實測
+      → 2026-09-09 補上 `probe-terminal-foreground.js`，並在那裡抓到根因（記事本重用視窗）
 
 回顧（全部打包版實測，`VOICEINK_EXE=D:/vi-build-680e-4/win-unpacked/VoiceInk.exe`）：
 `probe-workspace-bigfile.js` 12/12——開檔前 9.8MB → 開著大檔＋diff 66.9MB → 全關掉 21.2MB（掉了 45.7MB），

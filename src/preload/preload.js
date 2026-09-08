@@ -192,6 +192,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     resize: (id, cols, rows) => ipcRenderer.invoke('terminal:resize', id, cols, rows),
     kill: (id) => ipcRenderer.invoke('terminal:kill', id),
     pickDirectory: () => ipcRenderer.invoke('terminal:pickDirectory'),
+    /** 終端機桌布：讀回 data: URI（檔案在 main 手上，renderer 只認得檔名） */
+    background: (name) => ipcRenderer.invoke('terminal:background', name),
+    /** 換桌布：走系統對話框選圖，回新檔名；舊的那張由 main 刪掉 */
+    pickBackground: (previous) => ipcRenderer.invoke('terminal:pickBackground', previous),
+    clearBackground: (name) => ipcRenderer.invoke('terminal:clearBackground', name),
     resolveLinks: (id, texts) => ipcRenderer.invoke('terminal:resolveLinks', id, texts),
     revealLink: (id, text) => ipcRenderer.invoke('terminal:revealLink', id, text),
     /** 終端機裡即將開出來的視窗（Ctrl+G 的記事本）抬到最前面 */
