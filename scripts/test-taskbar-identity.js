@@ -61,8 +61,9 @@ assert.ok(
   '[E] 少了舊的開機自啟動值名稱（換 AUMID 之後那筆會變孤兒：關不掉但照樣開機啟動）'
 )
 assert.ok(/function migrateLoginItemName\(\)/.test(main), '[E] 少了 migrateLoginItemName()')
+// 只找「單獨一行的呼叫」，不要拿 \n 去比對（工作區的換行可能是 CRLF）
 assert.ok(
-  main.indexOf('migrateLoginItemName()\n') > main.indexOf('function migrateLoginItemName()'),
+  /^[ \t]*migrateLoginItemName\(\)[ \t]*\r?$/m.test(main),
   '[E] migrateLoginItemName() 定義了卻沒有人呼叫'
 )
 // 系統工具要指名 System32（PATH 上可能是 MSYS 的同名執行檔）
