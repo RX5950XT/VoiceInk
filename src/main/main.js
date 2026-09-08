@@ -128,6 +128,19 @@ const userDataDir = (
 if (userDataDir) app.setPath('userData', userDataDir)
 
 /**
+ * Windows 的「這扇窗屬於誰」。必須跟 package.json 的 `build.appId` 一字不差——
+ * NSIS 產生的捷徑（開始選單／釘選到工作列）上寫的就是這個字串。
+ *
+ * 不設的話 Windows 會自己從執行檔路徑推一個出來，跟捷徑上的對不起來，工作列就把
+ * 「釘選的那顆」和「跑起來的那扇窗」當成兩個程式 → 更新後（安裝程式重開 App，
+ * 不是從捷徑點的）會看到兩顆 VoiceInk，而且新長出來那顆沒有圖示（frameless 視窗
+ * 沒有自己的 HICON）就是一片白。
+ *
+ * 排在搶鎖之前：第一扇窗開出去時就得帶著正確的身分。
+ */
+app.setAppUserModelId('com.voiceink.app')
+
+/**
  * 只准跑一份。
  *
  * 常駐背景之後這不是「保險」而是必要條件：視窗藏起來時再點一次捷徑，
@@ -704,13 +717,16 @@ function showMainWindow() {
   mainWindow.focus()
 }
 
+/** App 圖示（系統匣、工作列、Alt+Tab 共用一份） */
+const APP_ICON = path.join(__dirname, '../../assets/icon.ico')
+
 /**
  * 系統匣圖示。第一次縮到背景才建立——沒有常駐需求時不該多一顆圖示。
  * 視窗藏起來後，這是唯一能叫回來或真的結束的入口，所以兩個項目都必須有。
  */
 function ensureTray() {
   if (tray) return
-  const icon = nativeImage.createFromPath(path.join(__dirname, '../../assets/icon.ico'))
+  const icon = nativeImage.createFromPath(APP_ICON)
   tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon)
   tray.setToolTip('VoiceInk（背景執行中）')
   tray.setContextMenu(Menu.buildFromTemplate([
@@ -733,6 +749,8 @@ function createMainWindow() {
     minHeight: 600,
     frame: false,
     title: 'VoiceInk',
+    // frameless 視窗沒有系統框，Windows 拿不到視窗圖示 → 工作列／Alt+Tab 會是一片白
+    icon: APP_ICON,
     // Windows：保留 thickFrame 以支援邊緣縮放與陰影（勿關）
     thickFrame: true,
     hasShadow: true,
@@ -1205,6 +1223,36 @@ ipcMain.handle('window:isMaximized', (event) => {
 // 「開機」分頁直接停用，存一份自己的布林值只會跟系統對不上、UI 說謊。
 // 開發模式不註冊：那會把 node_modules 裡的 electron.exe 排進使用者的開機清單。
 const LOGIN_ITEM_OPTIONS = { args: [HIDDEN_FLAG] }
+
+/**
+ * 開機自啟動的登錄檔搬遷。
+ *
+ * `setLoginItemSettings` 寫進 `HKCU\...\Run` 的**值名稱**就是 AppUserModelID，
+ * 而 `getLoginItemSettings` 沒有 `name` 參數、只認現在這個 AUMID。所以設了
+ * `com.voiceink.app` 之後，舊版留下的 `electron.app.VoiceInk`（Electron 的預設名）
+ * 就變成孤兒：開機照樣自己啟動，但設定頁顯示「未開啟」而且關不掉。
+ *
+ * 只在打包版、且新名字底下還沒有東西時做一次。
+ */
+const LEGACY_LOGIN_ITEM = 'electron.app.VoiceInk'
+const RUN_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'
+
+function migrateLoginItemName() {
+  if (isDev) return
+  try {
+    if (app.getLoginItemSettings(LOGIN_ITEM_OPTIONS).openAtLogin) return
+    // 系統工具一律指名 System32：PATH 上可能擺著 MSYS 的同名執行檔
+    const reg = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'reg.exe')
+    const { spawnSync } = require('child_process')
+    const query = spawnSync(reg, ['query', RUN_KEY, '/v', LEGACY_LOGIN_ITEM], { windowsHide: true })
+    if (query.status !== 0) return
+    app.setLoginItemSettings({ ...LOGIN_ITEM_OPTIONS, openAtLogin: true })
+    spawnSync(reg, ['delete', RUN_KEY, '/v', LEGACY_LOGIN_ITEM, '/f'], { windowsHide: true })
+    bootLog('login item migrated')
+  } catch {
+    // 搬不動就算了：舊的那筆還在，開機自啟動的行為不變
+  }
+}
 
 ipcMain.handle('system:getStartup', (event) => {
   if (!assertMainWindowSender(event)) return { openAtLogin: false, supported: false }
@@ -1846,6 +1894,7 @@ app.whenReady().then(() => {
 
   createMainWindow()
   bootLog('window created')
+  migrateLoginItemName()
   initStore()
     .then(() => {
       // 更新檢查要等 store（自動更新開關存在裡面）；延後 20 秒讓開機那陣忙完再說
