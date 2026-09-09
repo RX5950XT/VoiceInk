@@ -376,6 +376,16 @@ async function main() {
       await waitInPage(cdp, `document.querySelectorAll('#wsTabStrip .ws-tab').length >= 1`, 8000))
     ok('[C] 編輯器真的顯示出來（量高度，不是只看 hidden）',
       await waitInPage(cdp, `document.getElementById('wsEditor').offsetHeight > 0`, 8000))
+
+    // 文件類（md／html／svg）點開就停在預覽那一面，不是編輯器
+    ok('[C0] .md 開起來預設就是預覽',
+      await waitInPage(cdp, `document.querySelector('#wsEditorPreview .md-h')
+        && document.getElementById('wsIdeContainer').offsetHeight === 0`, 8000))
+    ok('[C0] 預覽時按鈕寫「編輯」',
+      await cdp.eval(`document.getElementById('wsEditorPreviewBtn').textContent`) === '編輯')
+    await cdp.eval(`document.getElementById('wsEditorPreviewBtn').click()`)
+    await waitInPage(cdp, `document.getElementById('wsIdeContainer').offsetHeight > 0`, 8000)
+
     const loaded = await cdp.eval(`document.getElementById('wsEditorText').value`)
     ok('[C] 讀得到檔案內容', typeof loaded === 'string' && loaded.includes('# 標題'), JSON.stringify(loaded))
 
@@ -398,6 +408,18 @@ async function main() {
     ok('[C] 存檔真的落到磁碟', savedOnDisk)
     ok('[C] 存完未儲存標記消失',
       await waitInPage(cdp, `!document.querySelector('#wsTabStrip .ws-tab-dirty')`, 5000))
+
+    // Ctrl+S：焦點不在那顆 textarea 上（Monaco 接手時本來就不在）也要存得進去
+    const marker2 = 'ponytail_ctrl_s_ok'
+    await cdp.eval(`(() => {
+      const t = document.getElementById('wsEditorText')
+      t.value = ['# 標題', '', '${marker2}', ''].join(String.fromCharCode(10))
+      t.dispatchEvent(new Event('input'))
+      document.body.focus()
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true }))
+    })()`)
+    ok('[C2] Ctrl+S 存得進磁碟', await waitDisk(() =>
+      fs.readFileSync(path.join(PROJECT_DIR, 'README.md'), 'utf8').includes(marker2)))
 
     // ===== [D] Markdown 預覽 =====
     await cdp.eval(`document.getElementById('wsEditorPreviewBtn').click()`)
@@ -917,6 +939,12 @@ async function main() {
 
     // ===== [R] 尋找取代（Ctrl+F）與外部變更提示條 =====
     await cdp.eval(`document.querySelector('#wsTree .ws-tree-row[data-rel="README.md"]').click()`)
+    // 重開的 .md 停在預覽，先切回編輯這一面
+    await waitInPage(cdp, `document.getElementById('wsEditor').offsetHeight > 0`, 8000)
+    await cdp.eval(`(() => {
+      const btn = document.getElementById('wsEditorPreviewBtn')
+      if (btn && btn.textContent === '編輯') btn.click()
+    })()`)
     await waitInPage(cdp, `document.getElementById('wsEditorText').offsetHeight > 0`, 8000)
     // 尋找／取代由 Monaco 自己那顆負責（我們那份 widget 只在 Monaco 載不起來時才用）
     await cdp.eval(`document.getElementById('wsEditorFindBtn').click()`)

@@ -250,7 +250,21 @@ function gitRowLayoutChecks() {
   check('動作鈕不縮', /flex:\s*none/.test(act))
 }
 
-runAgentPathChecks().then(gitStatusCacheChecks).then(zoomChecks).then(gitRowLayoutChecks).then(() => {
+/** 文件類（md／html／svg）開起來就停在預覽那一面，Ctrl+S 在 Monaco／預覽下也存得到 */
+function editorDefaultsChecks() {
+  const openFn = tabs.slice(tabs.indexOf('export async function openEditorTab'), tabs.indexOf('function goToLine'))
+  check('文件類開檔預設就是預覽模式', /preview:[\s\S]{0,160}PREVIEWABLE_EXTS\.includes\(extOf\(relPath\)\)/.test(openFn))
+  check('預覽副檔名只有一份清單', !/\['md', 'markdown'/.test(tabs.slice(tabs.indexOf('function paintEditor'))))
+
+  const save = tabs.slice(tabs.indexOf("if (event.key.toLowerCase() !== 's'") - 400,
+    tabs.indexOf('// Alt+↑／↓ 在 diff 分頁上'))
+  check('Ctrl+S 掛在 document 上（Monaco 與預覽模式也收得到）', /document\.addEventListener\('keydown'/.test(save))
+  check('textarea 已處理過的那一次不重複存檔', /event\.defaultPrevented/.test(save))
+  check('焦點在終端機裡不搶 Ctrl+S', /#termHost/.test(save))
+  check('Ctrl+S 真的呼叫存檔', /saveActiveFile\(\)/.test(save))
+}
+
+runAgentPathChecks().then(gitStatusCacheChecks).then(zoomChecks).then(gitRowLayoutChecks).then(editorDefaultsChecks).then(() => {
   console.log(`\n${passed} passed, ${failed} failed`)
   process.exitCode = failed ? 1 : 0
 }).catch((error) => {
