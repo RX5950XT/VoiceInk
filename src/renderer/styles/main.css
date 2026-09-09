@@ -1960,6 +1960,48 @@ option:disabled {
   display: block;
 }
 
+/* 分割顯示：並排的每一格各佔一份寬度。**順序用 `order` 排、不搬 DOM**——
+   搬 xterm 的節點等於逼它整份重新量尺寸。 */
+.term-host.is-split {
+  display: flex;
+  gap: 4px;
+}
+
+.term-host.is-split .term-pane {
+  position: relative;
+  inset: auto;
+  flex: 1;
+  min-width: 0;
+}
+
+/* 哪一格在接鍵盤要看得出來，但只用 1px 邊框（全 App 不用強調條） */
+.term-host.is-split .term-pane.is-current {
+  outline: 1px solid var(--accent-primary);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ── 終端機搜尋列（Ctrl+F） ── */
+.term-find {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px;
+}
+
+.term-find-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.term-find-count {
+  flex: none;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
 /* 候選字視窗跑掉的**真正原因**在這一層：xterm.css 給 `.xterm-helpers` 寫了
    `position: absolute; top: 0`，卻沒寫 `left`——留成 `auto`。在 Electron 的 Blink 裡
    `left: auto` 會算出一個非 0 的值，於是那個接鍵盤的隱形 `<textarea>` 整個被推離游標，

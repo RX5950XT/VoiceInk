@@ -87,6 +87,37 @@ AGY 設定、終端機、聊天、語音輸入紀錄**刻意不進** `STORE_ALLO
 
 ## 最近變更
 
+### 2026-09-09 — 終端機：WebGL、搜尋、字級、分割、標題與 cwd、忙碌判定
+
+補上四個「每天碰得到、各只要幾行」的缺口，並修掉串流時游標亂閃。
+
+- **游標亂閃的根因是 DOM renderer**（不是輸入法）。它把游標畫成
+  `<span class="xterm-cursor-blink">`，閃爍是 CSS `animation: 1s step-end infinite`；
+  AI CLI 串流時那一列每一幀都被重建，動畫就每一幀從 0%（游標實心）重來，永遠跑不完一個
+  週期。實測 2.4 秒 29 幀 → DOM 重建游標 **30 次**，換上 `@xterm/addon-webgl` 是 **0 次**。
+  **候選字視窗的抖動不是位置在跑**：同一段時間 88 次游標移動只換來 **1 次** textarea 位置
+  變動（每輪重畫完游標都回到輸入行同一格）——別再往 `syncImeCaret` 修。回歸
+  `probe-terminal-flicker.js`。
+- **搜尋**（`@xterm/addon-search`）：Ctrl+F／Ctrl+Shift+F 開，Enter／Shift+Enter 前後找，
+  顯示「第幾筆／共幾筆」，Esc 收。PSReadLine 的 Windows 編輯模式沒有綁 Ctrl+F（實測
+  `Get-PSReadLineKeyHandler -Bound` 查得到），所以拿來當搜尋不會擋到行內編輯。
+- **字級**：Ctrl+滾輪、Ctrl+= / Ctrl+- / Ctrl+0，所有分頁一起改，存 `termFontSize`
+  （已進 `STORE_ALLOWLIST`，夾在 8～40）。
+- **Unicode 11**（`@xterm/addon-unicode11`）：`loadAddon` 之後**還要**
+  `term.unicode.activeVersion = '11'` 才生效。預設的 Unicode 6 字寬表會把 emoji 與部分
+  框線字元算成一格，AI CLI 畫的方框就歪掉。
+- **分割顯示**：同一個 `#termHost` 最多並排 3 格。**不搬 DOM**（搬 xterm 的節點＝逼它整份
+  重新量尺寸），順序用 CSS `order`；`#termHost.is-split` 切成 flex。右鍵分頁 →「並排顯示」。
+- **分頁標題跟著跑什麼變、cwd 跟著 `cd` 走**：宿主從 PTY 輸出撈 OSC 0/2 與 OSC 7，經
+  `terminal:status` 的 `osTitle`／`liveCwd` 上來；`links.js` 改用即時 cwd 當相對路徑基準
+  （原本的 `ponytail:` 待辦結掉了）。使用者改過名字（store 的 `renamed`）就不准被蓋掉。
+- **安靜不再一律等於做完**（原本的 `ponytail:` 待辦）：拿得到 shell integration 標記、
+  而且送出指令之後人沒再打過字時，安靜多久都維持「運行中」——quiet build 不再誤報收工。
+  人在裡面又送出過一行才算「互動中」，那時才恢復「安靜＝做完」。`cmd.exe` 沒有標記，
+  維持原本的靜默判定（不然會永遠卡在運行中）。
+- **scrollback 不再每個 chunk 都重切 256KB**：實測 2 萬個 chunk 從 1912ms 降到 3.4ms；
+  砍的位置改成從最近的換行砍（從中間切會切在跳脫序列裡，回放第一行冒出半截 `[38;5;12m`）。
+
 ### 2026-09-09 — 記事本真的置頂、Shift+Enter、Git 面板重整、終端機桌布
 
 - **Ctrl+G 開的記事本終於每次都跳出來而且置頂**。根因：Windows 11 的記事本第二次開檔案

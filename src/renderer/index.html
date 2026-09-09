@@ -240,6 +240,22 @@
 
                 <p id="termError" class="live-error hidden" role="alert"></p>
 
+                <!-- 終端機搜尋（Ctrl+F）。放在分頁列與畫面之間，不用蓋在終端機上面。 -->
+                <div class="term-find hidden" id="termFind">
+                  <input
+                    type="text"
+                    class="input term-find-input"
+                    id="termFindInput"
+                    placeholder="搜尋畫面內容"
+                    aria-label="搜尋終端機內容"
+                    maxlength="200"
+                  />
+                  <span class="term-find-count" id="termFindCount" aria-live="polite"></span>
+                  <button type="button" id="termFindPrev" class="btn-icon" title="上一個（Shift+Enter）" aria-label="上一個">↑</button>
+                  <button type="button" id="termFindNext" class="btn-icon" title="下一個（Enter）" aria-label="下一個">↓</button>
+                  <button type="button" id="termFindClose" class="btn-icon" title="關閉（Esc）" aria-label="關閉搜尋">✕</button>
+                </div>
+
                 <div class="ws-surfaces" id="wsSurfaces">
                   <div id="termEmpty" class="term-empty">
                     <h2>工作區</h2>

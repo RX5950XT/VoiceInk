@@ -207,6 +207,29 @@ tag 要與 `package.json` 的 version 一致。
   `^bg-\d+\.[a-z]{3,4}$` 擋路徑穿越），renderer 只拿得到 `data:` URI，換圖一律走系統對話框。
   **只有真的有桌布時才把 xterm 底色改成 `#00000000` ＋ `allowTransparency`**（沒圖時維持不透明，
   否則捲動殘影會疊在一起）；壓暗的 `opacity` 只作用在 `.term-host::before` 那一層，文字那層一個字都沒動。
+- **游標畫在 canvas 上（WebGL renderer）**：DOM renderer 把游標畫成
+  `<span class="xterm-cursor-blink">`，閃爍是 CSS `animation: 1s step-end infinite`——串流時
+  那一列每一幀都被重建，動畫就每一幀從 0%（實心）重來，游標永遠跑不完一個週期，看起來是
+  在亂閃（實測 2.4 秒 29 幀＝重建 30 次；WebGL 是 0 次）。`onContextLoss` **一定要接並
+  `dispose()`**（驅動更新／GPU 重置會掉 context，不收就是整片空白）；拿不到 GPU 時要能安靜
+  退回 DOM renderer。**候選字視窗的抖動不在輸入法對位**：同一段時間 88 次游標移動只換來
+  1 次 textarea 位置變動——別再去改 `syncImeCaret`。回歸 `probe-terminal-flicker.js`
+  （**會叫到最前面**，而且是刻意的：沒焦點的終端機根本不畫游標，量到的會是假的 0）。
+- **Unicode 11 要 `loadAddon` 之後再 `term.unicode.activeVersion = '11'`**，只 load 不切不生效。
+- **分割顯示不搬 DOM**（搬 xterm 的節點＝逼它整份重新量尺寸），順序用 CSS `order`；
+  `createPane` 裡**不可以**改成呼叫 `paintPanes()`——新的那一格還沒登記進 `panes`，會被它
+  過濾掉，於是 `term.open()` 開在 `display: none` 上，變成 0×0。並排時**每一格都要各自
+  `fit`**（只 fit 作用中那個的話，旁邊那格的 ConPTY 還以為自己有整個寬度，換行全亂）。
+- **「安靜＝做完了」只適用人在裡面來回打字的前景程式**：拿得到 shell integration 標記、
+  而且送出指令後沒再打過字時，安靜多久都維持「運行中」（安靜的 build 不再誤報收工）；
+  在裡面又送出一行才算 `interactive`，那時才恢復靜默判定。**沒有標記的（`cmd.exe`）不可以
+  套這條**——沒人來解會永遠卡在「運行中」。
+- **標題與 cwd 走 `osTitle`／`liveCwd`，不可以叫 `title`／`cwd`**：`service.listSessions` 是
+  `{ ...store 那筆, ...宿主那筆 }` 展開，同名欄位會把使用者取的名字與開檔當下的目錄無聲蓋掉。
+  使用者改過名字（store 的 `renamed`）就不准被 OSC 0/2 蓋。OSC 7 只收磁碟機開頭的絕對路徑。
+- **scrollback 不要每個 chunk 都 `slice(-上限)`**：那是每個小封包都複製一份 256KB 字串
+  （實測 2 萬個 chunk 1912ms vs 3.4ms）。留到超過兩倍才砍，而且**從最近的換行砍**——
+  從字串中間切會切在跳脫序列裡，回放的第一行就冒出半截 `[38;5;12m`。
 - `.chat-list-item` 三邊共用，選擇器一定要限定 `#chatList`／`#projList`。側欄寬度走 `--chat-sidebar-w`（`main.css` 有三處要各留 `var()`）。
 
 ### HF模型與本地 LLM
@@ -331,7 +354,7 @@ tag 要與 `package.json` 的 version 一致。
 |---|---|
 | 開發沙箱 | `probe-dev-sandbox.js`（**實測**沙箱讀得到你的模型與供應商，而你正在用的那份一個位元組都沒動；動 `dev-sandbox.js` 前後都要跑）|
 | 專案工作區 | `test-workspace.js`／`-nav`／`-ui`／`-state`／`-perf` ＋ `e2e-workspace-cdp.js`（暫存 user-data-dir ＋自種專案）；動 Monaco 前後跑 `probe-workspace-monaco.js`，動 PDF 前跑 `probe-workspace-pdf.js`；動編輯器／diff／預覽／專案切換前後跑 `probe-workspace-perf.js`（**打包版**開 1.4MB／4 萬行的檔，數 `createModel` 有沒有重做、量輸入法游標位置、驗專案隔離）；動大檔開關與記憶體前後跑 `probe-workspace-bigfile.js`（**打包版**量 1.4MB／4 萬行的開檔毫秒數、並排變更毫秒數，以及關掉之後堆積回不回得去、預覽的 iframe 有沒有被收掉） |
-| 終端機 | `test-terminal.js` ＋ `test-terminal-ui.js`（輸出合併、輸入法對位）＋ `probe-terminal-ime.js`（**打包版**真的走一次 Chromium 輸入法組字）＋ `e2e-terminal.js`（真 ConPTY）＋ `e2e-terminal-cdp.js` ＋ `test-terminal-host.js`（獨立宿主）＋ `test-terminal-links.js` ＋ `probe-terminal-links.js`（真 xterm 座標，`npx electron`）；動宿主或 `build.files`／`asarUnpack` 前後跑 `probe-terminal-restart.js`（**打包版**真的關 App、覆寫安裝檔再開回來）；管理員 `probe-terminal-admin.js`（免 UAC）／`probe-terminal-admin-elevate.js`（**跳一次 UAC**）；動 `foreground.js` 前後跑 `probe-terminal-foreground.js`（**會開／關記事本**，重現「記事本已經開著」再開第二次）；動配色或桌布前後跑 `probe-terminal-background.js`（**打包版**量桌布那一層畫不畫得出來、字有沒有被 opacity 一起壓掉、拿掉圖之後底色回不回得到不透明）|
+| 終端機 | `test-terminal.js` ＋ `test-terminal-ui.js`（輸出合併、輸入法對位）＋ `probe-terminal-flicker.js`（**會叫到最前面**：DOM vs WebGL 量游標重建與 textarea 抖動）＋ `probe-terminal-upgrade.js`（**打包版**驗 WebGL／Unicode 11／字級／搜尋／分割／OSC 標題與 cwd）＋ `probe-terminal-ime.js`（**打包版**真的走一次 Chromium 輸入法組字）＋ `e2e-terminal.js`（真 ConPTY）＋ `e2e-terminal-cdp.js` ＋ `test-terminal-host.js`（獨立宿主）＋ `test-terminal-links.js` ＋ `probe-terminal-links.js`（真 xterm 座標，`npx electron`）；動宿主或 `build.files`／`asarUnpack` 前後跑 `probe-terminal-restart.js`（**打包版**真的關 App、覆寫安裝檔再開回來）；管理員 `probe-terminal-admin.js`（免 UAC）／`probe-terminal-admin-elevate.js`（**跳一次 UAC**）；動 `foreground.js` 前後跑 `probe-terminal-foreground.js`（**會開／關記事本**，重現「記事本已經開著」再開第二次）；動配色或桌布前後跑 `probe-terminal-background.js`（**打包版**量桌布那一層畫不畫得出來、字有沒有被 opacity 一起壓掉、拿掉圖之後底色回不回得到不透明）|
 | 聊天／Markdown | `e2e-chat.js`（mock SSE）＋ `e2e-chat-cdp.js` ＋ `test-markdown.js` |
 | HF模型 | `test-hfmodels.js` ＋ `probe-hf-router.js`（動 runtime 前跑）／`probe-hf-hub.js`／`probe-hf-detail.js`（打真 HF）＋ `e2e-hfmodels.js` ＋ `e2e-hf-cdp.js` |
 | CC代理／閘道 | `test-ccswitch.js` ＋ `e2e-ccswitch-cdp.js`；端點 `probe-ccswitch-endpoints.js`／模型 `probe-ccswitch-models.js`／Codex 參數 `probe-ccswitch-codex.js`；閘道 `test-ccswitch-gateway.js` ＋ `e2e-ccswitch-gateway.js` |

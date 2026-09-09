@@ -25,9 +25,12 @@ const source = fs.readFileSync(path.join(__dirname, '../src/renderer/scripts/ter
 function load() {
   const context = {
     console,
-    document: { hidden: false },
+    document: { hidden: false, getElementById: () => null },
     requestAnimationFrame: () => 0,
-    window: { setTimeout, clearTimeout }
+    window: { setTimeout, clearTimeout },
+    // 被剝掉的 import 裡，只有這兩支在模組載入當下就會被呼叫（外觀預設值）
+    normalizeAppearance: () => ({ theme: 'black', image: '', opacity: 20 }),
+    applyAppearance: () => ({ theme: {}, allowTransparency: false })
   }
   vm.createContext(context)
   vm.runInContext(`${source}\nthis.api = { drainOutput, syncImeCaret }`, context)
