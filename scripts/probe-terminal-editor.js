@@ -68,12 +68,22 @@ async function main() {
   assert.equal(exited, null, 'batch 在使用者按送出之前不可以結束（CLI 會以為編完了）')
   ok('[A] 沒按送出時那支 batch 一直卡著')
 
-  // ── 使用者按了送出 ──
-  assert.equal(bridge.submit(request.id, '改過的提示詞\n'), true)
+  // ── 使用者按了儲存：分頁還開著，CLI 也還要繼續等 ──
+  assert.equal(bridge.save(request.id, '改過的提示詞\n'), true)
+  await sleep(1500)
+  assert.equal(exited, null, '儲存不可以放走 batch（分頁還開著，使用者可能還要再改）')
+  assert.equal(fs.readFileSync(target, 'utf8'), '原本的提示詞\n', '儲存還沒動到原檔')
+  ok('[C] 儲存只留著內容，CLI 繼續等（分頁沒被收掉）')
+
+  // 再存一次：最後一次存的那份才算數
+  assert.equal(bridge.save(request.id, '再改一次\n'), true)
+
+  // ── 使用者關掉分頁＝送回終端機 ──
+  assert.equal(bridge.cancel(request.id), true)
   const done = await until(() => exited !== null)
-  assert.ok(done, 'batch 要在送出之後結束')
-  assert.equal(fs.readFileSync(target, 'utf8'), '改過的提示詞\n', '內容要寫回原檔')
-  ok('[C] 送出後檔案更新，batch 退出（CLI 拿得回內容）')
+  assert.ok(done, 'batch 要在關掉分頁之後結束')
+  assert.equal(fs.readFileSync(target, 'utf8'), '再改一次\n', '關掉分頁才把最後存的那份寫回原檔')
+  ok('[C2] 關掉分頁後檔案更新成最後存的那份，batch 退出（CLI 拿得回內容）')
 
   // ── 取消（使用者關掉分頁）──
   events.length = 0
@@ -84,8 +94,8 @@ async function main() {
   assert.ok(request2, '第二次也要收得到請求')
   assert.equal(bridge.cancel(request2.id), true)
   assert.ok(await until(() => exited2), '取消也要放走那支 batch')
-  assert.equal(fs.readFileSync(target, 'utf8'), '改過的提示詞\n', '取消不可以動到檔案')
-  ok('[D] 取消放走 CLI，且一個位元組都沒動')
+  assert.equal(fs.readFileSync(target, 'utf8'), '再改一次\n', '沒存過就關掉不可以動到檔案')
+  ok('[D] 沒存過就關掉：放走 CLI，且一個位元組都沒動')
 
   // ── 上一輪留下來的請求 ──
   bridge.stop()

@@ -124,8 +124,9 @@ module.exports = {
     editorBridge.configure(require('electron').app.getPath('userData'))
     editorBridge.start((channel, payload) => emit(channel, payload))
   },
-  // Ctrl+G 開的那個編輯分頁：renderer 只送得出 id，改哪個檔由 main 說了算
-  editorSubmit: (id, content) => editorBridge.submit(id, content),
+  // Ctrl+G 開的那個編輯分頁：renderer 只送得出 id，改哪個檔由 main 說了算。
+  // 儲存只把內容留著，關掉分頁才真的送回終端機（見 editor-bridge.js）
+  editorSave: (id, content) => editorBridge.save(id, content),
   editorCancel: (id) => editorBridge.cancel(id),
   catalog: terminal.catalog,
   createSession: terminal.createSession,

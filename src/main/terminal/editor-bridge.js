@@ -10,8 +10,9 @@
  *   1. `EDITOR` 指到 `<userData>/editor-bridge/voiceink-edit.cmd`（純 batch，沒有相依）
  *   2. 那支 batch 把**檔案本身**複製成 `<id>.in`，然後每秒看一次 `<id>.done` 出現了沒
  *   3. main 這邊看到 `.in` 就叫 renderer 開一個編輯器分頁
- *   4. 使用者按「送出」→ main 寫出 `<id>.out` ＋ `<id>.done` → batch 把 `.out` 複製回原檔
- *      → batch 結束 → CLI 讀回檔案
+ *   4. 使用者按「儲存」→ main 寫出 `<id>.out`（分頁還開著，可以再改再存）
+ *   5. 使用者關掉分頁 → main 寫出 `<id>.done` → batch 把 `.out` 複製回原檔 → batch 結束
+ *      → CLI 讀回檔案。**沒存過就沒有 `.out`，關掉等於原樣放行**
  *
  * **路徑一個字都不出 batch**：`echo %~f1` 寫出來的位元組是主控台的 ANSI 字碼頁
  * （這裡是 cp950），使用者名稱或檔名有中文就變亂碼，Node 用 UTF-8 讀回來會指到一個
@@ -168,13 +169,17 @@ function doneFile(id) {
 }
 
 /**
- * 使用者按了「送出」：內容寫回原檔，再放走那支卡住的 batch。
+ * 使用者按了「儲存」：內容先落地成 `.out`，但**不放走**那支 batch——分頁還開著，
+ * 他可能還要再改。真正送回終端機是關掉分頁那一刻（`cancel` → `.done` → batch 自己
+ * 把 `.out` 蓋回原檔）。
+ *
+ * 存兩次就覆寫，最後一次存的那份才算數。
  *
  * @param {string} id
  * @param {string} content
  * @returns {boolean}
  */
-function submit(id, content) {
+function save(id, content) {
   const key = String(id || '')
   if (!pending.has(key)) return false
   if (typeof content !== 'string') return false
@@ -183,15 +188,16 @@ function submit(id, content) {
     fs.writeFileSync(path.join(dir, 'requests', `${key}.out`), content, 'utf8')
   } catch {
     const error = new Error('EDIT_WRITE_FAILED')
-    error.userMessage = '寫不出這次的內容，沒有送回終端機'
+    error.userMessage = '存不起來，這次的內容沒有留下'
     throw error
   }
-  release(key)
   return true
 }
 
 /**
- * 使用者關掉分頁：不改內容，但一定要放走那支 batch（不然 CLI 會一直卡在 Ctrl+G）。
+ * 使用者關掉分頁：放走那支 batch。**存過就送、沒存過就照原樣**——batch 看到 `.done`
+ * 之後只在 `.out` 存在時才蓋回原檔，所以「改完存檔再關」與「什麼都沒動就關」自然分開。
+ * 不放走的話 CLI 會一直卡在 Ctrl+G。
  * @param {string} id
  * @returns {boolean}
  */
@@ -211,4 +217,4 @@ function release(key) {
   try { fs.writeFileSync(doneFile(key), '1', 'utf8') } catch { /* batch 會等到逾時，不再多做 */ }
 }
 
-module.exports = { configure, shimCommand, isRealEditor, start, stop, submit, cancel }
+module.exports = { configure, shimCommand, isRealEditor, start, stop, save, cancel }

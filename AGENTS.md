@@ -219,6 +219,11 @@ tag 要與 `package.json` 的 version 一致。
   ——那一格被藏起來的期間側欄或視窗可能被拉過，量到的新尺寸沒送給 ConPTY 的話，
   整畫面重畫的 CLI（Claude Code／Codex）會照舊寬度再貼一次：**狀態列出現兩份、
   右邊被切掉半行**。回歸 `test-terminal-ui.js`。
+- **Ctrl+G 的編輯分頁是「儲存」與「關閉」兩件事**：`save()` 只寫 `.out`（分頁留著，可以再改
+  再存，最後一次存的那份才算數），`cancel()`（＝關掉分頁）才寫 `.done` 放走 batch，而 batch
+  只在 `.out` 存在時才蓋回原檔——所以「改完存檔再關」與「什麼都沒動就關」自然分開，不用另外
+  記狀態。**存檔不可以順手收掉分頁**（舊版 `submit()` 是存＋放走＋關分頁，使用者要的是像一般
+  編輯器那樣存完還能繼續改）。回歸 `probe-terminal-editor.js` 的 [C][C2][D]。
 - **Ctrl+G 的 `$EDITOR` 橋接（`editor-bridge.js`）三個坑**：那支 batch **只能是 ASCII**
   （cmd.exe 用 cp950 讀 UTF-8 的中文註解會把行切壞，錯誤是莫名其妙的
   `'idge' is not recognized`）；**路徑不可以用 `echo %~f1` 送出來**（同樣的 cp950 問題，

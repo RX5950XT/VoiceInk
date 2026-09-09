@@ -204,7 +204,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** 終端機裡即將開出來的視窗（Ctrl+G 的記事本）抬到最前面 */
     raiseChildWindow: () => ipcRenderer.invoke('terminal:raiseChildWindow'),
     // Ctrl+G 開的編輯分頁：送出＝寫回那個暫存檔並放走卡住的 CLI；取消只放走
-    editorSubmit: (id, content) => ipcRenderer.invoke('terminal:editorSubmit', id, content),
+    editorSave: (id, content) => ipcRenderer.invoke('terminal:editorSave', id, content),
     editorCancel: (id) => ipcRenderer.invoke('terminal:editorCancel', id),
     onEditRequest: (handler) => {
       ipcRenderer.on('terminal:editRequest', handler)

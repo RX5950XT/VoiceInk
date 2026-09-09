@@ -54,8 +54,8 @@ function registerTerminalIpc({ ipcMain, service, isMainSender, dialog, getWindow
   ))
 
   // Ctrl+G 的編輯器橋接：id 是 main 發的，內容才是 renderer 給的（要編哪個檔不收）
-  ipcMain.handle('terminal:editorSubmit', (event, id, content) => (
-    invoke(event, () => service.editorSubmit(id, content))
+  ipcMain.handle('terminal:editorSave', (event, id, content) => (
+    invoke(event, () => service.editorSave(id, content))
   ))
   ipcMain.handle('terminal:editorCancel', (event, id) => (
     invoke(event, () => service.editorCancel(id))
