@@ -356,9 +356,10 @@ function openSessionWithMeta(meta, cols, rows, editor) {
 /**
  * 宿主的 Node 模式只給宿主自己用，不污染使用者啟動的程式。
  *
- * `editor` 有值時順便把 `EDITOR`／`VISUAL` 指到 App 的編輯器橋接（Claude Code 按
- * Ctrl+G 就會開 App 內的分頁，而不是記事本）。**使用者自己設過就不覆蓋**——已經
- * 習慣 vim 的人按下去本來就該進 vim。
+ * `editor` 有值時把 `EDITOR`／`VISUAL` 兩個都指到 App 的編輯器橋接（Claude Code 與
+ * Codex 都是先看 `VISUAL` 再看 `EDITOR`，只蓋一個會被另一個壓過去）。**要不要接手是
+ * main 決定的**（見 `service.js` 的 `bridgeTakesOver`）——使用者設了 vim 那類真的編輯器
+ * 時，main 根本不會把命令送過來，這裡拿到的就是空字串。
  *
  * @param {string} [editor]
  */
@@ -366,7 +367,7 @@ function shellEnvironment(editor) {
   const env = { ...process.env, TERM: 'xterm-256color' }
   delete env.ELECTRON_RUN_AS_NODE
   delete env.ELECTRON_NO_ASAR
-  if (editor && !env.EDITOR && !env.VISUAL) env.EDITOR = editor
+  if (editor) { env.EDITOR = editor; env.VISUAL = editor }
   return env
 }
 
