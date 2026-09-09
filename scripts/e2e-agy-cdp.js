@@ -372,13 +372,20 @@ async function main() {
       return {
         isError: row.classList.contains('is-error'),
         badge: row.querySelector('.agy-badge')?.textContent || '',
-        code: row.querySelector('.agy-error-code')?.textContent || ''
+        code: row.querySelector('.agy-error-code')?.textContent || '',
+        time: row.querySelector('.agy-cell-time')?.textContent || ''
       }
     })()`)
     if (logRow.badge !== '400' || !logRow.isError || logRow.code !== 'INVALID_JSON') {
       fail(`日誌列內容不對：${JSON.stringify(logRow)}`)
     }
     pass('失敗請求記到日誌，狀態碼與錯誤代碼都顯示在列上')
+
+    // 日誌留得到 30 天前，只有時分秒分不出是哪一天
+    if (!/^\d{2}\/\d{2} \d{2}:\d{2}:\d{2}$/.test(logRow.time)) {
+      fail(`日誌時間欄沒有日期：${JSON.stringify(logRow.time)}`)
+    }
+    pass(`日誌時間欄帶日期（${logRow.time}）`)
 
     // --- 金鑰遮罩 ---
     const masked = await cdp.eval(`(() => document.getElementById('agyApiKey').textContent)()`)

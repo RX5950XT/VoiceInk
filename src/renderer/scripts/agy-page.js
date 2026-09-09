@@ -57,10 +57,18 @@ function formatDuration(ms) {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}s` : `${n}ms`
 }
 
+/** 日誌可以留到 30 天前，只給時分秒分不出是哪一天，所以帶上月／日 */
 function formatTime(ts) {
   const date = new Date(Number(ts) || 0)
   if (!Number.isFinite(date.getTime())) return '—'
-  return date.toLocaleTimeString('zh-TW', { hour12: false })
+  return date.toLocaleString('zh-TW', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  })
 }
 
 function showError(message) {
