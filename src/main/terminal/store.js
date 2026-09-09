@@ -183,6 +183,8 @@ function sanitizeAll(raw) {
     out.push({
       id,
       title: normalizeTitle(item.title, defaultTitle(preset, cwd)),
+      // 使用者自己改過名字：前景程式報的標題（OSC 0/2）就不准再蓋掉它
+      renamed: item.renamed === true,
       shell,
       preset,
       cwd,
@@ -260,6 +262,7 @@ function create(req) {
     const session = {
       id: newId(),
       title: normalizeTitle(req?.title, defaultTitle(preset, cwd)),
+      renamed: false,
       shell,
       preset,
       cwd,
@@ -282,7 +285,7 @@ function rename(id, title) {
     const items = await readAll()
     const next = items.map((item) => (
       item.id === id
-        ? { ...item, title: normalizeTitle(title, defaultTitle(item.preset, item.cwd)) }
+        ? { ...item, title: normalizeTitle(title, defaultTitle(item.preset, item.cwd)), renamed: true }
         : item
     ))
     await writeAll(next)

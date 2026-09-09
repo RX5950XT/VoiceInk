@@ -666,6 +666,10 @@ function openTabMenu(tab, event) {
   ]
   if (tab.kind === 'terminal') {
     items.push({ label: '重新命名', onSelect: () => startTabRename(tab.id) })
+    items.push({
+      label: tab.split ? '取消並排顯示' : '並排顯示',
+      onSelect: () => void splitTerminal(tab.id)
+    })
   }
   if (others.length) {
     items.push({ label: `關閉其他 ${others.length} 個`, onSelect: () => void closeMany(others) })
@@ -680,6 +684,15 @@ function openTabMenu(tab, event) {
     items.push({ label: '用系統瀏覽器開', onSelect: () => void openOutside(tab.url || '') })
   }
   showMenu({ x: event.clientX, y: event.clientY }, items)
+}
+
+/**
+ * 並排／取消並排一個終端機。要先開得起來（沒開過的終端機沒有那一格可以排）。
+ * @param {string} id
+ */
+async function splitTerminal(id) {
+  const mod = await import('./terminal-page.js')
+  await mod.toggleTerminalSplit(id)
 }
 
 /**
@@ -921,11 +934,13 @@ export function trackTerminal(id, title) {
 /**
  * 把終端機現在的樣子畫到分頁上（`terminal-page.js` 每次狀態變動都會推過來）。
  * @param {string} id
- * @param {{ title: string, state: string, stateLabel: string, admin: boolean, cwd: string, unread: boolean }} meta
+ * @param {{ title: string, state: string, stateLabel: string, admin: boolean, cwd: string, split: boolean, unread: boolean }} meta
  */
 export function paintTerminalTab(id, meta) {
   const tab = findTab(id)
   if (!tab) return
+  // 有沒有在並排顯示只影響右鍵選單那一行字，不必重畫分頁
+  tab.split = meta.split === true
   const before = `${tab.title}|${tab.state}|${tab.unread}|${tab.stateLabel}`
   tab.title = meta.title || tab.title
   tab.state = meta.state

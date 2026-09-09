@@ -11,15 +11,42 @@ let client
 let emit = () => {}
 
 function getClient() {
-  if (!client) client = new HostClient(require('electron').app.getPath('userData'), (event, payload) => emit(event, payload))
+  if (!client) client = new HostClient(require('electron').app.getPath('userData'), forward)
   return client
+}
+
+/**
+ * 宿主送上來的事件轉給 renderer。
+ *
+ * 宿主講的 `title`／`cwd` 是**前景程式自己報的**（OSC 0/2 與 OSC 7），跟 store 裡
+ * 使用者自己取的名字、開檔當下的工作目錄是兩回事——換個欄位名往上送，免得在
+ * `listSessions` 的展開裡把 store 那份無聲蓋掉。
+ *
+ * @param {string} event
+ * @param {object} payload
+ */
+function forward(event, payload) {
+  if (event !== 'terminal:status') { emit(event, payload); return }
+  const { title, cwd, ...rest } = payload
+  if (cwd) links.noteCwd(payload.id, cwd)
+  emit(event, { ...rest, osTitle: title || '', liveCwd: cwd || '' })
 }
 
 async function listSessions() {
   const items = await store.list()
   const states = await getClient().request('list') || []
   const byId = new Map(states.map(item => [item.id, item]))
-  return items.map(item => ({ ...item, state: 'stopped', exitCode: null, ...byId.get(item.id) }))
+  return items.map(item => {
+    const state = byId.get(item.id)
+    if (state?.cwd) links.noteCwd(item.id, state.cwd)
+    return {
+      ...item,
+      state: state?.state || 'stopped',
+      exitCode: state?.exitCode ?? null,
+      osTitle: state?.title || '',
+      liveCwd: state?.cwd || ''
+    }
+  })
 }
 
 async function openSession(id, cols, rows) {
@@ -30,11 +57,14 @@ async function openSession(id, cols, rows) {
     error.userMessage = '找不到這個工作階段'
     throw error
   }
-  return getClient().request('open', { sessionId: meta.id, meta, cols, rows }, true)
+  const snapshot = await getClient().request('open', { sessionId: meta.id, meta, cols, rows }, true)
+  if (snapshot?.cwd) links.noteCwd(meta.id, snapshot.cwd)
+  return snapshot
 }
 
 async function deleteSession(id) {
   await getClient().request('forget', { sessionId: String(id || '') })
+  links.noteCwd(String(id || ''), '')
   return store.remove(String(id || ''))
 }
 

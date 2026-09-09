@@ -142,6 +142,15 @@ async function main() {
       String(await cdp.eval(`document.querySelectorAll('.chat-main').length`)))
     await waitInPage(cdp, `document.getElementById('wsNewBtn')`)
 
+    // 先攔下 Terminal 實例：WebGL renderer 之後畫面內容只讀得到緩衝區，DOM 沒有字
+    await cdp.eval(`(async () => {
+      const { Terminal } = await import('../../node_modules/@xterm/xterm/lib/xterm.mjs')
+      const open = Terminal.prototype.open
+      Terminal.prototype.open = function (host) {
+        window.__uxTerm = this
+        return open.call(this, host)
+      }
+    })()`)
     createdId = await cdp.eval(`(async () => {
       document.getElementById('wsNewBtn').click()
       await new Promise((r) => setTimeout(r, 300))
@@ -187,10 +196,18 @@ async function main() {
     await cdp.eval(`navigator.clipboard.writeText('${marker}')`)
     await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: box.x + 20, y: box.y + 20, button: 'right', buttons: 2, clickCount: 1 })
     await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: box.x + 20, y: box.y + 20, button: 'right', buttons: 0, clickCount: 1 })
-    const pasted = await waitInPage(cdp,
-      `document.querySelector('.term-pane.is-active .xterm-rows').textContent.includes('${marker}')`, 10000)
-    ok('[C] 右鍵貼上', pasted, pasted ? ''
-      : String(await cdp.eval(`document.querySelector('.term-pane.is-active .xterm-rows').textContent.slice(-120)`)))
+    // 畫面內容要從緩衝區讀不是從 DOM：WebGL renderer 把字畫在 canvas 上，
+    // .xterm-rows 整個不存在。
+    const screenText = `(() => {
+      const t = window.__uxTerm
+      if (!t) return ''
+      const b = t.buffer.active
+      let out = ''
+      for (let i = 0; i < b.length; i += 1) out += (b.getLine(i)?.translateToString(true) ?? '')
+      return out
+    })()`
+    const pasted = await waitInPage(cdp, `${screenText}.includes('${marker}')`, 10000)
+    ok('[C] 右鍵貼上', pasted, pasted ? '' : String(await cdp.eval(`${screenText}.slice(-120)`)))
 
     // ===== [D] 側欄拖寬 =====
     const before = await cdp.eval(`(() => ({

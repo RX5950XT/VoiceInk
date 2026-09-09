@@ -4,7 +4,14 @@ const vm = require('node:vm')
 const source = fs.readFileSync('src/renderer/scripts/terminal-page.js', 'utf8')
   .replace(/^import [\s\S]*?from '[^']*'$/gm, '').replace(/^export /gm, '')
 const handlers = {}, writes = [], errors = []
-const context = vm.createContext({ electronAPI: { getPathForFile: f => f.path }, showToast: x => errors.push(x) })
+const context = vm.createContext({
+  electronAPI: { getPathForFile: f => f.path },
+  showToast: x => errors.push(x),
+  document: { getElementById: () => null },
+  // 被剝掉的 import 裡，只有外觀那兩支在模組載入當下就會被呼叫
+  normalizeAppearance: () => ({ theme: 'black', image: '', opacity: 20 }),
+  applyAppearance: () => ({ theme: {}, allowTransparency: false })
+})
 vm.runInContext(source + '\nthis.bind = initTerminalDrop', context)
 context.bind({ addEventListener: (type, fn) => { handlers[type] = fn } }, {
   paste: text => writes.push(text), focus() {}

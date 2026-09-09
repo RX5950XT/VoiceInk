@@ -111,7 +111,11 @@ function publishStatus(id) {
   emit('terminal:status', {
     id,
     state: session ? session.tracker.state : 'exited',
-    exitCode: session ? session.tracker.exitCode : null
+    exitCode: session ? session.tracker.exitCode : null,
+    // 前景程式自己報的（OSC 0/2 與 OSC 7）：分頁標題要跟著跑什麼變，
+    // 連結解析要跟著 `cd` 走。沒報過就是空字串，呼叫端自己退回原本的值。
+    title: session ? session.tracker.title : '',
+    cwd: session ? session.tracker.cwd : ''
   })
 }
 
@@ -132,12 +136,31 @@ function flush(session) {
  * @param {string} chunk
  */
 function absorb(session, chunk) {
-  const before = session.tracker.state
-  status.onOutput(session.tracker, chunk, Date.now())
-  session.buffer = (session.buffer + chunk).slice(-SCROLLBACK_CHARS)
+  const t = session.tracker
+  const before = `${t.state}|${t.title}|${t.cwd}`
+  status.onOutput(t, chunk, Date.now())
+  // **不要每個 chunk 都 `slice(-上限)`**：那是每個小封包都複製一份 256KB 字串。
+  // AI CLI 串流一秒上百個封包，實測 2 萬個 chunk 要 1912ms；留到超過兩倍才砍一次
+  // 是 3.4ms。回放時 `trimBuffer` 再砍回上限，對外的量沒有變多。
+  session.buffer += chunk
+  if (session.buffer.length > SCROLLBACK_CHARS * 2) session.buffer = trimBuffer(session.buffer)
   session.pendingOut += chunk
   if (!session.flushTimer) session.flushTimer = setTimeout(() => flush(session), FLUSH_MS)
-  if (session.tracker.state !== before) publishStatus(session.id)
+  if (`${t.state}|${t.title}|${t.cwd}` !== before) publishStatus(session.id)
+}
+
+/**
+ * 砍到 scrollback 上限。**從最近的換行砍**：從字串中間切下去有機會切在跳脫序列
+ * 中間，回放的第一行就會冒出半截 `[38;5;12m`。
+ * @param {string} text
+ * @returns {string}
+ */
+function trimBuffer(text) {
+  if (text.length <= SCROLLBACK_CHARS) return text
+  const cut = text.length - SCROLLBACK_CHARS
+  const nl = text.indexOf('\n', cut)
+  // 找不到換行（或遠得離譜，例如一整段沒斷行的進度條）就照原本的位置砍
+  return text.slice(nl >= 0 && nl - cut < 4096 ? nl + 1 : cut)
 }
 
 function ensureTick() {
@@ -318,8 +341,10 @@ function openSessionWithMeta(meta, cols, rows) {
     pid: session.term.pid || null,
     state: session.tracker.state,
     exitCode: session.tracker.exitCode,
+    title: session.tracker.title,
+    cwd: session.tracker.cwd,
     seq: session.seq,
-    buffer: session.buffer
+    buffer: trimBuffer(session.buffer)
   }
 }
 
@@ -334,6 +359,7 @@ function shellEnvironment() {
 function sessionStates() {
   return [...live.values(), ...finished.values()].map((session) => ({
     id: session.id, state: session.tracker.state, exitCode: session.tracker.exitCode,
+    title: session.tracker.title, cwd: session.tracker.cwd,
     pid: session.term.pid || null
   }))
 }
@@ -444,6 +470,7 @@ module.exports = {
   killSession,
   killAll,
   // 測試用
+  trimBuffer,
   _live: live,
   _clampDim: clampDim
 }

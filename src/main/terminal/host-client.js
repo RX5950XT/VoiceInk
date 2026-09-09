@@ -35,9 +35,13 @@ class HostClient {
     readMessages(socket, (message) => {
       if (message.event === 'terminal:data' || message.event === 'terminal:status') {
         const payload = message.payload
+        // 標題與 cwd 是宿主從 PTY 輸出裡撈出來的（前景程式自己講的），型別一樣要驗：
+        // 收進來之後會進分頁標題，也會當成連結解析的基準路徑。
+        const text = (value, max) => value === undefined || (typeof value === 'string' && value.length <= max)
         const valid = typeof payload?.id === 'string' && (message.event === 'terminal:data'
           ? typeof payload.data === 'string' && Number.isSafeInteger(payload.seq) && payload.seq > 0
-          : ['running', 'idle', 'exited'].includes(payload.state))
+          : ['running', 'idle', 'exited'].includes(payload.state)
+            && text(payload.title, 200) && text(payload.cwd, 260))
         if (!valid) { socket.destroy(); return }
         this.emit(message.event, payload)
         return

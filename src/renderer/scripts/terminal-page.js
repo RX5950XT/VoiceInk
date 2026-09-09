@@ -10,6 +10,9 @@ import {
 // vendoring 只會多一份得跟著升級的複本（markdown.js 那條慣例同理）。
 import { Terminal } from '../../../node_modules/@xterm/xterm/lib/xterm.mjs'
 import { FitAddon } from '../../../node_modules/@xterm/addon-fit/lib/addon-fit.mjs'
+import { SearchAddon } from '../../../node_modules/@xterm/addon-search/lib/addon-search.mjs'
+import { Unicode11Addon } from '../../../node_modules/@xterm/addon-unicode11/lib/addon-unicode11.mjs'
+import { WebglAddon } from '../../../node_modules/@xterm/addon-webgl/lib/addon-webgl.mjs'
 
 /**
  * 終端機頁。
@@ -33,6 +36,18 @@ let shellSelect = null
 let presetSelect = null
 let cwdInput = null
 let adminInput = null
+let findEl = null
+let findInput = null
+let findCountEl = null
+
+/** 終端機字級（Ctrl+滾輪／Ctrl+加減調的那個），跟 main 的 `sanitizeFontSize` 同一組上下限 */
+const FONT_MIN = 8
+const FONT_MAX = 40
+const FONT_DEFAULT = 17
+let fontSize = FONT_DEFAULT
+
+/** 最多同時並排幾個工作階段。再多每一格就窄到看不出東西了。 */
+const MAX_VISIBLE = 3
 
 /** @type {Array<{ id: string, title: string, shell: string, preset: string, cwd: string, state: string, exitCode: number | null }>} */
 let items = []
@@ -41,12 +56,19 @@ let catalog = { shells: [], presets: [], maxSessions: 20 }
 
 /**
  * @typedef {{
- *   term: Terminal, fit: FitAddon, pane: HTMLElement,
+ *   term: Terminal, fit: FitAddon, search: SearchAddon, pane: HTMLElement,
  *   seq: number, ready: boolean, writing: boolean, queue: Array<{ seq: number, data: string }>
  * }} Pane
  */
 /** @type {Map<string, Pane>} */
 const panes = new Map()
+
+/**
+ * 現在並排顯示哪幾個工作階段。長度 1 ＝一般的單格，2 以上就是分割顯示。
+ * 第一個是「作用中」的那一格（`currentId`）。
+ * @type {string[]}
+ */
+let visibleIds = []
 
 /** 跑完但使用者不在看的階段 */
 const unread = new Set()
@@ -95,15 +117,27 @@ function stateLabel(item) {
  * 把一個工作階段現在的樣子推給分頁列。找不到（清單還沒同步）就不動。
  * @param {string} id
  */
+/**
+ * 分頁上顯示的名字。使用者自己改過就一定用他改的；沒改過才讓前景程式自己報的
+ * 標題（OSC 0/2，例如 `npm run build`）蓋上去——不然改完名字下一秒就被蓋掉。
+ * @param {{ renamed?: boolean, title: string, osTitle?: string }} item
+ * @returns {string}
+ */
+function displayTitle(item) {
+  return item.renamed ? item.title : (item.osTitle || item.title)
+}
+
 function pushTabState(id) {
   const item = items.find((entry) => entry.id === id)
   if (!item) return
   paintTerminalTab(id, {
-    title: item.title,
+    title: displayTitle(item),
     state: item.state,
     stateLabel: stateLabel(item),
     admin: Boolean(item.admin),
-    cwd: item.cwd || '',
+    // 前景 shell 報到哪就顯示哪（OSC 7）；沒報過才退回開起來時的那個目錄
+    cwd: item.liveCwd || item.cwd || '',
+    split: isTerminalSplit(id),
     unread: unread.has(id)
   })
 }
@@ -264,6 +298,29 @@ function initTerminalDrop(pane, term, id) {
   })
 }
 
+/**
+ * 換上 WebGL renderer。
+ *
+ * 預設的 DOM renderer 把每一格字畫成一個 `<span>`，游標是帶 CSS `animation` 的那一顆——
+ * **串流時那一列每一幀都被重建，動畫就每一幀從 0% 重來**，游標永遠跑不完一個閃爍週期，
+ * 看起來就是在亂閃（AI CLI 的 spinner 一秒重畫好幾次，正是最糟的情況）。WebGL renderer
+ * 把整個畫面畫在一張 canvas 上，游標閃爍走它自己的計時器，不受重繪影響。
+ *
+ * 顯示卡驅動更新、GPU 重置都會讓 context 掉；掉了就把 addon 收掉退回 DOM renderer
+ * （xterm 自己會接手），**不能放著不管**——context 沒了畫面就是一片空白。
+ *
+ * @param {Terminal} term
+ */
+function attachRenderer(term) {
+  try {
+    const webgl = new WebglAddon()
+    webgl.onContextLoss(() => webgl.dispose())
+    term.loadAddon(webgl)
+  } catch {
+    // 沒有 GPU（遠端桌面、`--disable-gpu`）：留著 DOM renderer，功能不受影響
+  }
+}
+
 function createPane(id) {
   const pane = document.createElement('div')
   pane.className = 'term-pane'
@@ -271,28 +328,70 @@ function createPane(id) {
   hostEl.appendChild(pane)
   // `term.open()` 要量得到尺寸才畫得出東西。掛在 display:none 的格子上會開出一個
   // 0×0 的終端機，第一段輸出（提示字元）就這樣消失了——所以先切成可見再 open。
+  //
+  // **這裡不可以改成呼叫 `paintPanes()`**：那支會把還沒登記進 `panes` 的 id 過濾掉
+  // （新的這一格正是還沒登記的那個），結果就是開在一個 `display: none` 的格子上。
   for (const other of panes.values()) other.pane.classList.remove('is-active')
   pane.classList.add('is-active')
+  hostEl.classList.remove('is-split')
+  visibleIds = [id]
 
   const term = new Terminal({
     allowProposedApi: true,
     convertEol: false,
     cursorBlink: true,
     fontFamily: '"Cascadia Mono", "Cascadia Code", Consolas, "微軟正黑體", monospace',
-    fontSize: 17,
+    fontSize,
     scrollback: 5000,
     ...themeOptions()
   })
   const fit = new FitAddon()
+  const search = new SearchAddon()
   term.loadAddon(fit)
+  term.loadAddon(search)
+  // 預設的字寬表是 Unicode 6 的：emoji 與一部分框線字元會被算成一格，
+  // AI CLI 畫的方框就會歪掉。載了還要真的切過去，只 `loadAddon` 不會生效。
+  const unicode11 = new Unicode11Addon()
+  term.loadAddon(unicode11)
+  term.unicode.activeVersion = '11'
   term.open(pane)
+  attachRenderer(term)
   registerTermLinks(term, id)
   initTerminalDrop(pane, term, id)
   term.onData((data) => {
     writeToPty(id, data)
   })
+  // 命中幾筆／現在第幾筆。addon 是每一格各一份，所以只有作用中那格的結果才畫上去。
+  search.onDidChangeResults(({ resultIndex, resultCount }) => {
+    if (!findCountEl || currentId !== id) return
+    findCountEl.textContent = resultCount ? `${resultIndex + 1}/${resultCount}` : '沒有符合的'
+  })
+
   term.attachCustomKeyEventHandler((event) => {
-    if (event.key !== 'Enter' || !event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || event.isComposing) return true
+    if (event.isComposing) return true
+    if (event.ctrlKey && !event.altKey && !event.metaKey) {
+      // Ctrl+F 搜尋。PSReadLine 的 Windows 編輯模式沒有綁 Ctrl+F（實測
+      // `Get-PSReadLineKeyHandler -Bound` 沒有這一條），拿來當搜尋不會擋到編輯。
+      // Ctrl+Shift+F 也收：那是 Windows 終端機的習慣。
+      if (event.key === 'f' || event.key === 'F') {
+        if (event.type === 'keydown') showFind(true)
+        return false
+      }
+      // 字級：`=` 與 `+` 是同一顆，兩個 key 都要收
+      if (['=', '+', '-', '_', '0'].includes(event.key)) {
+        if (event.type === 'keydown') {
+          if (event.key === '0') applyFontSize(FONT_DEFAULT)
+          else applyFontSize(fontSize + (event.key === '-' || event.key === '_' ? -1 : 1))
+        }
+        return false
+      }
+    }
+    // Esc 關搜尋列——**但只有搜尋列開著時才吞**，不然 AI CLI 收不到 Esc（那是中斷鍵）
+    if (event.key === 'Escape' && findOpen()) {
+      if (event.type === 'keydown') showFind(false)
+      return false
+    }
+    if (event.key !== 'Enter' || !event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return true
     event.preventDefault()
     // 送 `ESC` ＋ `CR`（＝ Alt+Enter 的序列）。這是 Claude Code 的 `/terminal-setup`
     // 幫 VSCode／iTerm2 綁的同一個東西，Codex 那些 CLI 也認得。
@@ -331,10 +430,84 @@ function createPane(id) {
     navigator.clipboard.readText().then((text) => { if (text) term.paste(text) }, () => {})
   })
 
+  // 分割顯示時點哪一格，哪一格就是作用中的那個（打字、resize、未讀點都跟著它走）。
+  // 用 pointerdown 不用 click：選取文字放開時 click 不一定會來。
+  pane.addEventListener('pointerdown', () => {
+    if (currentId === id) return
+    currentId = id
+    visibleIds = [id, ...visibleIds.filter((key) => key !== id)]
+    unread.delete(id)
+    paintPanes()
+    pushTabState(id)
+  })
+
   /** @type {Pane} */
-  const entry = { term, fit, pane, seq: 0, ready: false, writing: false, queue: [] }
+  const entry = { term, fit, search, pane, seq: 0, ready: false, writing: false, queue: [] }
   panes.set(id, entry)
+  // 登記好了才畫得出來（`order`、並排狀態都要有這一格在 `panes` 裡才算得出來）
+  paintPanes()
   return entry
+}
+
+/**
+ * 把 `visibleIds` 畫出來：哪幾格看得到、誰排在前面、要不要切成並排版面。
+ *
+ * 刻意**不搬 DOM**（每一格都留在 `#termHost` 底下不動）：搬 xterm 的節點等於讓它整份
+ * 重新量尺寸，而順序用 CSS `order` 就排得出來。
+ */
+function paintPanes() {
+  visibleIds = visibleIds.filter((id) => panes.has(id)).slice(0, MAX_VISIBLE)
+  if (!visibleIds.length && currentId && panes.has(currentId)) visibleIds = [currentId]
+  hostEl?.classList.toggle('is-split', visibleIds.length > 1)
+  for (const [id, entry] of panes) {
+    const at = visibleIds.indexOf(id)
+    entry.pane.classList.toggle('is-active', at >= 0)
+    entry.pane.classList.toggle('is-current', id === currentId && visibleIds.length > 1)
+    entry.pane.style.order = at >= 0 ? String(at) : ''
+  }
+}
+
+/**
+ * 把某個工作階段加進（或移出）並排顯示。
+ *
+ * 加進來的那一格會變成作用中的那個——是使用者剛剛說要看它的。
+ * @param {string} id
+ * @returns {Promise<void>}
+ */
+export async function toggleTerminalSplit(id) {
+  const already = visibleIds.includes(id)
+  if (already) {
+    // 只剩自己就不用收了，收掉會變成一格都沒有
+    if (visibleIds.length < 2) return
+    visibleIds = visibleIds.filter((key) => key !== id)
+    if (currentId === id) currentId = visibleIds[0]
+  } else {
+    if (visibleIds.length >= MAX_VISIBLE) {
+      showToast(`最多並排 ${MAX_VISIBLE} 個終端機`, 'error')
+      return
+    }
+    const keep = [...visibleIds]
+    // 沒開過的先真的開起來（要跟 main 要一顆 pty 與畫面快照）。`openSession` 會把
+    // 畫面切成只剩它一格，所以開完再把原本並排的那幾格接回去。
+    if (!panes.has(id)) await openSession(id)
+    if (!panes.has(id)) return
+    visibleIds = [...keep.filter((key) => key !== id), id].slice(-MAX_VISIBLE)
+    currentId = id
+    unread.delete(id)
+  }
+  paintPanes()
+  fitVisible()
+  panes.get(currentId)?.term.focus()
+  for (const key of [...visibleIds, id]) pushTabState(key)
+}
+
+/**
+ * 這個工作階段現在有沒有被並排顯示（`ws-tabs.js` 畫右鍵選單要問）。
+ * @param {string} id
+ * @returns {boolean}
+ */
+export function isTerminalSplit(id) {
+  return visibleIds.length > 1 && visibleIds.includes(id)
 }
 
 /**
@@ -345,8 +518,10 @@ function disposePane(id) {
   if (!entry) return
   panes.delete(id)
   writeChains.delete(id)
+  visibleIds = visibleIds.filter((key) => key !== id)
   entry.term.dispose()
   entry.pane.remove()
+  paintPanes()
 }
 
 /**
@@ -364,6 +539,9 @@ function showHost(on) {
  */
 async function openSession(id, isActive = () => true) {
   const projectId = currentProjectId()
+  // 換工作階段就把搜尋列收掉：命中的標示是畫在**上一格**的 addon 上，
+  // 留著它只會在別的終端機上顯示一組跟畫面對不起來的計數。
+  if (currentId !== id && findOpen()) showFind(false)
   // 聊天與工作區同頁：點終端機就是切到工作區主區（同步切 DOM，xterm 才量得到尺寸）
   setChatPaneMode('workspace')
   currentId = id
@@ -374,7 +552,13 @@ async function openSession(id, isActive = () => true) {
   const fresh = !entry
   // createPane 自己會把新格子切成可見（open 前必須量得到尺寸）
   if (!entry) entry = createPane(id)
-  else for (const [key, pane] of panes) pane.pane.classList.toggle('is-active', key === id)
+  else {
+    // 已經在並排裡的話只是把焦點換過去，不要把並排收掉
+    visibleIds = visibleIds.includes(id)
+      ? [id, ...visibleIds.filter((key) => key !== id)]
+      : [id]
+    paintPanes()
+  }
   fitPane(entry)
   entry.term.scrollToBottom()
   const isCurrent = () => currentId === id && currentProjectId() === projectId
@@ -425,15 +609,22 @@ function fitPane(entry) {
   }
 }
 
-function fitCurrent() {
-  const entry = panes.get(currentId)
-  if (!entry || !hostEl || hostEl.classList.contains('hidden')) return
-  const before = `${entry.term.cols}x${entry.term.rows}`
-  fitPane(entry)
-  // 拖側欄寬度時 ResizeObserver 一秒送幾十次，欄列數其實大多沒變：
-  // 每一次都往 main 送 resize 等於連累 ConPTY 一起重排。
-  if (`${entry.term.cols}x${entry.term.rows}` === before) return
-  void electronAPI.terminal.resize(currentId, entry.term.cols, entry.term.rows)
+/**
+ * 量看得到的每一格。並排時每一格都要各自 fit——只 fit 作用中那個的話，
+ * 旁邊那格的 ConPTY 還以為自己有整個寬度，換行會全部亂掉。
+ */
+function fitVisible() {
+  if (!hostEl || hostEl.classList.contains('hidden')) return
+  for (const id of visibleIds) {
+    const entry = panes.get(id)
+    if (!entry) continue
+    const before = `${entry.term.cols}x${entry.term.rows}`
+    fitPane(entry)
+    // 拖側欄寬度時 ResizeObserver 一秒送幾十次，欄列數其實大多沒變：
+    // 每一次都往 main 送 resize 等於連累 ConPTY 一起重排。
+    if (`${entry.term.cols}x${entry.term.rows}` === before) continue
+    void electronAPI.terminal.resize(id, entry.term.cols, entry.term.rows)
+  }
 }
 
 /** ResizeObserver 一次拖曳會噴幾十發；合併到下一幀再量一次就夠 */
@@ -442,8 +633,88 @@ function scheduleFit() {
   if (fitFrame) return
   fitFrame = requestAnimationFrame(() => {
     fitFrame = 0
-    fitCurrent()
+    fitVisible()
   })
+}
+
+// ===== 字級 =====
+
+/**
+ * 套用字級。**所有分頁一起改**：同一個終端機的每一格忽大忽小只會讓人分心。
+ * 改完欄列數就變了，要重新 fit 並把輸入法游標對回去。
+ *
+ * @param {number} next
+ * @param {boolean} [persist] 開頁時從 store 讀回來的那次不用再寫回去
+ */
+function applyFontSize(next, persist = true) {
+  const size = Math.max(FONT_MIN, Math.min(FONT_MAX, Math.round(Number(next) || FONT_DEFAULT)))
+  if (size === fontSize) return
+  fontSize = size
+  for (const entry of panes.values()) entry.term.options.fontSize = size
+  fitVisible()
+  for (const entry of panes.values()) syncImeCaret(entry.term)
+  if (persist) void electronAPI.store.set('termFontSize', size)
+}
+
+// ===== 搜尋 =====
+
+/**
+ * 命中的底色。**不要用 `--accent-primary` 當底色**：那是文字色系，壓在終端機的字底下
+ * 讀不出來；用它的半透明版本當底、選中的那一筆再加深。
+ * @returns {object}
+ */
+function findDecorations() {
+  const css = getComputedStyle(document.documentElement)
+  const accent = css.getPropertyValue('--accent-primary').trim() || '#78a3b5'
+  return {
+    matchBackground: 'rgba(120, 163, 181, 0.35)',
+    matchBorder: 'transparent',
+    matchOverviewRuler: accent,
+    activeMatchBackground: accent,
+    activeMatchBorder: 'transparent',
+    activeMatchColorOverviewRuler: accent
+  }
+}
+
+/**
+ * 往前／往後找一筆。空字串就把既有的標示清掉（不然關掉搜尋列還留著一片高亮）。
+ * @param {1 | -1} direction
+ */
+function runFind(direction) {
+  const entry = panes.get(currentId)
+  if (!entry) return
+  const text = findInput?.value || ''
+  if (!text) {
+    entry.search.clearDecorations()
+    if (findCountEl) findCountEl.textContent = ''
+    return
+  }
+  const options = { decorations: findDecorations() }
+  if (direction > 0) entry.search.findNext(text, options)
+  else entry.search.findPrevious(text, options)
+}
+
+/**
+ * @param {boolean} on
+ */
+function showFind(on) {
+  if (!findEl) return
+  findEl.classList.toggle('hidden', !on)
+  if (on) {
+    findInput?.focus()
+    findInput?.select()
+    runFind(1)
+    return
+  }
+  // 關掉就把高亮收乾淨，再把鍵盤還給終端機
+  panes.get(currentId)?.search.clearDecorations()
+  if (findCountEl) findCountEl.textContent = ''
+  panes.get(currentId)?.term.focus()
+}
+
+/** 搜尋列現在開著嗎（`refreshTerminalPage` 換分頁時要收掉） */
+function findOpen() {
+  return Boolean(findEl) && !findEl.classList.contains('hidden')
 }
 
 // ===== 新終端機 =====
@@ -578,12 +849,17 @@ function onStatus(payload) {
   const wasRunning = item.state === 'running'
   item.state = payload.state
   item.exitCode = payload.exitCode
+  // 前景程式自己報的標題與工作目錄。**空的不要蓋回去**：清單只送「現在知道的」，
+  // 收到一次空值就把好不容易撈到的標題洗掉，分頁名字會一直閃。
+  if (payload.osTitle) item.osTitle = payload.osTitle
+  if (payload.liveCwd) item.liveCwd = payload.liveCwd
   // 跑完的當下不在看它 → 亮未讀點（這是「哪個代理做完了」的提示）。
   // 「不在看」包含兩種：看的是別的工作階段，或終端機主區沒開著
   // （聊天跟終端機同頁：主區顯示對話時＝人不在終端機）。
   // 主區顯示的是對話時 `termMain` 被藏起來（`termHost` 自己不會變），少這一條的話
   // 人在對話裡，背景終端機跑完永遠不亮未讀點。
-  const watching = payload.id === currentId
+  // 並排時每一格都看得到，不是只有作用中那格才算「在看」
+  const watching = visibleIds.includes(payload.id)
     && document.getElementById('page-chat')?.classList.contains('active')
     && !document.getElementById('termMain')?.classList.contains('hidden')
     && !hostEl?.classList.contains('hidden')
@@ -610,6 +886,33 @@ export function initTerminalPage() {
   presetSelect = document.getElementById('termPresetSelect')
   cwdInput = document.getElementById('termCwdInput')
   adminInput = /** @type {HTMLInputElement | null} */ (document.getElementById('termAdminInput'))
+  findEl = document.getElementById('termFind')
+  findInput = /** @type {HTMLInputElement | null} */ (document.getElementById('termFindInput'))
+  findCountEl = document.getElementById('termFindCount')
+
+  // ── 搜尋列 ──
+  findInput?.addEventListener('input', () => runFind(1))
+  findInput?.addEventListener('keydown', (event) => {
+    // 搜尋列的按鍵不可以漏回終端機（Enter 會被當成送出指令）
+    event.stopPropagation()
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      runFind(event.shiftKey ? -1 : 1)
+    } else if (event.key === 'Escape') {
+      event.preventDefault()
+      showFind(false)
+    }
+  })
+  document.getElementById('termFindPrev')?.addEventListener('click', () => runFind(-1))
+  document.getElementById('termFindNext')?.addEventListener('click', () => runFind(1))
+  document.getElementById('termFindClose')?.addEventListener('click', () => showFind(false))
+
+  // ── 字級：Ctrl+滾輪。掛在 host 上而不是各分頁，並排時滾哪一格都一樣 ──
+  hostEl?.addEventListener('wheel', (event) => {
+    if (!event.ctrlKey) return
+    event.preventDefault()
+    applyFontSize(fontSize + (event.deltaY < 0 ? 1 : -1))
+  }, { passive: false })
 
   document.getElementById('termNewCancelBtn')?.addEventListener('click', () => dialogEl.close())
   document.getElementById('termNewCreateBtn')?.addEventListener('click', () => void createSession())
@@ -631,6 +934,8 @@ export function initTerminalPage() {
 
   void (async () => {
     try {
+      // 字級要在第一個分頁開起來之前讀好，不然會先用預設值畫一次再跳大小
+      applyFontSize(await electronAPI.store.get('termFontSize', FONT_DEFAULT), false)
       catalog = await call(electronAPI.terminal.catalog(), '讀取設定失敗')
       cwdInput.value = catalog.homeDir || ''
       await reloadList()
@@ -700,7 +1005,7 @@ export function refreshTerminalPage() {
   // 分頁剛顯示，這一幀才量得到尺寸
   panes.get(currentId)?.term.scrollToBottom()
   requestAnimationFrame(() => {
-    fitCurrent()
+    fitVisible()
     panes.get(currentId)?.term.scrollToBottom()
   })
 }

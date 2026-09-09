@@ -237,7 +237,9 @@ async function main() {
         dialogClosed: !document.getElementById('termNewDialog').open,
         hostVisible: !document.getElementById('termHost').classList.contains('hidden'),
         panes: document.querySelectorAll('.term-pane').length,
-        rows: document.querySelectorAll('.xterm-rows').length
+        // 不可以數 .xterm-rows：WebGL renderer 把字畫在 canvas 上，那個容器整個不存在。
+        // .xterm-screen 兩種 renderer 都有。
+        rows: document.querySelectorAll('.xterm-screen').length
       }
     })()`)
     createdId = created.id
@@ -349,11 +351,18 @@ async function main() {
         && window.__statusProject === document.querySelector('#projList [data-id="w_status_test"]')
     })()`))
 
+    // 安靜地跑很久的指令（build、測試、下載）**不可以**被當成做完了。
+    // 舊版是「靜默 4 秒就標成暫無輸出」，`Start-Sleep -Seconds 8` 每次都誤報；
+    // 現在拿得到 shell integration 標記、而且送出之後人沒再打過字時，安靜多久都維持
+    // 「運行中」，等 shell 真的回到提示字元才變「已完成」。
     await cdp.eval(`window.electronAPI.terminal.write(${JSON.stringify(createdId)}, 'Start-Sleep -Seconds 8\\r')`)
-    ok('指令仍活著但沒有輸出時，不誤報已完成', await waitInPage(cdp,
-      `document.querySelector('.ws-tab.is-active .ws-tab-status-label')?.textContent === '暫無輸出'
-        && !!document.querySelector('#projList .proj-session-status[data-id="${createdId}"] .ws-status-icon.state-idle')`, 7000))
-    await waitInPage(cdp, `document.querySelector('.ws-tab.is-active .ws-tab-status-label')?.textContent === '已完成'`, 10000)
+    await sleep(6000)
+    ok('指令仍活著但沒有輸出時，不誤報已完成', await cdp.eval(
+      `document.querySelector('.ws-tab.is-active .ws-tab-status-label')?.textContent === '運行中'`
+    ), await cdp.eval(`document.querySelector('.ws-tab.is-active .ws-tab-status-label')?.textContent || '(無)'`))
+    ok('等 shell 真的回到提示字元才變已完成', await waitInPage(cdp,
+      `document.querySelector('.ws-tab.is-active .ws-tab-status-label')?.textContent === '已完成'`, 15000),
+    await cdp.eval(`document.querySelector('.ws-tab.is-active .ws-tab-status-label')?.textContent || '(無)'`))
 
     await cdp.eval(`window.electronAPI.terminal.write(${JSON.stringify(createdId)}, 'ping -n 6 127.0.0.1\\r')`)
     await cdp.eval(`(() => {
@@ -469,7 +478,15 @@ async function main() {
 
     // ===== 切走再切回來，畫面還在 =====
     const kept = await cdp.eval(`(async () => {
-      const rows = () => document.querySelector('.term-pane[data-id="${createdId}"] .xterm-rows')
+      // 畫面內容要從緩衝區讀，不是從 DOM：WebGL renderer 把字畫在 canvas 上，
+      // .xterm-rows 整個不存在（讀 DOM 只會拿到 null）。
+      const rows = () => {
+        const t = window.__testTerminals.get(${JSON.stringify(createdId)})
+        const b = t.buffer.active
+        let out = ''
+        for (let i = 0; i < b.length; i += 1) out += b.getLine(i)?.translateToString(true) ?? ''
+        return { textContent: out }
+      }
       const before = rows().textContent.length
       const term = window.__testTerminals.get(${JSON.stringify(createdId)})
       term._core._writeBuffer.writeSync('\\r\\n' + Array.from({ length: 100 }, (_, i) => 'latest-line-' + i).join('\\r\\n'))

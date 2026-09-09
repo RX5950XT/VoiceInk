@@ -116,6 +116,64 @@ console.log('\n[狀態機]')
 }
 
 {
+  // 安靜的 build 不可以被當成「做完了」。
+  // 這是 shell integration 說得出「還在跑」的情境：送出一行之後人就沒再打過字，
+  // 安靜只代表它跑得久（webpack、測試、下載），不是收工。
+  const t = status.createTracker(0)
+  status.onOutput(t, done(0, 10), 10) // 開機的第一個提示字元，定住 id 起點
+  status.onInput(t, 'npm run build\r', 100)
+  status.onOutput(t, '> vite build', 200)
+  ok('安靜再久都還是「運行中」', status.tick(t, 200 + status.BUSY_QUIET_MS * 10) === false && t.state === 'running')
+  status.onOutput(t, done(0, 11), 60000)
+  ok('等到 shell 說跑完才 idle', t.state === 'idle' && t.exitCode === 0)
+}
+
+{
+  // 但 AI CLI 那種「人在裡面來回打字」的，安靜仍然代表它停下來在等你。
+  const t = status.createTracker(0)
+  status.onOutput(t, done(0, 20), 10)
+  status.onInput(t, 'claude\r', 100)
+  status.onOutput(t, 'Welcome to Claude Code', 200)
+  ok('剛開起來還沒打過字：安靜不算做完', status.tick(t, 200 + status.BUSY_QUIET_MS * 3) === false)
+  status.onInput(t, '幫我看一下 pty.js\r', 5000)
+  ok('在裡面送出一行 → 算互動中', t.interactive === true && t.state === 'running')
+  status.onOutput(t, 'thinking...', 5100)
+  ok('代理還在動時不算做完', status.tick(t, 5100 + status.PROMPT_QUIET_MS + 10) === false)
+  ok('安靜夠久 → idle（在等你）', status.tick(t, 5100 + status.BUSY_QUIET_MS) === true)
+  status.onOutput(t, done(0, 21), 60000)
+  ok('離開代理回到提示字元 → 互動狀態歸零', t.interactive === false)
+}
+
+{
+  // 沒有 shell integration（cmd.exe）不可以被壓著不放——沒有標記就沒人來解，
+  // 會永遠卡在「運行中」。
+  const t = status.createTracker(0)
+  status.onInput(t, 'ping -n 30 127.0.0.1\r', 100)
+  status.onOutput(t, 'Reply from', 200)
+  ok('沒有標記時維持原本的靜默判定', status.tick(t, 200 + status.BUSY_QUIET_MS) === true && t.state === 'idle')
+}
+
+{
+  // OSC 0/2 標題與 OSC 7 工作目錄
+  const t = status.createTracker(0)
+  status.onOutput(t, `${ESC}]0;npm run build${BEL}done`, 100)
+  ok('撈得到 OSC 0 標題', t.title === 'npm run build')
+  status.onOutput(t, `${ESC}]2;pwsh${ESC}\\`, 200)
+  ok('OSC 2 與 ESC-backslash 結尾也認得', t.title === 'pwsh')
+  status.onOutput(t, `${ESC}]7;file:///D:/Workspace/My%20Repo${BEL}`, 300)
+  ok('OSC 7 解得出 Windows 路徑', t.cwd === 'D:\\Workspace\\My Repo')
+  status.onOutput(t, `${ESC}]7;file://host/C:/Users/x${BEL}`, 400)
+  ok('帶主機名的也解得出來', t.cwd === 'C:\\Users\\x')
+  const before = t.cwd
+  status.onOutput(t, `${ESC}]7;file://server/share/thing${BEL}`, 500)
+  ok('UNC 不收（不是磁碟機開頭）', t.cwd === before)
+  status.onOutput(t, `${ESC}]7;http://evil/x${BEL}`, 600)
+  ok('不是 file:// 不收', t.cwd === before)
+  ok('純函式：控制字元不收', status.parseOsc7(`file:///C:/a${ESC}b`) === '')
+  ok('純函式：相對路徑不收', status.parseOsc7('file:///not-a-drive/x') === '')
+}
+
+{
   const t = status.createTracker(0)
   status.onExit(t, 3)
   ok('pty 結束 → exited', t.state === 'exited' && t.exitCode === 3)
@@ -123,6 +181,22 @@ console.log('\n[狀態機]')
   status.onInput(t, 'ls\r', 110)
   ok('結束後不再被輸入輸出改回去', t.state === 'exited')
   ok('結束後 tick 不動它', status.tick(t, 999999) === false && t.state === 'exited')
+}
+
+// ===== scrollback =====
+console.log('\n[scrollback]')
+{
+  const pty = require(path.join(ROOT, 'src/main/terminal/pty.js'))
+  const cap = pty.SCROLLBACK_CHARS
+  ok('沒超過上限就原樣不動', pty.trimBuffer('abc') === 'abc')
+  // 從中間切下去會切在跳脫序列裡，回放的第一行就冒出半截 `[38;5;12m`：要從換行砍
+  const text = 'x'.repeat(100) + '\n' + 'y'.repeat(cap)
+  const cut = pty.trimBuffer(text)
+  ok('砍到上限以內', cut.length <= cap)
+  ok('從換行砍，不是從字串中間切', cut === 'y'.repeat(cap))
+  // 一整段沒有換行（進度條那種）就只好照位置砍，但不可以整份留著
+  const noBreak = 'z'.repeat(cap * 2)
+  ok('找不到換行時仍然砍得下來', pty.trimBuffer(noBreak).length === cap)
 }
 
 // ===== 信任邊界 =====

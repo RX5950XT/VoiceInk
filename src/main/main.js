@@ -207,7 +207,9 @@ const STORE_ALLOWLIST = new Set([
   // 桌布壓暗程度。色表本身在 renderer 的 `term-themes.js`，這裡只認 key。
   'termTheme',
   'termBgImage',
-  'termBgOpacity'
+  'termBgOpacity',
+  // 終端機字級（Ctrl+滾輪／Ctrl+加減調的那個）
+  'termFontSize'
 ])
 
 const TRANSLATOR_VALUES = new Set(['cloud', 'local'])
@@ -266,6 +268,17 @@ function sanitizeBgOpacity(val) {
   const n = Number(val)
   if (!Number.isFinite(n)) return 20
   return Math.max(0, Math.min(100, Math.round(n)))
+}
+
+/**
+ * 終端機字級。太小看不到、太大一行塞不下幾個字，兩邊都夾住。
+ * @param {unknown} val
+ * @returns {number}
+ */
+function sanitizeFontSize(val) {
+  const n = Number(val)
+  if (!Number.isFinite(n)) return 17
+  return Math.max(8, Math.min(40, Math.round(n)))
 }
 
 /**
@@ -1034,6 +1047,7 @@ ipcMain.handle('store:get', async (event, key, defaultValue) => {
   if (key === 'termTheme') return TERM_THEME_VALUES.has(val) ? val : 'black'
   if (key === 'termBgImage') return termBackground.sanitizeName(val)
   if (key === 'termBgOpacity') return sanitizeBgOpacity(val)
+  if (key === 'termFontSize') return sanitizeFontSize(val)
   if (key === 'chatThinking') return val === true
   if (key === 'dictationEnabled') return val === true
   if (key === 'dictationLang') return DICTATION_LANGS.has(val) ? val : 'zh-TW'
@@ -1111,6 +1125,10 @@ ipcMain.handle('store:set', async (event, key, value) => {
   }
   if (key === 'termBgOpacity') {
     store.set(key, sanitizeBgOpacity(value))
+    return true
+  }
+  if (key === 'termFontSize') {
+    store.set(key, sanitizeFontSize(value))
     return true
   }
   if (key === 'asrApiUrl') {

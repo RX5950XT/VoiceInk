@@ -135,7 +135,10 @@ const SNAPSHOT = `JSON.stringify((() => {
   const pane = document.querySelector('.term-pane.is-active')
   const term = window.__testTerminals?.get(pane?.dataset.id)
   const before = host ? getComputedStyle(host, '::before') : null
-  const glyph = pane?.querySelector('.xterm-rows span')
+  // WebGL renderer 把字畫在 canvas 上，.xterm-rows 整個不存在——「字有沒有被桌布的
+  // opacity 一起壓掉」就不能再讀 span 的顏色。改成量分層：壓暗只准作用在
+  // .term-host 的 ::before 那一層，字所在的那一層必須完全不透明。
+  const screen = pane?.querySelector('.xterm-screen')
   return {
     hasClass: !!host?.classList.contains('has-term-bg'),
     image: before?.backgroundImage || '',
@@ -146,8 +149,9 @@ const SNAPSHOT = `JSON.stringify((() => {
     themeBg: term?.options?.theme?.background || '',
     themeFg: term?.options?.theme?.foreground || '',
     transparent: term?.options?.allowTransparency === true,
-    glyphColour: glyph ? getComputedStyle(glyph).color : '',
-    glyphText: glyph?.textContent || ''
+    screenOpacity: screen ? getComputedStyle(screen).opacity : '',
+    paneOpacity: pane ? getComputedStyle(pane).opacity : '',
+    canvases: screen ? screen.querySelectorAll('canvas').length : 0
   }
 })())`
 
@@ -220,8 +224,10 @@ async function main() {
       JSON.stringify({ bg: on.themeBg, transparent: on.transparent }))
     ok('[C] 文字的前景色還是配色表給的那個（全黑主題的 #e6e6e6）',
       on.themeFg.toLowerCase() === '#e6e6e6', on.themeFg)
-    ok('[C] 畫面上的字是不透明的（沒有被桌布的 opacity 一起壓掉）',
-      /^rgb\(/.test(on.glyphColour), JSON.stringify({ colour: on.glyphColour, text: on.glyphText.slice(0, 20) }))
+    ok('[C] 字那一層完全不透明（壓暗只作用在桌布那一層）',
+      on.screenOpacity === '1' && on.paneOpacity === '1',
+      JSON.stringify({ screen: on.screenOpacity, pane: on.paneOpacity }))
+    ok('[C] 字真的畫得出來（WebGL 的 canvas 在位子上）', on.canvases > 0, String(on.canvases))
 
     // ===== 換配色：Dracula 應該即時套到已經開著的分頁上 =====
     await cdp.eval(`(async () => {

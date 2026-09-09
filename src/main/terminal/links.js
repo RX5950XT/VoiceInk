@@ -7,8 +7,9 @@
  * 這裡負責兩件事：hover 時回報哪些候選真的存在（不存在就不畫底線），
  * 點下去時用檔案總管開起來。
  *
- * 相對路徑一律以**這個工作階段開起來時的 cwd** 為基準——PTY 之後 `cd` 去哪，
- * 主行程看不到（ponytail: 起始 cwd 為基準，要跟著 cd 走得讓 host 回報 OSC 7）。
+ * 相對路徑的基準是**這個工作階段現在的 cwd**：宿主從 PTY 輸出裡撈 OSC 7
+ * （`shell` 每次換目錄自己報的），由 `service.js` 呼叫 `noteCwd` 存進來。
+ * 沒報過（`cmd.exe`、或 shell 沒設定 OSC 7）就退回開起來時的那個目錄。
  */
 
 const fs = require('node:fs')
@@ -58,10 +59,30 @@ function resolveCandidate(cwd, raw) {
 }
 
 /**
+ * 前景 shell 目前報到哪個目錄（OSC 7）。**這是終端機裡跑的程式自己講的**，
+ * 所以只當成解析相對路徑的基準，能不能開仍然由 `resolveCandidate` 的 `statSync` 說了算。
+ * @type {Map<string, string>}
+ */
+const liveCwd = new Map()
+
+/**
+ * @param {string} id
+ * @param {string} cwd 空字串＝這個階段收掉了，把記錄清掉
+ */
+function noteCwd(id, cwd) {
+  const key = String(id || '')
+  if (!key) return
+  if (!cwd) liveCwd.delete(key)
+  else if (typeof cwd === 'string' && cwd.length <= MAX_LENGTH && !hasControlChar(cwd)) liveCwd.set(key, cwd)
+}
+
+/**
  * @param {unknown} id
  * @returns {Promise<string>}
  */
 async function baseCwd(id) {
+  const live = liveCwd.get(String(id || ''))
+  if (live) return live
   const meta = await store.get(String(id || ''))
   return typeof meta?.cwd === 'string' ? meta.cwd : ''
 }
@@ -104,4 +125,4 @@ async function revealLink(id, text) {
   return true
 }
 
-module.exports = { resolveCandidate, resolveLinks, revealLink }
+module.exports = { resolveCandidate, resolveLinks, revealLink, noteCwd, _liveCwd: liveCwd }
