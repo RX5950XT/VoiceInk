@@ -864,7 +864,8 @@ export async function closeTab(id) {
     const mod = await import('./terminal-page.js')
     await mod.deleteTerminalSession(id).catch(() => {})
   }
-  // 還沒送出就關掉：一定要放走那支卡住的 CLI，不然它會一直停在 Ctrl+G
+  // 提示詞分頁關掉＝送回終端機：main 放走那支卡住的 CLI，存過的內容就在這一刻被
+  // 蓋回去（沒存過就照原樣）。不放走的話 CLI 會一直停在 Ctrl+G。
   if (tab.bridgeId) void electronAPI.terminal.editorCancel(tab.bridgeId)
   tabs = tabs.filter((item) => item.id !== id)
   disposeModel(id)
@@ -1130,8 +1131,8 @@ export async function openEditorTab(proj, relPath, line = 0) {
 }
 
 /**
- * 把手上所有提示詞分頁對應的 CLI 放走。分頁清單要被整批換掉時一定要先叫一次——
- * 那支 batch 還在終端機裡等，沒人放它就永遠停在 Ctrl+G。
+ * 把手上所有提示詞分頁對應的 CLI 放走（存過的內容照樣送回去）。分頁清單要被整批
+ * 換掉時一定要先叫一次——那支 batch 還在終端機裡等，沒人放它就永遠停在 Ctrl+G。
  */
 function cancelBridgeTabs() {
   for (const tab of tabs) {
@@ -1141,7 +1142,8 @@ function cancelBridgeTabs() {
 
 /**
  * Ctrl+G：AI CLI 要編輯提示詞。開一個沒有專案、沒有相對路徑的編輯分頁，
- * 「儲存」＝把內容送回那支卡住的 CLI（`saveActiveFile` 有另一條路），關掉＝放棄。
+ * 「儲存」把內容留在 main 手上（`saveActiveFile` 有另一條路），**關掉分頁才送回
+ * 那支卡住的 CLI**；沒存過就關等於原樣放行。
  *
  * 內容是 main 從那個暫存檔讀出來的；renderer 自始至終不知道那是哪個檔案。
  *
@@ -1340,8 +1342,7 @@ function paintEditor(tab) {
   }
   if (el.editorSaveBtn) {
     el.editorSaveBtn.hidden = Boolean(tab.readonly)
-    // 提示詞分頁存的不是檔案，是「送回終端機」
-    el.editorSaveBtn.textContent = tab.bridgeId ? '送出' : '儲存'
+    el.editorSaveBtn.textContent = '儲存'
   }
 
   // Monaco 接手之後行號欄是 hidden 的，狀態列也由 `paintMonacoStatus` 蓋過去：
@@ -1664,18 +1665,20 @@ async function saveActiveFile(force = false) {
   const content = typeof live === 'string' ? live : text.value
   text.value = content
 
-  // Ctrl+G 開的提示詞分頁：沒有專案也沒有相對路徑，「儲存」＝把內容送回那支
-  // 卡在終端機裡的 CLI（見 main 的 `terminal/editor-bridge.js`），送完就收掉分頁。
+  // Ctrl+G 開的提示詞分頁：沒有專案也沒有相對路徑，存的地方是 main 手上的暫存檔
+  // （見 `terminal/editor-bridge.js`）。**存完分頁還開著**——真的送回終端機是關掉
+  // 分頁那一刻，跟一般編輯器一樣「存檔＋關閉」兩件事分開。
   if (tab.bridgeId) {
-    const sent = await electronAPI.terminal.editorSubmit(tab.bridgeId, content)
-    if (!sent?.ok) {
-      showToast(sent?.error?.message || '送不回終端機', 'error')
+    const saved = await electronAPI.terminal.editorSave(tab.bridgeId, content)
+    if (!saved?.ok) {
+      showToast(saved?.error?.message || '存不起來', 'error')
       return
     }
-    tab.bridgeId = ''
+    tab.savedContent = content
+    tab.content = content
     tab.dirty = false
-    showToast('已送回終端機')
-    await closeTab(tab.id)
+    renderTabs()
+    showToast('已儲存，關掉這個分頁就送回終端機')
     return
   }
 

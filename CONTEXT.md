@@ -96,7 +96,8 @@ AGY 設定、終端機、聊天、語音輸入紀錄**刻意不進** `STORE_ALLO
   `fitAndSync`（量完欄列數變了才送）。回歸 `test-terminal-ui.js`。
 - **Ctrl+G 不再彈記事本**：`terminal/editor-bridge.js` 產生一支純 batch 當 `EDITOR`，
   CLI 呼叫它時 batch 把檔案複製成 `<id>.in` 並卡住等 `<id>.done`；App 收到就開一個
-  提示詞編輯分頁，按「送出」寫出 `<id>.out` ＋ `.done`，batch 自己蓋回原檔後退出。
+  提示詞編輯分頁，按「儲存」只寫出 `<id>.out`（分頁還開著），**關掉分頁才寫 `.done`**，
+  batch 這時把 `.out` 蓋回原檔後退出（沒存過就沒有 `.out`，等於原樣放行）。
   **路徑一個字都不出 batch**（`echo %~f1` 會用 cp950 寫出亂碼路徑），renderer 也只
   拿得到 id 與內容。**宿主是獨立程序、更新不會換掉它**，所以這個功能一直沒生效——
   App 現在會比對宿主回報的 `runtime` 與這一版想要的那份，舊的就（沒 shell 在跑時）
