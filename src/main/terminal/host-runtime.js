@@ -61,8 +61,15 @@ function connection(userData, create = false) {
   return { root, token: config.token, protocol: PROTOCOL, pipe: `\\\\.\\pipe\\voiceink-terminal-v${PROTOCOL}-${name}` }
 }
 
-/** 原生檔案不能鎖住安裝目錄；執行環境按內容分版，運行中的版本永不覆寫。 */
-function stageRuntime(root, execPath = process.execPath) {
+/**
+ * 這一版 App 想要的執行環境資料夾名（＝宿主檔案的內容雜湊）。**只算不複製**：
+ * 每次連上宿主都要拿它跟對方回報的名字比，看跑著的是不是舊版程式碼
+ * （宿主是獨立程序，App 更新不會把它換掉——見 `service.js` 的 `hostState`）。
+ *
+ * @param {string} [execPath]
+ * @returns {{ name: string, version: string, ptyRoot: string }}
+ */
+function runtimeName(execPath = process.execPath) {
   const version = process.versions.electron || fs.readFileSync(path.join(path.dirname(execPath), 'version'), 'utf8').trim()
   const hash = crypto.createHash('sha256').update(version)
   for (const name of HOST_FILES) hash.update(fs.readFileSync(path.join(__dirname, name)))
@@ -70,7 +77,13 @@ function stageRuntime(root, execPath = process.execPath) {
   // 所以 node-pty 的 JS 與原生檔都改指 app.asar.unpacked。
   const ptyRoot = unpacked(path.dirname(require.resolve('@lydell/node-pty')))
   hash.update(fs.readFileSync(path.join(ptyRoot, 'package.json')))
-  const dir = path.join(root, `runtime-${hash.digest('hex').slice(0, 24)}`)
+  return { name: `runtime-${hash.digest('hex').slice(0, 24)}`, version, ptyRoot }
+}
+
+/** 原生檔案不能鎖住安裝目錄；執行環境按內容分版，運行中的版本永不覆寫。 */
+function stageRuntime(root, execPath = process.execPath) {
+  const { name, version, ptyRoot } = runtimeName(execPath)
+  const dir = path.join(root, name)
   if (!fs.existsSync(path.join(dir, 'ready'))) {
     const staging = fs.mkdtempSync(path.join(root, 'runtime-building-'))
     try {
@@ -109,4 +122,4 @@ function pruneRuntimes(root, keep) {
   }
 }
 
-module.exports = { PROTOCOL, connection, stageRuntime, hostError }
+module.exports = { PROTOCOL, connection, runtimeName, stageRuntime, hostError }

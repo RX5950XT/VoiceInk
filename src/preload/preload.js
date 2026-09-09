@@ -181,6 +181,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** @returns {Promise<{ ok: boolean, data?: { shells: object[], presets: object[], maxSessions: number } }>} */
     catalog: () => ipcRenderer.invoke('terminal:catalog'),
     list: () => ipcRenderer.invoke('terminal:list'),
+    hostState: () => ipcRenderer.invoke('terminal:hostState'),
+    restartHost: () => ipcRenderer.invoke('terminal:restartHost'),
     /** @param {{ shell?: string, preset?: string, cwd?: string, title?: string }} req */
     create: (req) => ipcRenderer.invoke('terminal:create', req || {}),
     rename: (id, title) => ipcRenderer.invoke('terminal:rename', id, title),

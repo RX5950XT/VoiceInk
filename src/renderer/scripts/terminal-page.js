@@ -1,6 +1,7 @@
 import { electronAPI, showToast, setChatPaneMode } from './app.js'
 import { terminalStatusLabel, setTerminalStatuses } from './ws-terminal-status.js'
 import { registerTermLinks } from './term-links.js'
+import { askConfirm } from './app-dialog.js'
 import { splitForPty } from './term-write-chunks.js'
 import { bindImeCaret, syncImeCaret } from './term-ime.js'
 import { applyAppearance, normalizeAppearance, DEFAULT_TERM_BG_OPACITY } from './term-themes.js'
@@ -794,6 +795,35 @@ async function reloadList() {
   const next = await call(electronAPI.terminal.list(), '讀取終端機清單失敗')
   items = Array.isArray(next) ? next : []
   pushAllTabStates()
+  checkHostRuntime()
+}
+
+/** 這次開 App 已經問過一次就不再煩人（拒絕了就是拒絕了） */
+let hostChecked = false
+
+/**
+ * PTY 不在 App 裡，宿主是獨立程序、**更新不會把它換掉**——所以終端機那一側的修正
+ * （`pty.js`／`status.js`／`store.js`）在宿主重開之前完全不會生效。實測有人的宿主
+ * 從好幾版之前一直活著，新功能裝了也像沒裝。
+ *
+ * 沒有跑著的 shell 就直接重開，有的話問一次（重開會把它們一起結束）。
+ */
+async function checkHostRuntime() {
+  if (hostChecked) return
+  hostChecked = true
+  const state = await electronAPI.terminal.hostState().catch(() => null)
+  if (!state?.ok || !state.data?.stale) return
+  if (state.data.busy) {
+    const go = await askConfirm('終端機的背景程序還是舊版，要現在重新啟動嗎？', {
+      desc: '它在 App 更新時刻意留著，所以新版的終端機修正還沒生效。重新啟動會把目前跑著的終端機一起關掉。',
+      confirmText: '重新啟動'
+    })
+    if (!go) return
+  }
+  const result = await electronAPI.terminal.restartHost().catch(() => null)
+  if (!result?.ok) { showToast('終端機背景程序重新啟動失敗'); return }
+  await reloadList()
+  showToast('終端機背景程序已重新啟動')
 }
 
 /**
