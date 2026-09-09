@@ -1538,6 +1538,32 @@ async function main() {
     ok('[AD] 帶進聊天的內容有標出是哪個檔案的哪一行',
       String(toChat).includes('src/app.js:2'), String(toChat))
 
+    // ===== [AE] Ctrl+G 的提示詞分頁（三份清單有沒有對起來）=====
+    // 這一段不去跑真的 CLI（那是 probe-terminal-editor.js 的事），只驗畫面這一端：
+    // 分頁開得出來、按鈕改口叫「送出」，而 `terminal:editorCancel` 一路通到 main。
+    await cdp.eval(`(async () => {
+      const mod = await import('./scripts/ws-tabs.js')
+      await mod.openPromptEditTab({ id: '99123', content: '這是提示詞' })
+      return true
+    })()`)
+    ok('[AE] 提示詞分頁開得出來，內容就是 CLI 給的那一份',
+      await waitInPage(cdp,
+        `document.getElementById('wsEditorText').value === '這是提示詞'
+          && document.querySelector('#wsTabStrip .ws-tab[data-id="g:99123"]')`, 8000))
+    ok('[AE] 存檔鈕改口叫「送出」（存的不是檔案，是送回終端機）',
+      await cdp.eval(`document.getElementById('wsEditorSaveBtn').textContent.trim()`) === '送出')
+    const cancelled = await cdp.eval(
+      `window.electronAPI.terminal.editorCancel('99123').then((r) => JSON.stringify(r))`)
+    ok('[AE] editorCancel 一路通到 main（preload／ipc／白名單三份清單都有這一支）',
+      String(cancelled).includes('"ok":true'), String(cancelled))
+    await cdp.eval(`(async () => {
+      const mod = await import('./scripts/ws-tabs.js')
+      await mod.closeTab('g:99123')
+      return true
+    })()`)
+    ok('[AE] 分頁收得掉',
+      await waitInPage(cdp, `!document.querySelector('#wsTabStrip .ws-tab[data-id="g:99123"]')`, 5000))
+
   } finally {
     mainCdp?.close()
     cdp?.close()

@@ -40,6 +40,7 @@ const MAX_TAB_TITLE = 28
  *   projectId?: string,
  *   relPath?: string,
  *   url?: string,
+ *   bridgeId?: string,
  *   content?: string,
  *   dirty?: boolean,
  *   preview?: boolean,
@@ -174,7 +175,7 @@ async function persistTabsNow() {
     activeId,
     // 「比較」與「審閱」分頁都是臨時視角（磁碟 ⇄ 草稿、跟某條分支比），
     // 存了的話下次開專案會被當成一般的 Git diff 去打 `gitDiff`
-    tabs: tabs.filter((t) => !t.conflict && !t.reviewRef).map((t) => ({
+    tabs: tabs.filter((t) => !t.conflict && !t.reviewRef && !t.bridgeId).map((t) => ({
       id: t.id,
       kind: t.kind,
       title: t.title,
@@ -863,6 +864,8 @@ export async function closeTab(id) {
     const mod = await import('./terminal-page.js')
     await mod.deleteTerminalSession(id).catch(() => {})
   }
+  // 還沒送出就關掉：一定要放走那支卡住的 CLI，不然它會一直停在 Ctrl+G
+  if (tab.bridgeId) void electronAPI.terminal.editorCancel(tab.bridgeId)
   tabs = tabs.filter((item) => item.id !== id)
   disposeModel(id)
   // 這個分頁抓著的內容（草稿影子、預覽的 iframe／影片）要當場放掉，
@@ -1127,6 +1130,53 @@ export async function openEditorTab(proj, relPath, line = 0) {
 }
 
 /**
+ * 把手上所有提示詞分頁對應的 CLI 放走。分頁清單要被整批換掉時一定要先叫一次——
+ * 那支 batch 還在終端機裡等，沒人放它就永遠停在 Ctrl+G。
+ */
+function cancelBridgeTabs() {
+  for (const tab of tabs) {
+    if (tab.bridgeId) void electronAPI.terminal.editorCancel(tab.bridgeId)
+  }
+}
+
+/**
+ * Ctrl+G：AI CLI 要編輯提示詞。開一個沒有專案、沒有相對路徑的編輯分頁，
+ * 「儲存」＝把內容送回那支卡住的 CLI（`saveActiveFile` 有另一條路），關掉＝放棄。
+ *
+ * 內容是 main 從那個暫存檔讀出來的；renderer 自始至終不知道那是哪個檔案。
+ *
+ * @param {{ id: string, name?: string, content?: string }} req
+ */
+export async function openPromptEditTab(req) {
+  const bridgeId = String(req?.id || '')
+  if (!bridgeId) return
+  const id = `g:${bridgeId}`
+  if (findTab(id)) { await activate(id); return }
+  const content = String(req?.content || '')
+  /** @type {WsTab} */
+  const tab = {
+    id,
+    kind: 'editor',
+    title: req?.name ? `提示詞 ${req.name}` : '提示詞',
+    bridgeId,
+    projectId: '',
+    relPath: '',
+    content,
+    savedContent: content,
+    dirty: false,
+    preview: false,
+    fileSize: content.length,
+    fileExt: extOf(req?.name || '') || 'md',
+    mtimeMs: Date.now(),
+    readonly: ''
+  }
+  tabs.push(tab)
+  await activate(id)
+  // Monaco 接手時焦點在它自己的輸入框上，那顆 textarea 只是影子——兩邊都點一下最省事
+  if (findTab(activeId) === tab) el.editorText?.focus()
+}
+
+/**
  * 把游標移到第 n 行並捲過去。textarea 沒有「捲到某一行」的 API，
  * 只能靠選取——設 selectionStart 之後 `blur/focus` 一次瀏覽器就會把它捲進畫面。
  *
@@ -1288,7 +1338,11 @@ function paintEditor(tab) {
     el.editorPreviewBtn.hidden = (!previewable && !isMedia) || (isMedia && ext !== 'svg')
     el.editorPreviewBtn.textContent = tab.preview ? '編輯' : '預覽'
   }
-  if (el.editorSaveBtn) el.editorSaveBtn.hidden = Boolean(tab.readonly)
+  if (el.editorSaveBtn) {
+    el.editorSaveBtn.hidden = Boolean(tab.readonly)
+    // 提示詞分頁存的不是檔案，是「送回終端機」
+    el.editorSaveBtn.textContent = tab.bridgeId ? '送出' : '儲存'
+  }
 
   // Monaco 接手之後行號欄是 hidden 的，狀態列也由 `paintMonacoStatus` 蓋過去：
   // 這兩支各要把整份內容掃一遍（組全部行號、兩次 `split('\n')`、一顆 `Blob`），
@@ -1609,6 +1663,22 @@ async function saveActiveFile(force = false) {
   const live = monaco ? currentValue() : null
   const content = typeof live === 'string' ? live : text.value
   text.value = content
+
+  // Ctrl+G 開的提示詞分頁：沒有專案也沒有相對路徑，「儲存」＝把內容送回那支
+  // 卡在終端機裡的 CLI（見 main 的 `terminal/editor-bridge.js`），送完就收掉分頁。
+  if (tab.bridgeId) {
+    const sent = await electronAPI.terminal.editorSubmit(tab.bridgeId, content)
+    if (!sent?.ok) {
+      showToast(sent?.error?.message || '送不回終端機', 'error')
+      return
+    }
+    tab.bridgeId = ''
+    tab.dirty = false
+    showToast('已送回終端機')
+    await closeTab(tab.id)
+    return
+  }
+
   let saved
   const result = await electronAPI.workspace.writeFile(
     tab.projectId, tab.relPath, content, force ? undefined : (tab.mtimeMs || 0)
@@ -2373,6 +2443,8 @@ export async function newTerminalWithCommand(title, command) {
  * @param {{ id: string, name: string, path: string }} proj
  */
 async function restoreProjectTabs(proj, generation) {
+  // 換專案會把分頁清單整個換掉，提示詞分頁也在其中——先把那些卡著的 CLI 放走
+  cancelBridgeTabs()
   try {
     const res = await electronAPI.workspace.getTabsState(proj.id)
     if (generation !== projectSwitch) return
@@ -2508,6 +2580,7 @@ export async function setActiveProject(next) {
   if (generation !== projectSwitch) return false
   const hadProject = Boolean(project?.id)
   const keepTerminal = Boolean(next && findTab(activeId)?.kind === 'terminal')
+  cancelBridgeTabs()
   project = next
   if (hadProject) {
     // 分頁清單各自還原，xterm 留在 terminal-page，避免切回時重播整份畫面。
