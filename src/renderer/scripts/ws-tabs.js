@@ -1029,6 +1029,9 @@ const extOf = (relPath) => {
   return dot < 0 ? '' : name.slice(dot + 1).toLowerCase()
 }
 
+/** 有「預覽／編輯」可切的副檔名（開檔時預設就停在預覽那一面） */
+const PREVIEWABLE_EXTS = ['md', 'markdown', 'html', 'htm', 'svg']
+
 /**
  * 格式化檔案大小
  * @param {number} bytes
@@ -1100,7 +1103,8 @@ export async function openEditorTab(proj, relPath, line = 0) {
     relPath,
     content: file.content || '',
     dirty: false,
-    preview: Boolean(file.image || file.pdf || file.audio || file.video),
+    preview: Boolean(file.image || file.pdf || file.audio || file.video)
+      || (!unsupported && PREVIEWABLE_EXTS.includes(extOf(relPath))),
     image: file.image || '',
     pdf: file.pdf || '',
     audio: file.audio || '',
@@ -1277,7 +1281,7 @@ function paintEditor(tab) {
   }
 
   const ext = extOf(tab.relPath || '')
-  const previewable = ['md', 'markdown', 'html', 'htm', 'svg'].includes(ext)
+  const previewable = PREVIEWABLE_EXTS.includes(ext)
   const isMedia = Boolean(tab.image || tab.pdf || tab.audio || tab.video)
 
   if (el.editorPreviewBtn) {
@@ -2811,6 +2815,22 @@ export function initWsTabs() {
     clearComments(projectId)
     renderReviewList()
     paintReviewCount()
+  })
+
+  // Ctrl+S 存檔：textarea 那條只在它自己有焦點時收得到，Monaco 接手或停在預覽那一面
+  // 時焦點都不在它身上。放在 document 上補齊，`defaultPrevented` 擋掉 textarea 已經
+  // 處理過的那一次（不擋就會存兩趟）。條件跟其他全域快捷鍵一樣：工作區看得見、
+  // 焦點不在終端機裡（Ctrl+S 在 shell 裡是暫停輸出）。
+  document.addEventListener('keydown', (event) => {
+    if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return
+    if (event.key.toLowerCase() !== 's' || event.defaultPrevented) return
+    const tab = findTab(activeId)
+    if (!tab || tab.kind !== 'editor' || tab.readonly || tab.unsupported) return
+    const main = document.getElementById('termMain')
+    if (!main || main.offsetParent === null) return
+    if (document.activeElement?.closest('#termHost')) return
+    event.preventDefault()
+    void saveActiveFile()
   })
 
   // Alt+↑／↓ 在 diff 分頁上＝跳變更（跟 VS Code 一樣）。
