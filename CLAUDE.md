@@ -217,8 +217,13 @@ tag 要與 `package.json` 的 version 一致。
   使用者名稱有中文就指到不存在的檔案），改成 batch 自己 `copy` 檔案進出；**「上一輪
   留下來的請求」不可以用檔案時間判斷**（`copy` 會把來源的 mtime 一起帶過去，看起來
   永遠很舊），改成啟動時掃一次當下就存在的那些。回歸 `probe-terminal-editor.js`。
-- 使用者自己設過 `EDITOR`／`VISUAL` 就**不接手**（`pty.js` 不覆蓋），這時 `raiseChildWindow`
-  才需要出手抬窗。
+- **接不接手只在 main 決定一次**（`service.js` 的 `bridgeTakesOver`），宿主拿到空字串就完全
+  不動環境變數。判斷要看 `VISUAL` 再看 `EDITOR`（Claude Code 與 Codex 都是這個順序），
+  而且 **`EDITOR=notepad` 不算「使用者挑過編輯器」**——那正是 CLI 沒設時的預設值
+  （`start /wait notepad`），實測使用者環境變數裡躺著這一條，Ctrl+G 就永遠彈記事本，
+  照著程式碼查會以為橋接壞了。接手時 `EDITOR`／`VISUAL` **兩個都要蓋**（只蓋 EDITOR 會被
+  VISUAL 壓過去）。設了 vim 那類真編輯器才放行，這時 `raiseChildWindow` 才需要出手抬窗。
+  回歸 `probe-terminal-editor.js` 的 [F]。
 - **終端機連結**：`provideLinks` 收到的是**整份緩衝區的 1-based 列號**（不是畫面上第幾列），回去的 range 也是同一套；折行的一列要先往回接成整條邏輯行，非最後一折要補滿 `cols` 格位移才換得回欄位。路徑候選一律先問 main 存不存在再畫底線（不驗＝畫面上每個含斜線的字都變假連結），相對路徑以**階段起始 cwd** 為基準。
 - **Shift+Enter 送的是 `\x1b\r` 不是 CSI u**：`\x1b[13;2u` 要終端機與 CLI 先協商 kitty keyboard
   protocol，xterm.js 不宣告支援、CLI 也就不會啟用，那串序列會被當成一般字元——使用者看到的是

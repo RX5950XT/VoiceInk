@@ -98,7 +98,8 @@ AGY 設定、終端機、聊天、語音輸入紀錄**刻意不進** `STORE_ALLO
   CLI 呼叫它時 batch 把檔案複製成 `<id>.in` 並卡住等 `<id>.done`；App 收到就開一個
   提示詞編輯分頁，按「送出」寫出 `<id>.out` ＋ `.done`，batch 自己蓋回原檔後退出。
   **路徑一個字都不出 batch**（`echo %~f1` 會用 cp950 寫出亂碼路徑），renderer 也只
-  拿得到 id 與內容。使用者自己設過 `EDITOR`／`VISUAL` 就不接手。回歸
+  拿得到 id 與內容。接不接手由 main 的 `bridgeTakesOver` 決定：使用者挑過真的編輯器
+  （vim 那類）才放行，`EDITOR=notepad` 等同沒設（那就是 CLI 的預設值）照樣接手。回歸
   `probe-terminal-editor.js`（真的把 batch 跑起來走完整條路）。
 
 ### 2026-09-09 — 終端機：WebGL、搜尋、字級、分割、標題與 cwd、忙碌判定

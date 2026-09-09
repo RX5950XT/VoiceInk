@@ -34,12 +34,16 @@ function forward(event, payload) {
 }
 
 /**
- * Ctrl+G 會不會落在 App 自己的編輯分頁上：橋接命令建得起來，而且使用者沒有自己
- * 設過 `EDITOR`／`VISUAL`（設過的話 `pty.js` 不會覆蓋，開的是他指定的那支）。
+ * Ctrl+G 會不會落在 App 自己的編輯分頁上：橋接命令建得起來，而且使用者沒有真的挑過
+ * 編輯器。`VISUAL` 排在前面是因為 Claude Code 與 Codex 都先看它。
+ *
+ * `EDITOR=notepad` 不算挑過（那就是 CLI 沒設時的預設值）——實測使用者環境變數裡躺著
+ * 這一條，Ctrl+G 就永遠彈記事本。
  * @returns {boolean}
  */
 function bridgeTakesOver() {
-  return Boolean(editorBridge.shimCommand()) && !process.env.EDITOR && !process.env.VISUAL
+  const picked = process.env.VISUAL || process.env.EDITOR
+  return Boolean(editorBridge.shimCommand()) && !editorBridge.isRealEditor(picked)
 }
 
 async function listSessions() {
@@ -67,8 +71,9 @@ async function openSession(id, cols, rows) {
     error.userMessage = '找不到這個工作階段'
     throw error
   }
-  // Ctrl+G 的編輯器橋接：每次開 shell 都帶最新的那條命令過去（見 editor-bridge.js）
-  const editor = editorBridge.shimCommand()
+  // Ctrl+G 的編輯器橋接：每次開 shell 都帶最新的那條命令過去（見 editor-bridge.js）。
+  // 接不接手在這裡決定，宿主拿到空字串就完全不動 EDITOR／VISUAL。
+  const editor = bridgeTakesOver() ? editorBridge.shimCommand() : ''
   const snapshot = await getClient().request('open', { sessionId: meta.id, meta, cols, rows, editor }, true)
   if (snapshot?.cwd) links.noteCwd(meta.id, snapshot.cwd)
   return snapshot

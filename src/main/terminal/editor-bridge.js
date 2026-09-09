@@ -17,8 +17,9 @@
  * （這裡是 cp950），使用者名稱或檔名有中文就變亂碼，Node 用 UTF-8 讀回來會指到一個
  * 不存在的檔案——症狀是 Ctrl+G 之後什麼都沒發生。改成搬檔案就完全繞開編碼這件事。
  *
- * **只在使用者自己沒設 `EDITOR`／`VISUAL` 時才接手**（見 `pty.js`）：已經設好 vim 的人
- * 按 Ctrl+G 本來就該進 vim。
+ * **只在使用者沒挑過編輯器時才接手**（見 `isRealEditor` 與 `service.js` 的
+ * `bridgeTakesOver`）：已經設好 vim 的人按 Ctrl+G 本來就該進 vim；但 `EDITOR=notepad`
+ * 等同沒設（那正是 CLI 的預設值），要接手。
  *
  * 安全邊界：renderer 只拿得到 `id` 與內容，完全碰不到路徑（連 main 都不知道那是哪個
  * 檔案，寫回是 batch 自己做的）。id 只收數字，避免路徑穿越。
@@ -54,6 +55,23 @@ if exist "%REQ%\\%ID%.out" copy /y /b "%REQ%\\%ID%.out" "%~f1" > nul
 del "%REQ%\\%ID%.in" "%REQ%\\%ID%.out" "%REQ%\\%ID%.done" > nul 2>&1
 exit /b 0
 `
+
+/**
+ * 「使用者其實沒有挑編輯器」的那幾種值。Claude Code 沒設 `EDITOR` 時本來就是跑
+ * `start /wait notepad`，所以 `EDITOR=notepad`（Windows 上很常見，安裝別的工具時
+ * 順手寫進使用者環境變數的也有）跟沒設是同一件事——那不是「我要用記事本」的決定，
+ * 而是預設值被寫成明碼，不該擋掉 App 自己的編輯分頁。
+ *
+ * @param {string} [value]
+ * @returns {boolean} 有值、而且是使用者真的挑過的編輯器
+ */
+function isRealEditor(value) {
+  const raw = String(value || '').trim().replace(/^["']|["']$/g, '')
+  if (!raw) return false
+  const name = raw.toLowerCase().replace(/^start\s+(\/wait\s+)?/, '').trim()
+  const base = name.split(/[\\/]/).pop().replace(/\.exe$/, '')
+  return base !== 'notepad'
+}
 
 let dir = ''
 let watcher = null
@@ -193,4 +211,4 @@ function release(key) {
   try { fs.writeFileSync(doneFile(key), '1', 'utf8') } catch { /* batch 會等到逾時，不再多做 */ }
 }
 
-module.exports = { configure, shimCommand, start, stop, submit, cancel }
+module.exports = { configure, shimCommand, isRealEditor, start, stop, submit, cancel }

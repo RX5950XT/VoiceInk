@@ -11,6 +11,7 @@
  *  [C] 按下送出＝內容寫回原檔，而且那支 batch 真的退出了（CLI 才拿得回內容）
  *  [D] 取消（關分頁）也要放它走，不然 CLI 會永遠停在 Ctrl+G
  *  [E] 上一輪留下來的請求不開分頁，但一樣要放走
+ *  [F] `EDITOR=notepad`（＝CLI 的預設值）不算「使用者挑過編輯器」，橋接照樣接手
  *
  * 用法：node scripts/probe-terminal-editor.js
  */
@@ -98,6 +99,30 @@ async function main() {
   assert.equal(events.length, 0, '過期的請求不可以開分頁（App 重開後跳出幽靈分頁）')
   assert.ok(fs.existsSync(path.join(requests, '424242.done')), '過期的請求還是要補 .done 放走那支 batch')
   ok('[E] 上一輪留下來的請求：不開分頁，但一樣放走')
+
+  // ── 接不接手：EDITOR=notepad 等同沒設 ──
+  assert.equal(bridge.isRealEditor(''), false)
+  assert.equal(bridge.isRealEditor('notepad'), false, 'EDITOR=notepad 是 CLI 的預設值，不是使用者挑的')
+  assert.equal(bridge.isRealEditor('Notepad.exe'), false)
+  assert.equal(bridge.isRealEditor('"C:\\Windows\\System32\\notepad.exe"'), false)
+  assert.equal(bridge.isRealEditor('start /wait notepad'), false)
+  assert.equal(bridge.isRealEditor('vim'), true, '設過 vim 的人按 Ctrl+G 本來就該進 vim')
+  assert.equal(bridge.isRealEditor('notepad++.exe'), true, 'Notepad++ 是另一支編輯器，不可以一起吃掉')
+  const env = { EDITOR: 'notepad', VISUAL: 'notepad' }
+  const before = { EDITOR: process.env.EDITOR, VISUAL: process.env.VISUAL }
+  Object.assign(process.env, env)
+  try {
+    const shell = require('../src/main/terminal/pty').shellEnvironment(command)
+    // 兩個都要蓋：Claude Code 與 Codex 都先看 VISUAL，只蓋 EDITOR 會被它壓過去
+    assert.equal(shell.EDITOR, command, 'EDITOR 要被橋接蓋掉')
+    assert.equal(shell.VISUAL, command, 'VISUAL 也要被蓋掉')
+  } finally {
+    for (const key of ['EDITOR', 'VISUAL']) {
+      if (before[key] === undefined) delete process.env[key]
+      else process.env[key] = before[key]
+    }
+  }
+  ok('[F] EDITOR／VISUAL 是 notepad 時橋接照樣接手，真的編輯器則放行')
 
   bridge.stop()
   try { fs.rmSync(userData, { recursive: true, force: true }) } catch { /* 暫存目錄清不掉就算了 */ }
