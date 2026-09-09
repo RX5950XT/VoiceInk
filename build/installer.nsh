@@ -8,7 +8,11 @@
 ;   所以每次安裝都把「本來就存在」的那幾份捷徑重寫一次（使用者刪掉的不要自己長回來），
 ;   重寫後一定要補回 AUMID，否則捷徑跟跑起來的視窗對不起來，工作列會多長一顆。
 
-Var voiceInkPinnedLink
+; **這裡不可以宣告 `Var`**：這支 .nsh 會被安裝程式與解除安裝程式各編譯一次，而
+; `customInstall` 只插進安裝程式那一份——解除安裝程式那次就變成「宣告了卻沒人用」，
+; NSIS 報 warning 6001，electron-builder 把警告當錯誤，`electron:build` 整個失敗
+; （症狀是 dist 只剩 `.nsis.7z`，連 `win-unpacked` 都被收走，而且錯誤訊息在很上面）。
+; 路徑當字面值傳進 macro 就好——NSIS 的 macro 參數本來就是純文字替換。
 
 !macro voiceInkRefreshShortcut link
   ${if} ${FileExists} "${link}"
@@ -24,8 +28,7 @@ Var voiceInkPinnedLink
   !insertmacro voiceInkRefreshShortcut "$newDesktopLink"
 
   ; 工作列顯示的是「已釘選」的那一份，跟開始功能表是兩個不同的檔案
-  StrCpy $voiceInkPinnedLink "$APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\${SHORTCUT_NAME}.lnk"
-  !insertmacro voiceInkRefreshShortcut "$voiceInkPinnedLink"
+  !insertmacro voiceInkRefreshShortcut "$APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\${SHORTCUT_NAME}.lnk"
 
   ; SHCNE_ASSOCCHANGED：叫檔案總管重讀圖示
   System::Call 'Shell32::SHChangeNotify(i 0x8000000, i 0, i 0, i 0)'

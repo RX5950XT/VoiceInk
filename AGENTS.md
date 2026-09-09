@@ -100,6 +100,12 @@ tag 要與 `package.json` 的 version 一致。
 - 打包跑的是 `src/` 原始碼；**新增任何產物資料夾都要記得排除**（`dist-hud/` 曾讓 asar 525MB → 1.46GB，`native/` 漏排時 asar 631MB **打包直接失敗**在 `EBUSY: unlink app.asar`）。
 - **`app.asar` 被別的程式抓著 → 產出的 asar 會安靜錯位**（每個檔案拿到前一個的內容，整頁 SyntaxError，electron-builder **exit 0**）。兇手實測是 `Orca.exe`（連 `%TEMP%` 也監看）。解法：打包到工作區外 → `cd` 到暫存目錄跑 `npx @electron/asar extract-file <app.asar> package.json` 驗過（**這指令會把檔案寫進當下工作目錄**，在專案根目錄跑會蓋掉自己的 `package.json`）→ `robocopy /MIR /XF app.asar` 覆寫回去，asar 用 `[IO.File]::Open(dst,'Open','Write','Read')` 就地覆寫＋`SetLength`，**`VoiceInk.exe` 一定要一起換**（完整性雜湊嵌在它裡面）。
 - **「工作區外」是指 `D:\Workspace` 之外**（實測：打到 `D:/Workspace/vi-pack-…` 一樣錯位，打到 `D:/vi-build-…` 才乾淨）；**打包期間不可以動到任何會被打包的檔案**——連改一行 `CLAUDE.md` 都會讓後面每個檔案位移（實測四次：中途編輯過的三次全錯位，全程沒碰的兩次乾淨）；**驗證要抽一支 renderer 的 `.js`**，只驗 `package.json` 過得了關卻仍然是錯的（`extract-file` 的路徑要用反斜線）。症狀：App 開得起來但整頁功能沒反應，console 一堆 `SyntaxError: Unexpected token '}'`，而且指的是你根本沒改過的檔案。
+- **NSIS 的警告會被當成錯誤**：`build/installer.nsh` 會被安裝程式與解除安裝程式**各編譯一次**，
+  而 `customInstall` 只插進安裝程式那一份——在那裡宣告 `Var` 卻只在 `customInstall` 用到，
+  解除安裝程式那次就是「宣告了沒人用」（warning 6001），`electron:build` 直接失敗。
+  路徑之類的東西當字面值傳進 macro 就好（macro 參數是純文字替換）。症狀很難認：
+  `dist` 只剩 `voiceink-*.nsis.7z`，連 `win-unpacked` 都被收走，而錯誤訊息埋在輸出很上面
+  ——**別把 `tail` 之後的 exit code 當成建置成功**（管線的離開碼是 `tail` 的）。
 - `electron:pack` 中途失敗會留下壞掉的 `dist/win-unpacked`（症狀：啟動無 log、CDP 埠連不上）：**整個刪掉重打**。
 - **`latest.yml` 只在 `build.publish` 有設定時才產出**；**`nsis.artifactName` 不能改回預設**（預設帶空白，上傳 GitHub 會被改名成點分隔版 → 下載 404）。回歸 `test-updater.js` 的 [E]。
 - **`electron:pack`（dir target）的預覽版永遠檢查不到更新，那不是 bug**（只有 nsis／appx 才寫 `app-update.yml`）；**不可以把 error 當成測試通過**。`autoInstallOnAppQuit` 在本 App 無效——`installOnQuit()` 要在 `app.exit(0)` 前一行。
