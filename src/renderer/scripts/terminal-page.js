@@ -3,7 +3,7 @@ import { terminalStatusLabel, setTerminalStatuses } from './ws-terminal-status.j
 import { registerTermLinks } from './term-links.js'
 import { splitForPty } from './term-write-chunks.js'
 import { bindImeCaret, syncImeCaret } from './term-ime.js'
-import { applyAppearance, normalizeAppearance } from './term-themes.js'
+import { applyAppearance, normalizeAppearance, DEFAULT_TERM_BG_OPACITY } from './term-themes.js'
 import {
   initWsTabs, showSurface, trackTerminal, paintTerminalTab, currentProjectId
 } from './ws-tabs.js'
@@ -191,7 +191,7 @@ export async function refreshTerminalAppearance() {
   const [theme, image, opacity] = await Promise.all([
     electronAPI.store.get('termTheme', 'black'),
     electronAPI.store.get('termBgImage', ''),
-    electronAPI.store.get('termBgOpacity', 20)
+    electronAPI.store.get('termBgOpacity', DEFAULT_TERM_BG_OPACITY)
   ])
   appearance = normalizeAppearance({ theme, image, opacity })
   backgroundUri = appearance.image

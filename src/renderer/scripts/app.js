@@ -12,7 +12,7 @@ import {
 import { DEFAULT_ASR_API_URL, DEFAULT_ASR_MODEL } from './api.js'
 import { initCustomSelects, syncCustomSelects } from './custom-select.js'
 import { askConfirm } from './app-dialog.js'
-import { TERM_THEMES, DEFAULT_TERM_THEME } from './term-themes.js'
+import { TERM_THEMES, DEFAULT_TERM_THEME, DEFAULT_TERM_BG_OPACITY, MIN_TERM_BG_OPACITY } from './term-themes.js'
 
 /** @type {typeof import('./live-caption.js') | null} */
 let liveCaption = null
@@ -601,8 +601,9 @@ async function loadTermAppearanceSettings() {
   // options 是這裡才填的，外面那次 syncCustomSelects 還沒東西可包
   syncCustomSelects()
   termBgName = String(await electronAPI.store.get('termBgImage', '') || '')
-  const saved = Number(await electronAPI.store.get('termBgOpacity', 20))
-  opacity.value = String(Number.isFinite(saved) ? saved : 20)
+  // 跟 `normalizeAppearance` 同一套：舊設定裡低於下限的（含 0）當成沒設定過
+  const saved = Math.round(Number(await electronAPI.store.get('termBgOpacity', DEFAULT_TERM_BG_OPACITY)))
+  opacity.value = String(Number.isFinite(saved) && saved >= MIN_TERM_BG_OPACITY ? Math.min(100, saved) : DEFAULT_TERM_BG_OPACITY)
   if (opacityLabel) opacityLabel.textContent = `${opacity.value}%`
   paintTermBgState(clearBtn, nameEl)
 
