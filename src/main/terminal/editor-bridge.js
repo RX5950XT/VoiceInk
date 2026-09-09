@@ -76,7 +76,10 @@ function isRealEditor(value) {
 
 let dir = ''
 let watcher = null
-/** 這次啟動當下就已經躺在那裡的請求（上一輪留下來的），一律放走不開分頁 */
+/**
+ * 不准開分頁的請求：這次啟動當下就躺在那裡的（上一輪留下來的），加上**已經放走過的**
+ * ——`.in` 要等 batch 下一輪迴圈才被刪掉，中間掃到會被當成新請求。
+ */
 let stale = new Set()
 let emit = () => {}
 /** @type {Map<string, string>} 還在等使用者的請求：id → 那張 `.in` 的路徑 */
@@ -214,6 +217,10 @@ function cancel(id) {
  */
 function release(key) {
   pending.delete(key)
+  // **放走過的一律進忽略名單**：`.done` 一落地就會叫醒 `fs.watch`，而那支 batch 每秒
+  // 才看一次，所以掃描當下 `<id>.in` 還躺在磁碟上——這一筆已經不在 `pending` 裡了，
+  // 不擋的話就會被當成新請求再發一次，使用者關掉的分頁**當場自己跳回來**。
+  stale.add(`${key}.in`)
   try { fs.writeFileSync(doneFile(key), '1', 'utf8') } catch { /* batch 會等到逾時，不再多做 */ }
 }
 

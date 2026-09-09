@@ -4,12 +4,14 @@
  * Ctrl+G 的編輯器橋接：**真的把那支 batch 跑起來**，走完 CLI 會走的整條路。
  *
  * mock 證明不了對面長什麼樣：Claude Code 是 `spawnSync(\`${EDITOR} "檔案"\`,
- * { shell: true })` 同步等編輯器結束，所以這裡也照樣用 `cmd /c` 跑，然後量四件事：
+ * { shell: true })` 同步等編輯器結束，所以這裡也照樣用 `cmd /c` 跑，然後一項一項量：
  *
- *  [A] batch 會卡住（沒人按送出就不會自己結束）
+ *  [A] batch 會卡住（沒關掉分頁就不會自己結束）
  *  [B] main 收得到請求，內容就是那個檔案現在的樣子
- *  [C] 按下送出＝內容寫回原檔，而且那支 batch 真的退出了（CLI 才拿得回內容）
- *  [D] 取消（關分頁）也要放它走，不然 CLI 會永遠停在 Ctrl+G
+ *  [C] 按下儲存只把內容留著：batch 還卡著、原檔一個字都沒動（分頁還開著要能再改）
+ *  [C2] 關掉分頁才寫回原檔（寫的是最後存的那份）並放走 batch
+ *  [G] 放走過的請求不可以再發一次（不然關掉的分頁會自己跳回來）
+ *  [D] 沒存過就關掉也要放它走，而且一個位元組都不准動
  *  [E] 上一輪留下來的請求不開分頁，但一樣要放走
  *  [F] `EDITOR=notepad`（＝CLI 的預設值）不算「使用者挑過編輯器」，橋接照樣接手
  *
@@ -65,8 +67,8 @@ async function main() {
   ok('[B] main 收到請求，內容一個字都沒變（中文檔名那條路也走得過）')
 
   await sleep(1500)
-  assert.equal(exited, null, 'batch 在使用者按送出之前不可以結束（CLI 會以為編完了）')
-  ok('[A] 沒按送出時那支 batch 一直卡著')
+  assert.equal(exited, null, 'batch 在使用者關掉分頁之前不可以結束（CLI 會以為編完了）')
+  ok('[A] 沒關掉分頁時那支 batch 一直卡著')
 
   // ── 使用者按了儲存：分頁還開著，CLI 也還要繼續等 ──
   assert.equal(bridge.save(request.id, '改過的提示詞\n'), true)
@@ -79,13 +81,21 @@ async function main() {
   assert.equal(bridge.save(request.id, '再改一次\n'), true)
 
   // ── 使用者關掉分頁＝送回終端機 ──
+  const beforeClose = events.length
   assert.equal(bridge.cancel(request.id), true)
   const done = await until(() => exited !== null)
   assert.ok(done, 'batch 要在關掉分頁之後結束')
   assert.equal(fs.readFileSync(target, 'utf8'), '再改一次\n', '關掉分頁才把最後存的那份寫回原檔')
   ok('[C2] 關掉分頁後檔案更新成最後存的那份，batch 退出（CLI 拿得回內容）')
 
-  // ── 取消（使用者關掉分頁）──
+  // 放走過的請求不可以再發一次。`.done` 一落地就叫醒 fs.watch，而 batch 每秒才看一次，
+  // 掃描當下 `<id>.in` 還在磁碟上——不擋的話使用者關掉的分頁會當場自己跳回來。
+  await sleep(1500)
+  const again = events.slice(beforeClose).filter((e) => e.channel === 'terminal:editRequest')
+  assert.equal(again.length, 0, `關掉之後又發了 ${again.length} 次編輯請求（分頁會自己跳回來）`)
+  ok('[G] 關掉之後不會再發同一筆請求（分頁不會自己跳回來）')
+
+  // ── 什麼都沒存就關掉 ──
   events.length = 0
   let exited2 = null
   const child2 = spawn(`${command} "${target}"`, { shell: true, stdio: 'ignore', windowsHide: true })
