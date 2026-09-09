@@ -345,5 +345,25 @@ console.log('\n[終端機桌布]')
   ok('只收得到圖片格式', Object.keys(bg.TYPES).every((ext) => ext.startsWith('.')))
 }
 
+// ===== 宿主版本（更新後宿主還是舊程式碼）=====
+// PTY 不在 App 裡，宿主是獨立程序、更新不會把它換掉——所以 pty.js 那一側的修正在
+// 宿主重開之前完全不會生效（Ctrl+G 的編輯器橋接就這樣好幾版都沒作用）。
+// 舊版宿主連 runtime 欄位都不回報，那正是最需要被認出來的那一種。
+console.log('\n[宿主版本]')
+{
+  const { HostClient } = require(path.join(ROOT, 'src/main/terminal/host-client.js'))
+  const want = 'runtime-aaaaaaaaaaaaaaaaaaaaaaaa'
+  const client = new HostClient(os.tmpdir(), () => {})
+  ok('沒連上就沒有舊程式碼可談', client.stale(want) === false)
+  client.socket = { destroyed: false }
+  ok('不回報 runtime 的舊宿主算舊版', client.stale(want) === true)
+  client.host = { pid: 1, runtime: 'runtime-000000000000000000000000' }
+  ok('對不上這一版就算舊版', client.stale(want) === true)
+  client.host = { pid: 1, runtime: want }
+  ok('對得上就不是舊版', client.stale(want) === false)
+  client.socket = { destroyed: true }
+  ok('連線斷掉不算舊版', client.stale(want) === false)
+}
+
 console.log(`\n${passed} passed, ${failed} failed`)
 process.exit(failed === 0 ? 0 : 1)

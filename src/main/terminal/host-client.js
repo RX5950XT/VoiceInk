@@ -2,7 +2,7 @@
 
 const net = require('node:net')
 const { spawn } = require('node:child_process')
-const { connection, stageRuntime, hostError, PROTOCOL } = require('./host-runtime')
+const { connection, runtimeName, stageRuntime, hostError, PROTOCOL } = require('./host-runtime')
 const { readMessages, send } = require('./host')
 
 /** 一個 App 只持有連線；真正的 PTY 由不在安裝目錄裡的宿主持有。 */
@@ -15,6 +15,43 @@ class HostClient {
     this.pending = new Map()
     this.nextId = 0
     this.closed = false
+    /** 連上之後才知道：宿主的 pid 與它跑的那份執行環境 */
+    this.host = { pid: 0, runtime: '' }
+  }
+
+  /**
+   * 跑著的宿主是不是更新前的舊程式碼。宿主刻意在 App 更新時活下來（跑著的 shell 才不會
+   * 被拖走），代價是 `pty.js` 那一側的修正**永遠不會生效**，除非它重開一次。
+   * @param {string} [wanted] 這一版想要的執行環境名（測試用；正式路徑自己算）
+   * @returns {boolean} 沒連上時回 false（沒有宿主就沒有舊程式碼）
+   */
+  stale(wanted = '') {
+    if (!this.socket || this.socket.destroyed) return false
+    try { return this.host.runtime !== (wanted || runtimeName().name) }
+    catch { return false }
+  }
+
+  /**
+   * 把宿主收掉再連一份新的。**跑著的 shell 會一起結束**，所以呼叫端要先問過使用者
+   * （見 `service.js` 的 `restartHost`）。
+   *
+   * 用 pid 直接收，不另外開一個 op：舊版宿主根本不認得新的 op，而會卡在舊程式碼的
+   * 正是它們。
+   * @returns {Promise<boolean>}
+   */
+  async restart() {
+    const pid = this.host.pid
+    if (!pid) return false
+    try { process.kill(pid) } catch { /* 已經不在了，照樣往下重連 */ }
+    this.socket?.destroy()
+    this.socket = null
+    this.host = { pid: 0, runtime: '' }
+    // 管道要等舊程序真的放掉，不然會連回同一個正在收尾的宿主
+    for (let i = 0; i < 50; i += 1) {
+      await new Promise(resolve => setTimeout(resolve, 100))
+      try { process.kill(pid, 0) } catch { break }
+    }
+    return this.ensure(true)
   }
 
   async attach(config) {
@@ -56,6 +93,8 @@ class HostClient {
     try {
       const reply = await this.send('auth', { token: config.token, protocol: PROTOCOL })
       if (reply?.protocol !== PROTOCOL || this.closed) throw hostError()
+      // 舊版宿主不回報 runtime／pid，留空字串與 0：`stale()` 會把它當成舊版。
+      this.host = { pid: Number.isSafeInteger(reply.pid) ? reply.pid : 0, runtime: typeof reply.runtime === 'string' ? reply.runtime : '' }
     } catch (error) { socket.destroy(); throw error }
   }
 

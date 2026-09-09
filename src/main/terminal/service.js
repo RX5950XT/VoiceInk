@@ -79,6 +79,34 @@ async function openSession(id, cols, rows) {
   return snapshot
 }
 
+/**
+ * 跑著的宿主是不是舊版程式碼，以及現在收不收得起。
+ *
+ * 宿主活得比 App 久（更新只斷線），所以 `pty.js` 這一側的修正在使用者按下重新啟動
+ * 之前完全不會生效——Ctrl+G 的編輯器橋接就是這樣整整幾版都沒作用。
+ *
+ * `busy` ＝還有跑著的 shell（`running`／`idle`）。沒有的話直接重開，不用煩使用者。
+ * @returns {Promise<{ stale: boolean, busy: boolean }>}
+ */
+async function hostState() {
+  if (!await getClient().ensure(false)) return { stale: false, busy: false }
+  const states = await getClient().request('list') || []
+  return {
+    stale: getClient().stale(),
+    busy: states.some(item => item.state === 'running' || item.state === 'idle')
+  }
+}
+
+/**
+ * 收掉舊宿主再連一份新的。**跑著的 shell 會一起結束**：renderer 在 `busy` 時要先問過
+ * 使用者（見 `terminal-page.js` 的 `checkHostRuntime`）。
+ * @returns {Promise<boolean>}
+ */
+async function restartHost() {
+  if (!await getClient().ensure(false)) return false
+  return getClient().restart()
+}
+
 async function deleteSession(id) {
   await getClient().request('forget', { sessionId: String(id || '') })
   links.noteCwd(String(id || ''), '')
@@ -103,6 +131,8 @@ module.exports = {
   createSession: terminal.createSession,
   renameSession: terminal.renameSession,
   listSessions,
+  hostState,
+  restartHost,
   openSession,
   deleteSession,
   writeSession,

@@ -90,7 +90,10 @@ function run(userData) {
         clearTimeout(timeout)
         clearTimeout(idleTimer)
         clients.add(socket)
-        send(socket, { id: message.id, ok: true, data: { protocol: PROTOCOL, pid: process.pid } })
+        // `runtime` ＝自己這份執行環境的資料夾名（內容雜湊）。App 拿它跟自己這一版
+        // 想要的那份比，才知道跑著的宿主是不是更新前的舊程式碼——**沒有這個欄位就是
+        // 舊宿主**（更新前的版本不回報），一樣算舊版。
+        send(socket, { id: message.id, ok: true, data: { protocol: PROTOCOL, pid: process.pid, runtime: path.basename(__dirname) } })
         return
       }
       try { send(socket, { id: message.id, ok: true, data: dispatch(message) }) }
