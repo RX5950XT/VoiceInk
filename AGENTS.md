@@ -178,9 +178,18 @@ tag 要與 `package.json` 的 version 一致。
 - **管理員終端機**：ConPTY 開不出提權 shell，改用 `Start-Process -Verb RunAs` 再開一份自己代開。host 的 socket 一 close 就 kill 掉所有管理員 shell；一顆 host 服務全部階段（UAC 只跳一次）；host 模式要 `app.setPath('userData', ...temp...)`（提權程序寫進主 userData 會讓檔案擁有者變管理員）。
 - `term.open()` 前要先讓那一格可見（`display:none` 會開出 0×0）；「人在不在看」要看 `#termMain` 不是 `termHost`。
 - **輸入法的候選字視窗跟著那個隱形 `<textarea>` 走**：xterm 平常把它丟在 `left: -9999em`，只有 `onCursorMove` 才挪回來，
-  所以剛開分頁／剛切回來時系統看到的輸入框在畫面外，候選字視窗會被夾到螢幕角落。`syncImeCaret` 在 `focus`、
-  `compositionstart` 與每次 `fitPane` 各對一次位置；**`compositionupdate` 刻意不接**（組字中途由 xterm 自己撐寬度）。
+  所以剛開分頁／剛切回來時系統看到的輸入框在畫面外，候選字視窗會被夾到螢幕角落。對位整段在 `term-ime.js`
+  （`bindImeCaret`／`syncImeCaret`），`fitPane` 也要各對一次。
   `.composition-view` 預設是寫死的黑底白字，要改成終端機的反白。
+- **組字期間候選字視窗會被 CLI 的重畫拉走**——「打注音時候選字視窗一直閃」的根因，而且**只有
+  Claude Code／Codex 那類整塊重畫的 CLI 才會**。組字中不是我們在對位，是 xterm 自己的
+  `updateCompositionElements()`，它讀**當下的 `buffer.x/y`**；Ink 每一幀把游標拉到上面幾行再走回輸入行，
+  按鍵落在哪個瞬間就被擺到哪（實測 12 個組字鍵落在 3 個位置）。**DOM 與 WebGL 量到一模一樣，不要往
+  renderer 找**。`term-ime.js` 的釘法三件缺一不可：錨點等游標**安靜 40ms** 才取（取 `compositionstart`
+  當下或下一個 rAF 都還會抓到重畫中途的位置，實測是 `0,0` 與 `0px,60px`）、整段組字**每一幀**把
+  `left/top` 釘回去（只補在 `compositionupdate` 後面贏不了 xterm，實測 12 次被蓋掉 9 次）、`compositionupdate`
+  之後再補一次（等下一幀那十幾毫秒足夠讓系統問到錯位置）。**寬高不准動**（那是 xterm 撐組字文字用的）。
+  回歸 `probe-terminal-flicker.js` 的組字那段。
 - **對好位置還不夠，那個 `<textarea>` 還必須真的被畫出來**：xterm 給它 `opacity: 0`，
   而 `opacity: 0` 的東西 Chromium 不畫，Windows 就問不到「游標的方框在哪」，注音的組字與
   候選字視窗會退回預設位置（視窗右下角）。要改用**透明的文字／游標／底色**藏
@@ -213,6 +222,13 @@ tag 要與 `package.json` 的 version 一致。
   `^bg-\d+\.[a-z]{3,4}$` 擋路徑穿越），renderer 只拿得到 `data:` URI，換圖一律走系統對話框。
   **只有真的有桌布時才把 xterm 底色改成 `#00000000` ＋ `allowTransparency`**（沒圖時維持不透明，
   否則捲動殘影會疊在一起）；壓暗的 `opacity` 只作用在 `.term-host::before` 那一層，文字那層一個字都沒動。
+- **桌布還會被 `xterm.css` 寫死的 `.xterm-viewport { background-color: #000 }` 整片蓋掉**：
+  xterm 6 把底色改畫在後面那層 `.xterm-scrollable-element` 上（配色表套的就是那一層），
+  `.xterm-viewport` 就變成一塊**永遠不會跟著配色更新的黑布**，剛好夾在桌布（`.term-host::before`）
+  與文字之間——選了背景圖只看得到全黑（實測純紅桌布、濃度 100%，畫面 100% 是 #121212）。
+  `main.css` 要把它設成 `background-color: transparent`。**只讀 `term.options.theme` 是恆真的斷言**
+  （那是自己剛塞進去的值），要量「那個點上疊了哪幾層、各自什麼底色」；截圖在 `--hidden` 的視窗上
+  會卡住不回，不要拿它當回歸。回歸 `probe-terminal-background.js` 的 [G]。
 - **游標畫在 canvas 上（WebGL renderer）**：DOM renderer 把游標畫成
   `<span class="xterm-cursor-blink">`，閃爍是 CSS `animation: 1s step-end infinite`——串流時
   那一列每一幀都被重建，動畫就每一幀從 0%（實心）重來，游標永遠跑不完一個週期，看起來是

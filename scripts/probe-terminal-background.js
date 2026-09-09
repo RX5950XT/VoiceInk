@@ -11,6 +11,9 @@
  *      真的是不透明的顏色（不是被 opacity 壓掉的灰）。
  *  [D] 濃度滑桿只作用在桌布那一層。
  *  [E] 換配色（全黑 ⇄ Dracula）會即時套到已經開著的分頁上。
+ *  [G] **桌布真的看得到**：量那個點上疊了哪幾層、各自的底色。`options.theme` 是
+ *      自己剛塞進去的值，讀回來永遠對得上——`xterm.css` 寫死黑底的 `.xterm-viewport`
+ *      曾經整片蓋在桌布上面，選項全對而畫面全黑，只有數圖層才抓得到。
  *
  * 系統對話框那一步（選圖）測不到，所以圖片是先擺進 `<userData>/terminal-bg/` 的——
  * 從 store 存的檔名往後那整條路（main 讀檔 → data: URI → CSS）都是真的。
@@ -129,6 +132,33 @@ async function waitInPage(cdp, expression, timeoutMs = 20000) {
   return false
 }
 
+/**
+ * 終端機中段那一個點上，`.term-host` 以上疊了哪幾層、各自的背景色。
+ * 桌布畫在 `.term-host::before`，只要中間有一層不透明，畫面上就看不到圖。
+ */
+const LAYERS = `JSON.stringify((() => {
+  const host = document.getElementById('termHost')
+  const r = host.getBoundingClientRect()
+  const x = Math.round(r.x + r.width / 2)
+  const y = Math.round(r.y + r.height * 0.7)
+  const layers = []
+  for (const el of document.elementsFromPoint(x, y)) {
+    if (el === host) break
+    layers.push({ cls: String(el.className || el.tagName), bg: getComputedStyle(el).backgroundColor })
+  }
+  return layers
+})())`
+
+/**
+ * @param {string} css `getComputedStyle` 給的 `rgb()`／`rgba()`
+ * @returns {boolean} 完全透明才算 true
+ */
+function isTransparent(css) {
+  if (css === 'transparent') return true
+  const alpha = /rgba\([^)]*,\s*([\d.]+)\s*\)/.exec(css)
+  return alpha ? Number(alpha[1]) === 0 : false
+}
+
 /** 桌布那一層、xterm 的選項、以及畫面上真正的字，一次全量回來 */
 const SNAPSHOT = `JSON.stringify((() => {
   const host = document.getElementById('termHost')
@@ -229,6 +259,16 @@ async function main() {
       JSON.stringify({ screen: on.screenOpacity, pane: on.paneOpacity }))
     ok('[C] 字真的畫得出來（WebGL 的 canvas 在位子上）', on.canvases > 0, String(on.canvases))
 
+    // ===== 桌布到底看不看得到：問「這個點上真正疊了哪幾層、各自什麼底色」 =====
+    // `options.theme` 是自己剛塞進去的值，讀回來永遠對得上（恆真的斷言）。
+    // 桌布畫在 `.term-host::before`，所以它上面的每一層都必須是透明的；
+    // `xterm.css` 給 `.xterm-viewport` 寫死的黑底就是這樣把整張圖蓋掉的。
+    const layers = JSON.parse(String(await cdp.eval(LAYERS)))
+    const opaque = layers.filter((l) => !isTransparent(l.bg))
+    ok('[G] 桌布上面每一層都是透明的（不然圖被蓋掉，選了等於沒選）',
+      layers.length > 0 && opaque.length === 0,
+      opaque.length ? opaque.map((l) => `${l.cls}=${l.bg}`).join('、') : `${layers.length} 層都透明`)
+
     // ===== 換配色：Dracula 應該即時套到已經開著的分頁上 =====
     await cdp.eval(`(async () => {
       await window.electronAPI.store.set('termTheme', 'dracula')
@@ -255,6 +295,10 @@ async function main() {
       off.hasClass === false && off.themeBg === '#000000' && off.transparent === false,
       JSON.stringify({ hasClass: off.hasClass, bg: off.themeBg, transparent: off.transparent }))
     ok('[B] 桌布那一層也不再畫圖', off.image === 'none', off.image)
+    const offLayers = JSON.parse(String(await cdp.eval(LAYERS)))
+    ok('[B] 沒有桌布時終端機底下有一層是不透明的（半透明的底會讓捲動殘影疊在一起）',
+      offLayers.some((l) => !isTransparent(l.bg)),
+      offLayers.map((l) => `${l.cls}=${l.bg}`).join('、'))
 
     // ===== store 只認得自己產的檔名 =====
     const bad = await cdp.eval(`(async () => {

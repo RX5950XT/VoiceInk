@@ -2011,6 +2011,16 @@ option:disabled {
   left: 0;
 }
 
+/* xterm.css 給 `.xterm-viewport` 寫死了 `background-color: #000`。xterm 6 已經把
+   底色改畫在後面那層 `.xterm-scrollable-element` 上（配色表就是套在那一層），
+   這一層於是變成一塊**永遠不會跟著配色更新的黑布**，整片蓋在桌布上面——
+   選了背景圖也只看得到全黑（實測：純紅桌布、濃度 100%，畫面 100% 是 #121212）。
+   讓它透明；沒有桌布時底色仍由 scrollable element 畫，一樣不透明。
+   回歸 `probe-terminal-background.js` 的 [G]。 */
+.term-pane .xterm .xterm-viewport {
+  background-color: transparent;
+}
+
 /* 這裡**刻意不動 `opacity`**：以前為了「讓 Chromium 畫得到游標方框」把它改成
    `opacity: 1` 加一堆 transparent，結果 Windows 上 Chromium 偶爾還是會把這個隱形
    輸入框的原生游標畫出來——畫面右下角那個會閃的白方塊就是它。位置的問題上面那條

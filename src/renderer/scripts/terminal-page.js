@@ -2,6 +2,7 @@ import { electronAPI, showToast, setChatPaneMode } from './app.js'
 import { terminalStatusLabel, setTerminalStatuses } from './ws-terminal-status.js'
 import { registerTermLinks } from './term-links.js'
 import { splitForPty } from './term-write-chunks.js'
+import { bindImeCaret, syncImeCaret } from './term-ime.js'
 import { applyAppearance, normalizeAppearance } from './term-themes.js'
 import {
   initWsTabs, showSurface, trackTerminal, paintTerminalTab, currentProjectId
@@ -217,35 +218,6 @@ function themeOptions() {
   return applyAppearance(hostEl, appearance, backgroundUri)
 }
 
-/**
- * 把 xterm 那份隱形的輸入框挪到游標所在的那一格。
- *
- * 中文（或任何輸入法）的候選字視窗是 OS 依「現在的輸入框在哪」畫出來的。
- * xterm 平常把那個 `<textarea>` 丟在畫面外（`left: -9999em`），只有游標移動時
- * 才順手挪回游標上——所以剛開分頁、剛切回終端機、還沒打出第一個字之前，
- * 系統看到的輸入框在畫面外，候選字視窗就被夾到螢幕角落去了。
- *
- * 聚焦與開始組字時各對一次位置就夠：組字中途 xterm 自己會跟著調（那時它會
- * 把寬度撐到組字文字的寬度，這裡不要插手）。
- *
- * @param {Terminal} term
- */
-function syncImeCaret(term) {
-  const area = term.textarea
-  const screen = /** @type {HTMLElement | null} */ (term.element?.querySelector('.xterm-screen'))
-  if (!area || !screen || !term.cols || !term.rows) return
-  const cellW = screen.clientWidth / term.cols
-  const cellH = screen.clientHeight / term.rows
-  if (!cellW || !cellH) return
-  const buffer = term.buffer.active
-  const col = Math.min(buffer.cursorX, term.cols - 1)
-  area.style.left = `${Math.round(col * cellW)}px`
-  area.style.top = `${Math.round(buffer.cursorY * cellH)}px`
-  area.style.width = `${Math.max(Math.round(cellW), 1)}px`
-  area.style.height = `${Math.max(Math.round(cellH), 1)}px`
-  area.style.lineHeight = `${Math.round(cellH)}px`
-}
-
 /** @type {Map<string, Promise<any>>} 每個工作階段一條寫入鏈 */
 const writeChains = new Map()
 
@@ -402,11 +374,8 @@ function createPane(id) {
     if (event.type === 'keydown') term.input('\x1b\r', true)
     return false
   })
-  // 輸入法的候選字視窗要跟著游標，不要跑到螢幕角落（見 `syncImeCaret`）。
-  // `compositionupdate` 刻意不接：組字中途由 xterm 自己撐寬度，接了會被我們縮回一格。
-  const placeIme = () => syncImeCaret(term)
-  term.textarea?.addEventListener('focus', placeIme)
-  term.textarea?.addEventListener('compositionstart', placeIme)
+  // 輸入法的候選字視窗要跟著游標，而且組字期間不准被 CLI 的重畫拉走（見 `term-ime.js`）
+  bindImeCaret(term)
 
   // 一般終端機的習慣：選起來就進剪貼簿、右鍵就貼上
   pane.addEventListener('mouseup', (event) => {

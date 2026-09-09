@@ -18,9 +18,13 @@ function ok(label) {
   console.log(`  PASS ${label}`)
 }
 
-const source = fs.readFileSync(path.join(__dirname, '../src/renderer/scripts/terminal-page.js'), 'utf8')
+/** 剝掉 import／export，讓整支檔案能在同一個 vm context 裡當普通程式碼跑 */
+const readPlain = (rel) => fs.readFileSync(path.join(__dirname, '../src/renderer/scripts/', rel), 'utf8')
   .replace(/^import [\s\S]*?from '[^']*'$/gm, '')
   .replace(/^export /gm, '')
+
+// 對位那一段搬到 `term-ime.js` 了，接在前面一起載（`syncImeCaret` 從那裡來）
+const source = `${readPlain('term-ime.js')}\n${readPlain('terminal-page.js')}`
 
 function load() {
   const context = {
