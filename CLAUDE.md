@@ -234,6 +234,19 @@ tag 要與 `package.json` 的 version 一致。
   `^bg-\d+\.[a-z]{3,4}$` 擋路徑穿越），renderer 只拿得到 `data:` URI，換圖一律走系統對話框。
   **只有真的有桌布時才把 xterm 底色改成 `#00000000` ＋ `allowTransparency`**（沒圖時維持不透明，
   否則捲動殘影會疊在一起）；壓暗的 `opacity` 只作用在 `.term-host::before` 那一層，文字那層一個字都沒動。
+- **桌布不可以用 `data:` URI 塞進 CSS**：Chromium 的 CSS 值大約 **2M 字元**就滿了，
+  `setProperty` 超過就**靜靜不做事**（不丟例外，computed style 直接 `none`）。
+  3.2MB 的圖 base64 之後 4.3M 字元，桌布整張消失，而且**滑桿拉到哪都一樣**
+  ——壓暗那一層是好的，只是沒有圖可壓。renderer 收到 `data:` 之後要轉成 `blob:`
+  短網址（`toBlobUrl`，換圖記得 `revokeObjectURL`）。回歸的測試圖**一定要用真實尺寸**：
+  原本 `probe-terminal-background.js` 用 8×8（base64 才 130 字元）全綠了好幾版卻完全沒
+  碰到那條線，現在用 `inflateToSize` 撐到 2.5MB，而且要把 URL 丟給 `Image` 真的解一次
+  （computed style 讀得到 `url(...)` 只代表宣告還在）。
+- **背景圖強度不可以到 0**：`opacity: 0` ＝圖還在卻整張沒畫，
+  使用者看到的就是「選了圖卻什麼都沒有」（實測：滑桿叫「濃度」又說「只壓背景圖」，
+  使用者往 0 拉以為那是「不壓暗」）。滑桿 `min="10"`，`normalizeAppearance` 與 main 的
+  `sanitizeBgOpacity` 把低於下限的（含舊設定裡的 0）當成「沒設定過」回預設 45；
+  「不要圖」走「移除背景圖」。回歸 `test-terminal-ui.js`。
 - **桌布還會被 `xterm.css` 寫死的 `.xterm-viewport { background-color: #000 }` 整片蓋掉**：
   xterm 6 把底色改畫在後面那層 `.xterm-scrollable-element` 上（配色表套的就是那一層），
   `.xterm-viewport` 就變成一塊**永遠不會跟著配色更新的黑布**，剛好夾在桌布（`.term-host::before`）

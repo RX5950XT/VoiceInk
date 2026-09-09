@@ -265,9 +265,12 @@ function sanitizeTtsRate(val) {
  * @returns {number}
  */
 function sanitizeBgOpacity(val) {
-  const n = Number(val)
-  if (!Number.isFinite(n)) return 20
-  return Math.max(0, Math.min(100, Math.round(n)))
+  // 下限 10 不是 0：0 ＝圖還在卻 `opacity: 0` 整張不畫，看起來就是功能壞掉。
+  // 低於下限當成「沒設定過」回預設（值要跟 `term-themes.js` 的
+  // MIN_TERM_BG_OPACITY／DEFAULT_TERM_BG_OPACITY 對齊）。
+  const n = Math.round(Number(val))
+  if (!Number.isFinite(n) || n < 10) return 45
+  return Math.min(100, n)
 }
 
 /**

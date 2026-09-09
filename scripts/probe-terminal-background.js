@@ -11,12 +11,16 @@
  *      真的是不透明的顏色（不是被 opacity 壓掉的灰）。
  *  [D] 濃度滑桿只作用在桌布那一層。
  *  [E] 換配色（全黑 ⇄ Dracula）會即時套到已經開著的分頁上。
+ *  [H] **圖真的載得進來**：computed style 說得出 `url(...)` 不代表瀏覽器讀得到它
+ *      （CSS 值太長會被靜靜丟掉、URL 失效也不會報錯），要把那個 URL 丟給 `Image`
+ *      解碼過才算數——使用者的 3.2MB 桌布就是卡在這裡。
  *  [G] **桌布真的看得到**：量那個點上疊了哪幾層、各自的底色。`options.theme` 是
  *      自己剛塞進去的值，讀回來永遠對得上——`xterm.css` 寫死黑底的 `.xterm-viewport`
  *      曾經整片蓋在桌布上面，選項全對而畫面全黑，只有數圖層才抓得到。
  *
  * 系統對話框那一步（選圖）測不到，所以圖片是先擺進 `<userData>/terminal-bg/` 的——
- * 從 store 存的檔名往後那整條路（main 讀檔 → data: URI → CSS）都是真的。
+ * 從 store 存的檔名往後那整條路（main 讀檔 → data: URI → blob: → CSS）都是真的，
+ * 而且用的是**真實尺寸**的圖（2.5MB，見 `inflateToSize`）。
  *
  * 用法：node scripts/probe-terminal-background.js
  *      VOICEINK_EXE=... node scripts/probe-terminal-background.js
@@ -26,6 +30,7 @@ const path = require('path')
 const http = require('http')
 const os = require('os')
 const fs = require('fs')
+const zlib = require('zlib')
 
 const PORT = 9257
 const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
@@ -37,9 +42,34 @@ const RED_PNG = Buffer.from(
   + 'DBhGw4BhOIQBAF9lB/2Bd1PGAAAAAElFTkSuQmCC',
   'base64'
 )
+
+/**
+ * 把那張 8×8 撐成 2.5MB 的 PNG（塞一個合法的 `tEXt` 附註 chunk 進去，圖還是 8×8 紅色）。
+ *
+ * **測試圖一定要夠大**：使用者的桌布是 3.2MB，base64 之後 4.3M 字元，而 Chromium 的
+ * CSS 值大約 2M 字元就滿了——`setProperty` 超過就靜靜不做事，`--term-bg-image` 變空的，
+ * 畫面上什麼都沒有。原本這支用 8×8（base64 才 130 字元）全綠了好幾版，卻完全沒碰到
+ * 那條線。回歸就是要壓在真實尺寸上。
+ *
+ * @param {Buffer} png
+ * @param {number} bytes 附註 chunk 的大小
+ * @returns {Buffer}
+ */
+function inflateToSize(png, bytes) {
+  const iend = png.length - 12 // IEND 這一段（長度 4 ＋ 型別 4 ＋ CRC 4）
+  const payload = Buffer.concat([Buffer.from('Comment\0'), Buffer.alloc(bytes, 0x61)])
+  const chunk = Buffer.alloc(payload.length + 12)
+  chunk.writeUInt32BE(payload.length, 0)
+  chunk.write('tEXt', 4, 'latin1')
+  payload.copy(chunk, 8)
+  chunk.writeUInt32BE(zlib.crc32(chunk.subarray(4, 8 + payload.length)) >>> 0, 8 + payload.length)
+  return Buffer.concat([png.subarray(0, iend), chunk, png.subarray(iend)])
+}
+
+const BIG_PNG = inflateToSize(RED_PNG, 2_500_000)
 const BG_NAME = 'bg-1738888888.png'
 fs.mkdirSync(path.join(USER_DATA_DIR, 'terminal-bg'))
-fs.writeFileSync(path.join(USER_DATA_DIR, 'terminal-bg', BG_NAME), RED_PNG)
+fs.writeFileSync(path.join(USER_DATA_DIR, 'terminal-bg', BG_NAME), BIG_PNG)
 fs.writeFileSync(path.join(USER_DATA_DIR, 'config.json'), JSON.stringify({
   sysmonSensors: false,
   termTheme: 'black',
@@ -185,6 +215,25 @@ const SNAPSHOT = `JSON.stringify((() => {
   }
 })())`
 
+/**
+ * 把 CSS 上那個桌布 URL 丟給 `Image` 真的解一次。
+ * computed style 讀得到 `url(...)` 只代表「宣告」還在，載不載得進來是另一回事。
+ */
+const DECODE = `(async () => {
+  const host = document.getElementById('termHost')
+  // 這一段在樣板字串裡，反斜線要寫兩次才傳得到頁面上
+  const m = /url\\("([^"]+)"\\)/.exec(getComputedStyle(host, '::before').backgroundImage || '')
+  if (!m) return JSON.stringify({ error: 'CSS 上沒有 url()' })
+  const r = await new Promise((res) => {
+    const img = new Image()
+    img.onload = () => res({ w: img.naturalWidth, h: img.naturalHeight, scheme: m[1].slice(0, 5) })
+    img.onerror = () => res({ error: 'decode failed', scheme: m[1].slice(0, 5) })
+    setTimeout(() => res({ error: 'timeout' }), 8000)
+    img.src = m[1]
+  })
+  return JSON.stringify(r)
+})()`
+
 async function main() {
   const results = []
   const ok = (name, pass, detail = '') => {
@@ -244,7 +293,7 @@ async function main() {
 
     const on = JSON.parse(String(await cdp.eval(SNAPSHOT)))
     ok('[A] 桌布那一層畫得出來（有圖、有寬高）',
-      on.hasClass && on.image.startsWith('url("data:image/png') && on.hostW > 0 && on.hostH > 0,
+      on.hasClass && /^url\("blob:/.test(on.image) && on.hostW > 0 && on.hostH > 0,
       JSON.stringify({ hasClass: on.hasClass, image: on.image.slice(0, 40), w: on.hostW, h: on.hostH }))
     ok('[A] 圖鋪滿整格', on.size === 'cover', on.size)
     ok('[D] 濃度滑桿的值套到桌布那一層（35% → 0.35）',
@@ -269,6 +318,11 @@ async function main() {
       layers.length > 0 && opaque.length === 0,
       opaque.length ? opaque.map((l) => `${l.cls}=${l.bg}`).join('、') : `${layers.length} 層都透明`)
 
+    // ===== 圖真的載得進來（computed style 說有，不代表瀏覽器讀得到）=====
+    const decoded = JSON.parse(String(await cdp.eval(DECODE)))
+    ok('[H] 桌布的 URL 真的解碼得出一張圖（大圖不會被 CSS 靜靜丟掉）',
+      decoded.w > 0 && decoded.h > 0, JSON.stringify(decoded))
+
     // ===== 換配色：Dracula 應該即時套到已經開著的分頁上 =====
     await cdp.eval(`(async () => {
       await window.electronAPI.store.set('termTheme', 'dracula')
@@ -279,7 +333,7 @@ async function main() {
     const dracula = JSON.parse(String(await cdp.eval(SNAPSHOT)))
     ok('[E] 換配色即時套到已經開著的分頁（Dracula 的前景 #f8f8f2）',
       dracula.themeFg.toLowerCase() === '#f8f8f2', dracula.themeFg)
-    ok('[E] 換配色不會把桌布弄掉', dracula.hasClass && dracula.image.startsWith('url("data:image/png'),
+    ok('[E] 換配色不會把桌布弄掉', dracula.hasClass && /^url\("blob:/.test(dracula.image),
       JSON.stringify({ hasClass: dracula.hasClass, image: dracula.image.slice(0, 30) }))
 
     // ===== 移除桌布：底色必須回到不透明 =====

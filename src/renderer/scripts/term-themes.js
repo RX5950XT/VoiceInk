@@ -34,6 +34,16 @@ export const TERM_THEMES = {
 /** 沒設定過就是全黑（使用者要的預設） */
 export const DEFAULT_TERM_THEME = 'black'
 
+/** 背景圖強度的預設值。20% 疊在全黑上幾乎看不出來，選了圖會以為功能壞掉。 */
+export const DEFAULT_TERM_BG_OPACITY = 45
+
+/**
+ * 背景圖強度的下限。**不可以是 0**：圖還在、`opacity: 0` 只是整張沒畫出來，
+ * 使用者看到的就是「選了圖卻什麼都沒有」（實測使用者把滑桿拉到 0 之後回報功能壞掉）。
+ * 真的不要圖是按「移除背景圖」，不是把強度歸零。
+ */
+export const MIN_TERM_BG_OPACITY = 10
+
 /**
  * `app` 主題要從 CSS 變數讀（深／淺色各一組），其餘直接查表。
  * @param {string} key
@@ -60,9 +70,12 @@ export function themeColorsOf(key) {
 export function normalizeAppearance(raw) {
   const theme = typeof raw?.theme === 'string' && TERM_THEMES[raw.theme] ? raw.theme : DEFAULT_TERM_THEME
   const image = typeof raw?.image === 'string' ? raw.image : ''
-  const opacity = Number.isFinite(Number(raw?.opacity))
-    ? Math.max(0, Math.min(100, Math.round(Number(raw.opacity))))
-    : 20
+  // 低於下限（含舊設定裡的 0）一律當成「沒設定過」回預設：滑桿已經拉不到那裡了，
+  // 留在 store 裡的只會是舊值，照著畫就是使用者回報的「選了圖卻什麼都沒有」。
+  const raw0 = Math.round(Number(raw?.opacity))
+  const opacity = Number.isFinite(raw0) && raw0 >= MIN_TERM_BG_OPACITY
+    ? Math.min(100, raw0)
+    : DEFAULT_TERM_BG_OPACITY
   return { theme, image, opacity }
 }
 

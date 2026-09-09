@@ -3,7 +3,7 @@ import { terminalStatusLabel, setTerminalStatuses } from './ws-terminal-status.j
 import { registerTermLinks } from './term-links.js'
 import { splitForPty } from './term-write-chunks.js'
 import { bindImeCaret, syncImeCaret } from './term-ime.js'
-import { applyAppearance, normalizeAppearance } from './term-themes.js'
+import { applyAppearance, normalizeAppearance, DEFAULT_TERM_BG_OPACITY } from './term-themes.js'
 import {
   initWsTabs, showSurface, trackTerminal, paintTerminalTab, currentProjectId
 } from './ws-tabs.js'
@@ -177,26 +177,53 @@ export async function deleteTerminalSession(id) {
 
 // ===== 終端機本體 =====
 
-/** 目前的終端機外觀（配色 key／桌布檔名／桌布壓暗程度）與桌布的 data: URI */
+/** 目前的終端機外觀（配色 key／桌布檔名／桌布壓暗程度）與桌布的 `blob:` 網址 */
 let appearance = normalizeAppearance({})
 let backgroundUri = ''
+
+/**
+ * main 給的 `data:` URI 換成 `blob:` 短網址。
+ *
+ * **不可以把 `data:` URI 直接塞進 CSS**：Chromium 的 CSS 值大約 2M 字元就滿了，
+ * `setProperty` 超過就靜靜不做事（不丟例外、computed style 直接變 `none`）。
+ * 3.2MB 的圖 base64 之後是 4.3M 字元，桌布就這樣整張消失，而且滑桿拉到哪都一樣——
+ * 因為壓暗那一層是好的，只是沒有圖可壓。`blob:` 網址才幾十個字元，圖多大都不影響。
+ *
+ * @param {string} dataUri
+ * @returns {string} `blob:` 網址；解不出來回空字串
+ */
+function toBlobUrl(dataUri) {
+  const match = /^data:([^;,]+);base64,(.*)$/s.exec(dataUri)
+  if (!match) return ''
+  try {
+    const binary = atob(match[2])
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
+    return URL.createObjectURL(new Blob([bytes], { type: match[1] }))
+  } catch {
+    return ''
+  }
+}
 
 /**
  * 讀設定並把外觀套到所有已開的分頁上。設定頁改完會發 `voiceink:term-appearance`
  * 事件叫這支，切到終端機頁時也會再對一次（主題可能在別頁被切過）。
  *
- * 桌布的圖片本體不進 store：這裡拿到的是檔名，data: URI 要跟 main 要。
+ * 桌布的圖片本體不進 store：這裡拿到的是檔名，圖要跟 main 要。
  */
 export async function refreshTerminalAppearance() {
   const [theme, image, opacity] = await Promise.all([
     electronAPI.store.get('termTheme', 'black'),
     electronAPI.store.get('termBgImage', ''),
-    electronAPI.store.get('termBgOpacity', 20)
+    electronAPI.store.get('termBgOpacity', DEFAULT_TERM_BG_OPACITY)
   ])
   appearance = normalizeAppearance({ theme, image, opacity })
-  backgroundUri = appearance.image
+  const dataUri = appearance.image
     ? String((await electronAPI.terminal.background(appearance.image))?.data || '')
     : ''
+  // 舊的那條要收掉，不然每次改外觀都留一份圖在記憶體裡
+  if (backgroundUri) URL.revokeObjectURL(backgroundUri)
+  backgroundUri = dataUri ? toBlobUrl(dataUri) : ''
   paintAppearance()
 }
 

@@ -172,6 +172,32 @@ async function main() {
     ok('尺寸沒變就不吵 ConPTY')
   }
 
+  // ===== 背景圖強度：0 不可以留下來 =====
+  {
+    // `term-themes.js` 沒有 DOM 相依，直接在 vm 裡跑就好
+    const context = { getComputedStyle: () => ({ getPropertyValue: () => '' }), document: {} }
+    vm.createContext(context)
+    const exposed = 'this.api = { normalizeAppearance, MIN_TERM_BG_OPACITY, DEFAULT_TERM_BG_OPACITY }'
+    vm.runInContext(readPlain('term-themes.js') + '\n' + exposed, context)
+    const { normalizeAppearance, MIN_TERM_BG_OPACITY, DEFAULT_TERM_BG_OPACITY } = context.api
+
+    // 使用者把滑桿拉到 0 之後回報「選了背景圖卻什麼都沒有」：
+    // 圖還在，只是 `opacity: 0` 整張沒畫出來。
+    assert.equal(normalizeAppearance({ image: 'bg-1.png', opacity: 0 }).opacity, DEFAULT_TERM_BG_OPACITY,
+      '舊設定裡的 0 要當成「沒設定過」，不然圖整張不畫')
+    assert.ok(MIN_TERM_BG_OPACITY > 0, '下限不可以是 0')
+    assert.equal(normalizeAppearance({ image: 'bg-1.png', opacity: MIN_TERM_BG_OPACITY }).opacity,
+      MIN_TERM_BG_OPACITY, '到得了下限的值要照收')
+    ok('背景圖強度 0 回預設（圖不會整張不見）')
+
+    assert.equal(normalizeAppearance({ image: 'bg-1.png' }).opacity, DEFAULT_TERM_BG_OPACITY)
+    assert.ok(DEFAULT_TERM_BG_OPACITY >= 40, '預設太低疊在全黑上等於看不到')
+    ok('沒設定過用預設強度，而且看得出來')
+
+    assert.equal(normalizeAppearance({ image: 'bg-1.png', opacity: 500 }).opacity, 100, '上限仍然是 100')
+    ok('上限照舊夾在 100')
+  }
+
   console.log(`\n${passed} passed, 0 failed`)
 }
 
