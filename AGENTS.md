@@ -224,6 +224,10 @@ tag 要與 `package.json` 的 version 一致。
   只在 `.out` 存在時才蓋回原檔——所以「改完存檔再關」與「什麼都沒動就關」自然分開，不用另外
   記狀態。**存檔不可以順手收掉分頁**（舊版 `submit()` 是存＋放走＋關分頁，使用者要的是像一般
   編輯器那樣存完還能繼續改）。回歸 `probe-terminal-editor.js` 的 [C][C2][D]。
+- **放走過的請求要進忽略名單**：`.done` 一落地就叫醒 `fs.watch`，而那支 batch 每秒才看一次
+  ——掃描當下 `<id>.in` 還躺在磁碟上，而該 id 已經從 `pending` 移除，於是被當成**新請求**
+  再發一次，使用者關掉的分頁**當場自己跳回來**（實測關掉後又多收到 1 次 editRequest）。
+  回歸 `probe-terminal-editor.js` 的 [G]。
 - **Ctrl+G 的 `$EDITOR` 橋接（`editor-bridge.js`）三個坑**：那支 batch **只能是 ASCII**
   （cmd.exe 用 cp950 讀 UTF-8 的中文註解會把行切壞，錯誤是莫名其妙的
   `'idge' is not recognized`）；**路徑不可以用 `echo %~f1` 送出來**（同樣的 cp950 問題，
