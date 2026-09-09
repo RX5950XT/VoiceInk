@@ -1669,6 +1669,9 @@ registerTerminalIpc({
     resolveLinks: (...args) => loadTerminal().resolveLinks(...args),
     revealLink: (...args) => loadTerminal().revealLink(...args),
     raiseChildWindow: (...args) => loadTerminal().raiseChildWindow(...args),
+    // Ctrl+G 的編輯器橋接（漏一支＝那個分頁按送出只會回通用錯誤，CLI 一直卡著）
+    editorSubmit: (...args) => loadTerminal().editorSubmit(...args),
+    editorCancel: (...args) => loadTerminal().editorCancel(...args),
     // 終端機桌布（三支都要列，漏一支那顆按鈕就只會回通用錯誤）
     backgroundImage: (...args) => loadTerminal().backgroundImage(...args),
     adoptBackground: (...args) => loadTerminal().adoptBackground(...args),

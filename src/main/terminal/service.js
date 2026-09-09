@@ -4,6 +4,7 @@ const store = require('./store')
 const terminal = require('./pty')
 const links = require('./links')
 const foreground = require('./foreground')
+const editorBridge = require('./editor-bridge')
 const background = require('./background')
 const { HostClient } = require('./host-client')
 
@@ -32,6 +33,15 @@ function forward(event, payload) {
   emit(event, { ...rest, osTitle: title || '', liveCwd: cwd || '' })
 }
 
+/**
+ * Ctrl+G 會不會落在 App 自己的編輯分頁上：橋接命令建得起來，而且使用者沒有自己
+ * 設過 `EDITOR`／`VISUAL`（設過的話 `pty.js` 不會覆蓋，開的是他指定的那支）。
+ * @returns {boolean}
+ */
+function bridgeTakesOver() {
+  return Boolean(editorBridge.shimCommand()) && !process.env.EDITOR && !process.env.VISUAL
+}
+
 async function listSessions() {
   const items = await store.list()
   const states = await getClient().request('list') || []
@@ -57,7 +67,9 @@ async function openSession(id, cols, rows) {
     error.userMessage = '找不到這個工作階段'
     throw error
   }
-  const snapshot = await getClient().request('open', { sessionId: meta.id, meta, cols, rows }, true)
+  // Ctrl+G 的編輯器橋接：每次開 shell 都帶最新的那條命令過去（見 editor-bridge.js）
+  const editor = editorBridge.shimCommand()
+  const snapshot = await getClient().request('open', { sessionId: meta.id, meta, cols, rows, editor }, true)
   if (snapshot?.cwd) links.noteCwd(meta.id, snapshot.cwd)
   return snapshot
 }
@@ -74,7 +86,14 @@ function writeSession(id, data) {
 }
 
 module.exports = {
-  setEmitter(fn) { emit = typeof fn === 'function' ? fn : () => {} },
+  setEmitter(fn) {
+    emit = typeof fn === 'function' ? fn : () => {}
+    editorBridge.configure(require('electron').app.getPath('userData'))
+    editorBridge.start((channel, payload) => emit(channel, payload))
+  },
+  // Ctrl+G 開的那個編輯分頁：renderer 只送得出 id，改哪個檔由 main 說了算
+  editorSubmit: (id, content) => editorBridge.submit(id, content),
+  editorCancel: (id) => editorBridge.cancel(id),
   catalog: terminal.catalog,
   createSession: terminal.createSession,
   renameSession: terminal.renameSession,
@@ -84,12 +103,13 @@ module.exports = {
   writeSession,
   resolveLinks: links.resolveLinks,
   revealLink: links.revealLink,
-  raiseChildWindow: foreground.raiseChildWindow,
+  // Ctrl+G：橋接接手時根本不會有新視窗冒出來，不用再叫一支 PowerShell 去等
+  raiseChildWindow: () => (bridgeTakesOver() ? false : foreground.raiseChildWindow()),
   // 終端機桌布：檔案在 main 手上，renderer 只拿得到 data: URI（見 background.js）
   backgroundImage: background.dataUri,
   adoptBackground: background.adopt,
   clearBackground: background.remove,
   resizeSession: (id, cols, rows) => getClient().request('resize', { sessionId: String(id || ''), cols, rows }),
   killSession: (id) => getClient().request('kill', { sessionId: String(id || '') }),
-  disconnect() { foreground.stop(); client?.disconnect(); client = null }
+  disconnect() { foreground.stop(); editorBridge.stop(); client?.disconnect(); client = null }
 }

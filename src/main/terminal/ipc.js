@@ -51,6 +51,14 @@ function registerTerminalIpc({ ipcMain, service, isMainSender, dialog, getWindow
     invoke(event, () => service.revealLink(id, text))
   ))
 
+  // Ctrl+G 的編輯器橋接：id 是 main 發的，內容才是 renderer 給的（要編哪個檔不收）
+  ipcMain.handle('terminal:editorSubmit', (event, id, content) => (
+    invoke(event, () => service.editorSubmit(id, content))
+  ))
+  ipcMain.handle('terminal:editorCancel', (event, id) => (
+    invoke(event, () => service.editorCancel(id))
+  ))
+
   // 終端機裡叫出來的 GUI 程式（Ctrl+G 的記事本）要跳到最前面，不然它開在 App 後面。
   // 沒有參數：renderer 只能說「等一下有視窗要出來」，抬哪一個由 main 自己認。
   ipcMain.handle('terminal:raiseChildWindow', (event) => (

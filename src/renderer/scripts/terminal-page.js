@@ -528,7 +528,10 @@ async function openSession(id, isActive = () => true) {
       : [id]
     paintPanes()
   }
-  fitPane(entry)
+  // 新開的那一格由下面的 `terminal.open` 直接帶尺寸過去；切回舊的要補一次 resize
+  // （被藏起來的期間版面可能被拉過，見 `fitAndSync`）。
+  if (fresh) fitPane(entry)
+  else fitAndSync(id, entry)
   entry.term.scrollToBottom()
   const isCurrent = () => currentId === id && currentProjectId() === projectId
     && panes.get(id) === entry && !hostEl.classList.contains('hidden') && isActive()
@@ -579,6 +582,26 @@ function fitPane(entry) {
 }
 
 /**
+ * 量這一格，欄列數真的變了才往 main 送 resize。
+ *
+ * **量完一定要走這支，不可以只 `fitPane`**：那一格被藏起來的期間（切到別的終端機、
+ * 切去別頁）視窗或側欄可能被拉過，切回來這一量欄數就變了——沒通知 ConPTY 的話
+ * 它還用舊寬度算折行，而 Claude Code／Codex 這類整畫面重畫的 CLI 會照舊寬度再貼
+ * 一次，畫面上就是「狀態列出現兩份、右邊被切掉半行」。
+ *
+ * @param {string} id
+ * @param {Pane} entry
+ */
+function fitAndSync(id, entry) {
+  const before = `${entry.term.cols}x${entry.term.rows}`
+  fitPane(entry)
+  // 拖側欄寬度時 ResizeObserver 一秒送幾十次，欄列數其實大多沒變：
+  // 每一次都往 main 送 resize 等於連累 ConPTY 一起重排。
+  if (`${entry.term.cols}x${entry.term.rows}` === before) return
+  void electronAPI.terminal.resize(id, entry.term.cols, entry.term.rows)
+}
+
+/**
  * 量看得到的每一格。並排時每一格都要各自 fit——只 fit 作用中那個的話，
  * 旁邊那格的 ConPTY 還以為自己有整個寬度，換行會全部亂掉。
  */
@@ -587,12 +610,7 @@ function fitVisible() {
   for (const id of visibleIds) {
     const entry = panes.get(id)
     if (!entry) continue
-    const before = `${entry.term.cols}x${entry.term.rows}`
-    fitPane(entry)
-    // 拖側欄寬度時 ResizeObserver 一秒送幾十次，欄列數其實大多沒變：
-    // 每一次都往 main 送 resize 等於連累 ConPTY 一起重排。
-    if (`${entry.term.cols}x${entry.term.rows}` === before) continue
-    void electronAPI.terminal.resize(id, entry.term.cols, entry.term.rows)
+    fitAndSync(id, entry)
   }
 }
 
@@ -892,6 +910,13 @@ export function initTerminalPage() {
 
   electronAPI.terminal.onData(onData)
   electronAPI.terminal.onStatus(onStatus)
+
+  // Ctrl+G：CLI 要開編輯器改提示詞。main 那邊把它導到 App 自己的編輯分頁
+  // （見 `terminal/editor-bridge.js`），這裡只負責把分頁開出來。
+  electronAPI.terminal.onEditRequest?.((_event, payload) => {
+    if (!payload?.id) return
+    void import('./ws-tabs.js').then((mod) => mod.openPromptEditTab(payload))
+  })
 
   // 外觀（配色＋桌布）先讀一次；設定頁存檔後會再發這個事件叫我們重讀
   void refreshTerminalAppearance()

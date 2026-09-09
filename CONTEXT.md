@@ -25,7 +25,8 @@ src/main/
   terminal/           ConPTY：pty.js、status.js（OSC 133 ＋ 靜默雙軌，純函式）、store.js（固定表）、
                       ipc.js、links.js（畫面上的網址／路徑，主行程驗存在再開）、
                       admin.js／admin-host.js（管理員終端機的提權 host）、
-                      host.js／host-runtime.js／host-client.js／service.js（**PTY 住在 App 外的獨立宿主**）
+                      host.js／host-runtime.js／host-client.js／service.js（**PTY 住在 App 外的獨立宿主**）、
+                      editor-bridge.js（Ctrl+G 的 $EDITOR 橋接：CLI 開的編輯器就是 App 自己的分頁）
   workspace/          專案工作區：store.js（workspaces.json）、files.js（**唯一的檔案系統入口**，resolveIn）、
                       git.js（porcelain=v2 -z 解析＋commit／push／審閱）、agents.js（本機 AI session）、
                       worktree.js、watch.js（一次看一個專案的 recursive watcher）、index.js、ipc.js
@@ -86,6 +87,19 @@ AGY 設定、終端機、聊天、語音輸入紀錄**刻意不進** `STORE_ALLO
 翻譯與 TTS 頁不在這組（維持全域 key）。
 
 ## 最近變更
+
+### 2026-09-09 — 終端機切回來畫面錯亂、Ctrl+G 改用 App 內的編輯器
+
+- **畫面重複／被切一半的根因是欄列數沒同步**：`openSession` 切回舊分頁時只 `fitPane`
+  不送 resize，那一格被藏起來的期間版面被拉過就對不上——Claude Code／Codex 這種整畫面
+  重畫的 CLI 會照舊寬度再貼一次，看起來就是狀態列兩份、右邊被切掉半行。改走
+  `fitAndSync`（量完欄列數變了才送）。回歸 `test-terminal-ui.js`。
+- **Ctrl+G 不再彈記事本**：`terminal/editor-bridge.js` 產生一支純 batch 當 `EDITOR`，
+  CLI 呼叫它時 batch 把檔案複製成 `<id>.in` 並卡住等 `<id>.done`；App 收到就開一個
+  提示詞編輯分頁，按「送出」寫出 `<id>.out` ＋ `.done`，batch 自己蓋回原檔後退出。
+  **路徑一個字都不出 batch**（`echo %~f1` 會用 cp950 寫出亂碼路徑），renderer 也只
+  拿得到 id 與內容。使用者自己設過 `EDITOR`／`VISUAL` 就不接手。回歸
+  `probe-terminal-editor.js`（真的把 batch 跑起來走完整條路）。
 
 ### 2026-09-09 — 終端機：WebGL、搜尋、字級、分割、標題與 cwd、忙碌判定
 

@@ -207,6 +207,18 @@ tag 要與 `package.json` 的 version 一致。
 - **一份執行環境 248MB**：`stageRuntime` 每次改版就多一份，舊的要清掉（能用 `r+` 開啟該份 exe ＝沒人在跑）；建到一半失敗要把 staging 整個刪掉。
 - **系統工具一律指名 `%SystemRoot%\System32`**：PATH 上常擺著 Git Bash 的 MSYS `whoami.exe`／`icacls.exe`，裸名會抓錯那支（libuv 的搜尋順序只看 PATH，不含 System32），症狀是「PowerShell 跑得過、Git Bash 跑不過」。
 - 已結束的終端機**保留畫面**（`finished` map），狀態是 `exited` 不是 `stopped`；`stopped` ＝這次還沒開過。明確刪除（`forget`）才真的收掉，宿主也才會閒置自關。
+- **切回一格終端機一定要重新對欄列數**：`openSession` 走 `fitAndSync` 不是 `fitPane`
+  ——那一格被藏起來的期間側欄或視窗可能被拉過，量到的新尺寸沒送給 ConPTY 的話，
+  整畫面重畫的 CLI（Claude Code／Codex）會照舊寬度再貼一次：**狀態列出現兩份、
+  右邊被切掉半行**。回歸 `test-terminal-ui.js`。
+- **Ctrl+G 的 `$EDITOR` 橋接（`editor-bridge.js`）三個坑**：那支 batch **只能是 ASCII**
+  （cmd.exe 用 cp950 讀 UTF-8 的中文註解會把行切壞，錯誤是莫名其妙的
+  `'idge' is not recognized`）；**路徑不可以用 `echo %~f1` 送出來**（同樣的 cp950 問題，
+  使用者名稱有中文就指到不存在的檔案），改成 batch 自己 `copy` 檔案進出；**「上一輪
+  留下來的請求」不可以用檔案時間判斷**（`copy` 會把來源的 mtime 一起帶過去，看起來
+  永遠很舊），改成啟動時掃一次當下就存在的那些。回歸 `probe-terminal-editor.js`。
+- 使用者自己設過 `EDITOR`／`VISUAL` 就**不接手**（`pty.js` 不覆蓋），這時 `raiseChildWindow`
+  才需要出手抬窗。
 - **終端機連結**：`provideLinks` 收到的是**整份緩衝區的 1-based 列號**（不是畫面上第幾列），回去的 range 也是同一套；折行的一列要先往回接成整條邏輯行，非最後一折要補滿 `cols` 格位移才換得回欄位。路徑候選一律先問 main 存不存在再畫底線（不驗＝畫面上每個含斜線的字都變假連結），相對路徑以**階段起始 cwd** 為基準。
 - **Shift+Enter 送的是 `\x1b\r` 不是 CSI u**：`\x1b[13;2u` 要終端機與 CLI 先協商 kitty keyboard
   protocol，xterm.js 不宣告支援、CLI 也就不會啟用，那串序列會被當成一般字元——使用者看到的是
@@ -376,7 +388,7 @@ tag 要與 `package.json` 的 version 一致。
 |---|---|
 | 開發沙箱 | `probe-dev-sandbox.js`（**實測**沙箱讀得到你的模型與供應商，而你正在用的那份一個位元組都沒動；動 `dev-sandbox.js` 前後都要跑）|
 | 專案工作區 | `test-workspace.js`／`-nav`／`-ui`／`-state`／`-perf` ＋ `e2e-workspace-cdp.js`（暫存 user-data-dir ＋自種專案）；動 Monaco 前後跑 `probe-workspace-monaco.js`，動 PDF 前跑 `probe-workspace-pdf.js`；動編輯器／diff／預覽／專案切換前後跑 `probe-workspace-perf.js`（**打包版**開 1.4MB／4 萬行的檔，數 `createModel` 有沒有重做、量輸入法游標位置、驗專案隔離）；動大檔開關與記憶體前後跑 `probe-workspace-bigfile.js`（**打包版**量 1.4MB／4 萬行的開檔毫秒數、並排變更毫秒數，以及關掉之後堆積回不回得去、預覽的 iframe 有沒有被收掉） |
-| 終端機 | `test-terminal.js` ＋ `test-terminal-ui.js`（輸出合併、輸入法對位）＋ `probe-terminal-flicker.js`（**會叫到最前面**：DOM vs WebGL 量游標重建與 textarea 抖動）＋ `probe-terminal-upgrade.js`（**打包版**驗 WebGL／Unicode 11／字級／搜尋／分割／OSC 標題與 cwd）＋ `probe-terminal-ime.js`（**打包版**真的走一次 Chromium 輸入法組字）＋ `e2e-terminal.js`（真 ConPTY）＋ `e2e-terminal-cdp.js` ＋ `test-terminal-host.js`（獨立宿主）＋ `test-terminal-links.js` ＋ `probe-terminal-links.js`（真 xterm 座標，`npx electron`）；動宿主或 `build.files`／`asarUnpack` 前後跑 `probe-terminal-restart.js`（**打包版**真的關 App、覆寫安裝檔再開回來）；管理員 `probe-terminal-admin.js`（免 UAC）／`probe-terminal-admin-elevate.js`（**跳一次 UAC**）；動 `foreground.js` 前後跑 `probe-terminal-foreground.js`（**會開／關記事本**，重現「記事本已經開著」再開第二次）；動配色或桌布前後跑 `probe-terminal-background.js`（**打包版**量桌布那一層畫不畫得出來、字有沒有被 opacity 一起壓掉、拿掉圖之後底色回不回得到不透明）|
+| 終端機 | `test-terminal.js` ＋ `test-terminal-ui.js`（輸出合併、輸入法對位）＋ `probe-terminal-flicker.js`（**會叫到最前面**：DOM vs WebGL 量游標重建與 textarea 抖動）＋ `probe-terminal-upgrade.js`（**打包版**驗 WebGL／Unicode 11／字級／搜尋／分割／OSC 標題與 cwd）＋ `probe-terminal-ime.js`（**打包版**真的走一次 Chromium 輸入法組字）＋ `e2e-terminal.js`（真 ConPTY）＋ `e2e-terminal-cdp.js` ＋ `test-terminal-host.js`（獨立宿主）＋ `test-terminal-links.js` ＋ `probe-terminal-links.js`（真 xterm 座標，`npx electron`） ＋ `probe-terminal-editor.js`（Ctrl+G 的 $EDITOR 橋接：真的把那支 batch 跑起來，量它會不會卡住、送出與取消放不放得走）；動宿主或 `build.files`／`asarUnpack` 前後跑 `probe-terminal-restart.js`（**打包版**真的關 App、覆寫安裝檔再開回來）；管理員 `probe-terminal-admin.js`（免 UAC）／`probe-terminal-admin-elevate.js`（**跳一次 UAC**）；動 `foreground.js` 前後跑 `probe-terminal-foreground.js`（**會開／關記事本**，重現「記事本已經開著」再開第二次）；動配色或桌布前後跑 `probe-terminal-background.js`（**打包版**量桌布那一層畫不畫得出來、字有沒有被 opacity 一起壓掉、拿掉圖之後底色回不回得到不透明）|
 | 聊天／Markdown | `e2e-chat.js`（mock SSE）＋ `e2e-chat-cdp.js` ＋ `test-markdown.js` |
 | HF模型 | `test-hfmodels.js` ＋ `probe-hf-router.js`（動 runtime 前跑）／`probe-hf-hub.js`／`probe-hf-detail.js`（打真 HF）＋ `e2e-hfmodels.js` ＋ `e2e-hf-cdp.js` |
 | CC代理／閘道 | `test-ccswitch.js` ＋ `e2e-ccswitch-cdp.js`；端點 `probe-ccswitch-endpoints.js`／模型 `probe-ccswitch-models.js`／Codex 參數 `probe-ccswitch-codex.js`；閘道 `test-ccswitch-gateway.js` ＋ `e2e-ccswitch-gateway.js` |

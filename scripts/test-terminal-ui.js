@@ -26,8 +26,9 @@ const readPlain = (rel) => fs.readFileSync(path.join(__dirname, '../src/renderer
 // 對位那一段搬到 `term-ime.js` 了，接在前面一起載（`syncImeCaret` 從那裡來）
 const source = `${readPlain('term-ime.js')}\n${readPlain('terminal-page.js')}`
 
-function load() {
+function load(extra = {}) {
   const context = {
+    ...extra,
     console,
     document: { hidden: false, getElementById: () => null },
     requestAnimationFrame: () => 0,
@@ -37,7 +38,7 @@ function load() {
     applyAppearance: () => ({ theme: {}, allowTransparency: false })
   }
   vm.createContext(context)
-  vm.runInContext(`${source}\nthis.api = { drainOutput, syncImeCaret }`, context)
+  vm.runInContext(`${source}\nthis.api = { drainOutput, syncImeCaret, fitAndSync }`, context)
   return context.api
 }
 
@@ -149,6 +150,26 @@ async function main() {
     api.syncImeCaret(term)
     assert.deepEqual({ ...style }, before, '還沒 open 的終端機也不要動')
     ok('量不到尺寸時不亂寫')
+  }
+
+  // ── 切回一格終端機時，欄列數變了一定要通知 ConPTY ──
+  {
+    const calls = []
+    const api = load({ electronAPI: { terminal: { resize: (...args) => calls.push(args) } } })
+
+    // 藏起來的期間側欄被拉寬了：這一量欄數就變了
+    const entry = { term: { cols: 80, rows: 24 }, fit: null }
+    entry.fit = { fit() { entry.term.cols = 100 } }
+    api.fitAndSync('t1', entry)
+    assert.deepEqual(calls, [['t1', 100, 24]], '欄數變了就要往 main 送 resize')
+    ok('切回來時量到的新尺寸有送給 ConPTY')
+
+    // 沒變就不要送（拖側欄時 ResizeObserver 一秒幾十發）
+    calls.length = 0
+    entry.fit = { fit() { /* 尺寸沒變 */ } }
+    api.fitAndSync('t1', entry)
+    assert.deepEqual(calls, [], '欄列數沒變不可以送 resize')
+    ok('尺寸沒變就不吵 ConPTY')
   }
 
   console.log(`\n${passed} passed, 0 failed`)

@@ -202,7 +202,7 @@ function shellCommand(shellKey) {
  * @param {number} rows
  * @returns {LiveSession}
  */
-function spawnSession(meta, cols, rows) {
+function spawnSession(meta, cols, rows, editor) {
   const { exe, args, integrated } = shellCommand(meta.shell)
 
   // 管理員：ConPTY 開不出提權的 shell，交給提權的 host 程序去開（admin.js）
@@ -213,7 +213,7 @@ function spawnSession(meta, cols, rows) {
       cols,
       rows,
       cwd: meta.cwd,
-      env: shellEnvironment()
+      env: shellEnvironment(editor)
     })
 
   /** @type {LiveSession} */
@@ -307,7 +307,7 @@ async function deleteSession(id) {
  * @param {number} cols
  * @param {number} rows
  */
-async function openSession(id, cols, rows) {
+async function openSession(id, cols, rows, editor) {
   const key = String(id || '')
   const meta = await store.get(key)
   if (!meta) {
@@ -316,17 +316,22 @@ async function openSession(id, cols, rows) {
     error.userMessage = '找不到這個工作階段'
     throw error
   }
-  return openSessionWithMeta(meta, cols, rows)
+  return openSessionWithMeta(meta, cols, rows, editor)
 }
 
-/** 背景宿主使用 main 已讀取的 metadata，不另外開 electron-store。 */
-function openSessionWithMeta(meta, cols, rows) {
+/**
+ * 背景宿主使用 main 已讀取的 metadata，不另外開 electron-store。
+ *
+ * `editor` 是 App 那邊算好的「Ctrl+G 要跑什麼」（見 `editor-bridge.js`）；只有這一次
+ * 真的要 spawn 新 shell 時用得到，接回既有階段時忽略。
+ */
+function openSessionWithMeta(meta, cols, rows, editor) {
   const key = meta.id
   const c = clampDim(cols, MAX_COLS, 80)
   const r = clampDim(rows, MAX_ROWS, 24)
   let session = live.get(key) || finished.get(key)
   if (!session) {
-    session = spawnSession(meta, c, r)
+    session = spawnSession(meta, c, r, editor)
     publishStatus(key)
   } else if (session.cols !== c || session.rows !== r) {
     resizeSession(key, c, r)
@@ -348,11 +353,20 @@ function openSessionWithMeta(meta, cols, rows) {
   }
 }
 
-/** 宿主的 Node 模式只給宿主自己用，不污染使用者啟動的程式。 */
-function shellEnvironment() {
+/**
+ * 宿主的 Node 模式只給宿主自己用，不污染使用者啟動的程式。
+ *
+ * `editor` 有值時順便把 `EDITOR`／`VISUAL` 指到 App 的編輯器橋接（Claude Code 按
+ * Ctrl+G 就會開 App 內的分頁，而不是記事本）。**使用者自己設過就不覆蓋**——已經
+ * 習慣 vim 的人按下去本來就該進 vim。
+ *
+ * @param {string} [editor]
+ */
+function shellEnvironment(editor) {
   const env = { ...process.env, TERM: 'xterm-256color' }
   delete env.ELECTRON_RUN_AS_NODE
   delete env.ELECTRON_NO_ASAR
+  if (editor && !env.EDITOR && !env.VISUAL) env.EDITOR = editor
   return env
 }
 
