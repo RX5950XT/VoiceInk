@@ -15,7 +15,7 @@ import { electronAPI } from './app.js'
 /** 同一份結果最多重用多久 */
 const CACHE_MS = 500
 
-/** @type {{ projectId: string, at: number, promise: Promise<any> } | null} */
+/** @type {{ projectId: string, at: number, pending: boolean, promise: Promise<any> } | null} */
 let cached = null
 
 /**
@@ -25,11 +25,15 @@ let cached = null
  */
 export function gitStatusShared(projectId) {
   const now = Date.now()
-  if (cached && cached.projectId === projectId && now - cached.at < CACHE_MS) return cached.promise
+  if (cached && cached.projectId === projectId && (cached.pending || now - cached.at < CACHE_MS)) return cached.promise
   const promise = electronAPI.workspace.gitStatus(projectId)
-  cached = { projectId, at: now, promise }
+  const entry = { projectId, at: now, pending: true, promise }
+  cached = entry
   // 失敗不留在快取裡，否則接下來半秒每個人都拿到同一個錯誤
-  promise.catch(() => {
+  promise.then(() => {
+    entry.pending = false
+    entry.at = Date.now()
+  }, () => {
     if (cached?.promise === promise) cached = null
   })
   return promise

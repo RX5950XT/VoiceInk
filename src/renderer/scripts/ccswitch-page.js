@@ -1224,10 +1224,6 @@ function bindOnce() {
   document.getElementById('ccCheckVersionBtn')?.addEventListener('click', () => void reloadVersions())
 }
 
-export function initCcSwitchPage() {
-  bindOnce()
-}
-
 export function refreshCcSwitchPage() {
   bindOnce()
   void (async () => {

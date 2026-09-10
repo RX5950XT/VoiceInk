@@ -134,8 +134,3 @@ export function stateIconName(item) {
   }
   return 'state-exited'
 }
-
-/** 測試用：有哪些名字 */
-export function toolIconNames() {
-  return Object.keys(ICONS)
-}

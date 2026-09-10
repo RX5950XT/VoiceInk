@@ -309,13 +309,11 @@ async function runSync(options) {
   scan.pruneCursors(cursors)
   const cutoff = Date.now() - RETENTION_DAYS * DAY_MS
   const rows = [...buckets.values()].filter((bucket) => bucket.ts >= cutoff)
-  s.set('buckets', rows)
-  s.set('cursors', cursors)
-  s.set('dbCursors', dbCursors)
-  s.set('rulesVersion', pricing.RULES_VERSION)
-  s.set('syncedAt', Date.now())
+  const syncedAt = Date.now()
+  // electron-store 每次 set 都會重讀與重寫 JSON；大游標檔案要一次寫完。
+  s.set({ buckets: rows, cursors, dbCursors, rulesVersion: pricing.RULES_VERSION, syncedAt })
 
-  return { ...report, fullRescan, buckets: rows.length, syncedAt: Date.now() }
+  return { ...report, fullRescan, buckets: rows.length, syncedAt }
 }
 
 // ===== 統計 =====
@@ -504,10 +502,7 @@ async function savePrices(raw) {
 /** 重新掃描：把游標清掉，下一次同步從頭讀 */
 async function reset() {
   const s = await getStore()
-  s.set('buckets', [])
-  s.set('cursors', {})
-  s.set('dbCursors', {})
-  s.set('syncedAt', 0)
+  s.set({ buckets: [], cursors: {}, dbCursors: {}, syncedAt: 0 })
   return true
 }
 

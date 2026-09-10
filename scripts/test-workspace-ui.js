@@ -175,6 +175,24 @@ function gitStatusCacheChecks() {
     await gitStatusShared('C').catch(() => {})
     await gitStatusShared('C').catch(() => {})
     check('失敗不留在快取裡（下一次要能重試）', calls === 5)
+    let now = 0
+    context.Date = { now: () => now }
+    let complete
+    context.electronAPI.workspace.gitStatus = () => {
+      calls += 1
+      return new Promise((resolve) => { complete = resolve })
+    }
+    const slow = gitStatusShared('slow')
+    now = 1000
+    const repeated = gitStatusShared('slow')
+    check('慢請求超過 500ms 仍只打一趟', calls === 6 && repeated === slow)
+    complete({ ok: true })
+    await repeated
+    now = 1200
+    check('快取從完成時計算，剛回來的結果可重用', gitStatusShared('slow') === repeated)
+    now = 1600
+    check('完成後超過 500ms 會重新讀取', gitStatusShared('slow') !== repeated)
+    complete({ ok: true })
   })()
 }
 
@@ -208,9 +226,11 @@ function zoomChecks() {
     /preventDefault\(\)/.test(zoomFn) && /passive: false/.test(zoomFn))
   check('PDF 不走 CSS 放大（會糊掉）', /!previewIsPdf/.test(zoomFn))
   const paintFn = tabs.slice(tabs.indexOf('function paintPreview'), tabs.indexOf('/** pdf.js'))
+  // 每一次套倍率之前都要先標記這一份是不是 PDF，否則會沿用上一份的旗標
+  const beforeZoom = paintFn.split('ensurePreviewZoom(box)').slice(0, -1)
+  const lastLine = (chunk) => chunk.trimEnd().split('\n').pop().trim()
   check('切成 PDF 前就標記，才不會沿用上一份的 CSS 倍率',
-    paintFn.indexOf('previewIsPdf = Boolean(tab.pdf)') >= 0 &&
-    paintFn.indexOf('previewIsPdf = Boolean(tab.pdf)') < paintFn.indexOf('ensurePreviewZoom(box)'))
+    beforeZoom.length > 0 && beforeZoom.every((chunk) => lastLine(chunk).startsWith('previewIsPdf =')))
   check('PDF 改用更大的 scale 重畫', /scale: 1\.5 \* zoom/.test(tabs))
   check('放大時要放開圖片的尺寸上限', /\.ws-editor-preview\.is-zoomed \.ws-editor-img/.test(css))
 }

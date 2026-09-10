@@ -287,7 +287,6 @@ async function main() {
     await cdp.eval(`document.querySelector('#wsTree .ws-tree-row[data-rel="page.html"]').click()`)
     await waitInPage(cdp, `!document.getElementById('wsEditor')?.hidden`)
     await sleep(500)
-    await cdp.eval(`document.getElementById('wsEditorPreviewBtn').click()`)
     const framed = await waitInPage(cdp, `!!document.querySelector('#wsEditorPreview iframe')`)
     ok('HTML 預覽畫得出來', framed)
     await cdp.eval(`(async () => {
@@ -296,7 +295,7 @@ async function main() {
     })()`)
     await sleep(500)
     const leftovers = await cdp.eval(`document.querySelectorAll('#wsEditorPreview iframe, #wsEditorPreview video, #wsEditorPreview audio').length`)
-    ok('[D] 關掉預覽分頁後 iframe 被收掉（不會繼續跑腳本）', leftovers === 0, `還留著 ${leftovers} 個`)
+    ok('[D] 關掉預覽分頁後 iframe 被收掉（不會繼續跑腳本）', framed && leftovers === 0, `還留著 ${leftovers} 個`)
   } finally {
     if (cdp) cdp.close()
     try { execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' }) } catch { /* 已結束 */ }

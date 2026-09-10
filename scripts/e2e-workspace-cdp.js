@@ -1550,8 +1550,9 @@ async function main() {
       await waitInPage(cdp,
         `document.getElementById('wsEditorText').value === '這是提示詞'
           && document.querySelector('#wsTabStrip .ws-tab[data-id="g:99123"]')`, 8000))
-    ok('[AE] 存檔鈕改口叫「送出」（存的不是檔案，是送回終端機）',
-      await cdp.eval(`document.getElementById('wsEditorSaveBtn').textContent.trim()`) === '送出')
+    // 儲存與送出是兩件事：這顆只寫 .out（可以再改再存），關掉分頁才寫 .done 放走 batch
+    ok('[AE] 存檔鈕就叫「儲存」（存完分頁還留著，關掉才送回終端機）',
+      await cdp.eval(`document.getElementById('wsEditorSaveBtn').textContent.trim()`) === '儲存')
     const cancelled = await cdp.eval(
       `window.electronAPI.terminal.editorCancel('99123').then((r) => JSON.stringify(r))`)
     ok('[AE] editorCancel 一路通到 main（preload／ipc／白名單三份清單都有這一支）',

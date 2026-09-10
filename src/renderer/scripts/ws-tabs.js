@@ -418,23 +418,6 @@ function tabTooltip(tab) {
  */
 const findTab = (id) => tabs.find((tab) => tab.id === id)
 
-/**
- * 把 `fromId` 搬到 `toId` 現在的位置。分頁順序只活在記憶體裡（不落盤），
- * 所以不用像側欄那樣回寫 store。
- *
- * @param {string} fromId
- * @param {string} toId
- */
-function moveTab(fromId, toId) {
-  const from = tabs.findIndex((tab) => tab.id === fromId)
-  const to = tabs.findIndex((tab) => tab.id === toId)
-  if (from < 0 || to < 0 || from === to) return
-  const [moved] = tabs.splice(from, 1)
-  tabs.splice(to, 0, moved)
-  renderTabs()
-  schedulePersistTabs()
-}
-
 // ===== 分頁拖曳：比照額度儀表板（拖曳中只改 transform，不改 DOM，零閃爍極致滑順）=====
 
 /** 拖曳啟動門檻：小於這個距離仍當成點擊 */
@@ -1378,22 +1361,45 @@ let previewKey = { id: '', source: null }
 /** 非同步預覽的世代；切換分頁後，舊的 PDF 結果不能蓋回來 */
 let previewGeneration = 0
 
+/** 目前 PDF 文件的清理器；pdf.js 文件不會因為移除 canvas 自己釋放 worker 資源 */
+let activePdfCleanup = null
+
+function releasePdf() {
+  previewGeneration += 1
+  const cleanup = activePdfCleanup
+  activePdfCleanup = null
+  cleanup?.()
+}
+
+/** @param {any} doc */
+async function destroyPdfDocument(doc) {
+  try {
+    await doc?.destroy?.()
+  } catch {
+    console.warn('[工作區] PDF 文件釋放失敗')
+  }
+}
+
 /**
  * 預覽區裡「看不到也還在跑」的東西要收掉。
  *
  * `<iframe>` 的腳本、`<video>`／`<audio>` 的緩衝與播放，被 `hidden` 蓋住之後
  * 一樣照跑——切到別的分頁、甚至把分頁關掉，它們都還在背景吃 CPU 與網路。
- * 純 DOM 的預覽（Markdown、圖片、SVG）與畫好的 PDF canvas 不會，留著下次切回來
- * 就不用重畫（PDF 尤其貴，要把整份 base64 再解一次）；那些等分頁真的關掉再一起收。
+ * 純 DOM 的預覽（Markdown、圖片、SVG）會留著下次切回來重用；PDF 文件與媒體則
+ * 在切換或關閉時收掉，避免背景資源一直活著。
  *
  * @param {HTMLElement} box
  */
 function releasePreviewMedia(box) {
-  if (!box.querySelector('iframe, video, audio')) return
-  for (const media of box.querySelectorAll('video, audio')) {
-    /** @type {HTMLMediaElement} */ (media).pause()
-    media.removeAttribute('src')
-    /** @type {HTMLMediaElement} */ (media).load()
+  const hadPdf = previewIsPdf || Boolean(activePdfCleanup)
+  releasePdf()
+  const previewMedia = box.querySelectorAll('iframe, video, audio')
+  if (!previewMedia.length && !hadPdf) return
+  const media = box.querySelectorAll('video, audio')
+  for (const mediaEl of media) {
+    /** @type {HTMLMediaElement} */ (mediaEl).pause()
+    mediaEl.removeAttribute('src')
+    /** @type {HTMLMediaElement} */ (mediaEl).load()
   }
   box.replaceChildren()
   previewKey = { id: '', source: null }
@@ -1465,9 +1471,7 @@ function paintPreview(tab) {
 
   const on = Boolean(tab.preview)
   const ext = extOf(tab.relPath || '')
-  // 先標記再套倍率：paintPdf 是非同步的，等 canvas 出現才判斷會慢一拍
-  previewIsPdf = Boolean(tab.pdf)
-  ensurePreviewZoom(box)
+  const nextIsPdf = Boolean(tab.pdf)
   const previewOnly = Boolean((tab.image || tab.pdf || tab.audio || tab.video) && ext !== 'svg')
   if (el.editorFindBtn) {
     el.editorFindBtn.hidden = previewOnly
@@ -1477,6 +1481,8 @@ function paintPreview(tab) {
   box.hidden = !on
   if (!on) {
     releasePreviewMedia(box)
+    previewIsPdf = false
+    ensurePreviewZoom(box)
     if (!monaco && text && el.ideGutter) updateGutter(text, el.ideGutter)
     return
   }
@@ -1485,7 +1491,16 @@ function paintPreview(tab) {
   // Markdown 解析／重建 iframe／把整份 PDF 從 base64 解出來再重新排版一次。
   // 比的是內容字串本身（不是長度）：同長度的修改也要重畫。
   const source = tab.pdf || tab.audio || tab.video || tab.image || (tab.content || '')
-  if (previewKey.id === tab.id && previewKey.source === source && box.firstChild) return
+  if (previewKey.id === tab.id && previewKey.source === source && box.firstChild) {
+    previewIsPdf = nextIsPdf
+    ensurePreviewZoom(box)
+    return
+  }
+  releasePreviewMedia(box)
+  // 先收掉上一份，再標記這一份：載入中的 PDF 還沒有 activePdfCleanup，
+  // releasePreviewMedia 得靠上一份的 previewIsPdf 找到它。
+  previewIsPdf = nextIsPdf
+  ensurePreviewZoom(box)
   previewKey = { id: tab.id, source }
   const generation = ++previewGeneration
 
@@ -1569,8 +1584,27 @@ async function paintPdf(tab, box, generation) {
     const bytes = new Uint8Array(bin.length)
     for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i)
     const doc = await pdfLib.getDocument({ data: bytes, isEvalSupported: false }).promise
-    if (!isCurrent()) { await doc.destroy(); return }
+    if (!isCurrent()) { await destroyPdfDocument(doc); return }
     let page = 1
+
+    let drawGeneration = 0
+    let renderTask = null
+    let released = false
+    const cleanup = () => {
+      if (released) return
+      released = true
+      drawGeneration += 1
+      const task = renderTask
+      renderTask = null
+      try {
+        task?.cancel()
+      } catch {
+        console.warn('[工作區] PDF 繪圖取消失敗')
+      }
+      void destroyPdfDocument(doc)
+      if (activePdfCleanup === cleanup) activePdfCleanup = null
+    }
+    activePdfCleanup = cleanup
 
     const bar = document.createElement('div')
     bar.className = 'ws-pdf-bar'
@@ -1599,8 +1633,6 @@ async function paintPdf(tab, box, generation) {
       void draw()
     }, { passive: false })
 
-    let drawGeneration = 0
-    let renderTask = null
     const draw = async () => {
       const drawId = ++drawGeneration
       try {

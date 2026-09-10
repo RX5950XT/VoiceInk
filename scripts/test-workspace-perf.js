@@ -229,7 +229,7 @@ this.api = { updateGutter }`, context)
   }
   vm.createContext(context)
   vm.runInContext(`${readModule('src/renderer/scripts/ws-tool-icons.js')}
-this.api = { toolIcon, toolIconNames, stateIconName }`, context)
+this.api = { toolIcon, stateIconName }`, context)
 
   const tabsSource = fs.readFileSync(path.join(__dirname, '../src/renderer/scripts/ws-tabs.js'), 'utf8')
   const block = tabsSource.slice(tabsSource.indexOf('const NEW_ITEMS'), tabsSource.indexOf('const NEW_ITEMS') + 600)
