@@ -50,15 +50,12 @@ export function registerTermLinks(term, id) {
       const hits = info ? scanLine(info.text) : []
       if (!hits.length) { callback(undefined); return }
 
-      const cols = term.cols || 1
-      /** @param {number} offset */
-      const at = (offset) => ({ x: (offset % cols) + 1, y: info.startY + Math.floor(offset / cols) })
       /** @param {Set<string>} exists */
       const finish = (exists) => {
         const links = hits
           .filter((hit) => hit.url || exists.has(hit.text))
           .map((hit) => ({
-            range: { start: at(hit.start), end: at(hit.end - 1) },
+            range: { start: info.at(hit.start), end: info.endAt(hit.end - 1) },
             text: hit.text,
             activate: (event) => {
               event.preventDefault()

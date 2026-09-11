@@ -241,7 +241,7 @@ tag 要與 `package.json` 的 version 一致。
   照著程式碼查會以為橋接壞了。接手時 `EDITOR`／`VISUAL` **兩個都要蓋**（只蓋 EDITOR 會被
   VISUAL 壓過去）。設了 vim 那類真編輯器才放行，這時 `raiseChildWindow` 才需要出手抬窗。
   回歸 `probe-terminal-editor.js` 的 [F]。
-- **終端機連結**：`provideLinks` 收到的是**整份緩衝區的 1-based 列號**（不是畫面上第幾列），回去的 range 也是同一套；折行的一列要先往回接成整條邏輯行，非最後一折要補滿 `cols` 格位移才換得回欄位。路徑候選一律先問 main 存不存在再畫底線（不驗＝畫面上每個含斜線的字都變假連結），相對路徑以**階段起始 cwd** 為基準。
+- **終端機連結**：`provideLinks` 收到的是**整份緩衝區的 1-based 列號**（不是畫面上第幾列），回去的 range 也是同一套；折行的一列要先往回接成整條邏輯行再掃。range 的 x 是 **cell 欄位**不是字元位移——CJK／emoji 一格佔兩欄，用 `offset % cols` 會把底線畫到前後無關的字上；有 `getCell` 就逐格對。掃描不要把前後黏著的中文、括號、等號吃進候選。路徑候選一律先問 main 存不存在再畫底線（不驗＝畫面上每個含斜線的字都變假連結），相對路徑以**即時 cwd（OSC 7，沒有就退回開檔目錄）** 為基準。
 - **Shift+Enter 送的是 `\x1b\r` 不是 CSI u**：`\x1b[13;2u` 要終端機與 CLI 先協商 kitty keyboard
   protocol，xterm.js 不宣告支援、CLI 也就不會啟用，那串序列會被當成一般字元——使用者看到的是
   輸入框裡直接冒出 `[13;2u`。`ESC`＋`CR` 是 Claude Code `/terminal-setup` 綁的同一個東西。

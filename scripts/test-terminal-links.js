@@ -64,6 +64,12 @@ async function main() {
     ok('剝掉尾巴的標點', hits[0]?.url === 'https://example.com/a/b', JSON.stringify(hits))
     ok('剝掉開頭的括號', hits[0]?.start === 'see ('.length)
   }
+  {
+    const line = '請看https://example.com/a/b即可'
+    const hits = scan.scanLine(line)
+    ok('網址不含前後中文', hits[0]?.url === 'https://example.com/a/b', JSON.stringify(hits))
+    ok('網址位移不含前後中文', line.slice(hits[0].start, hits[0].end) === 'https://example.com/a/b')
+  }
 
   // ===== 掃描：路徑 =====
   console.log('\n[掃描：路徑]')
@@ -86,6 +92,32 @@ async function main() {
     ok('單純一條斜線不是候選', scan.scanLine('a / b').length === 0)
     ok('空行沒有候選', scan.scanLine('').length === 0)
   }
+  {
+    const line = '請看src/main/terminal/links.js即可'
+    const hits = scan.scanLine(line)
+    ok('路徑不含前後中文', hits[0]?.text === 'src/main/terminal/links.js', JSON.stringify(hits))
+    ok('路徑位移不含前後中文', line.slice(hits[0].start, hits[0].end) === 'src/main/terminal/links.js')
+  }
+  {
+    const hits = scan.scanLine('Read(src/main/terminal/links.js)')
+    ok('函式呼叫括號裡只取路徑', hits[0]?.text === 'src/main/terminal/links.js', JSON.stringify(hits))
+  }
+  {
+    const hits = scan.scanLine('cwd=src/main/terminal/links.js')
+    ok('等號左邊不是路徑', hits[0]?.text === 'src/main/terminal/links.js', JSON.stringify(hits))
+  }
+  {
+    const hits = scan.scanLine('error:C:\\Users\\foo\\bar.txt')
+    ok('冒號後面的 Windows 路徑單獨取出', hits[0]?.text === 'C:\\Users\\foo\\bar.txt', JSON.stringify(hits))
+  }
+  {
+    const hits = scan.scanLine('路徑：D:\\文件\\說明.txt')
+    ok('全形冒號後面的中文路徑仍認得', hits[0]?.text === 'D:\\文件\\說明.txt', JSON.stringify(hits))
+  }
+  {
+    const hits = scan.scanLine('see src/文件/foo.js here')
+    ok('相對路徑中間的中文檔名留著', hits[0]?.text === 'src/文件/foo.js', JSON.stringify(hits))
+  }
 
   // ===== 掃描：折行 =====
   console.log('\n[掃描：折行]')
@@ -102,9 +134,34 @@ async function main() {
     ok('前面每一折補滿 cols 格', info?.text.length === cols + '/a.io/x'.length, JSON.stringify(info))
     const hit = scan.scanLine(info.text).find((entry) => entry.url)
     ok('跨折行的網址接得起來', hit?.url === 'http://a.io/x', JSON.stringify(hit))
-    const at = (offset) => ({ x: (offset % cols) + 1, y: info.startY + Math.floor(offset / cols) })
-    ok('起點換回第 2 列第 5 欄', JSON.stringify(at(hit.start)) === JSON.stringify({ x: 5, y: 2 }))
-    ok('終點落在第 3 列', at(hit.end - 1).y === 3)
+    ok('起點換回第 2 列第 5 欄', JSON.stringify(info.at(hit.start)) === JSON.stringify({ x: 5, y: 2 }))
+    ok('終點落在第 3 列', info.at(hit.end - 1).y === 3)
+  }
+  {
+    // 「看」佔兩欄，「 src/a.js」從第 3 欄開始。若用字元位移 % cols，底線會畫到「看」上面。
+    const rows = [{ text: '看 src/a.js' }]
+    const line = {
+      isWrapped: false,
+      length: 12,
+      getCell(x) {
+        const cells = [
+          { chars: '看', width: 2 }, { chars: '', width: 0 },
+          { chars: ' ', width: 1 },
+          { chars: 's', width: 1 }, { chars: 'r', width: 1 }, { chars: 'c', width: 1 },
+          { chars: '/', width: 1 }, { chars: 'a', width: 1 }, { chars: '.', width: 1 },
+          { chars: 'j', width: 1 }, { chars: 's', width: 1 }
+        ]
+        return cells[x]
+      },
+      translateToString: (trim) => (trim ? '看 src/a.js' : '看 src/a.js'.padEnd(12, ' '))
+    }
+    const buf = { getLine: (i) => (i === 0 ? line : undefined) }
+    const info = scan.logicalLine(buf, 1)
+    const hit = scan.scanLine(info.text).find((entry) => entry.text === 'src/a.js')
+    ok('寬字元列掃得到路徑', hit?.text === 'src/a.js', JSON.stringify(hit))
+    ok('寬字元後的路徑從第 4 欄起', JSON.stringify(info.at(hit.start)) === JSON.stringify({ x: 4, y: 1 }),
+      JSON.stringify(info.at(hit.start)))
+    ok('寬字元本身不是路徑的起點', info.at(0).x === 1 && info.at(hit.start).x !== 1)
   }
 
   // ===== 主行程：路徑解析 =====

@@ -41,10 +41,8 @@ term.registerLinkProvider({
     const info = logicalLine(term.buffer.active, lineNumber)
     const hits = info ? scanLine(info.text) : []
     if (!hits.length) { callback(undefined); return }
-    const cols = term.cols
-    const at = (offset) => ({ x: (offset % cols) + 1, y: info.startY + Math.floor(offset / cols) })
     callback(hits.map((hit) => ({
-      range: { start: at(hit.start), end: at(hit.end - 1) },
+      range: { start: info.at(hit.start), end: info.endAt(hit.end - 1) },
       text: hit.text,
       activate: (event) => { event.preventDefault(); window.__fired.push(hit.text) }
     })))
@@ -57,7 +55,9 @@ window.__ready = new Promise((resolve) => {
   // 座標約定弄反才驗得出來（不捲的話兩種算法剛好一樣，測了等於沒測）。
   const filler = Array.from({ length: 20 }, (unused, i) => 'filler ' + i).join('\\n') + '\\n'
   term.write(filler + 'line one\\nsee src/main/terminal/links.js here\\n', () => {
-    term.write('go http://localhost:5173/a/very/long/path/x end\\n', () => resolve(true))
+    term.write('go http://localhost:5173/a/very/long/path/x end\\n', () => {
+      term.write('\\u770bsrc/renderer/app.js end\\n', () => resolve(true))
+    })
   })
 })
 
@@ -144,6 +144,17 @@ app.whenReady().then(async () => {
   await run("window.__clickText('line one')")
   fired = await run('window.__fired')
   ok('沒有連結的字點了不會叫任何東西', fired.length === 0, JSON.stringify(fired))
+
+  // 「看」佔兩欄。座標若用字元位移，底線會蓋到這個字上，點下去會誤開路徑。
+  await run('window.__fired = []')
+  await run("window.__clickText('\\u770b')")
+  fired = await run('window.__fired')
+  ok('寬字元本身點了不是路徑', fired.length === 0, JSON.stringify(fired))
+
+  await run('window.__fired = []')
+  await run("window.__clickText('app.js')")
+  fired = await run('window.__fired')
+  ok('寬字元後面的路徑仍點得到', fired.includes('src/renderer/app.js'), JSON.stringify(fired))
 
   console.log(`\n${passed} passed, ${failed} failed`)
   win.destroy()

@@ -189,8 +189,10 @@ AGY 設定、終端機、聊天、語音輸入紀錄**刻意不進** `STORE_ALLO
 - **候選字要先問主行程「這個真的存在嗎」**，不存在就不畫底線：不然畫面上每個含斜線的字都變成假連結。
   相對路徑以**這個階段開起來時的 cwd** 為基準（PTY 之後 `cd` 去哪主行程看不到）。
 - `provideLinks` 拿到的是**整份緩衝區的 1-based 列號**（不是畫面上的第幾列），回去的 range 同一套；
-  折行的一列要往回接成整條邏輯行再掃。實測 `probe-terminal-links.js`（真 xterm、真滑鼠事件）。
-- 新測試：`test-terminal-links.js`（32 項）、`probe-terminal-links.js`（4 項）。
+  折行的一列要往回接成整條邏輯行再掃。range 的 x 是 cell 欄位：CJK 一格佔兩欄，
+  用字元位移 `% cols` 會把底線畫到前後無關的字上。掃描會剝掉黏在前後的中文、括號、等號。
+  實測 `probe-terminal-links.js`（真 xterm、真滑鼠事件）。
+- 新測試：`test-terminal-links.js`、`probe-terminal-links.js`。
 
 ### 2026-09-07 — 大檔不卡頓、輸入法對位、選單圖示
 
