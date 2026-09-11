@@ -195,6 +195,7 @@ function openDb(userDataPath, opts = {}) {
   const db = new Ctor(dbPath)
   db.exec(CREATE_SQL)
   try { db.exec('PRAGMA wal_checkpoint(PASSIVE)') } catch { /* 新庫沒有 WAL */ }
+  try { require('./categories').seed(db) } catch { /* 分類表還沒建起來也不擋開庫 */ }
   return db
 }
 

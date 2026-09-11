@@ -125,5 +125,24 @@ console.log('[D] 同一種讀數散在多個硬體上要分開')
     JSON.stringify(groups.map((g) => g.title)))
 }
 
+console.log('[E] 雙 GPU 感測器要分開')
+{
+  const dual = {
+    available: true,
+    groups: [
+      { n: 'NVIDIA GeForce RTX 4090', t: 'GpuNvidia', s: [{ n: 'GPU Core', t: 'Temperature', v: 62 }] },
+      { n: 'NVIDIA GeForce RTX 4060', t: 'GpuNvidia', s: [{ n: 'GPU Core', t: 'Temperature', v: 41 }] }
+    ]
+  }
+  const a = h.sensorGroups(dual, (t) => String(t).startsWith('Gpu'), 'GPU ', 'RTX 4090')
+  const b = h.sensorGroups(dual, (t) => String(t).startsWith('Gpu'), 'GPU ', 'RTX 4060')
+  const all = h.sensorGroups(dual, (t) => String(t).startsWith('Gpu'), 'GPU ')
+  ok('指名 4090 只拿到 62', a.length === 1 && a[0].rows.some(([, v]) => v.startsWith('62')),
+    JSON.stringify(a))
+  ok('指名 4060 只拿到 41', b.length === 1 && b[0].rows.some(([, v]) => v.startsWith('41')),
+    JSON.stringify(b))
+  ok('不指名還是兩張都在', all.length === 2, JSON.stringify(all.map((g) => g.title)))
+}
+
 console.log(failed ? `\n${failed} 項失敗` : '\n全部通過')
 process.exit(failed ? 1 : 0)

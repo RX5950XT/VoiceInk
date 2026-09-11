@@ -457,6 +457,26 @@ console.log('\n[差值計算]')
   ok('進程名的 #1 後綴剝掉', m.cleanProcName('chrome#12') === 'chrome')
 }
 
+// ===== 同名處理程序合併 =====
+console.log('\n[同名合併]')
+{
+  const rows = [
+    { pid: 11, name: 'chrome', cpu: 4, memory: 100, privateMemory: 90, threads: 20, handles: 100, diskRead: 10, diskWrite: 2, gpu: 12, gpuMemory: 50 },
+    { pid: 8, name: 'chrome', cpu: 6, memory: 200, privateMemory: 180, threads: 22, handles: 80, diskRead: 5, diskWrite: 1, gpu: 30, gpuMemory: 70 },
+    { pid: 3, name: 'notepad', cpu: 1, memory: 30, privateMemory: 20, threads: 4, handles: 40, diskRead: 0, diskWrite: 0, gpu: 0, gpuMemory: 0 }
+  ]
+  const merged = m.mergeProcesses(rows)
+  const chrome = merged.find((p) => p.name === 'chrome')
+  const note = merged.find((p) => p.name === 'notepad')
+  ok('同名收成一列', merged.length === 2)
+  ok('chrome 有 2 個 pid', chrome && chrome.count === 2 && chrome.pids.slice().sort((a, b) => a - b).join(',') === '8,11')
+  ok('主 pid 取最小', chrome && chrome.pid === 8)
+  ok('CPU／記憶體／VRAM 加總', chrome && chrome.cpu === 10 && chrome.memory === 300 && chrome.gpuMemory === 120)
+  ok('GPU% 加總後夾在 100', chrome && chrome.gpu === 42)
+  ok('單筆維持 count 1', note && note.count === 1 && note.pids.join(',') === '3')
+  ok('空清單還是空的', m.mergeProcesses([]).length === 0)
+}
+
 // ===== 整機 CPU =====
 console.log('\n[整機 CPU]')
 {

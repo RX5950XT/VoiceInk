@@ -54,6 +54,9 @@ const SLOTS = Object.freeze([
   { id: 'pump', label: '水冷泵' },
   { id: 'pch', label: '晶片組' },
   { id: 'gpu', label: '顯示卡' },
+  { id: 'gpu-2', label: '顯示卡 2' },
+  { id: 'gpu-3', label: '顯示卡 3' },
+  { id: 'gpu-4', label: '顯示卡 4' },
   { id: 'front-1', label: '前方進風 1' },
   { id: 'front-2', label: '前方進風 2' },
   { id: 'front-3', label: '前方進風 3' },
@@ -69,11 +72,42 @@ const SLOT_IDS = new Set(SLOTS.map((s) => s.id))
  * 曲線的 X 軸來源。溫度與使用率**都是 0~100 的區間**，所以同一個圖形元件通吃，
  * 只換單位標籤。`hw` 比對硬體型別、`kind` 比對感測器型別、`prefer` 是優先挑的名稱。
  */
+/** 來源表預先建滿 8 張；示意圖槽位只到 gpu-4，再多的卡仍讀得到溫度 */
+const GPU_MAX = 8
+
+function gpuSlotId(index) {
+  const i = Math.max(0, Math.floor(Number(index) || 0))
+  return i <= 0 ? 'gpu' : `gpu-${i + 1}`
+}
+
+function gpuSourceId(index, kind = 'temp') {
+  const i = Math.max(0, Math.floor(Number(index) || 0))
+  const suffix = kind === 'load' ? 'load' : 'temp'
+  return i <= 0 ? `gpu-${suffix}` : `gpu${i + 1}-${suffix}`
+}
+
+function gpuSources() {
+  const out = []
+  for (let i = 0; i < GPU_MAX; i += 1) {
+    const label = i === 0 ? 'GPU' : `GPU ${i + 1}`
+    out.push(
+      {
+        id: gpuSourceId(i, 'temp'), label: `${label} 溫度`, unit: '°C',
+        hw: /^Gpu/, kind: 'Temperature', prefer: /GPU Core|Hot ?Spot/i, temp: true, gpuIndex: i
+      },
+      {
+        id: gpuSourceId(i, 'load'), label: `${label} 使用率`, unit: '%',
+        hw: /^Gpu/, kind: 'Load', prefer: /GPU Core/i, temp: false, gpuIndex: i
+      }
+    )
+  }
+  return out
+}
+
 const SOURCES = Object.freeze([
   { id: 'cpu-temp', label: 'CPU 溫度', unit: '°C', hw: /^Cpu$/, kind: 'Temperature', prefer: /Tctl|Package|Core Average/i, temp: true },
   { id: 'cpu-load', label: 'CPU 使用率', unit: '%', hw: /^Cpu$/, kind: 'Load', prefer: /CPU Total/i, temp: false },
-  { id: 'gpu-temp', label: 'GPU 溫度', unit: '°C', hw: /^Gpu/, kind: 'Temperature', prefer: /GPU Core|Hot ?Spot/i, temp: true },
-  { id: 'gpu-load', label: 'GPU 使用率', unit: '%', hw: /^Gpu/, kind: 'Load', prefer: /GPU Core/i, temp: false },
+  ...gpuSources(),
   { id: 'nvme-temp', label: '硬碟溫度', unit: '°C', hw: /^Storage$/, kind: 'Temperature', prefer: /Temperature/i, temp: true },
   { id: 'board-temp', label: '主機板溫度', unit: '°C', hw: /^(Motherboard|SuperIO)$/, kind: 'Temperature', prefer: /System|Motherboard/i, temp: true }
 ])
@@ -89,9 +123,16 @@ const DEFAULT_POINTS = Object.freeze([[30, 30], [50, 40], [70, 70], [85, 100]])
 const CHASSIS_ORDER = Object.freeze(['front-1', 'front-2', 'front-3', 'rear', 'top-1', 'top-2', 'bottom', 'side'])
 
 /** 依接頭名稱猜一個槽位與來源；猜不到就留空讓使用者自己指派 */
-function guessChannel(name) {
+function guessChannel(name, gpuOrdinal = 0) {
   const text = String(name || '')
-  if (/GPU/i.test(text)) return { slot: 'gpu', source: 'gpu-temp' }
+  if (/GPU/i.test(text)) {
+    let ordinal = Math.max(0, Math.floor(Number(gpuOrdinal) || 0))
+    const named = /(?:#\s*|GPU\s*)(\d+)/i.exec(text)
+    if (named) ordinal = Math.max(0, Number(named[1]) - 1)
+    const i = Math.min(ordinal, GPU_MAX - 1)
+    const slot = gpuSlotId(i)
+    return { slot: SLOT_IDS.has(slot) ? slot : '', source: gpuSourceId(i, 'temp') }
+  }
   if (/Pump/i.test(text)) return { slot: 'pump', source: 'cpu-temp' }
   if (/CPU Opt/i.test(text)) return { slot: 'cpu-opt', source: 'cpu-temp' }
   if (/CPU/i.test(text)) return { slot: 'cpu', source: 'cpu-temp' }
@@ -158,12 +199,39 @@ function smooth(history, value) {
  * @param {Array<any>} groups @param {string} sourceId
  * @returns {number|null} 讀不到回 null（不是 0——0 度／0% 是完全不同的意思）
  */
+function gpuHardware(groups) {
+  return (groups || []).filter((group) => /^Gpu/.test(String(group?.t || '')))
+}
+
+/** 同一張卡的多個接頭共用一個序號，來源才對得到 gpu / gpu2 / gpu3 */
+function gpuOrdinals(controls) {
+  const seen = []
+  const map = new Map()
+  for (const control of controls || []) {
+    if (!/gpu/i.test(`${control.n} ${control.hw || ''}`)) continue
+    const key = String(control.hw || control.n)
+    let idx = seen.indexOf(key)
+    if (idx < 0) {
+      seen.push(key)
+      idx = seen.length - 1
+    }
+    map.set(control.id, idx)
+  }
+  return map
+}
+
 function readSource(groups, sourceId) {
   const spec = SOURCE_BY_ID.get(sourceId)
   if (!spec || !Array.isArray(groups)) return null
+  let pool = groups
+  if (Number.isInteger(spec.gpuIndex)) {
+    const hw = gpuHardware(groups)[spec.gpuIndex]
+    if (!hw) return null
+    pool = [hw]
+  }
   let preferred = null
   let fallback = null
-  for (const group of groups) {
+  for (const group of pool) {
     if (!spec.hw.test(String(group?.t || ''))) continue
     for (const sensor of group?.s || []) {
       if (String(sensor?.t) !== spec.kind) continue
@@ -197,8 +265,8 @@ function sanitizePoints(raw) {
  * 單一通道設定的驗證。**這是信任邊界**：renderer 給的東西一律當成敵意輸入。
  * 認不得的值退回猜測或預設，而不是丟掉整筆（比照 chatProviders 那條教訓）。
  */
-function sanitizeChannel(raw, name) {
-  const guess = guessChannel(name)
+function sanitizeChannel(raw, name, gpuOrdinal = 0) {
+  const guess = guessChannel(name, gpuOrdinal)
   const hasSlot = typeof raw?.slot === 'string'
   return {
     slot: SLOT_IDS.has(String(raw?.slot)) ? String(raw.slot) : (hasSlot ? '' : guess.slot),
@@ -295,8 +363,8 @@ function createFanEngine(deps = {}) {
   }
 
   /** 這條通道還沒有設定就依名稱猜一份（不落盤——使用者沒改過就不該長出一堆設定） */
-  function configOf(id, name) {
-    if (!config.channels[id]) config.channels[id] = sanitizeChannel(null, name)
+  function configOf(id, name, gpuOrdinal = 0) {
+    if (!config.channels[id]) config.channels[id] = sanitizeChannel(null, name, gpuOrdinal)
     return config.channels[id]
   }
 
@@ -336,8 +404,10 @@ function createFanEngine(deps = {}) {
 
     const groups = Array.isArray(data.groups) ? data.groups : []
     const now = Date.now()
-    for (const control of (Array.isArray(data.controls) ? data.controls : [])) {
-      const channel = configOf(control.id, control.n)
+    const controls = Array.isArray(data.controls) ? data.controls : []
+    const ordinals = gpuOrdinals(controls)
+    for (const control of controls) {
+      const channel = configOf(control.id, control.n, ordinals.get(control.id) || 0)
       const state = stateOf(control.id)
       const target = computeTarget(channel, state, groups, now)
 
@@ -409,8 +479,10 @@ function createFanEngine(deps = {}) {
       const data = sensors?.read?.() || {}
       const groups = Array.isArray(data.groups) ? data.groups : []
       const now = Date.now()
-      const channels = (Array.isArray(data.controls) ? data.controls : []).map((control) => {
-        const channel = configOf(control.id, control.n)
+      const live = Array.isArray(data.controls) ? data.controls : []
+      const ordinals = gpuOrdinals(live)
+      const channels = live.map((control) => {
+        const channel = configOf(control.id, control.n, ordinals.get(control.id) || 0)
         const state = stateOf(control.id)
         return {
           id: control.id,

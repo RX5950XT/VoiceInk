@@ -8,6 +8,7 @@
 const {
   MAX_HOUR, MAX_DAY, splitHours, splitDays, fmtHour, getDomain, getSiteName, friendlyName
 } = require('./util')
+const categories = require('./categories')
 
 function intOf(value, max) {
   const n = Math.floor(Number(value))
@@ -25,7 +26,7 @@ function ensureApp(db, name, filePath) {
   const processName = String(name || '').trim()
   if (!processName) return 0
   const file = String(filePath || '')
-  const row = db.prepare('SELECT ID, File, Description FROM AppModels WHERE Name = ?').get(processName)
+  const row = db.prepare('SELECT ID, File, Description, CategoryID FROM AppModels WHERE Name = ?').get(processName)
   const label = friendlyName({ name: processName })
   if (row) {
     if (file && !row.File) {
@@ -34,12 +35,17 @@ function ensureApp(db, name, filePath) {
     if (!row.Description && label !== processName) {
       db.prepare('UPDATE AppModels SET Description = ? WHERE ID = ?').run(label, row.ID)
     }
+    if (!row.CategoryID) {
+      const catId = categories.resolveAppCategory(db, processName, file || row.File, row.Description || label)
+      if (catId) db.prepare('UPDATE AppModels SET CategoryID = ? WHERE ID = ?').run(catId, row.ID)
+    }
     return row.ID
   }
+  const catId = categories.resolveAppCategory(db, processName, file, label)
   db.prepare(
     `INSERT INTO AppModels (Name, File, CategoryID, IconFile, TotalTime, Alias, Description)
-     VALUES (?, ?, 0, '', 0, '', ?)`
-  ).run(processName, file, label === processName ? '' : label)
+     VALUES (?, ?, ?, '', 0, '', ?)`
+  ).run(processName, file, catId, label === processName ? '' : label)
   const created = db.prepare('SELECT ID FROM AppModels WHERE Name = ?').get(processName)
   return created ? created.ID : 0
 }
@@ -123,13 +129,20 @@ function ensureUrl(db, url, title) {
 function ensureSite(db, url) {
   const domain = getDomain(url)
   if (!domain) return 0
-  const row = db.prepare('SELECT ID FROM WebSiteModels WHERE Domain = ?').get(domain)
-  if (row) return row.ID
+  const row = db.prepare('SELECT ID, CategoryID FROM WebSiteModels WHERE Domain = ?').get(domain)
+  if (row) {
+    if (!row.CategoryID) {
+      const catId = categories.resolveSiteCategory(db, domain)
+      if (catId) db.prepare('UPDATE WebSiteModels SET CategoryID = ? WHERE ID = ?').run(catId, row.ID)
+    }
+    return row.ID
+  }
   const title = getSiteName(url)
+  const catId = categories.resolveSiteCategory(db, domain)
   db.prepare(
     `INSERT INTO WebSiteModels (Title, Domain, Alias, CategoryID, IconFile, Duration)
-     VALUES (?, ?, '', 0, '', 0)`
-  ).run(title, domain)
+     VALUES (?, ?, '', ?, '', 0)`
+  ).run(title, domain, catId)
   return db.prepare('SELECT ID FROM WebSiteModels WHERE Domain = ?').get(domain).ID
 }
 

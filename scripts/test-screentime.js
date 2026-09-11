@@ -82,6 +82,99 @@ async function main() {
     assert.strictEqual(util.friendlyName({ alias: '我的瀏覽器', name: 'msedge' }), '我的瀏覽器')
   })
 
+  await check('應用與網站會自動分到固定類別', () => {
+    const cat = require('../src/main/screentime/categories')
+    assert.strictEqual(cat.classifyApp('Code', 'C:\\Code.exe', 'Visual Studio Code'), '開發')
+    assert.strictEqual(cat.classifyApp('msedge', '', 'Microsoft Edge'), '瀏覽器')
+    assert.strictEqual(cat.classifyApp('Discord', '', ''), '通訊')
+    assert.strictEqual(cat.classifyApp('Spotify', '', ''), '娛樂')
+    assert.strictEqual(cat.classifyApp('steam', '', ''), '遊戲')
+    assert.strictEqual(cat.classifyApp('SomeUnknown', '', ''), '未分類')
+    assert.strictEqual(cat.classifySite('www.youtube.com'), '娛樂')
+    assert.strictEqual(cat.classifySite('github.com'), '開發')
+    assert.strictEqual(cat.classifySite('discord.com'), '通訊')
+    assert.strictEqual(cat.classifySite('obscure.example'), '未分類')
+  })
+
+  await check('遊戲後綴、模擬器與 Outlook 會分到對的類', () => {
+    const cat = require('../src/main/screentime/categories')
+    assert.strictEqual(cat.classifyApp('Palworld-Win64-Shipping', '', ''), '遊戲')
+    assert.strictEqual(cat.classifyApp('HD-Player', '', 'BlueStacks'), '遊戲')
+    assert.strictEqual(cat.classifyApp('olk', '', 'Microsoft Outlook'), '生產力')
+    assert.strictEqual(cat.classifyApp('VoiceInk', '', 'VoiceInk'), '開發')
+    assert.strictEqual(cat.classifySite('shopee.tw'), '購物')
+    assert.strictEqual(cat.classifySite('www.reuters.com'), '資訊')
+  })
+
+  await check('維基摘要對得上類別', () => {
+    const cat = require('../src/main/screentime/categories')
+    assert.strictEqual(
+      cat.categoryFromText('Palworld is a 2024 action-adventure survival video game.', 'app'),
+      '遊戲'
+    )
+    assert.strictEqual(
+      cat.categoryFromText('Visual Studio Code is a source-code editor developed by Microsoft.', 'app'),
+      '開發'
+    )
+  })
+
+  await check('上網查未分類會寫回 CategoryID，不覆蓋已分類', async () => {
+    const cat = require('../src/main/screentime/categories')
+    const user = tmpDir()
+    const db = dbMod.openDb(user, { import: false })
+    cat.seed(db)
+    const when = new Date(2026, 8, 4, 10, 0, 0)
+    write.updateAppDuration(db, 'WikiOnlyGame', 40, when, 'C:\\WikiOnlyGame.exe')
+    write.updateAppDuration(db, 'Code', 10, when, 'C:\\Code.exe')
+    const fetchFn = async () => ({
+      ok: true,
+      json: async () => ({
+        query: {
+          pages: {
+            1: {
+              title: 'WikiOnlyGame',
+              extract: 'WikiOnlyGame is a 2024 sandbox video game.',
+              categories: [{ title: 'Category:2024 video games' }]
+            }
+          }
+        }
+      })
+    })
+    await cat.lookupUnclassified(db, {
+      fetchFn,
+      cacheFile: path.join(user, 'lookup-cache.json'),
+      limit: 10
+    })
+    const gameId = db.prepare('SELECT ID FROM CategoryModels WHERE Name = ?').get('遊戲').ID
+    const devId = db.prepare('SELECT ID FROM CategoryModels WHERE Name = ?').get('開發').ID
+    assert.strictEqual(db.prepare('SELECT CategoryID FROM AppModels WHERE Name = ?').get('WikiOnlyGame').CategoryID, gameId)
+    assert.strictEqual(db.prepare('SELECT CategoryID FROM AppModels WHERE Name = ?').get('Code').CategoryID, devId)
+    dbMod.closeDb(db)
+  })
+
+  await check('空庫會種預設分類，寫入時帶上 CategoryID', () => {
+    const cat = require('../src/main/screentime/categories')
+    const user = tmpDir()
+    const db = dbMod.openDb(user, { import: false })
+    cat.seed(db)
+    const names = db.prepare('SELECT Name FROM CategoryModels ORDER BY ID').all().map((r) => r.Name)
+    assert.ok(names.includes('開發') && names.includes('瀏覽器'))
+    write.updateAppDuration(db, 'Code', 30, new Date(2026, 8, 4, 10, 0, 0), 'C:\\Code.exe')
+    const row = db.prepare('SELECT CategoryID FROM AppModels WHERE Name = ?').get('Code')
+    const devId = db.prepare('SELECT ID FROM CategoryModels WHERE Name = ?').get('開發').ID
+    assert.strictEqual(row.CategoryID, devId)
+    write.addUrlBrowseTime(db, {
+      url: 'https://www.youtube.com/watch?v=1',
+      title: 'Youtube',
+      duration: 20,
+      activeAt: new Date(2026, 8, 4, 10, 0, 0)
+    })
+    const site = db.prepare('SELECT CategoryID FROM WebSiteModels WHERE Domain = ?').get('www.youtube.com')
+    const funId = db.prepare('SELECT ID FROM WebSiteCategoryModels WHERE Name = ?').get('娛樂').ID
+    assert.strictEqual(site.CategoryID, funId)
+    dbMod.closeDb(db)
+  })
+
   await check('忽略系統行程與 Tai／VoiceInk', () => {
     assert.strictEqual(util.isIgnoredName('Tai'), true)
     assert.strictEqual(util.isIgnoredName('VoiceInk'), true)

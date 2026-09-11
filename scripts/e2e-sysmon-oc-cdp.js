@@ -135,14 +135,14 @@ async function main() {
       apply: Boolean(document.getElementById('ocApplyBtn')),
       reset: Boolean(document.getElementById('ocResetBtn')),
       cpu: Boolean(document.getElementById('ocCpuCard')),
-      gpu: Boolean(document.getElementById('ocGpuCard')),
+      gpu: Boolean(document.getElementById('ocGpuHost')),
       dash: Boolean(document.getElementById('ocDash')),
       cpuGauges: Boolean(document.getElementById('ocCpuGauges')),
-      gpuGauges: Boolean(document.getElementById('ocGpuGauges')),
+      gpuGauges: Boolean(document.getElementById('ocGpuGauges') || document.querySelector('#ocGpuDashHost .sysmon-gauges')),
       cores: Boolean(document.getElementById('ocCpuCores')),
       cpuSpark: Boolean(document.getElementById('ocCpuSpark')),
       gpuSpark: Boolean(document.getElementById('ocGpuSpark')),
-      vf: Boolean(document.getElementById('ocVfHost'))
+      vf: Boolean(document.getElementById('ocVfHost') || document.querySelector('#ocGpuHost .oc-vf-host'))
     }))()`)
     ok('套用／還原與兩欄卡片都在', bar.apply && bar.reset && bar.cpu && bar.gpu, JSON.stringify(bar))
     ok('即時儀表區在', bar.dash && bar.cpuGauges && bar.gpuGauges && bar.cores && bar.cpuSpark && bar.gpuSpark, JSON.stringify(bar))

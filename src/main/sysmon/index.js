@@ -68,6 +68,7 @@ function createSysmonService(deps = {}) {
   sampler.setSampleHandler((sample) => {
     const data = {
       ...sample,
+      processes: metrics.mergeProcesses(sample.processes || []),
       gpu: gpu.read(),
       // 帶上 status 是為了讓畫面能自己更新提示：裝了 PawnIO 之後 `Computer.Open()`
       // 要載一堆核心模組，第一筆讀數實測約 10 秒才到，中間得有話講
@@ -92,12 +93,13 @@ function createSysmonService(deps = {}) {
    * @param {any} snap
    */
   function withOcFeed(snap) {
-    const card = (lastFeed?.gpu?.cards || gpu.read().cards || [])[0] || null
+    const cards = lastFeed?.gpu?.cards || gpu.read().cards || []
     return {
       ...snap,
       feed: {
         cpuTotal: lastFeed?.cpu?.total ?? null,
-        gpu: card
+        gpu: cards[0] || null,
+        gpus: cards
       }
     }
   }

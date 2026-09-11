@@ -36,8 +36,20 @@ namespace VoiceInkSensors
         private const int TempMax = 95;
 
         private static readonly object Gate = new object();
-        private static IntPtr _gpu;
+        private static IntPtr[] _gpus = Array.Empty<IntPtr>();
         private static bool _ready;
+
+        internal static int Count
+        {
+            get { lock (Gate) return _gpus.Length; }
+        }
+
+        private static IntPtr GpuAt(int index)
+        {
+            if (_gpus.Length == 0) return IntPtr.Zero;
+            if (index < 0 || index >= _gpus.Length) index = 0;
+            return _gpus[index];
+        }
 
         private delegate IntPtr QueryInterface(uint id);
         private delegate int NvInit();
@@ -91,8 +103,10 @@ namespace VoiceInkSensors
                 var gpus = new IntPtr[64];
                 uint count = 0;
                 if (enumerate(gpus, ref count) != Ok || count == 0) return false;
-                _gpu = gpus[0];
-                _ready = _gpu != IntPtr.Zero;
+                var list = new System.Collections.Generic.List<IntPtr>((int)count);
+                for (uint i = 0; i < count; i++) if (gpus[i] != IntPtr.Zero) list.Add(gpus[i]);
+                _gpus = list.ToArray();
+                _ready = _gpus.Length > 0;
                 return _ready;
             }
         }
@@ -100,19 +114,25 @@ namespace VoiceInkSensors
         /// <summary>時脈偏移、功耗牆、VID 電壓偏移（µV API，不是 I2C）、溫度牆。V/F 另走 ApplyCurve。</summary>
         internal static bool Apply(int coreMhz, int memMhz, int powerPct, int voltMv, int tempC)
         {
+            return Apply(0, coreMhz, memMhz, powerPct, voltMv, tempC);
+        }
+
+        internal static bool Apply(int index, int coreMhz, int memMhz, int powerPct, int voltMv, int tempC)
+        {
             lock (Gate)
             {
-                if (!_ready) return false;
+                IntPtr gpu = GpuAt(index);
+                if (gpu == IntPtr.Zero) return false;
                 int core = Clamp(coreMhz, CoreMin, CoreMax);
                 int mem = Clamp(memMhz, MemMin, MemMax);
                 int power = Clamp(powerPct, PowerMin, PowerMax);
                 int volt = Clamp(voltMv, VoltMin, VoltMax);
                 int temp = Clamp(tempC, TempMin, TempMax);
-                bool any = SetOffset(DomainCore, core * 1000);
-                any = SetOffset(DomainMemory, mem * 1000) || any;
-                any = SetPower(power) || any;
-                any = SetVoltage(volt * 1000) || any;
-                any = SetTemp(temp) || any;
+                bool any = SetOffset(gpu, DomainCore, core * 1000);
+                any = SetOffset(gpu, DomainMemory, mem * 1000) || any;
+                any = SetPower(gpu, power) || any;
+                any = SetVoltage(gpu, volt * 1000) || any;
+                any = SetTemp(gpu, temp) || any;
                 return any;
             }
         }
@@ -120,11 +140,17 @@ namespace VoiceInkSensors
         /// <summary>extras 為每個啟用的 graphics 點相對核心滑桿的額外 MHz；空的就整條同一偏移。</summary>
         internal static bool ApplyCurve(int coreMhz, int[] extras)
         {
+            return ApplyCurve(0, coreMhz, extras);
+        }
+
+        internal static bool ApplyCurve(int index, int coreMhz, int[] extras)
+        {
             lock (Gate)
             {
-                if (!_ready) return false;
+                IntPtr gpu = GpuAt(index);
+                if (gpu == IntPtr.Zero) return false;
                 int core = Clamp(coreMhz, CoreMin, CoreMax);
-                return SetCurvePoints(core, extras);
+                return SetCurvePoints(gpu, core, extras);
             }
         }
 
@@ -132,29 +158,48 @@ namespace VoiceInkSensors
         {
             lock (Gate)
             {
-                if (!_ready) return false;
-                bool ok = SetOffset(DomainCore, 0);
-                ok = SetOffset(DomainMemory, 0) && ok;
-                ok = SetPower(100) && ok;
-                ok = SetVoltage(0) && ok;
-                SetCurvePoints(0, null);
+                bool ok = true;
+                for (int i = 0; i < _gpus.Length; i++) ok = ResetLocked(i) && ok;
                 return ok;
             }
         }
 
+        internal static bool Reset(int index)
+        {
+            lock (Gate) return ResetLocked(index);
+        }
+
+        private static bool ResetLocked(int index)
+        {
+            IntPtr gpu = GpuAt(index);
+            if (gpu == IntPtr.Zero) return false;
+            bool ok = SetOffset(gpu, DomainCore, 0);
+            ok = SetOffset(gpu, DomainMemory, 0) && ok;
+            ok = SetPower(gpu, 100) && ok;
+            ok = SetVoltage(gpu, 0) && ok;
+            SetCurvePoints(gpu, 0, null);
+            return ok;
+        }
+
         internal static bool TryRead(out int coreOff, out int memOff, out int powerPct)
+        {
+            return TryRead(0, out coreOff, out memOff, out powerPct);
+        }
+
+        internal static bool TryRead(int index, out int coreOff, out int memOff, out int powerPct)
         {
             coreOff = 0;
             memOff = 0;
             powerPct = 100;
             lock (Gate)
             {
-                if (!_ready) return false;
+                IntPtr gpu = GpuAt(index);
+                if (gpu == IntPtr.Zero) return false;
                 bool any = false;
                 if (_getPstates != null)
                 {
                     var info = Pstates20.Blank(2);
-                    if (_getPstates(_gpu, ref info) == Ok && info.numPStates > 0 && info.numClocks > 0)
+                    if (_getPstates(gpu, ref info) == Ok && info.numPStates > 0 && info.numClocks > 0)
                     {
                         for (int i = 0; i < info.numClocks && i < 8; i++)
                         {
@@ -169,7 +214,7 @@ namespace VoiceInkSensors
                 if (_getPower != null)
                 {
                     var status = PowerStatus.Blank();
-                    if (_getPower(_gpu, ref status) == Ok && status.count > 0)
+                    if (_getPower(gpu, ref status) == Ok && status.count > 0)
                     {
                         powerPct = (int)Math.Round(status.e0Power / 1000.0);
                         any = true;
@@ -179,7 +224,7 @@ namespace VoiceInkSensors
             }
         }
 
-        private static bool SetOffset(int domain, int deltaKhz)
+        private static bool SetOffset(IntPtr gpu, int domain, int deltaKhz)
         {
             var info = Pstates20.Blank(2);
             info.numPStates = 1;
@@ -188,18 +233,18 @@ namespace VoiceInkSensors
             info.p0.clocks[0].domainId = (uint)domain;
             info.p0.clocks[0].typeId = 0;
             info.p0.clocks[0].deltaValue = deltaKhz;
-            return _setPstates(_gpu, ref info) == Ok;
+            return _setPstates(gpu, ref info) == Ok;
         }
 
-        private static bool SetPower(int percent)
+        private static bool SetPower(IntPtr gpu, int percent)
         {
             var status = PowerStatus.Blank();
             status.count = 1;
             status.e0Power = (uint)(percent * 1000);
-            return _setPower(_gpu, ref status) == Ok;
+            return _setPower(gpu, ref status) == Ok;
         }
 
-        private static bool SetVoltage(int deltaUv)
+        private static bool SetVoltage(IntPtr gpu, int deltaUv)
         {
             var info = Pstates20.Blank(2);
             info.numPStates = 1;
@@ -207,10 +252,10 @@ namespace VoiceInkSensors
             info.p0.pStateId = 0;
             info.p0.volts[0].domainId = 0;
             info.p0.volts[0].deltaValue = deltaUv;
-            return _setPstates(_gpu, ref info) == Ok;
+            return _setPstates(gpu, ref info) == Ok;
         }
 
-        private static bool SetTemp(int tempC)
+        private static bool SetTemp(IntPtr gpu, int tempC)
         {
             if (_setTemp == null) return false;
             var limit = ThermalLimit.Blank();
@@ -218,20 +263,20 @@ namespace VoiceInkSensors
             limit.controller = 1;
             limit.value = (uint)(tempC << 8);
             limit.flags = 1;
-            return _setTemp(_gpu, ref limit) == Ok;
+            return _setTemp(gpu, ref limit) == Ok;
         }
 
         /// <summary>Pascal 以後寫入 frequencyDeltaKHz 要 ×2。extras 依啟用 graphics 點順序。</summary>
-        private static bool SetCurvePoints(int coreMhz, int[] extras)
+        private static bool SetCurvePoints(IntPtr gpu, int coreMhz, int[] extras)
         {
             if (_getMask == null || _getTable == null || _setTable == null) return false;
             try
             {
                 var mask = ClockMasks.Blank();
-                if (_getMask(_gpu, ref mask) != Ok) return false;
+                if (_getMask(gpu, ref mask) != Ok) return false;
                 var table = ClockTable.Blank();
                 Buffer.BlockCopy(mask.mask, 0, table.mask, 0, 32);
-                if (_getTable(_gpu, ref table) != Ok) return false;
+                if (_getTable(gpu, ref table) != Ok) return false;
                 int n = 0;
                 for (int i = 0; i < 255; i++)
                 {
@@ -241,7 +286,7 @@ namespace VoiceInkSensors
                     table.clocks[i].frequencyDeltaKHz = mhz * 2000;
                     n++;
                 }
-                return _setTable(_gpu, ref table) == Ok;
+                return _setTable(gpu, ref table) == Ok;
             }
             catch
             {
@@ -260,17 +305,23 @@ namespace VoiceInkSensors
         /// <summary>啟用的 graphics 點。電壓來自 GetVFPCurve，讀不到就只給偏移。</summary>
         internal static VfPoint[] TryReadCurve()
         {
+            return TryReadCurve(0);
+        }
+
+        internal static VfPoint[] TryReadCurve(int index)
+        {
             lock (Gate)
             {
-                if (!_ready || _getMask == null || _getTable == null) return Array.Empty<VfPoint>();
+                IntPtr gpu = GpuAt(index);
+                if (gpu == IntPtr.Zero || _getMask == null || _getTable == null) return Array.Empty<VfPoint>();
                 try
                 {
                     var mask = ClockMasks.Blank();
-                    if (_getMask(_gpu, ref mask) != Ok) return Array.Empty<VfPoint>();
+                    if (_getMask(gpu, ref mask) != Ok) return Array.Empty<VfPoint>();
                     var table = ClockTable.Blank();
                     Buffer.BlockCopy(mask.mask, 0, table.mask, 0, 32);
-                    if (_getTable(_gpu, ref table) != Ok) return Array.Empty<VfPoint>();
-                    VfSample[] tableVf = ReadVfTable();
+                    if (_getTable(gpu, ref table) != Ok) return Array.Empty<VfPoint>();
+                    VfSample[] tableVf = ReadVfTable(gpu);
                     var list = new System.Collections.Generic.List<VfPoint>(64);
                     int n = 0;
                     for (int i = 0; i < 255 && list.Count < 96; i++)
@@ -307,7 +358,7 @@ namespace VoiceInkSensors
             public int FreqMhz;
         }
 
-        private static VfSample[] ReadVfTable()
+        private static VfSample[] ReadVfTable(IntPtr gpu)
         {
             if (_getVf == null) return null;
             const int size = 0x1C28;
@@ -318,7 +369,7 @@ namespace VoiceInkSensors
                 Marshal.WriteInt32(buf, 0, size | (1 << 16));
                 for (int i = 4; i < 20; i++) Marshal.WriteByte(buf, i, 0xFF);
                 Marshal.WriteInt32(buf, 0x14, 15);
-                if (_getVf(_gpu, buf) != Ok) return null;
+                if (_getVf(gpu, buf) != Ok) return null;
                 var samples = new VfSample[128];
                 for (int i = 0; i < 128; i++)
                 {

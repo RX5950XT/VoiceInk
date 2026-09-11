@@ -124,16 +124,65 @@ function paintProjectStatuses() {
     const host = row.querySelector('.proj-status')
     if (!host) continue
     const sessions = terminalStatuses().filter((item) => item.projectId === row.dataset.id)
-    host.replaceChildren()
     if (!sessions.length) {
+      if (host.querySelector('.proj-status-empty')) continue
+      for (const chip of host.querySelectorAll('.proj-session-status')) chip.remove()
       const empty = document.createElement('span')
       empty.className = 'proj-status-empty'
       empty.textContent = '沒有終端機'
       host.appendChild(empty)
       continue
     }
-    for (const item of sessions) host.appendChild(buildSessionChip(item))
+    host.querySelector('.proj-status-empty')?.remove()
+    const existing = new Map(
+      [...host.querySelectorAll('.proj-session-status')].map((chip) => [chip.dataset.id, chip])
+    )
+    const keep = new Set()
+    let node = host.firstElementChild
+    for (const item of sessions) {
+      keep.add(item.id)
+      let chip = existing.get(item.id)
+      if (chip) {
+        patchSessionChip(chip, item)
+        if (chip !== node) host.insertBefore(chip, node)
+        node = chip.nextElementSibling
+      } else {
+        chip = buildSessionChip(item)
+        host.insertBefore(chip, node)
+        node = chip.nextElementSibling
+      }
+    }
+    for (const [id, chip] of existing) {
+      if (!keep.has(id)) chip.remove()
+    }
   }
+}
+
+/**
+ * 狀態沒變就留下正在轉的 SVG——每次 `terminal:status` 都拆掉重建的話，
+ * 轉圈圈的 CSS 動畫永遠從 0% 重來，看起來像在抖。
+ * @param {HTMLElement} chip
+ * @param {{ id: string, title: string, preset?: string, state: string, stateLabel: string, exitCode?: number | null }} item
+ */
+function patchSessionChip(chip, item) {
+  chip.title = `${item.title} · ${item.stateLabel}（依此 App 的終端機活動判定）`
+  const preset = item.preset || 'shell'
+  if (chip.dataset.preset !== preset) {
+    chip.dataset.preset = preset
+    const logo = chip.querySelector('.ws-tool-icon:not(.ws-status-icon)')
+    const nextLogo = toolIcon(preset) || toolIcon('shell')
+    if (logo && nextLogo) logo.replaceWith(nextLogo)
+    else if (nextLogo && !logo) chip.insertBefore(nextLogo, chip.firstChild)
+  }
+  const exit = item.exitCode == null ? '' : String(item.exitCode)
+  if (chip.dataset.state === item.state && (chip.dataset.exit || '') === exit) return
+  chip.dataset.state = item.state
+  chip.dataset.exit = exit
+  const old = chip.querySelector('.ws-status-icon')
+  const next = terminalStateIcon(item)
+  if (old && next) old.replaceWith(next)
+  else if (next) chip.appendChild(next)
+  else old?.remove()
 }
 
 /**
@@ -152,6 +201,8 @@ function buildSessionChip(item) {
   chip.className = 'proj-session-status'
   chip.dataset.state = item.state
   chip.dataset.id = item.id
+  chip.dataset.exit = item.exitCode == null ? '' : String(item.exitCode)
+  chip.dataset.preset = item.preset || 'shell'
   const logo = toolIcon(item.preset || 'shell') || toolIcon('shell')
   if (logo) chip.appendChild(logo)
   const state = terminalStateIcon(item)
@@ -697,19 +748,16 @@ function treeStatusInfo(entry) {
 async function renderTree(project = currentProject(), seq = projectSeq) {
   const request = ++treeSeq
   if (!isCurrentProject(project, seq) || !el.tree) return
-  // **同一個專案重畫時不先清空**：監看最快每秒觸發一次，先清再等 `git status`
-  // 等於整棵樹每秒閃一次空白（大 repo 的 status 要幾百毫秒）。舊樹的每一列都還指著
-  // 同一個專案的同一條路徑，點下去仍然是對的。
-  // 換專案就一定要先清——不然使用者會點到**上一個專案**的列。
+  // 換專案才清空——不然會點到上一個專案的列。同一個專案只就地改動：
+  // 監看最快每秒一次，先清再等 git status／listDir 等於整棵樹閃白。
   if (treeProjectId !== project.id) el.tree.replaceChildren()
   treeProjectId = project.id
   if (!await loadTreeGitStatus(project, seq, request)) return
-  el.tree.replaceChildren()
   if (el.filesProject) {
     el.filesProject.textContent = project.name
     el.filesProject.title = project.path
   }
-  await appendLevel(project, '', el.tree, 0, seq, request)
+  await syncLevel(project, '', el.tree, 0, seq, request)
   if (isCurrentProject(project, seq) && request === treeSeq) resetTreeCursor()
 }
 
@@ -745,6 +793,112 @@ async function appendLevel(project, relPath, host, depth, seq, request) {
     note.textContent = '只列出前面一部分'
     host.appendChild(note)
   }
+}
+
+/**
+ * 監看刷新：對這一層就地增刪改，不把整棵拆掉重畫。
+ * @param {{ id: string }} project
+ * @param {string} relPath
+ * @param {HTMLElement} host
+ * @param {number} depth
+ * @param {number} seq
+ * @param {number} request
+ */
+async function syncLevel(project, relPath, host, depth, seq, request) {
+  let listed
+  try {
+    listed = await call(electronAPI.workspace.listDir(project.id, relPath), '讀不到資料夾')
+  } catch {
+    return
+  }
+  if (!isCurrentProject(project, seq) || request !== treeSeq) return
+  let node = skipNonRows(host.firstElementChild)
+  for (const entry of listed.entries) {
+    if (!isCurrentProject(project, seq) || request !== treeSeq) return
+    node = skipNonRows(node)
+    node = await syncEntry(project, entry, host, node, depth, seq, request)
+  }
+  while (node) {
+    const doomed = node
+    node = node.nextElementSibling
+    doomed.remove()
+  }
+  if (listed.truncated) {
+    const note = document.createElement('p')
+    note.className = 'ws-tree-note'
+    note.textContent = '只列出前面一部分'
+    host.appendChild(note)
+  }
+}
+
+/** @param {Element | null} node @returns {Element | null} */
+function skipNonRows(node) {
+  while (node && !node.classList.contains('ws-tree-row')) {
+    const doomed = node
+    node = node.nextElementSibling
+    doomed.remove()
+  }
+  return node
+}
+
+/** @param {HTMLElement} row @returns {HTMLElement | null} */
+function takeChildren(row) {
+  const next = row.nextElementSibling
+  return next?.classList.contains('ws-tree-children') ? next : null
+}
+
+/** @param {Element | null} node @param {string} rel @returns {HTMLElement | null} */
+function findRowFrom(node, rel) {
+  while (node) {
+    if (node.classList.contains('ws-tree-row') && /** @type {HTMLElement} */ (node).dataset.rel === rel) {
+      return /** @type {HTMLElement} */ (node)
+    }
+    node = node.nextElementSibling
+  }
+  return null
+}
+
+/**
+ * @param {{ id: string }} project
+ * @param {{ name: string, rel: string, dir: boolean, ignored?: boolean }} entry
+ * @param {HTMLElement} host
+ * @param {Element | null} node
+ * @param {number} depth
+ * @param {number} seq
+ * @param {number} request
+ * @returns {Promise<Element | null>}
+ */
+async function syncEntry(project, entry, host, node, depth, seq, request) {
+  let row = node && /** @type {HTMLElement} */ (node).dataset.rel === entry.rel
+    ? /** @type {HTMLElement} */ (node)
+    : null
+  if (!row) {
+    const found = findRowFrom(node, entry.rel)
+    if (found) {
+      const kids = takeChildren(found)
+      host.insertBefore(found, node)
+      if (kids) host.insertBefore(kids, node)
+      row = patchTreeRow(found, project, entry, depth)
+    } else {
+      row = buildTreeRow(project, entry, depth)
+      host.insertBefore(row, node)
+    }
+  } else {
+    row = patchTreeRow(row, project, entry, depth)
+  }
+  const wantKids = Boolean(entry.dir && expanded.has(entry.rel))
+  let kids = takeChildren(row)
+  if (wantKids) {
+    if (!kids) {
+      kids = document.createElement('div')
+      kids.className = 'ws-tree-children'
+      row.after(kids)
+    }
+    await syncLevel(project, entry.rel, kids, depth + 1, seq, request)
+    return kids.nextElementSibling
+  }
+  if (kids) kids.remove()
+  return row.nextElementSibling
 }
 
 /**
@@ -788,29 +942,7 @@ function buildTreeRow(project, entry, depth) {
   row.append(caret, name)
 
   const status = treeStatusInfo(entry)
-  if (status) {
-    const statusEl = document.createElement('span')
-    statusEl.className = `ws-tree-status ${status.className}`
-    statusEl.textContent = status.label
-    statusEl.title = status.title
-    statusEl.setAttribute('aria-label', `${entry.rel}：${status.title}`)
-    if (!entry.dir) {
-      statusEl.setAttribute('role', 'button')
-      statusEl.tabIndex = 0
-      const openDiff = () => void openDiffTab(project, entry.rel, status.staged)
-      statusEl.addEventListener('click', (event) => {
-        event.stopPropagation()
-        openDiff()
-      })
-      statusEl.addEventListener('keydown', (event) => {
-        if (event.key !== 'Enter' && event.key !== ' ') return
-        event.preventDefault()
-        event.stopPropagation()
-        openDiff()
-      })
-    }
-    row.appendChild(statusEl)
-  }
+  if (status) row.appendChild(buildTreeStatus(project, entry, status))
 
   row.addEventListener('contextmenu', (event) => openTreeMenu(project, entry, event))
   row.addEventListener('focus', () => setTreeCursor(row))
@@ -836,6 +968,85 @@ function buildTreeRow(project, entry, depth) {
     void openEditorTab(project, entry.rel)
   })
   return row
+}
+
+/**
+ * 就地改一列的 Git 標記／開檔高亮，不重綁點擊。檔案變資料夾才整列換掉。
+ * @param {HTMLElement} row
+ * @param {{ id: string, name: string }} project
+ * @param {{ name: string, rel: string, dir: boolean, ignored?: boolean }} entry
+ * @param {number} depth
+ * @returns {HTMLElement}
+ */
+function patchTreeRow(row, project, entry, depth) {
+  if (Boolean(row.dataset.dir) !== entry.dir) {
+    const next = buildTreeRow(project, entry, depth)
+    takeChildren(row)?.remove()
+    row.replaceWith(next)
+    return next
+  }
+  row.classList.toggle('is-ignored', Boolean(entry.ignored))
+  row.classList.toggle('is-open', !entry.dir && entry.rel === openRel)
+  row.classList.toggle('is-selected', selected.has(entry.rel))
+  row.style.paddingLeft = `${8 + depth * 12}px`
+  row.dataset.depth = String(depth)
+  row.title = entry.ignored ? `${entry.rel}（被 .gitignore 排除，不會提交）` : entry.rel
+  if (entry.dir) {
+    row.setAttribute('aria-expanded', expanded.has(entry.rel) ? 'true' : 'false')
+  }
+  const caret = row.querySelector('.ws-tree-caret')
+  if (caret) caret.textContent = entry.dir ? (expanded.has(entry.rel) ? '▾' : '▸') : ''
+  const name = row.querySelector('.ws-tree-name')
+  if (name && name.textContent !== entry.name) name.textContent = entry.name
+  const status = treeStatusInfo(entry)
+  let statusEl = row.querySelector('.ws-tree-status')
+  if (status) {
+    if (!statusEl) row.appendChild(buildTreeStatus(project, entry, status))
+    else paintTreeStatus(statusEl, entry, status)
+  } else {
+    statusEl?.remove()
+  }
+  return row
+}
+
+/**
+ * @param {{ id: string }} project
+ * @param {{ name: string, rel: string, dir: boolean }} entry
+ * @param {{ label: string, className: string, title: string, staged?: boolean }} status
+ * @returns {HTMLElement}
+ */
+function buildTreeStatus(project, entry, status) {
+  const statusEl = document.createElement('span')
+  paintTreeStatus(statusEl, entry, status)
+  if (!entry.dir) {
+    statusEl.setAttribute('role', 'button')
+    statusEl.tabIndex = 0
+    const openDiff = () => void openDiffTab(project, entry.rel, statusEl.dataset.staged === '1')
+    statusEl.addEventListener('click', (event) => {
+      event.stopPropagation()
+      openDiff()
+    })
+    statusEl.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return
+      event.preventDefault()
+      event.stopPropagation()
+      openDiff()
+    })
+  }
+  return statusEl
+}
+
+/**
+ * @param {HTMLElement} badge
+ * @param {{ rel: string }} entry
+ * @param {{ label: string, className: string, title: string, staged?: boolean }} status
+ */
+function paintTreeStatus(badge, entry, status) {
+  badge.className = `ws-tree-status ${status.className}`
+  badge.textContent = status.label
+  badge.title = status.title
+  badge.setAttribute('aria-label', `${entry.rel}：${status.title}`)
+  badge.dataset.staged = status.staged ? '1' : ''
 }
 
 /**
@@ -1047,6 +1258,14 @@ function setTreeCursor(row) {
 function resetTreeCursor() {
   const rows = treeRows()
   if (!rows.length) return
+  const active = document.activeElement instanceof HTMLElement
+    ? document.activeElement.closest('.ws-tree-row')
+    : null
+  if (active && el.tree?.contains(active)) {
+    setTreeCursor(active)
+    return
+  }
+  if (rows.some((row) => row.tabIndex === 0)) return
   const open = rows.find((row) => row.classList.contains('is-open'))
   setTreeCursor(open || rows[0])
 }

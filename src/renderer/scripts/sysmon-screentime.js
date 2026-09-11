@@ -85,7 +85,7 @@ async function refresh() {
     renderCards(data)
     renderChart(data)
     renderList($('stimeList'), data?.list || [])
-    renderList($('stimeCats'), data?.categories || [])
+    renderCats($('stimeCats'), data?.categories || [])
     if (state.drillStamp) await refreshDrill()
     else hideDrill()
   } catch {
@@ -231,6 +231,34 @@ function hideDrill() {
   $('stimeDrillWrap')?.classList.add('hidden')
   const drill = $('stimeDrill')
   if (drill) drill.replaceChildren()
+}
+
+function renderCats(host, rows) {
+  if (!host) return
+  host.replaceChildren()
+  if (!rows.length) {
+    host.append(el('p', 'stime-row-name', '這段時間沒有紀錄'))
+    return
+  }
+  const bar = el('div', 'stime-cat-bar')
+  for (const row of rows) {
+    const slice = el('i')
+    slice.style.width = `${Math.max(1, Math.round((row.pct || 0) * 100))}%`
+    slice.style.background = row.color || 'var(--text-tertiary)'
+    slice.title = `${row.name || '未分類'} ${row.label || ''}`
+    bar.append(slice)
+  }
+  host.append(bar)
+  for (const row of rows) {
+    const item = el('div', 'stime-cat-row')
+    const dot = el('span', 'stime-cat-dot')
+    if (row.color) dot.style.background = row.color
+    item.append(dot)
+    item.append(el('span', 'stime-row-name', row.name || '未分類'))
+    item.append(el('span', 'stime-cat-pct', `${Math.round((row.pct || 0) * 100)}%`))
+    item.append(el('span', 'stime-row-time', row.label || ''))
+    host.append(item)
+  }
 }
 
 function renderList(host, rows) {

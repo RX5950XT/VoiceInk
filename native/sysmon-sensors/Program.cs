@@ -338,6 +338,7 @@ namespace VoiceInkSensors
                             break;
                         case "G" when parts.Length >= 4:
                             Oc.ApplyGpu(
+                                OptInt(parts, 6, 0),
                                 ParseInt(parts[1]), ParseInt(parts[2]), ParseInt(parts[3]),
                                 OptInt(parts, 4, 0), OptInt(parts, 5, 90));
                             break;
@@ -354,7 +355,10 @@ namespace VoiceInkSensors
                             Oc.ApplyFreqCores(ParseList(parts, 16));
                             break;
                         case "V" when parts.Length >= 2:
-                            Oc.ApplyVf(ParseList(parts, 96));
+                            Oc.ApplyVf(0, ParseList(parts, 96));
+                            break;
+                        case "W" when parts.Length >= 3:
+                            Oc.ApplyVf(ParseInt(parts[1]), ParseListAt(parts, 2, 96));
                             break;
                         case "X":
                             Oc.Reset();
@@ -424,11 +428,19 @@ namespace VoiceInkSensors
 
         private static int[] ParseList(string[] parts, int max)
         {
-            int n = ParseInt(parts[1]);
+            return ParseListAt(parts, 1, max);
+        }
+
+        private static int[] ParseListAt(string[] parts, int countIndex, int max)
+        {
+            int n = ParseInt(parts[countIndex]);
             if (n < 0) n = 0;
             if (n > max) n = max;
             var values = new int[n];
-            for (int i = 0; i < n && i + 2 < parts.Length; i++) values[i] = ParseInt(parts[i + 2]);
+            for (int i = 0; i < n && countIndex + 1 + i < parts.Length; i++)
+            {
+                values[i] = ParseInt(parts[countIndex + 1 + i]);
+            }
             return values;
         }
 

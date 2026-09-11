@@ -271,6 +271,40 @@ function gitRowLayoutChecks() {
 }
 
 /** 文件類（md／html／svg）開起來就停在預覽那一面，Ctrl+S 在 Monaco／預覽下也存得到 */
+/**
+ * 檔案樹監看刷新若先 `replaceChildren()` 再非同步補列，畫面會閃白。
+ * 側欄轉圈圈若每次 `terminal:status` 都拆掉 SVG 重建，動畫永遠從 0% 重來。
+ */
+function treeRefreshAndStatusSpinChecks() {
+  console.log('\n[G] 檔案樹刷新與側欄轉圈圈')
+  const renderTreeFn = workspacePage.slice(
+    workspacePage.indexOf('async function renderTree'),
+    workspacePage.indexOf('async function appendLevel')
+  )
+  check('同專案刷新走就地同步，不在 git status 之後整棵清空',
+    /syncLevel/.test(renderTreeFn)
+    && !/loadTreeGitStatus[\s\S]{0,240}el\.tree\.replaceChildren\(\)/.test(renderTreeFn))
+  check('換專案才清空檔案樹',
+    /treeProjectId !== project\.id[\s\S]{0,120}replaceChildren\(\)/.test(renderTreeFn))
+
+  const paintFn = workspacePage.slice(
+    workspacePage.indexOf('function paintProjectStatuses'),
+    workspacePage.indexOf('const TERMS_COLLAPSED_KEY')
+  )
+  check('終端機狀態更新不整組拆掉重建',
+    /patchSessionChip/.test(paintFn) && !/host\.replaceChildren\(\)/.test(paintFn))
+  check('狀態沒變就留下正在轉的那顆 SVG',
+    /querySelector\(['"]\.ws-status-icon['"]\)/.test(paintFn)
+    && /dataset\.state/.test(paintFn))
+
+  const spin = css.slice(
+    css.indexOf('.ws-status-icon.is-spin'),
+    css.indexOf('@keyframes ws-status-spin')
+  )
+  check('轉圈圈以 viewBox 中心為軸（SVG 的 50% 會繞錯點）',
+    /transform-box:\s*view-box/.test(spin) && /transform-origin:\s*center/.test(spin))
+}
+
 function editorDefaultsChecks() {
   const openFn = tabs.slice(tabs.indexOf('export async function openEditorTab'), tabs.indexOf('function goToLine'))
   check('文件類開檔預設就是預覽模式', /preview:[\s\S]{0,160}PREVIEWABLE_EXTS\.includes\(extOf\(relPath\)\)/.test(openFn))
@@ -284,7 +318,7 @@ function editorDefaultsChecks() {
   check('Ctrl+S 真的呼叫存檔', /saveActiveFile\(\)/.test(save))
 }
 
-runAgentPathChecks().then(gitStatusCacheChecks).then(zoomChecks).then(gitRowLayoutChecks).then(editorDefaultsChecks).then(() => {
+runAgentPathChecks().then(gitStatusCacheChecks).then(zoomChecks).then(gitRowLayoutChecks).then(treeRefreshAndStatusSpinChecks).then(editorDefaultsChecks).then(() => {
   console.log(`\n${passed} passed, ${failed} failed`)
   process.exitCode = failed ? 1 : 0
 }).catch((error) => {

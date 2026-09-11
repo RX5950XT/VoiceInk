@@ -658,6 +658,42 @@ function diffSamples(prev, curr, logicalCores) {
 }
 
 /**
+ * 同名處理程序收成一列（工作管理員的「依應用程式分組」）。
+ * GPU% 是每進程最忙引擎，加總後夾 100，避免十個 chrome 看起來像 400%。
+ * @param {any[]} list
+ */
+function mergeProcesses(list) {
+  const rows = Array.isArray(list) ? list : []
+  const map = new Map()
+  for (const p of rows) {
+    const key = String(p?.name || '').toLowerCase()
+    const cur = map.get(key)
+    if (!cur) {
+      map.set(key, {
+        ...p,
+        pid: p.pid,
+        pids: [p.pid],
+        count: 1
+      })
+      continue
+    }
+    cur.pids.push(p.pid)
+    cur.count += 1
+    cur.cpu += p.cpu || 0
+    cur.memory += p.memory || 0
+    cur.privateMemory += p.privateMemory || 0
+    cur.threads += p.threads || 0
+    cur.handles += p.handles || 0
+    cur.diskRead += p.diskRead || 0
+    cur.diskWrite += p.diskWrite || 0
+    cur.gpu = Math.min(100, (cur.gpu || 0) + (p.gpu || 0))
+    cur.gpuMemory += p.gpuMemory || 0
+    if (p.pid < cur.pid) cur.pid = p.pid
+  }
+  return [...map.values()]
+}
+
+/**
  * 整機 CPU 使用率。用 Node 的 os.cpus() 而不是再開一次 WMI：免費、每核心都有。
  * @param {{ times: { user: number, nice: number, sys: number, idle: number, irq: number } }[] | null} prev
  * @param {{ times: { user: number, nice: number, sys: number, idle: number, irq: number } }[]} curr
@@ -762,5 +798,6 @@ module.exports = {
   cpuUsage,
   parseNvidiaSmiRow,
   sortProcesses,
+  mergeProcesses,
   validateKillPid
 }

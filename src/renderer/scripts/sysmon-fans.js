@@ -78,6 +78,9 @@ const SLOT_3D = {
   cpu: { p: [34, 8, 88], plane: 'tray', r: 10, code: 'CPU', la: 'l' },
   'cpu-opt': { p: [64, 8, 96], plane: 'tray', r: 7, code: 'CPU2', la: 'a' },
   gpu: { p: [42, 10, 56], plane: 'tray', r: 7.5, code: 'GPU', la: 'l' },
+  'gpu-2': { p: [74, 10, 40], plane: 'tray', r: 7, code: 'GPU2', la: 'l' },
+  'gpu-3': { p: [58, 10, 22], plane: 'tray', r: 6.5, code: 'GPU3', la: 'b' },
+  'gpu-4': { p: [90, 10, 70], plane: 'tray', r: 6.5, code: 'GPU4', la: 'l' },
   pch: { p: [86, 8, 26], plane: 'tray', r: 6, code: 'PCH', la: 'b' }
 }
 

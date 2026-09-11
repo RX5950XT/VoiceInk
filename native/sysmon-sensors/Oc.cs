@@ -13,17 +13,38 @@ namespace VoiceInkSensors
     internal static class Oc
     {
         private static readonly object Gate = new object();
-        private static bool _gpuApplied;
+        private class GpuTune
+        {
+            public bool Applied;
+            public int Core;
+            public int Mem;
+            public int Power = 100;
+            public int Volt;
+            public int Temp = 90;
+            public int[] Vf = Array.Empty<int>();
+        }
+        private static readonly GpuTune[] Tunes = MakeTunes();
+        private static GpuTune[] MakeTunes()
+        {
+            var list = new GpuTune[8];
+            for (int i = 0; i < list.Length; i++) list[i] = new GpuTune();
+            return list;
+        }
+        private static GpuTune TuneAt(int index)
+        {
+            if (index < 0 || index >= Tunes.Length) index = 0;
+            return Tunes[index];
+        }
+        private static bool AnyGpuApplied()
+        {
+            for (int i = 0; i < Tunes.Length; i++) if (Tunes[i].Applied) return true;
+            return false;
+        }
         private static bool _cpuApplied;
-        private static int _core;
-        private static int _mem;
-        private static int _power = 100;
         private static int _ppt;
         private static int _tdc;
         private static int _edc;
         private static int _scalar = 100;
-        private static int _volt;
-        private static int _gpuTemp = 90;
         private static int _coAll;
         private static int _freq;
         private static int _tctl = 90;
@@ -33,7 +54,6 @@ namespace VoiceInkSensors
         private static int _liveSoc;
         private static int[] _perCore = Array.Empty<int>();
         private static int[] _perFreq = Array.Empty<int>();
-        private static int[] _vf = Array.Empty<int>();
         private static int _factoryPpt;
         private static int _factoryTdc;
         private static int _factoryEdc;
@@ -42,7 +62,7 @@ namespace VoiceInkSensors
 
         internal static bool IsApplied
         {
-            get { lock (Gate) return _gpuApplied || _cpuApplied; }
+            get { lock (Gate) return AnyGpuApplied() || _cpuApplied; }
         }
 
         /// <summary>
@@ -150,26 +170,39 @@ namespace VoiceInkSensors
 
         internal static void ApplyGpu(int coreMhz, int memMhz, int powerPct, int voltMv, int tempC)
         {
+            ApplyGpu(0, coreMhz, memMhz, powerPct, voltMv, tempC);
+        }
+
+        internal static void ApplyGpu(int index, int coreMhz, int memMhz, int powerPct, int voltMv, int tempC)
+        {
             lock (Gate)
             {
                 if (!NvapiOc.Init()) return;
-                if (!NvapiOc.Apply(coreMhz, memMhz, powerPct, voltMv, tempC)) return;
-                NvapiOc.ApplyCurve(coreMhz, _vf);
-                _core = coreMhz;
-                _mem = memMhz;
-                _power = powerPct;
-                _volt = voltMv;
-                _gpuTemp = tempC;
-                _gpuApplied = true;
+                if (index < 0 || index >= NvapiOc.Count) index = 0;
+                if (!NvapiOc.Apply(index, coreMhz, memMhz, powerPct, voltMv, tempC)) return;
+                GpuTune t = TuneAt(index);
+                NvapiOc.ApplyCurve(index, coreMhz, t.Vf);
+                t.Core = coreMhz;
+                t.Mem = memMhz;
+                t.Power = powerPct;
+                t.Volt = voltMv;
+                t.Temp = tempC;
+                t.Applied = true;
             }
         }
 
         internal static void ApplyVf(int[] extras)
         {
+            ApplyVf(0, extras);
+        }
+
+        internal static void ApplyVf(int index, int[] extras)
+        {
             lock (Gate)
             {
-                _vf = extras ?? Array.Empty<int>();
-                if (_gpuApplied) NvapiOc.ApplyCurve(_core, _vf);
+                GpuTune t = TuneAt(index);
+                t.Vf = extras ?? Array.Empty<int>();
+                if (t.Applied) NvapiOc.ApplyCurve(index, t.Core, t.Vf);
             }
         }
 
@@ -238,16 +271,19 @@ namespace VoiceInkSensors
         {
             lock (Gate)
             {
-                if (_gpuApplied)
+                if (AnyGpuApplied())
                 {
                     NvapiOc.Reset();
-                    _gpuApplied = false;
-                    _core = 0;
-                    _mem = 0;
-                    _power = 100;
-                    _volt = 0;
-                    _gpuTemp = 90;
-                    _vf = Array.Empty<int>();
+                    for (int i = 0; i < Tunes.Length; i++)
+                    {
+                        Tunes[i].Applied = false;
+                        Tunes[i].Core = 0;
+                        Tunes[i].Mem = 0;
+                        Tunes[i].Power = 100;
+                        Tunes[i].Volt = 0;
+                        Tunes[i].Temp = 90;
+                        Tunes[i].Vf = Array.Empty<int>();
+                    }
                 }
                 if (_cpuApplied)
                 {
@@ -265,7 +301,6 @@ namespace VoiceInkSensors
                     _soc = 0;
                     _perCore = Array.Empty<int>();
                     _perFreq = Array.Empty<int>();
-                    _vf = Array.Empty<int>();
                 }
             }
         }
@@ -274,14 +309,9 @@ namespace VoiceInkSensors
         internal static void AppendJson(StringBuilder sb, Computer computer)
         {
             SensorSnap cpu = ReadCpu(computer);
-            SensorSnap gpu = ReadGpu(computer);
-            int coreOff;
-            int memOff;
-            int powerPct;
-            bool gpuReady;
+            SensorSnap[] gpus = ReadGpus(computer);
             bool cpuReady;
             string cpuReason;
-            bool gpuApplied;
             bool cpuApplied;
             int ppt;
             int tdc;
@@ -290,20 +320,15 @@ namespace VoiceInkSensors
             int factoryPpt;
             int factoryTdc;
             int factoryEdc;
-            int volt;
-            int gpuTemp;
             int coAll;
             int freq;
             int tctl;
             int cpuVolt;
             int cores;
+            GpuTune[] snapTunes;
             lock (Gate)
             {
                 if (!_factoryOk) SnapshotFactory(cpu);
-                coreOff = _core;
-                memOff = _mem;
-                powerPct = _power;
-                gpuApplied = _gpuApplied;
                 cpuApplied = _cpuApplied;
                 ppt = _ppt;
                 tdc = _tdc;
@@ -312,8 +337,6 @@ namespace VoiceInkSensors
                 factoryPpt = _factoryPpt;
                 factoryTdc = _factoryTdc;
                 factoryEdc = _factoryEdc;
-                volt = _volt;
-                gpuTemp = _gpuTemp;
                 coAll = _coAll;
                 freq = _freq;
                 tctl = _tctl;
@@ -321,11 +344,11 @@ namespace VoiceInkSensors
                 cores = cpu.CoreClocks != null && cpu.CoreClocks.Length > 0
                     ? cpu.CoreClocks.Length
                     : (cpu.Cores > 0 ? cpu.Cores : 8);
+                snapTunes = new GpuTune[Tunes.Length];
+                for (int i = 0; i < Tunes.Length; i++) snapTunes[i] = Tunes[i];
             }
-            gpuReady = NvapiOc.Ready;
             cpuReady = SmuOc.Ready;
             cpuReason = SmuOc.Reason;
-            if (gpuReady) NvapiOc.TryRead(out coreOff, out memOff, out powerPct);
             if (cpu.Soc > 0.4f) _liveSoc = (int)Math.Round(cpu.Soc * 1000);
 
             sb.Append("\"o\":{\"c\":{");
@@ -353,8 +376,31 @@ namespace VoiceInkSensors
             sb.Append(",\"a\":").Append(cpuApplied ? "1" : "0");
             AppendClocks(sb, cpu.CoreClocks);
             if (!cpuReady) sb.Append(",\"r\":").Append(JsonString(cpuReason));
-            sb.Append("},\"g\":{");
-            sb.Append("\"w\":").Append(gpuReady ? "1" : "0");
+            int n = gpus.Length > 0 ? gpus.Length : 1;
+            sb.Append("},\"gs\":[");
+            for (int i = 0; i < n; i++)
+            {
+                if (i > 0) sb.Append(',');
+                AppendGpu(sb, i < gpus.Length ? gpus[i] : new SensorSnap(), i, snapTunes[i]);
+            }
+            sb.Append("],\"g\":");
+            AppendGpu(sb, gpus.Length > 0 ? gpus[0] : new SensorSnap(), 0, snapTunes[0]);
+            sb.Append("}");
+        }
+
+        private static void AppendGpu(StringBuilder sb, SensorSnap gpu, int index, GpuTune tune)
+        {
+            bool ready = index < NvapiOc.Count;
+            int coreOff = tune != null ? tune.Core : 0;
+            int memOff = tune != null ? tune.Mem : 0;
+            int powerPct = tune != null ? tune.Power : 100;
+            int volt = tune != null ? tune.Volt : 0;
+            int gpuTemp = tune != null ? tune.Temp : 90;
+            bool applied = tune != null && tune.Applied;
+            if (ready) NvapiOc.TryRead(index, out coreOff, out memOff, out powerPct);
+            sb.Append('{');
+            sb.Append("\"i\":").Append(index);
+            sb.Append(",\"w\":").Append(ready ? "1" : "0");
             sb.Append(",\"n\":").Append(JsonString(gpu.Name));
             sb.Append(",\"t\":").Append(Num(gpu.Temp));
             sb.Append(",\"h\":").Append(Num(gpu.Hotspot));
@@ -371,10 +417,10 @@ namespace VoiceInkSensors
             sb.Append(",\"mo\":").Append(memOff);
             sb.Append(",\"vo\":").Append(volt);
             sb.Append(",\"gt\":").Append(gpuTemp);
-            sb.Append(",\"a\":").Append(gpuApplied ? "1" : "0");
-            AppendVf(sb);
-            if (!gpuReady) sb.Append(",\"r\":").Append(JsonString("這張顯示卡還沒接（NVIDIA 時脈／功耗／電壓／溫度牆）"));
-            sb.Append("}}");
+            sb.Append(",\"a\":").Append(applied ? "1" : "0");
+            AppendVf(sb, index);
+            if (!ready) sb.Append(",\"r\":").Append(JsonString("這張顯示卡還沒接（NVIDIA 時脈／功耗／電壓／溫度牆）"));
+            sb.Append('}');
         }
 
         private static void SnapshotFactory(Computer computer)
@@ -476,19 +522,42 @@ namespace VoiceInkSensors
             return snap;
         }
 
+        private static SensorSnap[] ReadGpus(Computer computer)
+        {
+            var list = new System.Collections.Generic.List<SensorSnap>();
+            if (computer == null) return Array.Empty<SensorSnap>();
+            foreach (IHardware hardware in computer.Hardware)
+            {
+                CollectGpu(hardware, list);
+                foreach (IHardware sub in hardware.SubHardware) CollectGpu(sub, list);
+            }
+            return list.ToArray();
+        }
+
+        private static void CollectGpu(IHardware hardware, System.Collections.Generic.List<SensorSnap> list)
+        {
+            if (hardware.HardwareType != HardwareType.GpuNvidia
+                && hardware.HardwareType != HardwareType.GpuAmd
+                && hardware.HardwareType != HardwareType.GpuIntel)
+            {
+                return;
+            }
+            list.Add(ReadGpuHardware(hardware));
+        }
+
         private static SensorSnap ReadGpu(Computer computer)
         {
-            var snap = new SensorSnap();
-            Walk(computer, (hw, sensor) =>
+            SensorSnap[] all = ReadGpus(computer);
+            return all.Length > 0 ? all[0] : new SensorSnap();
+        }
+
+        private static SensorSnap ReadGpuHardware(IHardware hw)
+        {
+            var snap = new SensorSnap { Name = hw.Name };
+            foreach (ISensor sensor in hw.Sensors)
             {
-                if (hw.HardwareType != HardwareType.GpuNvidia
-                    && hw.HardwareType != HardwareType.GpuAmd)
-                {
-                    return;
-                }
-                if (string.IsNullOrEmpty(snap.Name)) snap.Name = hw.Name;
                 float? value = sensor.Value;
-                if (!value.HasValue || float.IsNaN(value.Value)) return;
+                if (!value.HasValue || float.IsNaN(value.Value)) continue;
                 float v = value.Value;
                 string name = sensor.Name ?? "";
                 if (sensor.SensorType == SensorType.Temperature)
@@ -524,7 +593,7 @@ namespace VoiceInkSensors
                     if (name.IndexOf("Memory Used", StringComparison.OrdinalIgnoreCase) >= 0) snap.VramUsed = v;
                     if (name.IndexOf("Memory Total", StringComparison.OrdinalIgnoreCase) >= 0) snap.VramTotal = v;
                 }
-            });
+            }
             return snap;
         }
 
@@ -556,10 +625,10 @@ namespace VoiceInkSensors
             return list.ToArray();
         }
 
-        private static void AppendVf(StringBuilder sb)
+        private static void AppendVf(StringBuilder sb, int index)
         {
-            if (!NvapiOc.Ready) return;
-            NvapiOc.VfPoint[] points = NvapiOc.TryReadCurve();
+            if (index >= NvapiOc.Count) return;
+            NvapiOc.VfPoint[] points = NvapiOc.TryReadCurve(index);
             if (points == null || points.Length == 0) return;
             sb.Append(",\"vf\":[");
             for (int i = 0; i < points.Length; i++)

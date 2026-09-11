@@ -47,7 +47,7 @@ function appStats(db, range, bounds, start, end) {
 
   const categories = db.prepare(`
     SELECT COALESCE(c.ID, 0) AS id, COALESCE(c.Name, '未分類') AS name,
-           SUM(d.Time) AS time
+           COALESCE(c.Color, '') AS color, SUM(d.Time) AS time
     FROM DailyLogModels d
     JOIN AppModels a ON a.ID = d.AppModelID
     LEFT JOIN CategoryModels c ON c.ID = a.CategoryID
@@ -72,7 +72,7 @@ function appStats(db, range, bounds, start, end) {
     end,
     labels: bounds.labels,
     series,
-    categories: categories.map(rowOut),
+    categories: withPct(categories.map(rowOut)),
     list: list.map(rowOut),
     cards: {
       totalTime: total,
@@ -105,7 +105,7 @@ function webStats(db, range, bounds, start, end) {
 
   const categories = db.prepare(`
     SELECT COALESCE(c.ID, 0) AS id, COALESCE(c.Name, '未分類') AS name,
-           SUM(l.Duration) AS time
+           COALESCE(c.Color, '') AS color, SUM(l.Duration) AS time
     FROM WebBrowseLogModels l
     JOIN WebSiteModels s ON s.ID = l.SiteId
     LEFT JOIN WebSiteCategoryModels c ON c.ID = s.CategoryID
@@ -133,7 +133,7 @@ function webStats(db, range, bounds, start, end) {
     end,
     labels: bounds.labels,
     series,
-    categories: categories.map(rowOut),
+    categories: withPct(categories.map(rowOut)),
     list: list.map(rowOut),
     cards: {
       totalTime: total,
@@ -233,6 +233,14 @@ function displayName(row) {
   return friendlyName(row)
 }
 
+function withPct(rows) {
+  const total = rows.reduce((n, r) => n + (r.time || 0), 0)
+  return rows.map((row) => ({
+    ...row,
+    pct: total > 0 ? row.time / total : 0
+  }))
+}
+
 function rowOut(row) {
   return {
     id: row.id,
@@ -241,6 +249,7 @@ function rowOut(row) {
     description: row.description || '',
     domain: row.domain || '',
     categoryId: row.categoryId || 0,
+    color: row.color || '',
     time: row.time || 0,
     label: formatDuration(row.time || 0),
     display: displayName(row)

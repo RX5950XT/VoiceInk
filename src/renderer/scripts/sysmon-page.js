@@ -279,12 +279,30 @@ function findSensor(sensors, matchType, sensorType) {
  * @param {{ hardware: (t: string) => boolean, fan: RegExp }} spec
  * @returns {number | null} RPM；讀不到回 null
  */
+function namesMatch(a, b) {
+  const x = String(a || '').toLowerCase().replace(/\s+/g, ' ').trim()
+  const y = String(b || '').toLowerCase().replace(/\s+/g, ' ').trim()
+  if (!x || !y) return false
+  return x.includes(y) || y.includes(x)
+}
+
+function isVirtualGpu(g) {
+  return /virtual|basic render|remote display|microsoft basic|meta quest|sunlogin|向日葵|parsec/i.test(g?.name || '')
+}
+
+function gpuHwGroups(sensors) {
+  return (sensors?.groups || []).filter((hw) => isGpuType(hw.t))
+}
+
 function findFan(sensors, spec) {
   if (!sensors?.available) return null
-  const fan = findSensor(sensors, spec.hardware, 'Fan')
-  if (fan != null) return fan
+  if (!spec.name) {
+    const fan = findSensor(sensors, spec.hardware, 'Fan')
+    if (fan != null) return fan
+  }
   for (const hw of sensors.groups || []) {
     if (!spec.hardware(hw.t)) continue
+    if (spec.name && !namesMatch(hw.n, spec.name)) continue
     for (const s of hw.s || []) {
       if (s.t === 'Fan' && typeof s.v === 'number' && s.v > 0 && spec.fan.test(s.n)) return s.v
     }
@@ -334,13 +352,14 @@ function sensorHwLabel(name) {
  * @param {string | ((t: string) => boolean)} matchType
  * @param {string} prefix
  */
-function sensorGroups(sensors, matchType, prefix) {
+function sensorGroups(sensors, matchType, prefix, hwName) {
   if (!sensors?.available) return []
   const match = typeMatcher(matchType)
   /** @type {Map<string, { type: string, hw: string, rows: Array<[string, string]> }>} */
   const byKey = new Map()
   for (const hw of sensors.groups || []) {
     if (!match(hw.t)) continue
+    if (hwName && !namesMatch(hw.n, hwName)) continue
     for (const s of hw.s || []) {
       // 0 是「沒讀到」不是「真的 0」（缺 PawnIO 時 CPU 那一整組都是 0）
       if (typeof s.v !== 'number' || s.v === 0) continue
@@ -645,20 +664,48 @@ function describeBlocks(s, inv) {
   // ── GPU ────────────────────────────────────────────────────────
   const nvCards = s.gpu?.cards || []
   const invGpus = inv?.gpus || []
+  const hwGroups = gpuHwGroups(sensors)
+  const usedInv = new Set()
+  const usedHw = new Set()
+  const gpuBlocks = []
+
+  const takeInv = (name) => {
+    const idx = invGpus.findIndex((x, i) => !usedInv.has(i) && namesMatch(x.name, name))
+    if (idx < 0) return null
+    usedInv.add(idx)
+    return invGpus[idx]
+  }
+  const takeHw = (name) => {
+    const named = hwGroups.find((hw) => !usedHw.has(hw) && namesMatch(hw.n, name))
+    if (named) {
+      usedHw.add(named)
+      return named
+    }
+    return null
+  }
+
+  const pushGpu = (desc) => {
+    gpuBlocks.push(desc)
+    out.push(desc)
+  }
+
   if (nvCards.length) {
     nvCards.forEach((g, i) => {
-      const info = invGpus.find((x) => x.name && (x.name.includes(g.name) || g.name.includes(x.name)))
+      const info = takeInv(g.name)
+      const hw = takeHw(g.name)
       const util = g.utilization ?? 0
       const vramUsed = (g.memoryUsed || 0) * 1048576
       const vramTotal = (g.memoryTotal || 0) * 1048576
-      // 風扇轉速優先走 LHM 的 RPM；nvidia-smi 只有百分比（`g.fan`），沒 RPM 時退回百分比
-      const gpuFanRpm = findFan(sensors, GPU_FAN)
+      const gpuFanRpm = findFan(sensors, { ...GPU_FAN, name: hw?.n || g.name })
       const fanText = gpuFanRpm != null
         ? `${Math.round(gpuFanRpm)} RPM`
         : (g.fan != null ? `${g.fan}%` : DASH)
-      out.push({
+      const many = nvCards.length + invGpus.filter((x, idx) => !usedInv.has(idx) && !isVirtualGpu(x)).length > 1
+        || nvCards.length > 1
+      pushGpu({
         id: `gpu${i}`,
-        title: nvCards.length > 1 ? `GPU ${i + 1}` : 'GPU',
+        span: many ? 1 : 2,
+        title: nvCards.length > 1 || i > 0 ? `GPU ${i + 1}` : 'GPU',
         accent: 'var(--success)',
         sub: g.name,
         value: util,
@@ -698,28 +745,62 @@ function describeBlocks(s, inv) {
           ['目前顯示模式', info?.width ? `${info.width} × ${info.height} @ ${info.refreshHz} Hz` : DASH],
           ['裝置 ID', info?.pnpId || DASH]
         ],
-        groups: [
-          // 主卡以外還有內顯／虛擬顯示卡時，只列 nvidia-smi 看得到的那張等於漏掉其他的
-          {
-            title: '顯示介面卡',
-            rows: gpuCardRows(invGpus)
-          },
-          ...sensorGroups(sensors, isGpuType, 'GPU ')
-        ]
+        groups: sensorGroups(sensors, isGpuType, 'GPU ', hw?.n || g.name)
       })
     })
-  } else {
-    // 沒有 nvidia-smi：Windows 的 GPU 效能計數器仍有使用率，只是沒有溫度／功耗
+  }
+
+  const utilMap = s.gpuAdapterUtil || {}
+  const utilKeys = Object.keys(utilMap)
+  const leftovers = invGpus
+    .map((g, i) => ({ g, i }))
+    .filter(({ g, i }) => !usedInv.has(i) && !isVirtualGpu(g))
+  leftovers.forEach(({ g }, n) => {
+    const idx = gpuBlocks.length
+    const pct = utilKeys[n] != null ? utilMap[utilKeys[n]] : (utilKeys.length ? Math.max(...utilKeys.map((k) => utilMap[k])) : 0)
+    const hw = takeHw(g.name)
+    const gpuFanRpm = findFan(sensors, { ...GPU_FAN, name: hw?.n || g.name })
+    pushGpu({
+      id: `gpu${idx}`,
+      span: (nvCards.length + leftovers.length) > 1 ? 1 : 2,
+      title: (nvCards.length + leftovers.length) > 1 ? `GPU ${idx + 1}` : 'GPU',
+      accent: 'var(--success)',
+      sub: g.name,
+      value: pct,
+      valueText: `${Math.round(pct)}%`,
+      spark: { key: `gpu${idx}`, value: pct, max: 100 },
+      stats: [
+        ['專用記憶體', g.vram ? fmtBytes(g.vram) : DASH],
+        ['風扇', gpuFanRpm != null ? `${Math.round(gpuFanRpm)} RPM` : DASH],
+        ['資料來源', nvCards.length ? 'Windows 計數器' : 'Windows 計數器']
+      ],
+      viz: {
+        kind: 'meters',
+        label: '即時狀態',
+        items: [{ label: '使用率', value: pct, max: 100, text: `${Math.round(pct)}%` }]
+      },
+      specs: [
+        ['名稱', g.name || DASH],
+        ['驅動版本', g.driver || DASH],
+        ['驅動日期', g.driverDate || DASH],
+        ['專用記憶體', g.vram ? fmtBytes(g.vram) : DASH],
+        ['目前顯示模式', g.width ? `${g.width} × ${g.height} @ ${g.refreshHz} Hz` : DASH]
+      ],
+      groups: sensorGroups(sensors, isGpuType, 'GPU ', hw?.n || g.name)
+    })
+  })
+
+  if (!gpuBlocks.length) {
     const utils = s.gpuAdapterUtil || {}
     const keys = Object.keys(utils)
     const pct = keys.length ? Math.max(...keys.map((k) => utils[k])) : 0
-    const primary = invGpus.find((g) => g.vram > 0) || invGpus[0]
-    const vram = s.processes.reduce((n, p) => n + (p.gpuMemory || 0), 0)
-    out.push({
+    const vram = (s.processes || []).reduce((n, p) => n + (p.gpuMemory || 0), 0)
+    pushGpu({
       id: 'gpu0',
+      span: 2,
       title: 'GPU',
       accent: 'var(--success)',
-      sub: primary?.name || '偵測中…',
+      sub: '偵測中…',
       value: pct,
       valueText: `${Math.round(pct)}%`,
       spark: { key: 'gpu0', value: pct, max: 100 },
@@ -732,18 +813,11 @@ function describeBlocks(s, inv) {
         label: '即時狀態',
         items: [{ label: '使用率', value: pct, max: 100, text: `${Math.round(pct)}%` }]
       },
-      specs: [
-        ['名稱', primary?.name || DASH],
-        ['驅動版本', primary?.driver || DASH],
-        ['驅動日期', primary?.driverDate || DASH],
-        ['專用記憶體', primary?.vram ? fmtBytes(primary.vram) : DASH],
-        ['溫度與功耗', '需要 NVIDIA 顯示卡或完整感測器']
-      ],
-      groups: [
-        { title: '顯示介面卡', rows: gpuCardRows(invGpus) },
-        ...sensorGroups(sensors, isGpuType, 'GPU ')
-      ]
+      specs: [['溫度與功耗', '需要 NVIDIA 顯示卡或完整感測器']],
+      groups: sensorGroups(sensors, isGpuType, 'GPU ')
     })
+  } else if (gpuBlocks.length > 1) {
+    gpuBlocks.forEach((b) => { b.span = 1 })
   }
 
   // ── 儲存 ───────────────────────────────────────────────────────
@@ -1223,6 +1297,7 @@ function ensureBlock(desc) {
   const el = document.createElement('section')
   el.className = 'sysmon-block'
   el.dataset.block = desc.id
+  el.dataset.span = String(desc.span || 2)
   if (desc.accent) el.style.setProperty('--block-accent', desc.accent)
 
   const head = document.createElement('button')
@@ -1472,6 +1547,7 @@ function renderBlocks() {
     // 順序可能變（第二張顯示卡是晚一點才被偵測到的），但只有真的不對位才動 DOM
     if (host.children[index] !== b.el) host.insertBefore(b.el, host.children[index] || null)
 
+    b.el.dataset.span = String(desc.span || 2)
     b.name.textContent = desc.title
     b.sub.textContent = desc.sub
     // 標題列必須是單行（不然每塊高度會跳），所以放不下時靠 title 補完整內容
@@ -1576,7 +1652,9 @@ function rebuildRows() {
   const needle = state.filter.trim().toLowerCase()
   let list = s.processes
   if (needle) {
-    list = list.filter((p) => p.name.toLowerCase().includes(needle) || String(p.pid).includes(needle))
+    list = list.filter((p) => p.name.toLowerCase().includes(needle)
+      || String(p.pid).includes(needle)
+      || (Array.isArray(p.pids) && p.pids.some((id) => String(id).includes(needle))))
   }
   const pick = PICK[state.sortKey] || PICK.cpu
   const sign = state.sortDir === 'asc' ? 1 : -1
@@ -1590,9 +1668,10 @@ function rebuildRows() {
   })
   const count = $('sysmonProcCount')
   if (count) {
+    const raw = s.processes.reduce((n, p) => n + (p.count || 1), 0)
     count.textContent = needle
-      ? `${state.rows.length} / ${s.processes.length} 個處理程序`
-      : `${s.processes.length} 個處理程序`
+      ? `${state.rows.length} 組 / ${raw} 個處理程序`
+      : `${state.rows.length} 組（${raw} 個處理程序）`
   }
   renderVisibleRows()
 }
@@ -1633,7 +1712,7 @@ function renderVisibleRows() {
     row.dataset.pid = String(p.pid)
     row.classList.toggle('is-selected', state.selectedPid === p.pid)
     const c = row.children
-    c[0].textContent = String(p.pid)
+    c[0].textContent = (p.count || 1) > 1 ? `×${p.count}` : String(p.pid)
     c[1].textContent = p.name
     c[2].textContent = fmtPct(p.cpu)
     c[3].textContent = fmtBytes(p.memory)
@@ -1661,8 +1740,13 @@ function selectPid(pid) {
       box.textContent = '程序已結束，或需要更高權限。'
       return
     }
+    const group = state.rows.find((p) => p.pid === pid)
+    const extra = (group?.count || 1) > 1
+      ? `同名 ${group.count} 個：PID ${group.pids.join('、')}`
+      : ''
     const bits = [
       `PID ${d.pid}`,
+      extra,
       d.description || d.name,
       d.company ? `發行者：${d.company}` : '',
       d.owner ? `使用者：${d.owner}` : '',
@@ -1686,8 +1770,11 @@ function askKill(force) {
   const desc = $('sysmonKillDesc')
   const confirm = $('sysmonKillConfirm')
   if (!dialog || !desc || !confirm) return
+  const n = proc?.count || 1
   desc.textContent = force
-    ? `強制結束「${proc?.name || pid}」（PID ${pid}）與子程序，未存檔資料會遺失。`
+    ? (n > 1
+      ? `強制結束「${proc.name}」全部 ${n} 個處理程序（PID ${proc.pids.join('、')}），未存檔資料會遺失。`
+      : `強制結束「${proc?.name || pid}」（PID ${pid}）與子程序，未存檔資料會遺失。`)
     : `請「${proc?.name || pid}」（PID ${pid}）關閉，程式可存檔；不回應再用強制結束。`
   confirm.textContent = force ? '強制結束' : '結束'
   confirm.dataset.force = force ? '1' : ''
@@ -1700,7 +1787,14 @@ async function doKill() {
   const pid = state.selectedPid
   dialog?.close()
   if (pid == null) return
-  const res = await electronAPI.sysmon.kill(pid, confirm?.dataset.force === '1')
+  const proc = state.rows.find((p) => p.pid === pid)
+  const pids = proc?.pids?.length ? proc.pids : [pid]
+  const force = confirm?.dataset.force === '1'
+  let res = { ok: true }
+  for (const id of pids) {
+    res = await electronAPI.sysmon.kill(id, force)
+    if (!res?.ok) break
+  }
   if (res?.ok) {
     state.selectedPid = null
     updateKillButtons()
@@ -1804,11 +1898,9 @@ void main() {
   color = vec4(abs(acc.xyz) * 0.5 + 0.25, 1.0);
 }`
 
-function initStressGl() {
-  if (stress.gl) return stress.gl
-  const canvas = /** @type {HTMLCanvasElement|null} */ ($('sysmonStressCanvas'))
+function createGlEngine(canvas, preference) {
   if (!canvas) return null
-  const gl = canvas.getContext('webgl2', { antialias: false, powerPreference: 'high-performance' })
+  const gl = canvas.getContext('webgl2', { antialias: false, powerPreference: preference || 'high-performance' })
   if (!gl) return null
 
   const compile = (type, src) => {
@@ -1846,12 +1938,31 @@ function initStressGl() {
   gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, rbo)
   if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) return null
 
-  stress.gl = gl
-  stress.fbo = fbo
-  stress.program = program
-  stress.loadLoc = gl.getUniformLocation(program, 'uLoad')
-  stress.timeLoc = gl.getUniformLocation(program, 'uTime')
-  return gl
+  return {
+    gl,
+    fbo,
+    program,
+    loadLoc: gl.getUniformLocation(program, 'uLoad'),
+    timeLoc: gl.getUniformLocation(program, 'uTime'),
+    textures: [],
+    vramMb: 0,
+    passes: 1,
+    lastFrameMs: 0,
+    probePixel: new Uint8Array(4)
+  }
+}
+
+function initStressGl() {
+  if (stress.gl) return stress.gl
+  const engine = createGlEngine($('sysmonStressCanvas'), 'high-performance')
+  if (!engine) return null
+  stress.gl = engine.gl
+  stress.fbo = engine.fbo
+  stress.program = engine.program
+  stress.loadLoc = engine.loadLoc
+  stress.timeLoc = engine.timeLoc
+  stress.engines = [engine]
+  return stress.gl
 }
 
 /** 配置到目標 MB 為止；配不到就回報實際上限（那本身就是有用的資訊） */
@@ -1885,12 +1996,56 @@ function freeVram() {
   stress.vramMb = 0
 }
 
+function extraStressCanvas(i) {
+  const host = $('sysmonStressCanvases')
+  const id = `sysmonStressCanvas${i}`
+  let canvas = /** @type {HTMLCanvasElement|null} */ ($(id))
+  if (!canvas) {
+    canvas = document.createElement('canvas')
+    canvas.id = id
+    canvas.width = 1
+    canvas.height = 1
+    canvas.hidden = true
+    canvas.setAttribute('aria-hidden', 'true')
+    host?.appendChild(canvas)
+  }
+  return canvas
+}
+
+function burnEngine(engine, iterations, now) {
+  const gl = engine.gl
+  gl.bindFramebuffer(gl.FRAMEBUFFER, engine.fbo)
+  gl.viewport(0, 0, STRESS_WIDTH, STRESS_HEIGHT)
+  gl.useProgram(engine.program)
+  gl.uniform1i(engine.loadLoc, iterations)
+  gl.uniform1f(engine.timeLoc, now)
+  const t0 = performance.now()
+  for (let i = 0; i < engine.passes; i += 1) gl.drawArrays(gl.TRIANGLES, 0, 3)
+  gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, engine.probePixel)
+  engine.lastFrameMs = performance.now() - t0
+  if (engine.lastFrameMs < GPU_FRAME_BUDGET_MS * 0.8 && engine.passes < GPU_MAX_PASSES) {
+    engine.passes = Math.min(GPU_MAX_PASSES, Math.max(engine.passes + 1, Math.round(engine.passes * 1.7)))
+  } else if (engine.lastFrameMs > GPU_FRAME_BUDGET_MS * 1.6 && engine.passes > 1) {
+    engine.passes = Math.max(1, Math.round(engine.passes * 0.7))
+  }
+}
+
 function startStress() {
   const gl = initStressGl()
   const stat = $('sysmonStressStat')
   if (!gl) {
     if (stat) stat.textContent = '沒有可用的 WebGL2，無法跑 GPU 壓力測試。'
     return
+  }
+  const picked = selectedGpuIndexes()
+  stress.engines = stress.engines?.length ? stress.engines : [{
+    gl: stress.gl, fbo: stress.fbo, program: stress.program,
+    loadLoc: stress.loadLoc, timeLoc: stress.timeLoc,
+    passes: 1, lastFrameMs: 0, probePixel: stress.probePixel
+  }]
+  for (let n = 1; n < picked.length; n += 1) {
+    const extra = createGlEngine(extraStressCanvas(n), n === 1 ? 'low-power' : 'high-performance')
+    if (extra) stress.engines.push(extra)
   }
   const level = Number($('sysmonGpuLoad')?.value || 3)
   const targetVram = Number($('sysmonVram')?.value || 0)
@@ -1916,31 +2071,21 @@ function startStress() {
       stopStress('已達 5 分鐘安全上限，自動停止。')
       return
     }
-    gl.bindFramebuffer(gl.FRAMEBUFFER, stress.fbo)
-    gl.viewport(0, 0, STRESS_WIDTH, STRESS_HEIGHT)
-    gl.uniform1i(stress.loadLoc, iterations)
-    gl.uniform1f(stress.timeLoc, now)
-    const t0 = performance.now()
-    for (let i = 0; i < stress.passes; i += 1) gl.drawArrays(gl.TRIANGLES, 0, 3)
-    // **這一行才是計時的關鍵**：`readPixels` 是同步的，會擋到 GPU 真的把前面那些畫完
-    // 才回來（讀 1 個像素，頻寬可以忽略）。
-    // 試過的兩種都不行：`gl.finish()` 在 Chromium 底下量回來永遠是 0ms（指令只是進了
-    // 驅動佇列），自動加壓會一路衝到上限——實測 1.2 FPS、一個 frame 800ms，離 Windows
-    // 兩秒的 TDR 只差一點點；改用「兩次 frame 的間隔」則是在視窗被遮住時被 Chromium
-    // 的 rAF 節流騙走（量到 1001ms，於是完全不加壓，GPU 只有 3%）
-    gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, stress.probePixel)
-    stress.lastFrameMs = performance.now() - t0
-    // 自動加壓：把單一 frame 的 GPU 工作量推到預算附近，等 vsync 的空檔就被擠掉了
-    if (stress.lastFrameMs < GPU_FRAME_BUDGET_MS * 0.8 && stress.passes < GPU_MAX_PASSES) {
-      stress.passes = Math.min(GPU_MAX_PASSES, Math.max(stress.passes + 1, Math.round(stress.passes * 1.7)))
-    } else if (stress.lastFrameMs > GPU_FRAME_BUDGET_MS * 1.6 && stress.passes > 1) {
-      stress.passes = Math.max(1, Math.round(stress.passes * 0.7))
-    }
+    const engines = stress.engines?.length ? stress.engines : [{
+      gl, fbo: stress.fbo, program: stress.program,
+      loadLoc: stress.loadLoc, timeLoc: stress.timeLoc,
+      passes: stress.passes, lastFrameMs: 0, probePixel: stress.probePixel
+    }]
+    for (const engine of engines) burnEngine(engine, iterations, now)
+    const primary = engines[0]
+    stress.passes = primary.passes
+    stress.lastFrameMs = primary.lastFrameMs
     stress.frames += 1
     if (now - stress.lastFpsAt >= 500 && stat) {
       const fps = (stress.frames / ((now - stress.startedAt) / 1000)).toFixed(1)
       const secs = Math.round((now - stress.startedAt) / 1000)
-      stat.textContent = `執行中 · ${fps} FPS · 每 frame ${stress.passes} 次繪製／${stress.lastFrameMs.toFixed(0)}ms · ${secs}s${allocated ? ` · 已配置 ${allocated} MB VRAM` : ''}`
+      const extra = engines.length > 1 ? ` · ${engines.length} 個 GL 環境` : ''
+      stat.textContent = `執行中 · ${fps} FPS · 每 frame ${stress.passes} 次繪製／${stress.lastFrameMs.toFixed(0)}ms · ${secs}s${allocated ? ` · 已配置 ${allocated} MB VRAM` : ''}${extra}`
       stress.lastFpsAt = now
     }
     schedule(loop)
@@ -1955,6 +2100,7 @@ function startStress() {
 function stopStress(reason = '') {
   unschedule()
   stress.running = false
+  stress.engines = []
   freeVram()
   void electronAPI.sysmon.gpuStress(false)
   const start = $('sysmonStressStart')
@@ -2030,11 +2176,13 @@ function renderStressGauges() {
   const sensors = s.sensors
   const total = s.totalMemory || 0
   const used = Math.max(0, total - (s.memory?.available || 0))
-  const gpuCard = (s.gpu?.cards || [])[0]
+  const gpuCards = s.gpu?.cards?.length
+    ? s.gpu.cards
+    : [{ name: 'GPU', utilization: 0, power: null, temperature: null, fan: null }]
   const cpuTemp = findSensor(sensors, 'Cpu', 'Temperature')
   const cpuPower = findSensor(sensors, 'Cpu', 'Power')
   const cpuFan = findFan(sensors, CPU_FAN)
-  const gpuFanRpm = findFan(sensors, GPU_FAN)
+  const hwGroups = gpuHwGroups(sensors)
 
   /** 磁碟列 → 顯示標籤（型號＋代號），跟總覽的儲存區塊同一套對法 */
   const pdisks = state.inventory?.physicalDisks || []
@@ -2058,17 +2206,7 @@ function renderStressGauges() {
     { label: '溫度', value: cpuTemp || 0, max: 100, text: cpuTemp != null ? `${cpuTemp.toFixed(0)} °C` : '需完整感測器' },
     { label: '轉速', value: cpuFan || 0, max: 3000, text: cpuFan != null ? `${Math.round(cpuFan)} RPM` : '需完整感測器' }
   ]
-  const gpuItems = gpuCard ? [
-    { label: '負載', value: gpuCard.utilization || 0, max: 100, text: `${Math.round(gpuCard.utilization || 0)}%` },
-    { label: '功耗', value: gpuCard.power || 0, max: 400, text: gpuCard.power != null ? `${gpuCard.power.toFixed(0)} W` : DASH },
-    { label: '溫度', value: gpuCard.temperature || 0, max: 100, text: gpuCard.temperature != null ? `${gpuCard.temperature} °C` : DASH },
-    {
-      label: '轉速',
-      value: gpuFanRpm || 0,
-      max: 3000,
-      text: gpuFanRpm != null ? `${Math.round(gpuFanRpm)} RPM` : (gpuCard.fan != null ? `${gpuCard.fan}%` : DASH)
-    }
-  ] : []
+  const gpuFanFor = (card, i) => findFan(sensors, { ...GPU_FAN, name: hwGroups[i]?.n || card.name })
 
   // 記憶體壓力測試量的就是「吃掉多少容量」；硬碟一格一顆，看的是「有沒有在讀寫」
   const diskItems = [
@@ -2082,7 +2220,8 @@ function renderStressGauges() {
   ]
 
   renderGaugeRow(cpuHost, cpuItems, stressCpuSlots)
-  renderGaugeRow(gpuHost, gpuItems, stressGpuSlots)
+  paintStressGpuCards(gpuHost, gpuCards, gpuFanFor)
+  paintGpuPick(gpuCards)
   // 硬碟的數量會變（隨身碟插拔），數量對不上就整排重畫
   renderGaugeRow(diskHost, diskItems, stressDiskSlots, true)
 }
@@ -2130,8 +2269,84 @@ function renderGaugeRow(host, items, slots, rebuildOnChange = false) {
 
 /** @type {Array<{ fill: HTMLElement, text: HTMLElement }>} */
 const stressCpuSlots = []
-const stressGpuSlots = []
+/** @type {Map<string, Array<{ fill: HTMLElement, text: HTMLElement }>>} */
+const stressGpuSlotMap = new Map()
 const stressDiskSlots = []
+
+/**
+ * @param {HTMLElement} host
+ * @param {any[]} cards
+ * @param {(card: any, i: number) => number|null} fanOf
+ */
+function paintStressGpuCards(host, cards, fanOf) {
+  if (!host) return
+  const want = cards.map((c, i) => String(c.index ?? i)).join('|')
+  if (host.dataset.cards !== want) {
+    host.replaceChildren()
+    stressGpuSlotMap.clear()
+    host.dataset.cards = want
+    cards.forEach((card, i) => {
+      const wrap = document.createElement('section')
+      wrap.className = 'sysmon-gpu-gauge-card'
+      const title = document.createElement('h4')
+      title.textContent = cards.length > 1 ? `GPU ${i + 1} · ${card.name || ''}` : (card.name || 'GPU')
+      const gauges = document.createElement('div')
+      gauges.className = 'sysmon-gauges sysmon-gauges-gpu'
+      wrap.append(title, gauges)
+      host.appendChild(wrap)
+      stressGpuSlotMap.set(String(i), [])
+    })
+  }
+  cards.forEach((card, i) => {
+    const gauges = host.children[i]?.querySelector('.sysmon-gauges')
+    const slots = stressGpuSlotMap.get(String(i)) || []
+    const rpm = fanOf(card, i)
+    const items = [
+      { label: '負載', value: card.utilization || 0, max: 100, text: `${Math.round(card.utilization || 0)}%` },
+      { label: '功耗', value: card.power || 0, max: 400, text: card.power != null ? `${card.power.toFixed(0)} W` : DASH },
+      { label: '溫度', value: card.temperature || 0, max: 100, text: card.temperature != null ? `${card.temperature} °C` : DASH },
+      {
+        label: '轉速',
+        value: rpm || 0,
+        max: 3000,
+        text: rpm != null ? `${Math.round(rpm)} RPM` : (card.fan != null ? `${card.fan}%` : DASH)
+      }
+    ]
+    renderGaugeRow(gauges, items, slots)
+    stressGpuSlotMap.set(String(i), slots)
+  })
+}
+
+function paintGpuPick(cards) {
+  const host = $('sysmonGpuPick')
+  if (!host) return
+  if (cards.length < 2) {
+    host.hidden = true
+    host.replaceChildren()
+    return
+  }
+  host.hidden = false
+  if (host.dataset.n === String(cards.length) && host.childElementCount) return
+  host.dataset.n = String(cards.length)
+  host.replaceChildren()
+  cards.forEach((card, i) => {
+    const lab = document.createElement('label')
+    const box = document.createElement('input')
+    box.type = 'checkbox'
+    box.checked = true
+    box.dataset.gpuIndex = String(i)
+    lab.append(box, document.createTextNode(`GPU ${i + 1} ${card.name || ''}`))
+    host.appendChild(lab)
+  })
+}
+
+function selectedGpuIndexes() {
+  const host = $('sysmonGpuPick')
+  if (!host || host.hidden) return [0]
+  const boxes = [...host.querySelectorAll('input[type="checkbox"]')]
+  const picked = boxes.filter((b) => b.checked).map((b) => Number(b.dataset.gpuIndex))
+  return picked.length ? picked : [0]
+}
 /** 每顆硬碟自己的讀寫峰值（慢慢往下衰減，免得一次尖峰把之後的長條壓扁） */
 const diskPeaks = new Map()
 

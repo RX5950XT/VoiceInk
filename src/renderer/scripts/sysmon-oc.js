@@ -22,13 +22,14 @@ const state = {
   folds: new Set(),
   foldsTouched: false,
   cpuSig: '',
-  gpuSig: ''
+  gpuSig: '',
+  vfGpuIndex: 0
 }
 
 /** @type {Array<{ fill: HTMLElement, text: HTMLElement }>} */
 const cpuGaugeSlots = []
-/** @type {Array<{ fill: HTMLElement, text: HTMLElement }>} */
-const gpuGaugeSlots = []
+/** @type {Map<number, Array<{ fill: HTMLElement, text: HTMLElement }>>} */
+const gpuGaugeSlotMap = new Map()
 /** @type {Array<{ fill: HTMLElement, text: HTMLElement }>} */
 const coreSlots = []
 const hist = {
@@ -119,7 +120,7 @@ function sliderRow(host, spec) {
     } else if (spec.key.startsWith('cpu.')) {
       patch = { cpu: { [spec.key.slice(4)]: n } }
     } else {
-      patch = { gpu: { [spec.key.slice(4)]: n } }
+      patch = { gpuIndex: spec.gpuIndex || 0, gpu: { [spec.key.slice(4)]: n } }
     }
     electronAPI.sysmon.ocSetDraft(patch).then((res) => { if (res?.ok) render(res.data) })
   })
@@ -136,7 +137,7 @@ function sliderRow(host, spec) {
 function foldBox(host, id, title) {
   const box = el('details', 'oc-fold')
   box.dataset.fold = id
-  const first = !state.foldsTouched && (id === 'pbo' || id === 'gpu-clock')
+  const first = !state.foldsTouched && (id === 'pbo' || id === 'gpu-clock' || id === 'gpu-clock-0')
   box.open = first || state.folds.has(id)
   if (box.open) state.folds.add(id)
   box.addEventListener('toggle', () => {
@@ -273,79 +274,121 @@ function renderCpu(data) {
   manual.append(el('p', 'oc-empty', '每核時脈 0＝跟全核／PBO'), freqBox)
 }
 
+function liveGpus(data) {
+  if (Array.isArray(data?.live?.gpus) && data.live.gpus.length) return data.live.gpus
+  return [data?.live?.gpu || {}]
+}
+
+function draftGpus(data) {
+  if (Array.isArray(data?.draft?.gpus) && data.draft.gpus.length) return data.draft.gpus
+  return [data?.draft?.gpu || {}]
+}
+
+function feedGpus(data) {
+  if (Array.isArray(data?.feed?.gpus) && data.feed.gpus.length) return data.feed.gpus
+  const one = data?.feed?.gpu || state.feed?.gpu
+  return one ? [one] : []
+}
+
 /** @param {any} data */
 function renderGpu(data) {
-  const live = data.live?.gpu || {}
-  const draft = data.draft?.gpu || {}
+  const host = $('ocGpuHost')
+  if (!host) return
+  const lives = liveGpus(data)
+  const drafts = draftGpus(data)
+  const n = Math.max(lives.length, drafts.length, 1)
+  const sig = `${data.available}|${n}|${lives.map((g) => g.writable).join(',')}|${JSON.stringify(data.draft?.gpus || data.draft?.gpu || {})}`
+  if (state.gpuSig === sig) return
+  if (document.activeElement && host.contains(document.activeElement)) return
+  state.gpuSig = sig
+  host.replaceChildren()
   const limits = data.limits || {}
-  const hint = $('ocGpuHint')
-  const liveEl = $('ocGpuLive')
-  const sliders = $('ocGpuSliders')
-  if (hint) hint.textContent = live.name || ''
-  if (liveEl) {
-    const card = data.feed?.gpu || {}
-    const clock = live.clock ?? card.clockSm
-    const temp = live.temp ?? card.temperature
-    const power = live.powerW ?? card.power
+  for (let i = 0; i < n; i += 1) {
+    const live = lives[i] || {}
+    const draft = drafts[i] || drafts[0] || {}
+    const card = el('section', 'oc-card')
+    const head = el('header', 'oc-card-head')
+    head.append(
+      el('h2', '', n > 1 ? `顯示卡 ${i + 1}` : '顯示卡'),
+      el('span', 'oc-card-hint', live.name || '')
+    )
+    const liveEl = el('p', 'oc-live')
+    const feed = feedGpus(data)[i] || {}
+    const clock = live.clock ?? feed.clockSm
+    const temp = live.temp ?? feed.temperature
+    const power = live.powerW ?? feed.power
     liveEl.textContent = data.available
       ? `目前 ${fmt(clock, ' MHz')} · ${fmt(temp, ' °C')} · ${fmt(power, ' W')} · 牆 ${fmt(live.powerPct, '%')}`
       : '感測器尚未連線'
+    const sliders = el('div', 'oc-sliders')
+    card.append(head, liveEl, sliders)
+    if (!data.available) {
+      host.appendChild(card)
+      continue
+    }
+    if (!live.writable) {
+      sliders.append(el('p', 'oc-empty', live.reason || '這張顯示卡還沒接（NVIDIA：時脈、功耗、VID 電壓、溫度牆、V/F 曲線）。'))
+      host.appendChild(card)
+      continue
+    }
+    const clocks = foldBox(sliders, i === 0 ? 'gpu-clock' : `gpu-clock-${i}`, '時脈與功耗')
+    sliderRow(clocks, {
+      key: 'gpu.coreMHz', label: '核心時脈偏移', unit: ' MHz',
+      min: limits.coreMin ?? -200, max: limits.coreMax ?? 200,
+      value: draft.coreMHz || 0, gpuIndex: i
+    })
+    sliderRow(clocks, {
+      key: 'gpu.memMHz', label: '記憶體時脈偏移', unit: ' MHz',
+      min: limits.memMin ?? -500, max: limits.memMax ?? 1000,
+      value: draft.memMHz || 0, gpuIndex: i
+    })
+    sliderRow(clocks, {
+      key: 'gpu.powerPct', label: '功耗上限', unit: '%',
+      min: limits.powerMin ?? 50, max: limits.powerMax ?? 120,
+      value: draft.powerPct || 100, gpuIndex: i
+    })
+    const volt = foldBox(sliders, `gpu-volt-${i}`, '電壓與溫度')
+    sliderRow(volt, {
+      key: 'gpu.voltMv', label: '核心電壓偏移', unit: ' mV',
+      min: limits.voltMin ?? -100, max: limits.voltMax ?? 100,
+      value: draft.voltMv || 0, gpuIndex: i
+    })
+    sliderRow(volt, {
+      key: 'gpu.tempC', label: 'GPU 溫度牆', unit: ' °C',
+      min: limits.gpuTempMin ?? 65, max: limits.gpuTempMax ?? 95,
+      value: draft.tempC || 90, gpuIndex: i
+    })
+    const vfFold = el('details', 'oc-fold')
+    vfFold.dataset.fold = `vf-${i}`
+    vfFold.open = state.folds.has(`vf-${i}`)
+    const sum = el('summary', 'oc-fold-sum', 'V/F 曲線')
+    const body = el('div', 'oc-fold-body')
+    body.append(el('p', 'oc-empty', '橫軸電壓、直軸時脈；往上拖＝加 MHz。'))
+    const vfHost = el('div', 'oc-vf-host')
+    if (i === 0) vfHost.id = 'ocVfHost'
+    vfHost.dataset.gpuIndex = String(i)
+    body.append(vfHost)
+    vfFold.append(sum, body)
+    vfFold.addEventListener('toggle', () => {
+      state.foldsTouched = true
+      if (vfFold.open) state.folds.add(`vf-${i}`)
+      else state.folds.delete(`vf-${i}`)
+    })
+    card.append(vfFold)
+    host.appendChild(card)
   }
-  if (!sliders) return
-  const sig = `${data.available}|${live.writable}|${JSON.stringify(data.draft?.gpu || {})}`
-  if (state.gpuSig === sig) {
-    const fold = $('ocVfFold')
-    if (fold) fold.hidden = !(data.available && live.writable)
-    return
-  }
-  if (document.activeElement && sliders.contains(document.activeElement)) return
-  state.gpuSig = sig
-  sliders.replaceChildren()
-  const vfFold = $('ocVfFold')
-  if (vfFold) vfFold.hidden = !(data.available && live.writable)
-  if (!data.available) return
-  if (!live.writable) {
-    sliders.append(el('p', 'oc-empty', live.reason || '這張顯示卡還沒接（NVIDIA：時脈、功耗、VID 電壓、溫度牆、V/F 曲線）。'))
-    return
-  }
-  const clocks = foldBox(sliders, 'gpu-clock', '時脈與功耗')
-  sliderRow(clocks, {
-    key: 'gpu.coreMHz', label: '核心時脈偏移', unit: ' MHz',
-    min: limits.coreMin ?? -200, max: limits.coreMax ?? 200,
-    value: draft.coreMHz || 0
-  })
-  sliderRow(clocks, {
-    key: 'gpu.memMHz', label: '記憶體時脈偏移', unit: ' MHz',
-    min: limits.memMin ?? -500, max: limits.memMax ?? 1000,
-    value: draft.memMHz || 0
-  })
-  sliderRow(clocks, {
-    key: 'gpu.powerPct', label: '功耗上限', unit: '%',
-    min: limits.powerMin ?? 50, max: limits.powerMax ?? 120,
-    value: draft.powerPct || 100
-  })
-  const volt = foldBox(sliders, 'gpu-volt', '電壓與溫度')
-  sliderRow(volt, {
-    key: 'gpu.voltMv', label: '核心電壓偏移', unit: ' mV',
-    min: limits.voltMin ?? -100, max: limits.voltMax ?? 100,
-    value: draft.voltMv || 0
-  })
-  sliderRow(volt, {
-    key: 'gpu.tempC', label: 'GPU 溫度牆', unit: ' °C',
-    min: limits.gpuTempMin ?? 65, max: limits.gpuTempMax ?? 95,
-    value: draft.tempC || 90
-  })
+  renderVf(data)
 }
 
 const VF_W = 320
 const VF_H = 140
 const VF_PAD = 18
 
-/** @param {any} data */
-function vfPoints(data) {
-  const live = data.live?.gpu?.vf || []
-  const deltas = data.draft?.gpu?.vfDeltas || []
-  const base = Number(data.draft?.gpu?.coreMHz) || 0
+/** @param {any} data @param {number} [index] */
+function vfPoints(data, index = 0) {
+  const live = liveGpus(data)[index]?.vf || []
+  const deltas = draftGpus(data)[index]?.vfDeltas || []
+  const base = Number(draftGpus(data)[index]?.coreMHz) || 0
   return live.map((p, i) => {
     const extra = deltas[i] || 0
     const freq = Number(p.f) || 0
@@ -414,9 +457,13 @@ function paintVf(svg, points) {
 
 /** @param {any} data */
 function renderVf(data) {
-  const host = $('ocVfHost')
-  if (!host || state.vfDrag) return
-  const points = vfPoints(data)
+  const hosts = [...document.querySelectorAll('#ocGpuHost .oc-vf-host')]
+  if (!hosts.length || state.vfDrag) return
+  hosts.forEach((host) => paintVfHost(host, data, Number(host.dataset.gpuIndex) || 0))
+}
+
+function paintVfHost(host, data, index) {
+  const points = vfPoints(data, index)
   if (!points.length) {
     if (host.dataset.empty !== '1') {
       host.replaceChildren()
@@ -446,7 +493,6 @@ function renderVf(data) {
     xText.setAttribute('text-anchor', 'end')
     svg.append(line, yText, xText)
     const read = el('p', 'oc-vf-read', '橫：電壓　直：時脈。往上拖＝那一檔加快。')
-    read.id = 'ocVfRead'
     host.append(svg, read)
     svg.addEventListener('pointerdown', onVfDown)
   }
@@ -461,7 +507,10 @@ function onVfDown(event) {
   if (!dot) return
   const index = Number(dot.getAttribute('data-index'))
   const svg = /** @type {SVGElement} */ (dot.ownerSVGElement)
+  const host = svg?.closest?.('.oc-vf-host')
+  const gpuIndex = Number(host?.dataset.gpuIndex) || 0
   state.vfDrag = true
+  state.vfGpuIndex = gpuIndex
   svg.classList.add('is-dragging')
   const move = (ev) => {
     const rect = svg.getBoundingClientRect()
@@ -470,26 +519,27 @@ function onVfDown(event) {
     const minY = Number(svg.dataset.minY) || 0
     const maxY = Number(svg.dataset.maxY) || 3000
     const mhz = Math.round(minY + Math.max(0, Math.min(1, t)) * (maxY - minY))
-    const live = state.data?.live?.gpu?.vf || []
+    const live = liveGpus(state.data)[gpuIndex]?.vf || []
     const point = live[index] || {}
-    const base = Number(state.data?.draft?.gpu?.coreMHz) || 0
+    const base = Number(draftGpus(state.data)[gpuIndex]?.coreMHz) || 0
     const extra = mhz - (Number(point.f) || 0) - base
-    const vfDeltas = [...(state.data?.draft?.gpu?.vfDeltas || [])]
+    const vfDeltas = [...(draftGpus(state.data)[gpuIndex]?.vfDeltas || [])]
     while (vfDeltas.length < live.length) vfDeltas.push(0)
     vfDeltas[index] = extra
-    const read = $('ocVfRead')
+    const read = host?.querySelector('.oc-vf-read')
     if (read) read.textContent = `${Math.round(point.v || 0)} mV → ${mhz} MHz（${extra > 0 ? '+' : ''}${extra}）`
-    const next = { ...state.data, draft: { ...state.data.draft, gpu: { ...state.data.draft.gpu, vfDeltas } } }
+    const gpus = draftGpus(state.data).map((g, i) => (i === gpuIndex ? { ...g, vfDeltas } : g))
+    const next = { ...state.data, draft: { ...state.data.draft, gpu: gpus[0], gpus } }
     state.data = next
-    paintVf(svg, vfPoints(next))
+    paintVf(svg, vfPoints(next, gpuIndex))
   }
   const up = () => {
     window.removeEventListener('pointermove', move)
     window.removeEventListener('pointerup', up)
     svg.classList.remove('is-dragging')
     state.vfDrag = false
-    const vfDeltas = state.data?.draft?.gpu?.vfDeltas || []
-    electronAPI.sysmon.ocSetDraft({ gpu: { vfDeltas } }).then((res) => { if (res?.ok) render(res.data) })
+    const vfDeltas = draftGpus(state.data)[gpuIndex]?.vfDeltas || []
+    electronAPI.sysmon.ocSetDraft({ gpuIndex, gpu: { vfDeltas } }).then((res) => { if (res?.ok) render(res.data) })
   }
   window.addEventListener('pointermove', move)
   window.addEventListener('pointerup', up)
@@ -689,22 +739,15 @@ function axisText(v, unit) {
 function renderDash(data) {
   const live = data.live || {}
   const cpu = live.cpu || {}
-  const gpu = live.gpu || {}
+  const gpus = liveGpus(data)
   const feed = data.feed || state.feed || {}
-  const card = feed.gpu || {}
+  const cards = feedGpus(data)
   const cpuLoad = pick(cpu.load, feed.cpuTotal)
   const cpuClock = pick(cpu.clock)
   const cpuTemp = pick(cpu.temp)
   const cpuPower = pick(cpu.powerW)
   const cpuVolt = pick(cpu.volt)
   const pptWall = pick(cpu.pptW, data.draft?.cpu?.pptW)
-  const gpuLoad = pick(gpu.load, card.utilization)
-  const gpuClock = pick(gpu.clock, card.clockSm)
-  const gpuMem = pick(gpu.mem, card.clockMem)
-  const gpuTemp = pick(gpu.temp, card.temperature)
-  const gpuPower = pick(gpu.powerW, card.power)
-  const gpuVolt = pick(gpu.volt)
-
   renderGaugeRow($('ocCpuGauges'), [
     { label: '負載', value: cpuLoad || 0, max: 100, text: dashText(cpuLoad, '%') },
     { label: '時脈', value: cpuClock || 0, max: 5000, text: dashText(cpuClock, ' MHz') },
@@ -713,14 +756,7 @@ function renderDash(data) {
     { label: '溫度', value: cpuTemp || 0, max: 100, text: dashText(cpuTemp, ' °C') }
   ], cpuGaugeSlots)
 
-  renderGaugeRow($('ocGpuGauges'), [
-    { label: '負載', value: gpuLoad || 0, max: 100, text: dashText(gpuLoad, '%') },
-    { label: '核心', value: gpuClock || 0, max: 3200, text: dashText(gpuClock, ' MHz') },
-    { label: '記憶體', value: gpuMem || 0, max: 30000, text: dashText(gpuMem, ' MHz') },
-    { label: '功耗', value: gpuPower || 0, max: 400, text: dashText(gpuPower, ' W') },
-    { label: '溫度', value: gpuTemp || 0, max: 100, text: dashText(gpuTemp, ' °C') },
-    { label: '電壓', value: gpuVolt || 0, max: 1.2, text: gpuVolt != null ? `${gpuVolt.toFixed(3)} V` : '—' }
-  ], gpuGaugeSlots)
+  paintOcGpuDash(data, gpus, cards)
 
   renderCores($('ocCpuCores'), Array.isArray(cpu.cores) ? cpu.cores : [])
 
@@ -730,9 +766,11 @@ function renderDash(data) {
     pushHist(hist.cpuClock, cpuClock)
     pushHist(hist.cpuTemp, cpuTemp)
     pushHist(hist.cpuPower, cpuPower)
-    pushHist(hist.gpuClock, gpuClock)
-    pushHist(hist.gpuPower, gpuPower)
-    pushHist(hist.gpuTemp, gpuTemp)
+    const g0 = gpus[0] || {}
+    const c0 = cards[0] || {}
+    pushHist(hist.gpuClock, pick(g0.clock, c0.clockSm))
+    pushHist(hist.gpuPower, pick(g0.powerW, c0.power))
+    pushHist(hist.gpuTemp, pick(g0.temp, c0.temperature))
   }
   const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent-primary').trim() || '#6ea8ff'
   const warn = getComputedStyle(document.documentElement).getPropertyValue('--warning').trim() || '#e8b84a'
@@ -740,17 +778,82 @@ function renderDash(data) {
     { values: hist.cpuClock, color: accent, unit: ' MHz' },
     { values: hist.cpuTemp, color: warn, unit: ' °C' }
   ])
-  drawSpark(/** @type {HTMLCanvasElement|null} */ ($('ocGpuSpark')), [
-    { values: hist.gpuClock, color: accent, unit: ' MHz' },
-    { values: hist.gpuPower, color: warn, unit: ' W' }
-  ])
+  document.querySelectorAll('#ocGpuDashHost canvas.oc-spark').forEach((canvas, i) => {
+    const g = gpus[i] || {}
+    const c = cards[i] || {}
+    if (i === 0) {
+      drawSpark(canvas, [
+        { values: hist.gpuClock, color: accent, unit: ' MHz' },
+        { values: hist.gpuPower, color: warn, unit: ' W' }
+      ])
+      return
+    }
+    drawSpark(canvas, [
+      { values: [pick(g.clock, c.clockSm) || 0], color: accent, unit: ' MHz' },
+      { values: [pick(g.powerW, c.power) || 0], color: warn, unit: ' W' }
+    ])
+  })
+}
+
+function paintOcGpuDash(data, gpus, cards) {
+  const host = $('ocGpuDashHost')
+  if (!host) return
+  const n = Math.max(gpus.length, 1)
+  if (host.childElementCount !== n) {
+    host.replaceChildren()
+    gpuGaugeSlotMap.clear()
+    for (let i = 0; i < n; i += 1) {
+      const section = el('section', 'oc-dash-group')
+      section.append(el('h3', '', n > 1 ? `顯示卡 ${i + 1} 即時` : '顯示卡即時'))
+      const gauges = el('div', 'sysmon-gauges')
+      gauges.id = i === 0 ? 'ocGpuGauges' : `ocGpuGauges${i}`
+      section.append(gauges)
+      if (i === 0) {
+        const legend = el('p', 'oc-spark-legend')
+        const a = el('i', 'oc-spark-swatch is-clock')
+        const b = el('i', 'oc-spark-swatch is-power')
+        legend.append(a, document.createTextNode('核心時脈（這一分鐘）'), b, document.createTextNode('功耗'))
+        const spark = document.createElement('canvas')
+        spark.className = 'oc-spark'
+        spark.width = 640
+        spark.height = 56
+        spark.setAttribute('aria-hidden', 'true')
+        section.append(legend, spark)
+      }
+      host.appendChild(section)
+      gpuGaugeSlotMap.set(i, [])
+    }
+  }
+  gpus.forEach((gpu, i) => {
+    const card = cards[i] || {}
+    const gauges = host.children[i]?.querySelector('.sysmon-gauges')
+    const slots = gpuGaugeSlotMap.get(i) || []
+    const gpuLoad = pick(gpu.load, card.utilization)
+    const gpuClock = pick(gpu.clock, card.clockSm)
+    const gpuMem = pick(gpu.mem, card.clockMem)
+    const gpuTemp = pick(gpu.temp, card.temperature)
+    const gpuPower = pick(gpu.powerW, card.power)
+    const gpuVolt = pick(gpu.volt)
+    renderGaugeRow(gauges, [
+      { label: '負載', value: gpuLoad || 0, max: 100, text: dashText(gpuLoad, '%') },
+      { label: '核心', value: gpuClock || 0, max: 3200, text: dashText(gpuClock, ' MHz') },
+      { label: '記憶體', value: gpuMem || 0, max: 30000, text: dashText(gpuMem, ' MHz') },
+      { label: '功耗', value: gpuPower || 0, max: 400, text: dashText(gpuPower, ' W') },
+      { label: '溫度', value: gpuTemp || 0, max: 100, text: dashText(gpuTemp, ' °C') },
+      { label: '電壓', value: gpuVolt || 0, max: 1.2, text: gpuVolt != null ? `${gpuVolt.toFixed(3)} V` : '—' }
+    ], slots)
+    gpuGaugeSlotMap.set(i, slots)
+    const title = host.children[i]?.querySelector('h3')
+    if (title && gpu.name) title.textContent = n > 1 ? `顯示卡 ${i + 1} · ${gpu.name}` : '顯示卡即時'
+  })
 }
 
 /** 系統監控取樣進來時立刻更新儀表，不必等 ocStatus 下一輪。 */
 export function onOcSample(sample) {
   state.feed = {
     cpuTotal: sample?.cpu?.total ?? null,
-    gpu: (sample?.gpu?.cards || [])[0] || null
+    gpu: (sample?.gpu?.cards || [])[0] || null,
+    gpus: sample?.gpu?.cards || []
   }
   if (!state.data) return
   state.data = { ...state.data, feed: state.feed }

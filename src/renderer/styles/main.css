@@ -2218,6 +2218,7 @@ option:disabled {
   border-radius: var(--radius-sm);
   background-color: var(--surface-subtle);
   color: var(--text-secondary);
+  overflow: visible;
 }
 
 .proj-session-status .ws-tool-icon {
@@ -2247,12 +2248,18 @@ option:disabled {
 }
 
 .ws-status-icon.is-spin {
-  animation: ws-status-spin 0.9s linear infinite;
-  transform-origin: 50% 50%;
+  overflow: visible;
+  animation: ws-status-spin 0.7s linear infinite;
+  transform-box: view-box;
+  transform-origin: center;
 }
 
 @keyframes ws-status-spin {
   to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ws-status-icon.is-spin { animation: none; }
 }
 
 .ws-tab-state-exited {
@@ -8239,6 +8246,19 @@ h6.md-h { font-size: 14px; }
   gap: 14px;
   align-items: start;
 }
+.oc-gpu-host,
+.oc-gpu-dash-host {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+@media (min-width: 900px) {
+  .oc-gpu-dash-host:has(.oc-dash-group:nth-child(2)) {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+}
 .oc-card {
   display: flex;
   flex-direction: column;
@@ -8384,9 +8404,18 @@ h6.md-h { font-size: 14px; }
    ------------------------------------------------------------------ */
 
 .sysmon-blocks {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: 1fr;
   gap: 10px;
+}
+
+@media (min-width: 900px) {
+  .sysmon-blocks {
+    grid-template-columns: 1fr 1fr;
+  }
+  .sysmon-block[data-span="2"] {
+    grid-column: 1 / -1;
+  }
 }
 
 .sysmon-block {
@@ -8696,6 +8725,45 @@ h6.md-h { font-size: 14px; }
   grid-template-columns: repeat(4, 1fr);
   gap: 10px 22px;
   padding: 12px 18px;
+}
+
+.sysmon-gpu-gauges {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+@media (min-width: 900px) {
+  .sysmon-gpu-gauges:has(.sysmon-gpu-gauge-card:nth-child(2)) {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+.sysmon-gpu-gauge-card {
+  padding: 10px 14px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--surface-glass);
+  min-width: 0;
+}
+.sysmon-gpu-gauge-card > h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+.sysmon-gpu-gauge-card .sysmon-gauges { padding: 0; }
+.sysmon-gpu-pick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-bottom: 8px;
+}
+.sysmon-gpu-pick label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-primary);
 }
 
 /* 記憶體＋硬碟的數量不定，讓它自動換行 */
@@ -9177,9 +9245,43 @@ h6.md-h { font-size: 14px; }
   font-variant-numeric: tabular-nums;
 }
 
+.stime-cat-bar {
+  display: flex;
+  height: 10px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--surface-solid);
+  margin-bottom: 10px;
+}
+.stime-cat-bar > i {
+  display: block;
+  height: 100%;
+  min-width: 0;
+}
+.stime-cat-row {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) 52px 88px;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+}
+.stime-cat-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+.stime-cat-pct {
+  text-align: right;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
 @media (max-width: 900px) {
   .stime-cards,
   .stime-split { grid-template-columns: 1fr; }
+  .stime-cat-row { grid-template-columns: 10px minmax(0, 1fr) 88px; }
+  .stime-cat-pct { display: none; }
 }
 
 /* ===== Claude Code 工作台 ===== */

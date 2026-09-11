@@ -114,7 +114,7 @@ check('套用只送數字指令', () => {
     cpu: { pptW: 100, tdcA: 70, edcA: 100, scalarX100: 125, coAll: -10, freqMhz: 0, tctlC: 85, cores: [-5, 0] }
   })
   engine.apply()
-  assert.ok(sent.some((line) => /^G 75 200 110 25 88$/.test(line)), sent.join('|'))
+  assert.ok(sent.some((line) => /^G 75 200 110 25 88(?: 0)?$/.test(line)), sent.join('|'))
   assert.ok(sent.some((line) => /^C 100 70 100 125 -10 0 85 0 0$/.test(line)), sent.join('|'))
   assert.ok(sent.some((line) => line.startsWith('K ')), sent.join('|'))
 })
@@ -205,6 +205,35 @@ check('panic 用未平滑的原始溫度', () => {
   assert.strictEqual(oc.isPanic(80, 40, 95), false)
   assert.strictEqual(oc.isPanic(null, null, 95), true)
   assert.strictEqual(oc.isPanic(null, 40, 95), false)
+})
+
+check('sidecar 多 GPU：gs 陣列＋舊的單 g 都能讀', () => {
+  const live = oc.parseLive({
+    c: { w: 1, t: 50 },
+    g: { w: 1, n: 'GPU0', t: 40, k: 2100 },
+    gs: [
+      { w: 1, n: 'RTX 4090', t: 62, k: 2700, pd: 320, i: 0 },
+      { w: 1, n: 'RTX 4060', t: 48, k: 2400, pd: 90, i: 1 }
+    ]
+  })
+  assert.strictEqual(live.gpus.length, 2)
+  assert.strictEqual(live.gpus[1].name, 'RTX 4060')
+  assert.strictEqual(live.gpu.name, 'RTX 4090')
+  const old = oc.parseLive({ c: {}, g: { w: 1, n: 'Solo', t: 41 } })
+  assert.strictEqual(old.gpus.length, 1)
+  assert.strictEqual(old.gpu.name, 'Solo')
+})
+
+check('多張卡任何一張過熱就 panic', () => {
+  assert.strictEqual(oc.isPanic(40, [50, 96], 95), true)
+  assert.strictEqual(oc.isPanic(40, [50, 60], 95), false)
+})
+
+check('舊設定 gpu 單物件會收成 gpus[0]', () => {
+  const cfg = oc.sanitizeConfig({ gpu: { coreMHz: 50, powerPct: 110 } })
+  assert.strictEqual(cfg.gpus.length, 1)
+  assert.strictEqual(cfg.gpus[0].coreMHz, 50)
+  assert.strictEqual(cfg.gpu.coreMHz, 50)
 })
 
 check('shutdown 已套用時會還原', () => {

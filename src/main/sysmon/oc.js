@@ -180,22 +180,30 @@ function sanitizeCpu(raw, factory = {}) {
  * @param {number} limit
  */
 function isPanic(cpuTemp, gpuTemp, limit) {
-  if (cpuTemp === null && gpuTemp === null) return true
+  const gpus = Array.isArray(gpuTemp) ? gpuTemp : [gpuTemp]
+  const gpuTemps = gpus.filter((t) => t != null)
+  if (cpuTemp === null && gpuTemps.length === 0) return true
   if (cpuTemp !== null && cpuTemp >= limit) return true
-  if (gpuTemp !== null && gpuTemp >= limit) return true
-  return false
+  return gpuTemps.some((t) => t >= limit)
 }
 
 /**
  * @param {any} raw
  * @param {{ pptW?: number, tdcA?: number, edcA?: number }} factory
  */
+function sanitizeGpus(raw, fallback) {
+  if (Array.isArray(raw) && raw.length) return raw.slice(0, 8).map((item) => sanitizeGpu(item))
+  return [sanitizeGpu(fallback)]
+}
+
 function sanitizeConfig(raw, factory = {}) {
   const src = raw && typeof raw === 'object' ? raw : {}
+  const gpus = sanitizeGpus(src.gpus, src.gpu)
   return {
     dirty: src.dirty === true,
     panicTemp: clamp(src.panicTemp == null ? DEFAULT_PANIC_TEMP : src.panicTemp, 70, 105),
-    gpu: sanitizeGpu(src.gpu),
+    gpu: gpus[0],
+    gpus,
     cpu: sanitizeCpu(src.cpu, factory)
   }
 }
@@ -204,14 +212,56 @@ function sanitizeConfig(raw, factory = {}) {
  * sidecar 每一框的 "o"。短鍵見 native Oc.AppendJson。
  * @param {any} raw
  */
-function parseLive(raw) {
-  const src = raw && typeof raw === 'object' ? raw : {}
-  const cpu = src.c && typeof src.c === 'object' ? src.c : {}
-  const gpu = src.g && typeof src.g === 'object' ? src.g : {}
+function parseGpu(gpu) {
+  const src = gpu && typeof gpu === 'object' ? gpu : {}
   const num = (value) => {
     const n = Number(value)
     return Number.isFinite(n) ? n : null
   }
+  return {
+    index: num(src.i) ?? 0,
+    writable: src.w === 1 || src.w === true,
+    name: String(src.n || ''),
+    temp: num(src.t),
+    hotspot: num(src.h),
+    clock: num(src.k),
+    mem: num(src.m),
+    load: num(src.u),
+    powerW: num(src.pd),
+    volt: num(src.vl),
+    fan: num(src.f),
+    vramUsed: num(src.vu),
+    vramTotal: num(src.vt),
+    coreMHz: num(src.co),
+    memMHz: num(src.mo),
+    powerPct: num(src.pw),
+    voltMv: num(src.vo),
+    tempC: num(src.gt),
+    vf: Array.isArray(src.vf)
+      ? src.vf.map((row) => {
+        const item = Array.isArray(row) ? row : []
+        return { i: num(item[0]), v: num(item[1]), f: num(item[2]), d: num(item[3]) }
+      }).filter((p) => p.i != null)
+      : [],
+    applied: src.a === 1 || src.a === true,
+    reason: String(src.r || '')
+  }
+}
+
+function parseLive(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {}
+  const cpu = src.c && typeof src.c === 'object' ? src.c : {}
+  const num = (value) => {
+    const n = Number(value)
+    return Number.isFinite(n) ? n : null
+  }
+  const gpus = Array.isArray(src.gs) && src.gs.length
+    ? src.gs.map((item, i) => {
+      const parsed = parseGpu(item)
+      parsed.index = parsed.index || i
+      return parsed
+    })
+    : [parseGpu(src.g)]
   return {
     cpu: {
       writable: cpu.w === 1 || cpu.w === true,
@@ -239,33 +289,8 @@ function parseLive(raw) {
       applied: cpu.a === 1 || cpu.a === true,
       reason: String(cpu.r || '')
     },
-    gpu: {
-      writable: gpu.w === 1 || gpu.w === true,
-      name: String(gpu.n || ''),
-      temp: num(gpu.t),
-      hotspot: num(gpu.h),
-      clock: num(gpu.k),
-      mem: num(gpu.m),
-      load: num(gpu.u),
-      powerW: num(gpu.pd),
-      volt: num(gpu.vl),
-      fan: num(gpu.f),
-      vramUsed: num(gpu.vu),
-      vramTotal: num(gpu.vt),
-      coreMHz: num(gpu.co),
-      memMHz: num(gpu.mo),
-      powerPct: num(gpu.pw),
-      voltMv: num(gpu.vo),
-      tempC: num(gpu.gt),
-      vf: Array.isArray(gpu.vf)
-        ? gpu.vf.map((row) => {
-          const item = Array.isArray(row) ? row : []
-          return { i: num(item[0]), v: num(item[1]), f: num(item[2]), d: num(item[3]) }
-        }).filter((p) => p.i != null)
-        : [],
-      applied: gpu.a === 1 || gpu.a === true,
-      reason: String(gpu.r || '')
-    }
+    gpu: gpus[0],
+    gpus
   }
 }
 
@@ -325,7 +350,8 @@ function createOcEngine(deps = {}) {
    * @param {ReturnType<typeof parseLive>} live
    */
   function shouldPanic(live) {
-    return isPanic(live.cpu.temp, live.gpu.temp, config.panicTemp)
+    const gpuTemps = (live.gpus || [live.gpu]).map((g) => g?.temp)
+    return isPanic(live.cpu.temp, gpuTemps, config.panicTemp)
   }
 
   function tick() {
@@ -398,7 +424,7 @@ function createOcEngine(deps = {}) {
         socMin: SOC_MIN,
         socMax: SOC_MAX
       },
-      draft: { gpu: config.gpu, cpu: config.cpu },
+      draft: { gpu: config.gpu, gpus: config.gpus, cpu: config.cpu },
       live
     }
   }
@@ -422,7 +448,14 @@ function createOcEngine(deps = {}) {
       load()
       const src = patch && typeof patch === 'object' ? patch : {}
       const factory = factoryOf()
-      if (src.gpu) config.gpu = sanitizeGpu({ ...config.gpu, ...src.gpu })
+      if (src.gpu) {
+        const i = clamp(src.gpuIndex == null ? 0 : src.gpuIndex, 0, 7)
+        const list = [...(config.gpus || [config.gpu])]
+        while (list.length <= i) list.push(sanitizeGpu({}))
+        list[i] = sanitizeGpu({ ...list[i], ...src.gpu })
+        config.gpus = list
+        config.gpu = list[0]
+      }
       if (src.cpu) config.cpu = sanitizeCpu({ ...config.cpu, ...src.cpu }, factory)
       if (src.panicTemp != null) config.panicTemp = clamp(src.panicTemp, 70, 105)
       persist()
@@ -443,8 +476,11 @@ function createOcEngine(deps = {}) {
       const live = parseLive(data.oc)
       const factory = factoryOf()
       config.cpu = sanitizeCpu(config.cpu, factory)
-      config.gpu = sanitizeGpu(config.gpu)
-      if (!live.cpu.writable && !live.gpu.writable) {
+      config.gpus = sanitizeGpus(config.gpus, config.gpu)
+      config.gpu = config.gpus[0]
+      const liveGpus = live.gpus || [live.gpu]
+      const gpuWritable = liveGpus.some((g) => g?.writable)
+      if (!live.cpu.writable && !gpuWritable) {
         const err = new Error('nothing writable')
         err.code = 'SYSMON_OC_UNSUPPORTED'
         err.userMessage = live.cpu.reason || live.gpu.reason || '這台機器的 CPU／顯示卡還沒接上效能調整。'
@@ -452,11 +488,13 @@ function createOcEngine(deps = {}) {
       }
       markDirty()
       let sent = false
-      if (live.gpu.writable) {
-        const g = config.gpu
-        sent = sensors.send(`G ${g.coreMHz} ${g.memMHz} ${g.powerPct} ${g.voltMv} ${g.tempC}`) || sent
+      for (let i = 0; i < liveGpus.length; i += 1) {
+        if (!liveGpus[i]?.writable) continue
+        const g = config.gpus[i] || config.gpu
+        sent = sensors.send(`G ${g.coreMHz} ${g.memMHz} ${g.powerPct} ${g.voltMv} ${g.tempC} ${i}`) || sent
         if (g.vfDeltas && g.vfDeltas.length) {
-          sent = sensors.send(`V ${g.vfDeltas.length} ${g.vfDeltas.join(' ')}`) || sent
+          if (i === 0) sent = sensors.send(`V ${g.vfDeltas.length} ${g.vfDeltas.join(' ')}`) || sent
+          sent = sensors.send(`W ${i} ${g.vfDeltas.length} ${g.vfDeltas.join(' ')}`) || sent
         }
       }
       if (live.cpu.writable) {
@@ -517,6 +555,7 @@ module.exports = {
   clamp,
   clampAround,
   sanitizeGpu,
+  sanitizeGpus,
   sanitizeCpu,
   sanitizeConfig,
   parseLive,

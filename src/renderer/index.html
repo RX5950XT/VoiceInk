@@ -917,7 +917,7 @@
                   </section>
                   <section class="sysmon-gauge-group">
                     <h3>GPU</h3>
-                    <div id="sysmonStressGpu" class="sysmon-gauges sysmon-gauges-gpu"></div>
+                    <div id="sysmonStressGpu" class="sysmon-gpu-gauges"></div>
                   </section>
                   <section class="sysmon-gauge-group">
                     <h3>記憶體與硬碟</h3>
@@ -946,6 +946,7 @@
                     <p class="sysmon-stress-desc">
                       著色器壓滿 GPU，可另配 VRAM。畫面卡頓是正常的；5 分鐘自動停止。
                     </p>
+                    <div id="sysmonGpuPick" class="sysmon-gpu-pick" hidden></div>
                     <div class="sysmon-stress-row">
                       <label for="sysmonGpuLoad">負載強度</label>
                       <input id="sysmonGpuLoad" type="range" min="1" max="5" step="1" value="3" />
@@ -966,8 +967,10 @@
                       離屏 framebuffer 上。畫到畫布本身的話每一批都要跟合成器與 swap chain
                       打交道，量到的 GPU 使用率會隨著視窗有沒有被遮住在 3%～100% 之間跳。
                     -->
-                    <canvas id="sysmonStressCanvas" class="sysmon-stress-canvas" width="1" height="1"
-                      aria-hidden="true" hidden></canvas>
+                    <div id="sysmonStressCanvases" hidden>
+                      <canvas id="sysmonStressCanvas" class="sysmon-stress-canvas" width="1" height="1"
+                        aria-hidden="true"></canvas>
+                    </div>
                   </section>
 
                   <section class="sysmon-stress-card">
@@ -1070,12 +1073,7 @@
                     <p class="oc-spark-legend"><i class="oc-spark-swatch is-clock"></i>時脈（這一分鐘）<i class="oc-spark-swatch is-temp"></i>溫度</p>
                     <canvas id="ocCpuSpark" class="oc-spark" width="640" height="56" aria-hidden="true"></canvas>
                   </section>
-                  <section class="oc-dash-group">
-                    <h3>顯示卡即時</h3>
-                    <div id="ocGpuGauges" class="sysmon-gauges"></div>
-                    <p class="oc-spark-legend"><i class="oc-spark-swatch is-clock"></i>核心時脈（這一分鐘）<i class="oc-spark-swatch is-power"></i>功耗</p>
-                    <canvas id="ocGpuSpark" class="oc-spark" width="640" height="56" aria-hidden="true"></canvas>
-                  </section>
+                  <div id="ocGpuDashHost" class="oc-gpu-dash-host"></div>
                 </div>
                 <div class="oc-layout">
                   <section class="oc-card" id="ocCpuCard">
@@ -1086,21 +1084,7 @@
                     <p id="ocCpuLive" class="oc-live"></p>
                     <div id="ocCpuSliders" class="oc-sliders"></div>
                   </section>
-                  <section class="oc-card" id="ocGpuCard">
-                    <header class="oc-card-head">
-                      <h2>顯示卡</h2>
-                      <span id="ocGpuHint" class="oc-card-hint"></span>
-                    </header>
-                    <p id="ocGpuLive" class="oc-live"></p>
-                    <div id="ocGpuSliders" class="oc-sliders"></div>
-                    <details class="oc-fold" id="ocVfFold" hidden>
-                      <summary class="oc-fold-sum">V/F 曲線</summary>
-                      <div class="oc-fold-body">
-                        <p class="oc-empty">橫軸電壓、直軸時脈；往上拖＝加 MHz。</p>
-                        <div id="ocVfHost" class="oc-vf-host"></div>
-                      </div>
-                    </details>
-                  </section>
+                  <div id="ocGpuHost" class="oc-gpu-host"></div>
                 </div>
               </div>
             </div>

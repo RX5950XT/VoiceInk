@@ -130,6 +130,13 @@ function createScreentimeService(deps = {}) {
       import: deps.import
     })
     if (!db) db = dbMod.openDb(userDataPath, { Database: deps.Database })
+    try { require('./categories').backfill(db) } catch { /* 舊庫缺欄位就下次再說 */ }
+    try {
+      const dest = dbMod.destDir(userDataPath)
+      require('./categories').lookupUnclassified(db, {
+        cacheFile: path.join(dest, 'lookup-cache.json')
+      }).catch(() => {})
+    } catch { /* 沒網路就下次再說 */ }
     applyConfig()
     running = true
     generation++
