@@ -126,6 +126,17 @@ function createSysmonService(deps = {}) {
       // nvidia-smi 的輪詢最小單位是秒，取樣 1 秒時它也給 1 秒
       gpu.start(Math.max(1, Math.round(INTERVALS[intervalKey] / 1000)))
       sampler.start(intervalKey)
+      // 取樣器常駐：進頁時立刻把上一筆再送一次，畫面不必等下一輪 tick。
+      // gpu／sensors 各自有自己的子程序，順便用當下的讀數蓋過取樣當下那一格。
+      if (lastFeed) {
+        const gpuNow = gpu.read()
+        lastFeed = {
+          ...lastFeed,
+          gpu: gpuNow.available ? gpuNow : lastFeed.gpu,
+          sensors: { ...sensorStatus(), groups: sensors.read().groups }
+        }
+        emit({ type: 'sample', data: lastFeed })
+      }
       return { running: true, intervalKey }
     },
 

@@ -9,7 +9,7 @@ VoiceInk：Windows Electron AI 工作台。Vanilla JS + Vite（無前端框架�
 目前版本 **v1.20.0**（系統監控多 GPU、處理程序合併、使用時長分類；前幾版為 Monaco 工作區、App 內自動更新、管理員終端機、
 全域語音輸入、系統監控、HF模型、CC 代理工作台）。
 
-nav 九頁：聊天（預設，**專案工作區與終端機都在同一頁**）｜CC代理（`data-page` 仍是 `ccswitch`）｜額度｜
+nav 十頁：聊天（預設，**專案工作區與終端機都在同一頁**）｜檔案｜CC代理（`data-page` 仍是 `ccswitch`）｜額度｜
 AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定。
 
 ## 架構
@@ -21,15 +21,17 @@ src/main/
                       結束前在 app.exit(0) 前一行靜默安裝（autoInstallOnAppQuit 對本 App 無效）
   chat.js             雲端聊天 SSE；單一 in-flight、雙逾時、上下文裁切、model allowlist、圖片與生圖、重新生成
   chat-store.js / chat-images.js / chat-models.js   會話持久化、圖片附件、/models 掃描（與 ccswitch 共用）
-  ipc-invoke.js       九組模組 IPC 的共用外殼 makeInvoke()：主視窗守衛 ＋ { ok, data|error } ＋ userMessage 白名單
+  ipc-invoke.js       十組模組 IPC 的共用外殼 makeInvoke()：主視窗守衛 ＋ { ok, data|error } ＋ userMessage 白名單
   terminal/           ConPTY：pty.js、status.js（OSC 133 ＋ 靜默雙軌，純函式）、store.js（固定表）、
                       ipc.js、links.js（畫面上的網址／路徑，主行程驗存在再開）、
                       admin.js／admin-host.js（管理員終端機的提權 host）、
                       host.js／host-runtime.js／host-client.js／service.js（**PTY 住在 App 外的獨立宿主**）、
                       editor-bridge.js（Ctrl+G 的 $EDITOR 橋接：CLI 開的編輯器就是 App 自己的分頁）
-  workspace/          專案工作區：store.js（workspaces.json）、files.js（**唯一的檔案系統入口**，resolveIn）、
+  workspace/          專案工作區：store.js（workspaces.json）、files.js（**專案內**唯一的檔案系統入口，resolveIn）、
                       git.js（porcelain=v2 -z 解析＋commit／push／審閱）、agents.js（本機 AI session）、
                       worktree.js、watch.js（一次看一個專案的 recursive watcher）、index.js、ipc.js
+  explorer/           整機檔案總管：paths.js（resolveAbs）、fs.js、recycle.js（系統資源回收筒）、
+                      drives.js、watch.js、uffs.js（代跑 UFFS CLI）、store.js（explorer.json）、index.js、ipc.js
   hfmodels/           hub.js（HF API 唯讀）、catalog.js、gguf.js（檔頭＋KV 估算）、hardware.js、plan.js、
                       fit.js（官方 llama-fit-params）、download.js、library.js、presets.js（INI）、
                       runtime.js（router 生死）、bench.js、index.js、ipc.js
@@ -54,7 +56,8 @@ src/renderer/scripts/
   app.js  chat-page.js  markdown.js（零 innerHTML）  terminal-page.js  ccswitch-page.js  sysmon-page.js
   usage-page.js  code-usage-page.js  agy-page.js  stt-page.js  transcribe.js  live-caption.js  vad.js
   translate-page.js  dictation.js  model-picker.js  custom-select.js（共用 ARIA listbox）
-  workspace-page.js（專案側欄＋右側欄四面板＋檔案樹）  ws-tabs.js（分頁列＋編輯器＋內建瀏覽器）
+  workspace-page.js（專案側欄＋右側欄四面板＋檔案樹）  explorer-page.js（整機檔案總管）
+  ws-tabs.js（分頁列＋編輯器＋內建瀏覽器）
   ws-monaco.js  ws-ai-session.js  ws-review.js  ws-git-status.js（git status 共用快取）  ws-tool-icons.js（「＋」選單圖示）
   list-reorder.js  grid-reorder.js  hf-page.js  sysmon-fans.js  sysmon-oc.js  sysmon-screentime.js
 
@@ -70,6 +73,7 @@ scripts/ 測試與探針（指令表見 CLAUDE.md「驗證方式」），dev-san
 | `chats.json` ／ `chat-images/` | 聊天會話（不含圖片）／圖片附件 | `chat:*`；檔名由 main 產生 |
 | `terminals.json` | 終端機 metadata（不存畫面內容） | `terminal:*` |
 | `workspaces.json` | 專案清單（`{ id, name, path }`＋`tabsState`） | `workspace:*` |
+| `explorer.json` | 檔案總管上次路徑／檢視模式 | `explorer:*` |
 | `dictations.json` | 語音輸入紀錄與個人字典 | `dictation:*` |
 | `usage.json` ／ `code-usage.json` | 七家額度快取／每小時用量桶＋掃描游標 | `usage:*`／`codeusage:*` |
 | `agy-logs.db` | AGY 流量日誌（node:sqlite） | `agy:*` |
@@ -87,6 +91,31 @@ AGY 設定、終端機、聊天、語音輸入紀錄**刻意不進** `STORE_ALLO
 翻譯與 TTS 頁不在這組（維持全域 key）。
 
 ## 最近變更
+
+### 2026-09-12 — 系統監控取樣器常駐
+
+- **probe.ps1 與 nvidia-smi 開機就跑**，離開系統監控頁與縮到系統匣都不停；進頁 `start()` 立刻把上一筆再送一次，不必等下一輪 tick（以前每次進頁都付冷啟動＋第一輪 CPU% 全 0）。
+- 壓力測試仍離頁就收。提權感測器 sidecar 的 UAC 自動啟用仍只在進頁時，開機那條還是只走排程工作。
+
+### 2026-09-12 — 檔案頁詳情／側欄／路徑／搜尋
+
+- 右側詳情：操作鈕改上方橫排，下面是預覽（圖片／文字開頭／捷徑目標）與類型／時間／尺寸。
+- 側欄位置可新增、移除、拖曳排序；可釘資料夾或加 UNC／NAS（可選磁碟代號 `net use`）。
+- 路徑列可點一下或 Ctrl+L 輸入直達（檔案會進上一層並選取）。
+- 快速搜尋命中依檔名相關度排序；右鍵補複製路徑／名稱、建立捷徑、釘到側欄、重新整理。
+
+### 2026-09-12 — 檔案頁可做日常檔案操作
+
+- 預設刪除進系統資源回收筒（側欄可進、還原、清空；Shift+Delete 永久刪除）。複製／搬移撞名改成 `name (2).ext`，不覆寫。
+- 右鍵選單、Shift 範圍選、Ctrl+A、拖到資料夾列或側欄；清單可依名稱／日期／大小排序。新增檔案與新增資料夾都有。
+- 路徑仍只放行本機磁碟機絕對路徑；回收筒是虛擬位置 `recyclebin`。
+
+### 2026-09-12 — 整機檔案總管 + UFFS 搜尋
+
+- 頂欄新增「檔案」頁（`data-page="explorer"`，排在聊天後面）：左側快捷／磁碟、麵包屑、清單／圖示、右側詳情。
+- 瀏覽走 `src/main/explorer/`，路徑只放行本機磁碟機絕對路徑；聊天頁的專案檔案樹不動。
+- 搜尋框代跑本機 UFFS（Everything 等級的 MFT 索引）。進檔案頁自動從 GitHub Releases 下載到 `%APPDATA%/voiceink/uffs/`，跳一次 UAC 裝 Access Broker 並拉起 daemon，之後搜尋即開即用。關 App 不停 daemon。沙箱／CDP 暫存 userData 不自動跳 UAC（含 `force`）。
+- 審查後：`assertCreatable` 讓家目錄根層可新增／貼上；`resolveExisting` 不跟 junction；UFFS 只跑安裝目錄且 checksum 缺就失敗；清空回收筒不吃 2000 上限。
 
 ### 2026-09-11 — 系統監控多 GPU、處理程序合併、使用時長分類
 

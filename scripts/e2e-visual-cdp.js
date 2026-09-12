@@ -10,7 +10,8 @@ const PORT = 9243
 const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
 const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-e2e-visual-'))
 fs.writeFileSync(path.join(USER_DATA_DIR, 'config.json'), JSON.stringify({ sysmonSensors: false }))
-const PAGES = ['chat', 'ccswitch', 'usage', 'agy', 'stt', 'translate', 'sysmon', 'hfmodels', 'settings']
+fs.writeFileSync(path.join(USER_DATA_DIR, 'explorer.json'), JSON.stringify({ uffsAuto: false }))
+const PAGES = ['chat', 'explorer', 'ccswitch', 'usage', 'agy', 'stt', 'translate', 'sysmon', 'hfmodels', 'settings']
 const VIEWPORTS = [
   { width: 1440, height: 1000 },
   { width: 900, height: 900 },
@@ -18,6 +19,7 @@ const VIEWPORTS = [
 ]
 const SIGNATURES = {
   chat: ['.chat-sidebar', '.chat-main', '.chat-composer'],
+  explorer: ['.ex-sidebar', '.ex-main', '.ex-detail'],
   // 探索頁的卡片要等搜尋回來才有，所以挑「執行環境」那三塊靜態就在 DOM 裡的面板
   hfmodels: ['.hf-panel'],
   ccswitch: ['.cc-panel'],

@@ -8,7 +8,7 @@
  *  - 排序在升冪／降冪之間切換，且 aria-sort 跟著改
  *  - 搜尋會過濾
  *  - 「結束工作」要選了列才會亮，而且是**彈窗二次確認**，不是按了就殺
- *  - 離開分頁會停掉取樣（PowerShell 不該在背景整天跑）
+ *  - 離開分頁後取樣器仍在跑（常駐，切回來立刻有讀數）
  *
  * **絕不結束使用者的任何處理程序**：只驗按鈕與彈窗的狀態，真正的 kill 由
  * `npx electron scripts/e2e-sysmon.js` 用它自己 spawn 的子程序覆蓋。
@@ -644,11 +644,14 @@ async function main() {
     ok('main 的狀態跟著換',
       (await cdp.eval(`(async () => (await window.electronAPI.sysmon.status()).data.intervalKey)()`)) === 'slow')
 
-    // ── 離開分頁要停掉取樣 ──────────────────────────────────────
+    // ── 離開分頁後取樣器仍在跑 ──────────────────────────────────
     await cdp.eval(`document.querySelector('[data-page="chat"]').click()`)
     await sleep(500)
-    ok('離開分頁後取樣器停止（PowerShell 不在背景整天跑）',
-      (await cdp.eval(`(async () => (await window.electronAPI.sysmon.status()).data.running)()`)) === false)
+    ok('離開分頁後取樣器仍在跑（常駐，進頁才有現成讀數）',
+      (await cdp.eval(`(async () => (await window.electronAPI.sysmon.status()).data.running)()`)) === true)
+    await cdp.eval(`document.querySelector('[data-page="sysmon"]').click()`)
+    ok('切回來立刻有區塊（不必等下一輪取樣）',
+      (await cdp.eval(`(document.getElementById('sysmonBlocks')?.children.length || 0) > 0`)) === true)
 
     // ── 信任邊界 ────────────────────────────────────────────────
     const guards = await cdp.eval(`(async () => {

@@ -1740,6 +1740,43 @@ function gitLineCounts(file) {
 }
 
 /**
+ * 一組檔案的總增刪。二進位與沒有數字的（未追蹤）不算。
+ * 兩個都是 0 就回 null，呼叫端不要畫「+0 −0」。
+ *
+ * @param {Array<{ added?: number, removed?: number, binary?: boolean }>} files
+ * @returns {{ added: number, removed: number } | null}
+ */
+function gitLineTotals(files) {
+  let added = 0
+  let removed = 0
+  for (const file of files) {
+    if (file.binary) continue
+    added += Number(file.added) || 0
+    removed += Number(file.removed) || 0
+  }
+  if (!added && !removed) return null
+  return { added, removed }
+}
+
+/**
+ * 「變更」區段標題右邊那組總 +/−。篩選只動清單，總數仍看整包。
+ * @param {Array<object>} files
+ */
+function paintGitChangesStat(files) {
+  const host = el.gitChangesStat
+  if (!host) return
+  host.replaceChildren()
+  const totals = gitLineTotals(files)
+  const counts = totals ? gitLineCounts(totals) : null
+  if (!counts) {
+    host.hidden = true
+    return
+  }
+  host.appendChild(counts)
+  host.hidden = false
+}
+
+/**
  * Git 面板的一列。`side` 決定徽章跟動作：staged（取消暫存）、
  * worktree（暫存／捨棄）、untracked（暫存／捨棄）、conflict（解決了）。
  *
@@ -1911,6 +1948,7 @@ async function renderGit() {
     el.reviewRef?.replaceChildren()
     el.reviewFiles?.replaceChildren()
     reviewRef = ''
+    paintGitChangesStat([])
     void renderGitLog()
     return
   }
@@ -1955,6 +1993,7 @@ function paintGitFiles(project, status) {
   const ambiguous = new Set([...seen].filter(([, paths]) => paths.size > 1).map(([base]) => base))
 
   el.gitFiles.replaceChildren()
+  paintGitChangesStat(status.files)
   /** @type {Array<[Array<object>, 'conflict' | 'staged' | 'worktree' | 'untracked']>} */
   const groups = [
     [keep(conflicts), 'conflict'],
@@ -2254,6 +2293,9 @@ function gitGroup(files, side, project, host, ambiguous) {
   count.textContent = String(files.length)
   count.title = `${files.length} 個檔案`
   head.append(label, count)
+  const totals = gitLineTotals(files)
+  const totalCounts = totals ? gitLineCounts(totals) : null
+  if (totalCounts) head.appendChild(totalCounts)
 
   const bulk = side === 'staged'
     ? { text: '整組取消', title: '把這一組整個移出暫存區', run: (id, rel) => electronAPI.workspace.gitUnstage(id, rel) }
@@ -2280,6 +2322,64 @@ function gitGroup(files, side, project, host, ambiguous) {
   for (const file of files) host.appendChild(gitRow(project, file, side, ambiguous))
 }
 
+/**
+ * 最近提交的一列：主旨整段看得到、作者、相對時間、這筆的增刪。
+ * hash 是常駐按鈕，點一下複製。
+ *
+ * @param {{ short: string, subject: string, at: number, author?: string, added?: number, removed?: number }} entry
+ * @returns {HTMLElement}
+ */
+function gitLogRow(entry) {
+  const row = document.createElement('div')
+  row.className = 'ws-git-log-row'
+  const when = entry.at ? new Date(entry.at * 1000) : null
+  row.title = [entry.subject, entry.author, when?.toLocaleString('zh-TW', { hour12: false })]
+    .filter(Boolean)
+    .join('\n')
+
+  const top = document.createElement('div')
+  top.className = 'ws-git-log-top'
+  const subject = document.createElement('span')
+  subject.className = 'ws-git-log-subject'
+  subject.textContent = entry.subject || '（無訊息）'
+  top.appendChild(subject)
+  const counts = gitLineCounts({ added: entry.added, removed: entry.removed })
+  if (counts) {
+    counts.title = `這筆提交新增 ${entry.added} 行、刪除 ${entry.removed} 行`
+    top.appendChild(counts)
+  }
+
+  const meta = document.createElement('div')
+  meta.className = 'ws-git-log-meta'
+  const hash = document.createElement('button')
+  hash.type = 'button'
+  hash.className = 'ws-git-log-hash'
+  hash.textContent = entry.short
+  hash.title = `複製 ${entry.short}`
+  hash.setAttribute('aria-label', `複製 ${entry.short}`)
+  hash.addEventListener('click', (event) => {
+    event.stopPropagation()
+    void navigator.clipboard.writeText(entry.short).then(
+      () => showToast(`已複製 ${entry.short}`),
+      () => showToast('複製失敗', 'error')
+    )
+  })
+  meta.appendChild(hash)
+  if (entry.author) {
+    const author = document.createElement('span')
+    author.className = 'ws-git-log-author'
+    author.textContent = entry.author
+    meta.appendChild(author)
+  }
+  const time = document.createElement('span')
+  time.className = 'ws-git-log-time'
+  time.textContent = gitTimeOf(entry.at)
+  meta.appendChild(time)
+
+  row.append(top, meta)
+  return row
+}
+
 async function renderGitLog() {
   const project = currentProject()
   if (!project || !el.gitLog) return
@@ -2299,20 +2399,7 @@ async function renderGitLog() {
     el.gitLog.appendChild(note)
     return
   }
-  for (const entry of log) {
-    const row = document.createElement('p')
-    row.className = 'ws-git-log-row'
-    row.title = entry.subject
-    const hash = document.createElement('code')
-    hash.textContent = entry.short
-    const subject = document.createElement('span')
-    subject.textContent = entry.subject
-    const time = document.createElement('span')
-    time.className = 'ws-git-log-time'
-    time.textContent = gitTimeOf(entry.at)
-    row.append(hash, subject, time)
-    el.gitLog.appendChild(row)
-  }
+  for (const entry of log) el.gitLog.appendChild(gitLogRow(entry))
 }
 
 async function stageAll() {
@@ -2591,6 +2678,7 @@ export function initWorkspacePage() {
   el.tree = document.getElementById('wsTree')
   el.gitBranch = document.getElementById('wsGitBranch')
   el.gitFiles = document.getElementById('wsGitFiles')
+  el.gitChangesStat = document.getElementById('wsGitChangesStat')
   el.gitFilter = document.getElementById('wsGitFilter')
   el.gitMessage = document.getElementById('wsGitMessage')
   el.gitLog = document.getElementById('wsGitLog')

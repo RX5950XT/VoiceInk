@@ -602,5 +602,55 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on('chat:delta', handler)
       return () => ipcRenderer.removeListener('chat:delta', handler)
     }
+  },
+
+  // ===== 整機檔案總管（絕對路徑由 main 的 explorer/paths.js 收斂）=====
+  explorer: {
+    bootstrap: () => ipcRenderer.invoke('explorer:bootstrap'),
+    saveState: (patch) => ipcRenderer.invoke('explorer:saveState', patch),
+    listPlaces: () => ipcRenderer.invoke('explorer:listPlaces'),
+    savePlaces: (list) => ipcRenderer.invoke('explorer:savePlaces', list),
+    addPlace: (spec) => ipcRenderer.invoke('explorer:addPlace', spec),
+    removePlace: (id) => ipcRenderer.invoke('explorer:removePlace', id),
+    connectShare: (spec) => ipcRenderer.invoke('explorer:connectShare', spec),
+    pickFolder: () => ipcRenderer.invoke('explorer:pickFolder'),
+    resolvePath: (target) => ipcRenderer.invoke('explorer:resolvePath', target),
+    createShortcut: (target, toDir) => ipcRenderer.invoke('explorer:createShortcut', target, toDir),
+    listDrives: () => ipcRenderer.invoke('explorer:listDrives'),
+    listDir: (dirPath, opts) => ipcRenderer.invoke('explorer:listDir', dirPath, opts),
+    preview: (filePath) => ipcRenderer.invoke('explorer:preview', filePath),
+    inspect: (filePath) => ipcRenderer.invoke('explorer:inspect', filePath),
+    createEntry: (dirPath, name, dir) => ipcRenderer.invoke('explorer:createEntry', dirPath, name, dir),
+    renameEntry: (target, name) => ipcRenderer.invoke('explorer:renameEntry', target, name),
+    removeEntry: (target, opts) => ipcRenderer.invoke('explorer:removeEntry', target, opts),
+    restoreEntry: (key) => ipcRenderer.invoke('explorer:restoreEntry', key),
+    purgeEntry: (key) => ipcRenderer.invoke('explorer:purgeEntry', key),
+    emptyRecycle: () => ipcRenderer.invoke('explorer:emptyRecycle'),
+    copyEntry: (fromPath, toDir) => ipcRenderer.invoke('explorer:copyEntry', fromPath, toDir),
+    moveEntry: (fromPath, toDir) => ipcRenderer.invoke('explorer:moveEntry', fromPath, toDir),
+    openPath: (target) => ipcRenderer.invoke('explorer:openPath', target),
+    reveal: (target) => ipcRenderer.invoke('explorer:reveal', target),
+    setClipboard: (items, mode) => ipcRenderer.invoke('explorer:setClipboard', items, mode),
+    paste: (toDir) => ipcRenderer.invoke('explorer:paste', toDir),
+    dropEntries: (items, toDir, mode) => ipcRenderer.invoke('explorer:dropEntries', items, toDir, mode),
+    watch: (dirPath) => ipcRenderer.invoke('explorer:watch', dirPath),
+    unwatch: () => ipcRenderer.invoke('explorer:unwatch'),
+    uffsStatus: () => ipcRenderer.invoke('explorer:uffsStatus'),
+    uffsSearch: (pattern) => ipcRenderer.invoke('explorer:uffsSearch', pattern),
+    uffsCancel: () => ipcRenderer.invoke('explorer:uffsCancel'),
+    uffsInstall: () => ipcRenderer.invoke('explorer:uffsInstall'),
+    uffsCancelInstall: () => ipcRenderer.invoke('explorer:uffsCancelInstall'),
+    uffsInstallBroker: () => ipcRenderer.invoke('explorer:uffsInstallBroker'),
+    uffsEnsure: (opts) => ipcRenderer.invoke('explorer:uffsEnsure', opts),
+    onChanged: (callback) => {
+      const handler = (_event, payload) => callback(payload)
+      ipcRenderer.on('explorer:changed', handler)
+      return () => ipcRenderer.removeListener('explorer:changed', handler)
+    },
+    onUffsProgress: (callback) => {
+      const handler = (_event, payload) => callback(payload)
+      ipcRenderer.on('explorer:uffsProgress', handler)
+      return () => ipcRenderer.removeListener('explorer:uffsProgress', handler)
+    }
   }
 })

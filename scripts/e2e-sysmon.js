@@ -123,6 +123,15 @@ async function main() {
   ok('沒有負速率', last.processes.every((p) => p.diskRead >= 0 && p.diskWrite >= 0))
   ok('進程名沒有 #1 後綴', last.processes.every((p) => !/#\d+$/.test(p.name)))
 
+  {
+    const before = samples.length
+    const cpuBefore = last.cpu.total
+    service.start('fast')
+    ok('再次 start 立刻重送上一筆（進頁不必等下一輪）', samples.length === before + 1,
+      `before=${before} after=${samples.length}`)
+    ok('重送帶著上一筆的 CPU 讀數', samples[samples.length - 1].cpu.total === cpuBefore)
+  }
+
   console.log('\n[硬體清單]')
   const inv = service.inventory()
   ok('有拿到硬體清單', Boolean(inv))

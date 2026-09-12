@@ -328,35 +328,64 @@ function relPathOf(value) {
 }
 
 /**
- * 解析 `git log --pretty=format:%h%x1f%at%x1f%s` 的輸出（記錄以換行分隔、欄位以 %x1f）。
+ * 解析 `git log --pretty=format:%h%x1f%at%x1f%an%x1f%s` 加上 `--numstat` 的輸出。
+ * 記錄以換行分隔、欄位以 %x1f；每個 commit 後面跟著該筆的 numstat 列。
  * 純函式，可直接 node 測。**不能也用 -z**：NUL 同時是記錄與欄位的界線，整包會變成一鍋粥。
+ * 舊的三欄格式（沒有作者）仍收得下來。
+ *
  * @param {string} raw
- * @returns {Array<{ short: string, subject: string, at: number }>}
+ * @returns {Array<{ short: string, subject: string, at: number, author: string, added: number, removed: number }>}
  */
 function parseLog(raw) {
   const out = []
+  let current = null
+  const take = () => {
+    if (!current) return
+    if (out.length < 10) out.push(current)
+    current = null
+  }
   for (const line of String(raw || '').split('\n')) {
     if (!line) continue
-    const parts = line.split('\x1f')
-    if (parts.length < 3) continue
-    const at = Number(parts[1])
-    out.push({
-      short: parts[0],
-      at: Number.isFinite(at) ? at : 0,
-      subject: parts[2]
-    })
-    if (out.length >= 10) break
+    if (line.includes('\x1f')) {
+      take()
+      if (out.length >= 10) break
+      const parts = line.split('\x1f')
+      if (parts.length < 3) continue
+      const at = Number(parts[1])
+      const hasAuthor = parts.length >= 4
+      current = {
+        short: parts[0],
+        at: Number.isFinite(at) ? at : 0,
+        author: hasAuthor ? parts[2] : '',
+        subject: hasAuthor ? parts.slice(3).join('\x1f') : parts[2],
+        added: 0,
+        removed: 0
+      }
+      continue
+    }
+    if (!current) continue
+    const cols = line.split('\t')
+    if (cols.length < 3) continue
+    if (cols[0] !== '-') current.added += Number(cols[0]) || 0
+    if (cols[1] !== '-') current.removed += Number(cols[1]) || 0
   }
+  take()
   return out
 }
 
 /**
  * @param {string} projectId
- * @returns {Promise<Array<{ short: string, subject: string, at: number }>>}
+ * @returns {Promise<Array<{ short: string, subject: string, at: number, author: string, added: number, removed: number }>>}
  */
 async function log(projectId) {
   const cwd = await rootOf(projectId)
-  const res = await run(cwd, ['log', '--pretty=format:%h%x1f%at%x1f%s', '-n', '10'])
+  const res = await run(cwd, [
+    'log',
+    '--pretty=format:%h%x1f%at%x1f%an%x1f%s',
+    '--numstat',
+    '-n',
+    '10'
+  ])
   // 空 repo（還沒有 commit）不是錯誤，回空清單
   if (res.code !== 0) return []
   return parseLog(res.stdout)

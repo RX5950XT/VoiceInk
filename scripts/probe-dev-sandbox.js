@@ -106,6 +106,8 @@ async function main() {
     const flags = JSON.parse(fs.readFileSync(path.join(SANDBOX, 'config.json'), 'utf8'))
     const offDetail = JSON.stringify({ agyEnabled: flags.agyEnabled, dictationEnabled: flags.dictationEnabled, sysmonSensors: flags.sysmonSensors })
     ok('會跑出 userData 之外的三個開關都關著', flags.agyEnabled === false && flags.dictationEnabled === false && flags.sysmonSensors === false, offDetail)
+    const explorer = JSON.parse(fs.readFileSync(path.join(SANDBOX, 'explorer.json'), 'utf8'))
+    ok('沙箱不自動跳 UFFS UAC', explorer.uffsAuto === false)
     const agyRunning = await cdp.eval(`(async()=>{const r=await window.electronAPI.agy.status();return (r?.data?.running ?? r?.running) === true})()`)
     ok('沙箱沒有去搶 AGY 的埠', agyRunning === false)
 

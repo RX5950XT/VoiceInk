@@ -48,6 +48,7 @@ const { registerCcSwitchIpc } = require('./ccswitch/ipc')
 const { registerCodeUsageIpc } = require('./codeusage/ipc')
 const { registerDictationIpc } = require('./dictation/ipc')
 const { registerScreentimeIpc } = require('./screentime/ipc')
+const { registerExplorerIpc } = require('./explorer/ipc')
 const dictationHud = require('./dictation/hud')
 const updater = require('./updater')
 
@@ -90,6 +91,7 @@ let agyMod = null
 let dictationMod = null
 let terminalMod = null
 let workspaceMod = null
+let explorerMod = null
 let sysmonMod = null
 let screentimeMod = null
 let ccSwitchMod = null
@@ -369,6 +371,23 @@ function loadWorkspace() {
 }
 
 /**
+ * 整機檔案總管。第一次進「檔案」頁才載（會掃磁碟與找 UFFS）。
+ * @returns {object}
+ */
+function loadExplorer() {
+  if (!explorerMod) {
+    explorerMod = require('./explorer')
+    explorerMod.configure({
+      userDataPath: app.getPath('userData'),
+      send: (channel, payload) => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload)
+      }
+    })
+  }
+  return explorerMod
+}
+
+/**
  * 第一次進 Claude Code 頁才載模組（會讀使用者家目錄的設定檔，不該擋啟動）。
  * @returns {object}
  */
@@ -399,10 +418,6 @@ function loadCodeUsage() {
 }
 
 /**
- * 第一次進系統監控頁才載模組（會開 PowerShell 與 nvidia-smi 子程序，不該擋啟動）。
- * @returns {object}
- */
-/**
  * 使用時長：開機就導入 Tai 資料並開始記，不必等使用者點開系統監控頁。
  * @returns {object}
  */
@@ -415,6 +430,10 @@ function loadScreentime() {
   return screentimeMod
 }
 
+/**
+ * 系統監控：開機就載（取樣器常駐，進頁才有現成讀數）。
+ * @returns {object}
+ */
 function loadSysmon() {
   if (!sysmonMod) {
     sysmonMod = require('./sysmon').createSysmonService()
@@ -1747,6 +1766,52 @@ registerWorkspaceIpc({
   getWindow: () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null)
 })
 
+// ===== 整機檔案總管 =====
+// renderer 送本機絕對路徑；sanitize + realpath 全在 explorer/paths.js。
+// 搜尋走本機 UFFS CLI，關 App 不停它的 daemon。
+registerExplorerIpc({
+  ipcMain,
+  service: {
+    bootstrap: (...args) => loadExplorer().bootstrap(...args),
+    saveState: (...args) => loadExplorer().saveState(...args),
+    listPlaces: (...args) => loadExplorer().listPlaces(...args),
+    savePlaces: (...args) => loadExplorer().savePlaces(...args),
+    addPlace: (...args) => loadExplorer().addPlace(...args),
+    removePlace: (...args) => loadExplorer().removePlace(...args),
+    connectShare: (...args) => loadExplorer().connectShare(...args),
+    pickFolder: (...args) => loadExplorer().pickFolder(...args),
+    resolvePath: (...args) => loadExplorer().resolvePath(...args),
+    createShortcut: (...args) => loadExplorer().createShortcut(...args),
+    listDrives: (...args) => loadExplorer().listDrives(...args),
+    listDir: (...args) => loadExplorer().listDir(...args),
+    preview: (...args) => loadExplorer().preview(...args),
+    inspect: (...args) => loadExplorer().inspect(...args),
+    createEntry: (...args) => loadExplorer().createEntry(...args),
+    renameEntry: (...args) => loadExplorer().renameEntry(...args),
+    removeEntry: (...args) => loadExplorer().removeEntry(...args),
+    restoreEntry: (...args) => loadExplorer().restoreEntry(...args),
+    purgeEntry: (...args) => loadExplorer().purgeEntry(...args),
+    emptyRecycle: (...args) => loadExplorer().emptyRecycle(...args),
+    copyEntry: (...args) => loadExplorer().copyEntry(...args),
+    moveEntry: (...args) => loadExplorer().moveEntry(...args),
+    openPath: (...args) => loadExplorer().openPath(...args),
+    reveal: (...args) => loadExplorer().reveal(...args),
+    setClipboard: (...args) => loadExplorer().setClipboard(...args),
+    paste: (...args) => loadExplorer().paste(...args),
+    dropEntries: (...args) => loadExplorer().dropEntries(...args),
+    watchDir: (...args) => loadExplorer().watchDir(...args),
+    unwatch: (...args) => loadExplorer().unwatch(...args),
+    uffsStatus: (...args) => loadExplorer().uffsStatus(...args),
+    uffsSearch: (...args) => loadExplorer().uffsSearch(...args),
+    uffsCancel: (...args) => loadExplorer().uffsCancel(...args),
+    uffsInstall: (...args) => loadExplorer().uffsInstall(...args),
+    uffsCancelInstall: (...args) => loadExplorer().uffsCancelInstall(...args),
+    uffsInstallBroker: (...args) => loadExplorer().uffsInstallBroker(...args),
+    uffsEnsure: (...args) => loadExplorer().uffsEnsure(...args)
+  },
+  isMainSender: assertMainWindowSender
+})
+
 // ===== HF模型（本機 llama.cpp router）=====
 // renderer 只送 repoId／variantId／模型 id；下載網址由 hub.fileUrl 在 main 組，
 // router 的 api key 不出 main（`runtimeStatus` 只回 running 與 port）。
@@ -1982,14 +2047,17 @@ app.whenReady().then(() => {
       try { loadScreentime().start() } catch (err) {
         console.error('[screentime] start failed:', err?.message || err)
       }
+      const sysmon = loadSysmon()
+      try { sysmon.start(store?.get('sysmonInterval')) } catch (err) {
+        console.error('[sysmon] sampler start failed:', err?.message || err)
+      }
       const fansOn = store?.get('fanControl')?.enabled === true
       const sensorsOn = store?.get('sysmonSensors') !== false
-      if (!fansOn && !sensorsOn) return undefined
-      const sysmon = loadSysmon()
       if (fansOn) {
         return sysmon.ensureFanControl()
           .catch((err) => console.error('[sysmon] fan takeover failed:', err?.message || err))
       }
+      if (!sensorsOn) return undefined
       return sysmon.ensureSensors()
         .catch((err) => console.error('[sysmon] sensors start failed:', err?.message || err))
     })
@@ -2057,6 +2125,8 @@ app.on('before-quit', (e) => {
   isQuitting = true
   // 終端機由獨立宿主持有；更新／結束 App 只斷線，明確關閉分頁才結束程序。
   if (terminalMod) terminalMod.disconnect()
+  // 檔案總管只收自己的 fs.watch；UFFS daemon 是整機索引，關 App 不停它
+  if (explorerMod) explorerMod.unwatch()
   // 系統監控有三顆子程序（probe.ps1／nvidia-smi／感測器 sidecar），少收一顆就變孤兒。
   // **這條是 await 得到的**：風扇的手動 PWM 留在晶片裡，沒等它交還就退出等於把風扇
   // 釘在最後的轉速（事後 SetDefault 也救不回來，只有重開機）。

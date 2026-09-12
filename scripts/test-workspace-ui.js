@@ -268,6 +268,40 @@ function gitRowLayoutChecks() {
   const act = css.slice(css.indexOf('.ws-git-act {'), css.indexOf('.ws-git-act:hover'))
   check('動作鈕常駐（沒有靠 opacity 藏起來）', !/opacity:\s*0/.test(act))
   check('動作鈕不縮', /flex:\s*none/.test(act))
+
+  check('變更區段有總增刪的掛點', hasId('wsGitChangesStat'))
+  check('總增刪畫在變更區段標題，不塞進收合鈕裡',
+    /id=["']wsGitChangesStat["']/.test(html)
+    && !/<button[^>]*ws-git-sec-toggle[^>]*>[^<]*wsGitChangesStat/.test(html)
+    && /textContent === '變更'/.test(fs.readFileSync(path.join(ROOT, 'scripts/e2e-workspace-cdp.js'), 'utf8')))
+  check('變更清單會畫總增刪', /paintGitChangesStat\(/.test(workspacePage))
+  check('分組標題也帶該組總增刪',
+    /function gitGroup[\s\S]*gitLineTotals\(files\)/.test(workspacePage))
+}
+
+/**
+ * 最近提交：主旨要整段看得到（面板窄也不准 ellipsis），還要作者、每筆增刪、點 hash 複製。
+ */
+function gitLogLayoutChecks() {
+  console.log('\n[F2] Git 最近提交的顯示')
+  const logFn = workspacePage.slice(
+    workspacePage.indexOf('function gitLogRow'),
+    workspacePage.indexOf('async function stageAll')
+  )
+  check('提交列有主旨／作者／hash',
+    /ws-git-log-subject/.test(logFn) && /ws-git-log-author/.test(logFn) && /ws-git-log-hash/.test(logFn))
+  check('hash 是常駐按鈕（點一下複製）',
+    /ws-git-log-hash/.test(logFn) && /clipboard\.writeText\(entry\.short\)/.test(logFn))
+  check('每筆提交畫得出增刪', /gitLineCounts\(/.test(logFn) && /entry\.added/.test(logFn))
+
+  const subject = css.slice(css.indexOf('.ws-git-log-subject {'), css.indexOf('.ws-git-log-meta {'))
+  check('提交主旨換行，不准截成省略號',
+    /overflow-wrap:\s*anywhere/.test(subject) && !/text-overflow:\s*ellipsis/.test(subject))
+  check('不再用單一列省略號把主旨截掉',
+    !/\.ws-git-log-row span \{[\s\S]{0,120}text-overflow:\s*ellipsis/.test(css))
+  const hash = css.slice(css.indexOf('.ws-git-log-hash {'), css.indexOf('.ws-git-log-hash:hover'))
+  check('複製 hash 的按鈕常駐（沒有靠 opacity 藏起來）',
+    css.includes('.ws-git-log-hash {') && !/opacity:\s*0/.test(hash))
 }
 
 /** 文件類（md／html／svg）開起來就停在預覽那一面，Ctrl+S 在 Monaco／預覽下也存得到 */
@@ -318,7 +352,7 @@ function editorDefaultsChecks() {
   check('Ctrl+S 真的呼叫存檔', /saveActiveFile\(\)/.test(save))
 }
 
-runAgentPathChecks().then(gitStatusCacheChecks).then(zoomChecks).then(gitRowLayoutChecks).then(treeRefreshAndStatusSpinChecks).then(editorDefaultsChecks).then(() => {
+runAgentPathChecks().then(gitStatusCacheChecks).then(zoomChecks).then(gitRowLayoutChecks).then(gitLogLayoutChecks).then(treeRefreshAndStatusSpinChecks).then(editorDefaultsChecks).then(() => {
   console.log(`\n${passed} passed, ${failed} failed`)
   process.exitCode = failed ? 1 : 0
 }).catch((error) => {
