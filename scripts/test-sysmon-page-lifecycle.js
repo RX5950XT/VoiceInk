@@ -10,10 +10,11 @@ const activePanels = new Set()
 const noop = () => {}
 let resolveStatus
 let sensorStarts = 0
+let stopCalls = 0
 const context = {
   document: { getElementById: () => null, querySelectorAll: () => [] },
   electronAPI: { sysmon: {
-    onEvent: () => noop, start: noop, stop: noop, cpuStress: noop, memStress: noop,
+    onEvent: () => noop, start: noop, stop: () => { stopCalls++ }, cpuStress: noop, memStress: noop,
     stressStatus: async () => ({ ok: false }),
     status: () => new Promise((resolve) => { resolveStatus = resolve })
   }, store: { get: async () => true } },
@@ -45,6 +46,10 @@ async function main() {
   }
   context.api.refreshSysmonPage()
   context.api.cooldownSysmonPage()
+  try {
+    assert.equal(stopCalls, 0, '離頁不停取樣器')
+    console.log('PASS 離頁不停取樣器')
+  } catch (error) { failed++; console.error(`FAIL ${error.message}`) }
   resolveStatus({ ok: true, data: { sensors: { installed: true, state: 'off' } } })
   await new Promise(setImmediate)
   try {

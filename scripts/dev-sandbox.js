@@ -16,9 +16,10 @@
  * | 小而想沿用（`config.json`、`workspaces.json`） | **複製**一份 | 沙箱怎麼寫都不會弄髒你的 |
  * | 會累積的紀錄（`usage.json`、`code-usage.json`、`agy-logs.db`、`dictations.json`、`terminals.json`） | 不接 | 沙箱的測試資料混進去就分不出來了；`terminals.json` 指的是**另一份程序**的 pty，接過來只會是死的 |
  *
- * 另外三個鍵一定要在沙箱裡關掉——它們的影響會**跑出 userData 之外**：
+ * 另外這幾個一定要在沙箱裡關掉——它們的影響會**跑出 userData 之外**：
  * `agyEnabled`（會去搶同一個埠）、`dictationEnabled`（原生 hook 在全機器層級吞掉右 Alt）、
- * `sysmonSensors`（提權 sidecar 會跳 UAC）。
+ * `sysmonSensors`（提權 sidecar 會跳 UAC）、`explorer.json` 的 `uffsAuto`
+ * （UFFS Access Broker 是機器層級的 Windows 服務）。
  *
  * 用法：
  *   node scripts/dev-sandbox.js              # 用原始碼跑（等同 npm run electron:dev 的 electron 那半）
@@ -124,6 +125,19 @@ function seed() {
   unlinkDest('config.json')
   fs.writeFileSync(path.join(SANDBOX, 'config.json'), JSON.stringify({ ...config, ...FORCED_OFF }, null, 2))
 
+  let explorer = {}
+  try {
+    explorer = JSON.parse(fs.readFileSync(path.join(REAL, 'explorer.json'), 'utf8'))
+    done.push('沿用 explorer.json')
+  } catch {
+    done.push('沒有 explorer.json，用空設定')
+  }
+  unlinkDest('explorer.json')
+  fs.writeFileSync(
+    path.join(SANDBOX, 'explorer.json'),
+    JSON.stringify({ ...explorer, uffsAuto: false }, null, 2)
+  )
+
   if (copyFile('workspaces.json')) done.push('複製專案清單')
   if (has('--with-chats')) {
     if (copyFile('chats.json')) done.push('複製對話')
@@ -139,7 +153,7 @@ function seed() {
  */
 function verify() {
   const real = fs.realpathSync(REAL)
-  for (const name of ['config.json', 'workspaces.json', 'chats.json', 'usage.json', 'agy-logs.db']) {
+  for (const name of ['config.json', 'workspaces.json', 'explorer.json', 'chats.json', 'usage.json', 'agy-logs.db']) {
     const file = path.join(SANDBOX, name)
     if (!fs.existsSync(file)) continue
     const resolved = fs.realpathSync(file)
@@ -151,6 +165,8 @@ function verify() {
   for (const [key, value] of Object.entries(FORCED_OFF)) {
     if (config[key] !== value) throw new Error(`沙箱的 ${key} 沒有被關掉`)
   }
+  const explorer = JSON.parse(fs.readFileSync(path.join(SANDBOX, 'explorer.json'), 'utf8'))
+  if (explorer.uffsAuto !== false) throw new Error('沙箱的 explorer.json uffsAuto 沒有被關掉')
 }
 
 function main() {

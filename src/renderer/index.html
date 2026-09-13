@@ -31,6 +31,10 @@
             <span class="nav-icon">💬</span>
             <span class="nav-text">聊天</span>
           </button>
+          <button class="nav-tab" data-page="explorer" title="檔案" aria-label="檔案">
+            <span class="nav-icon">📁</span>
+            <span class="nav-text">檔案</span>
+          </button>
           <button class="nav-tab" data-page="ccswitch" title="CC代理" aria-label="CC代理">
             <span class="nav-icon">🧩</span>
             <span class="nav-text">CC代理</span>
@@ -501,6 +505,7 @@
                     <section class="ws-git-sec" data-sec="changes">
                       <div class="ws-git-sec-head">
                         <button type="button" class="ws-git-sec-toggle" aria-expanded="true" aria-controls="wsGitSecChanges">變更</button>
+                        <span class="ws-git-sec-stat" id="wsGitChangesStat" hidden></span>
                       </div>
                       <div class="ws-git-sec-body" id="wsGitSecChanges">
                         <div class="ws-git-commit">
@@ -584,6 +589,68 @@
                   <div class="ws-port-list" id="wsPortList" aria-label="本機埠號"></div>
                 </div>
               </aside>
+            </div>
+          </section>
+
+          <!-- 整機檔案總管：瀏覽本機資料夾 + UFFS 檔名搜尋 -->
+          <section id="page-explorer" class="page">
+            <div class="ex-shell">
+              <header class="ex-toolbar">
+                <div class="ex-nav-btns" role="group" aria-label="瀏覽">
+                  <button type="button" id="exBackBtn" class="btn-icon" title="上一頁" aria-label="上一頁" disabled>←</button>
+                  <button type="button" id="exForwardBtn" class="btn-icon" title="下一頁" aria-label="下一頁" disabled>→</button>
+                  <button type="button" id="exUpBtn" class="btn-icon" title="上一層" aria-label="上一層">↑</button>
+                </div>
+                <div class="ex-pathbar" id="exPathBar" title="點一下可輸入路徑">
+                  <nav id="exCrumbs" class="ex-crumbs" aria-label="目前路徑"></nav>
+                  <input type="text" id="exPathInput" class="ex-path-input" hidden
+                         spellcheck="false" autocomplete="off" aria-label="路徑">
+                </div>
+                <div class="ex-search-wrap">
+                  <input type="search" id="exSearch" class="input" placeholder="搜尋整機檔案…"
+                         aria-label="搜尋整機檔案" autocomplete="off" spellcheck="false">
+                  <span id="exSearchHint" class="ex-search-hint" role="status"></span>
+                </div>
+                <div class="ex-toolbar-actions">
+                  <button type="button" id="exNewFolderBtn" class="btn btn-secondary btn-sm">新增資料夾</button>
+                  <button type="button" id="exNewFileBtn" class="btn btn-secondary btn-sm">新增檔案</button>
+                  <button type="button" id="exEmptyBinBtn" class="btn btn-secondary btn-sm" hidden>清空資源回收筒</button>
+                  <button type="button" id="exViewListBtn" class="btn-icon" title="清單" aria-label="清單檢視" aria-pressed="true">☰</button>
+                  <button type="button" id="exViewGridBtn" class="btn-icon" title="圖示" aria-label="圖示檢視" aria-pressed="false">▦</button>
+                </div>
+              </header>
+              <div class="ex-cmdbar" id="exCmdBar" role="toolbar" aria-label="檔案操作"></div>
+              <div class="ex-body">
+                <aside class="ex-sidebar" id="exSidebar">
+                  <div class="ex-side-head">
+                    <p class="ex-side-label">位置</p>
+                    <button type="button" id="exPlaceAddBtn" class="btn-icon" title="新增位置" aria-label="新增位置">+</button>
+                  </div>
+                  <div id="exPlaces" class="ex-side-list" role="list"></div>
+                  <p class="ex-side-label">磁碟</p>
+                  <div id="exDrives" class="ex-side-list" role="list"></div>
+                </aside>
+                <div class="ex-main">
+                  <div id="exListHead" class="ex-list-head" hidden>
+                    <button type="button" class="ex-sort" data-sort="name">名稱</button>
+                    <button type="button" class="ex-sort" data-sort="size">大小</button>
+                    <button type="button" class="ex-sort" data-sort="date">修改</button>
+                  </div>
+                  <div id="exList" class="ex-list" role="listbox" aria-label="檔案清單" tabindex="0"></div>
+                  <p id="exEmpty" class="ex-empty" hidden>這個資料夾是空的</p>
+                </div>
+                <aside class="ex-detail" id="exDetail" aria-live="polite">
+                  <p class="setting-hint">選一個項目看詳情。</p>
+                </aside>
+              </div>
+              <footer class="ex-status">
+                <span id="exStatusText">—</span>
+                <span id="exUffsChip" class="ex-uffs-chip" role="status">
+                  <span class="hf-dot" id="exUffsDot" aria-hidden="true"></span>
+                  <span id="exUffsText">搜尋引擎…</span>
+                  <button type="button" id="exUffsEnableBtn" class="btn btn-secondary btn-sm" hidden>啟用快速搜尋</button>
+                </span>
+              </footer>
             </div>
           </section>
 

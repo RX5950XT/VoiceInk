@@ -107,6 +107,15 @@ async function loadCcSwitchPage() {
   return ccSwitchPage
 }
 
+/** @type {typeof import('./explorer-page.js') | null} */
+let explorerPage = null
+
+/** @returns {Promise<typeof import('./explorer-page.js')>} */
+async function loadExplorerPage() {
+  if (!explorerPage) explorerPage = await import('./explorer-page.js')
+  return explorerPage
+}
+
 /** @type {typeof import('./hf-page.js') | null} */
 let hfPage = null
 
@@ -290,6 +299,36 @@ export const electronAPI = window.electronAPI || {
   },
   llm: {
     loadInfo: async () => ({ loaded: false, key: null, gpu: false, backend: 'cpu' })
+  },
+  explorer: {
+    bootstrap: async () => ({ lastPath: '', view: 'list', places: [], drives: [] }),
+    saveState: async () => ({ lastPath: '', view: 'list' }),
+    listPlaces: async () => [],
+    listDrives: async () => [],
+    listDir: async () => ({ path: '', entries: [], truncated: false }),
+    preview: async () => ({ path: '', image: '', tooLarge: false, size: 0 }),
+    createEntry: async () => { throw new Error('僅 Electron 環境可用') },
+    renameEntry: async () => { throw new Error('僅 Electron 環境可用') },
+    removeEntry: async () => { throw new Error('僅 Electron 環境可用') },
+    openPath: async () => true,
+    reveal: async () => true,
+    setClipboard: async () => ({ count: 0, mode: 'copy' }),
+    paste: async () => ({ paths: [] }),
+    watch: async () => ({ watching: false, path: '' }),
+    unwatch: async () => true,
+    uffsStatus: async () => ({
+      installed: false,
+      version: '',
+      daemon: { running: false, warming: false, drives: 0, records: 0 },
+      broker: { present: false, installed: false }
+    }),
+    uffsSearch: async () => ({ hits: [], truncated: false, warming: false }),
+    uffsCancel: async () => true,
+    uffsInstall: async () => { throw new Error('僅 Electron 環境可用') },
+    uffsCancelInstall: async () => true,
+    uffsInstallBroker: async () => { throw new Error('僅 Electron 環境可用') },
+    onChanged: () => () => {},
+    onUffsProgress: () => () => {}
   }
 }
 
@@ -936,6 +975,7 @@ export function switchPage(pageName) {
     setChatPaneMode(chatPaneMode)
   }
   if (pageName === 'ccswitch') loadCcSwitchPage().then((m) => m.refreshCcSwitchPage())
+  if (pageName === 'explorer') loadExplorerPage().then((m) => m.refreshExplorerPage())
   if (pageName === 'hfmodels') loadHfPage().then((m) => m.start())
   if (pageName === 'sysmon') loadSysmonPage().then((m) => m.refreshSysmonPage())
   if (pageName === 'usage') loadUsagePage().then((m) => m.refreshUsagePage())
@@ -954,11 +994,12 @@ export function switchPage(pageName) {
   if (pageName !== 'stt') liveCaption?.cooldownEngine()
   if (pageName !== 'translate') translatePage?.cooldownTranslatePage()
   if (pageName !== 'usage') usagePage?.cooldownUsagePage()
-  // 取樣器會開 PowerShell 與 nvidia-smi；離開這一頁就該停，不能在背景一直跑
+  // 取樣器常駐：離開這一頁只收壓力測試與面板，不停 probe / nvidia-smi
   if (pageName !== 'sysmon') sysmonPage?.cooldownSysmonPage()
   if (pageName !== 'agy') agyPage?.cooldownAgyPage()
   // **離開 HF模型頁不關 router**：聊天要用它，關掉等於每次切頁都把模型卸載一次。
   // 這裡只收自己的計時器。
+  if (pageName !== 'explorer') explorerPage?.cooldownExplorerPage()
   if (pageName !== 'hfmodels') hfPage?.stop()
 }
 

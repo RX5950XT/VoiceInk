@@ -203,9 +203,9 @@ async function main() {
       }
     })()`)
     ok(
-      'eight-tab order + usage page structure',
+      'ten-tab order + usage page structure',
       JSON.stringify(usageUi?.order) === JSON.stringify([
-        'chat', 'ccswitch', 'usage', 'agy', 'stt', 'translate', 'sysmon', 'hfmodels', 'settings'
+        'chat', 'explorer', 'ccswitch', 'usage', 'agy', 'stt', 'translate', 'sysmon', 'hfmodels', 'settings'
       ]) &&
         usageUi.hasApi &&
         usageUi.active &&

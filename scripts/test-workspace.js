@@ -823,6 +823,25 @@ console.log('\n[J] git log 解析與檔名守衛')
   ok('hash 與 subject 對得上', entries[0].short === 'abc1234' && entries[0].subject === 'feat: 加工作區')
   ok('時間戳是數字', Number.isFinite(entries[1].at))
   ok('空輸入回空清單', git.parseLog('').length === 0)
+
+  const withAuthor = [
+    `abc1234\x1f1710000000\x1fAlice\x1ffeat: 加工作區`,
+    '12\t3\tfile.js',
+    '4\t0\tother.js',
+    '',
+    `def5678\x1f1710000100\x1fBob\x1ffix: 修守衛`,
+    '-\t-\tpic.png',
+    '',
+    `ghi9012\x1f1710000200\x1fCarol\x1frename only`,
+    '0\t0\ta.js => b.js'
+  ].join('\n')
+  const rich = git.parseLog(withAuthor)
+  ok('帶作者的格式解得出作者', rich[0].author === 'Alice' && rich[1].author === 'Bob', JSON.stringify(rich.map((e) => e.author)))
+  ok('主旨不會被作者欄吃掉', rich[0].subject === 'feat: 加工作區')
+  ok('numstat 加總新增與刪除', rich[0].added === 16 && rich[0].removed === 3, JSON.stringify(rich[0]))
+  ok('二進位 numstat 不加進總數', rich[1].added === 0 && rich[1].removed === 0, JSON.stringify(rich[1]))
+  ok('純改名 0/0 不算增刪', rich[2].added === 0 && rich[2].removed === 0, JSON.stringify(rich[2]))
+  ok('log 指令帶作者與 numstat', /%an/.test(git.log.toString()) && /numstat/.test(git.log.toString()))
 }
 
 // ===== [K] git diff 解析與統計 =====
@@ -1160,6 +1179,17 @@ console.log('\n[T] git worktree 的解析與分支名白名單')
     ok('刪掉的檔案算全部刪除', rows[1].removed === 1 && rows[1].added === 0, JSON.stringify(rows[1]))
     ok('未追蹤的沒有數字', rows[2].added === undefined, JSON.stringify(rows[2]))
     ok('空清單不跑 git', await git.attachLineCounts(dir, []) === undefined)
+
+    const logged = await new Promise((resolve, reject) => {
+      execFile('git', [
+        'log', '--pretty=format:%h%x1f%at%x1f%an%x1f%s', '--numstat', '-n', '10'
+      ], { cwd: dir, encoding: 'utf8' }, (error, stdout) => {
+        if (error) reject(error)
+        else resolve(git.parseLog(stdout))
+      })
+    })
+    ok('真的 git log 解得出作者', logged[0]?.author === 'probe', JSON.stringify(logged[0]))
+    ok('真的 git log 解得出增刪', Number(logged[0]?.added) >= 1, JSON.stringify(logged[0]))
     await fsp.rm(dir, { recursive: true, force: true })
   }
 

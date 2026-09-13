@@ -184,8 +184,8 @@ async function main() {
       termNewBtn: !!document.getElementById('termNewBtn')
     }))()`)
     // 終端機已併入聊天頁：nav 不再有 terminal 分頁，終端機在主區的分頁列上
-    ok('nav 九個分頁、聊天排第一、沒有 terminal 分頁',
-      nav.order.length === 9 && nav.order[0] === 'chat' && !nav.order.includes('terminal'), JSON.stringify(nav.order))
+    ok('nav 十個分頁、聊天排第一、檔案在後、沒有 terminal 分頁',
+      nav.order.length === 10 && nav.order[0] === 'chat' && nav.order[1] === 'explorer' && !nav.order.includes('terminal'), JSON.stringify(nav.order))
     ok('分頁列有「＋」按鈕', nav.newBtn)
     ok('側欄沒有終端機清單，也沒有「＋ 終端機」', !nav.termList && !nav.termNewBtn, JSON.stringify(nav))
 

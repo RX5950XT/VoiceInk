@@ -9,13 +9,14 @@
 Windows Electron AI 工作台：聊天＋終端機＋專案工作區＋本機 LLM＋Claude Code 工作台＋系統監控＋
 額度與用量統計＋AGY 反代＋語音轉文字＋翻譯與 TTS。Vanilla JS + Vite（無框架），Electron 43.4.1 ＋ Node 22。
 
-nav：聊天（預設，**工作區與終端機同一頁**）｜CC代理｜額度｜AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定。
+nav：聊天（預設，**工作區與終端機同一頁**）｜檔案｜CC代理｜額度｜AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定。
 
 | 模組 | 一句話 |
 |---|---|
 | 聊天 | 多組供應商（`chatProviders`），雲端翻譯共用同一份清單；會話存 `chats.json`，圖片存 `chat-images/` |
 | 終端機 | `@lydell/node-pty` ConPTY ＋ xterm.js，開在工作區的分頁列上；PTY 由 userData 裡的獨立宿主持有（更新／關 App 只斷線）；可用管理員身分（提權 host 代開）|
 | 專案工作區 | `src/main/workspace/`：專案＝本機資料夾（`workspaces.json`）；中間分頁列（終端機／Monaco 編輯器／`<webview>` 瀏覽器），右側欄＝檔案總管／Git／AI 記錄／監聽埠 |
+| 檔案 | 整機檔案總管（`src/main/explorer/`）；瀏覽本機資料夾；檔名搜尋走 UFFS（MFT），不自己 walk 整碟 |
 | HF模型 | 在 HF 搜 GGUF → 下載 → llama-server **router 模式** 一顆程序管全部模型 → 出現在聊天選單 |
 | CC代理 | `src/main/ccswitch/`：供應商 tile 改 `~/.claude/settings.json` 的 `env`／MCP／CLI 版本；非 Anthropic 格式經本機閘道轉協議 |
 | 系統監控 | `probe.ps1` 常駐取樣器＋`nvidia-smi`；六子頁（總覽／使用時長／處理程序／壓力測試／風扇控制／效能調整），感測器走提權 sidecar |
@@ -71,8 +72,8 @@ tag 要與 `package.json` 的 version 一致。
 - 檔名 kebab-case、變數 camelCase、常數 UPPER_SNAKE_CASE；ES2022、async/await、JSDoc。
 - Renderer 是 ESM，Main／Preload 是 CJS。函數 <50 行、檔案 <800 行、巢狀 ≤4 層。
 - 所有外部輸入都要驗證；例外不可靜默吞掉，邊界回結構化錯誤。
-- 設定走 electron-store IPC，**key 僅 allowlist**。以下**不走** `store:*`，各有獨立 store／IPC：聊天／終端機／工作區／AGY／語音輸入紀錄／用量統計。`hfToken`、`agyEnabled`、`ocControl` 刻意不進 allowlist。
-- 九組模組 IPC 的共用外殼在 `src/main/ipc-invoke.js`（主視窗守衛＋`{ ok, data|error }`＋`userMessage` 白名單），**handler 仍要各模組自己逐一列舉**。
+- 設定走 electron-store IPC，**key 僅 allowlist**。以下**不走** `store:*`，各有獨立 store／IPC：聊天／終端機／工作區／檔案總管／AGY／語音輸入紀錄／用量統計。`hfToken`、`agyEnabled`、`ocControl` 刻意不進 allowlist。
+- 十組模組 IPC 的共用外殼在 `src/main/ipc-invoke.js`（主視窗守衛＋`{ ok, data|error }`＋`userMessage` 白名單），**handler 仍要各模組自己逐一列舉**。
 - 兩窗 `sandbox: true`；CSP `connect-src 'self' https: http:`、`font-src 'self' data:`、`worker-src 'self' blob:`（後兩條是 Monaco 要的，不可拿掉）。
 - **UI 改完先跑 `npm run electron:pack`** 更新免安裝預覽；完整安裝檔僅發佈時打。
 
@@ -168,6 +169,13 @@ tag 要與 `package.json` 的 version 一致。
 - 檔案樹展開／收合只動自己那一列後面的子樹（整棵重畫會把捲動位置跳回最上面）。
 - 新增／改名的名字要在 `checkName` 就擋（斜線、冒號、Windows 保留檔名）；刪除要擋專案根目錄；搬檔要擋「搬進自己底下」與同名覆蓋。
 - `netstat -ano` 的 `LISTENING` 沒有被在地化可以直接比對；**刻意不用 `Get-NetTCPConnection`**（要載模組）。
+
+### 檔案總管
+
+- **跟工作區檔案樹是兩件事**：聊天頁右側仍是 `{ projectId, relPath }` + `workspace/files.js` 的 `resolveIn`。整機那頁走 `explorer/paths.js` 的 `resolveAbs`，放行 `^[A-Za-z]:\` 與嚴格 UNC（`\\伺服器\分享`，主機名／IPv4），不收 `\\.\`／`\\?\`／named pipe／ADS。資源回收筒是虛擬位置 `recyclebin`（不是 UNC）。側欄位置存 `explorer.json` 的 `places`（可隱藏內建、加自訂／NAS）；`net use` 對應磁碟代號時不帶密碼、不透傳 stderr。
+- **整機搜尋不准自己 walk C:\\**：檔名搜尋只代跑本機 `uffs`（NTFS MFT）。pattern 拒 `>` regex 與以 `-` 開頭的參數。進檔案頁自動下載並跳一次 UAC 裝 Access Broker、拉起 daemon；開機不跳 UAC。使用者按否就寫 `uffsAuto: false`，只留「啟用快速搜尋」。
+- **`uffs.exe` 不打進 asar**；只跑 `<userData>/uffs/`，不認 PATH／`%LOCALAPPDATA%\uffs`。zip checksum 缺或對不上就失敗。關 App **不停** UFFS daemon。刪／改名／搬移擋磁碟根目錄、`%SystemRoot%` 本身、使用者家目錄本身（`assertMutable`）；家目錄根層可以新增／貼上／還原子項（`assertCreatable` 只擋磁碟根與 Windows 目錄）。`resolveExisting` 回使用者路徑，刪 junction 不跟目標。清空回收筒不吃 list 的 2000 上限。預設刪除丟進系統資源回收筒（寫 `$I`／`$R`，Electron 裡走 `shell.trashItem`）；`{ permanent: true }` 才 `rm`。複製／搬移撞名產出 `name (2).ext`，不覆寫。CDP 暫存 userData 與沙箱的 `uffsAuto` 關掉，且忽略 `uffsEnsure({ force })`，避免自動化卡在 UAC。
+- 三份清單：`explorer/index.js` exports、`main.js` 的 `registerExplorerIpc` service、`preload.js` 的 `electronAPI.explorer`。回歸 `test-explorer.js` 的 [Q][Q2]。
 
 ### 終端機
 
@@ -376,6 +384,7 @@ tag 要與 `package.json` 的 version 一致。
 - `probe.ps1` 要有 UTF-8 BOM ＋ `AutoFlush`；**probe 裡不可以相信 `$env:*`**（被 spawn 的子程序沒有）；static 框裡不准查 `Win32_Tpm`（未提權卡 5.2 秒）；網路卡走 `Win32_NetworkAdapter` 不用 `Get-NetAdapter`。
 - **資料列一律往後加欄位、解析端逐格取值**（不要插在中間）；SMBIOS 佔位字串統一在 `metrics.clean()` 清掉；groups 的 rows 值不能給空字串（整列會塌成 0 高）。
 - 感測器 sidecar：只有它提權（不是整個 App）、版本鎖 `0.9.7-pre728`、斷線要自己重拉（上限 5 次，經 `ensureSensors`）；**自動啟用只能放在進系統監控頁時**（開機那條只走排程工作）；PawnIO 由 App 代裝但要驗 Authenticode（不釘 SHA-256），靜默安裝參數是 `-install -silent`；殭屍 sidecar 要用 `Invoke-CimMethod ... Terminate` 才殺得掉。
+- **probe.ps1 與 nvidia-smi 開機就常駐**：離開系統監控頁與縮到系統匣都不要 `stop()`（每次重開會付冷啟動＋第一輪 CPU% 全 0）；壓力測試才要離頁收掉。進頁 `start()` 要把 lastFeed 立刻再送一次。
 - **風扇的手動 PWM 是留在晶片裡的**，新程序 `SetDefault()` 救不回來（只有重開機）：所以下限 `minPwm` ≥20、sidecar 5 秒看門狗、`before-quit` 要 await 得到、`dirty` 存 store。
 - **雙向管道一定要 `PipeOptions.Asynchronous`**（同步讀會把同步寫整個擋住，症狀是只收到第一框且完全不報錯）。
 - 開機接管只能走排程工作（無觸發程序、`RunLevel Highest`、`ExecutionTimeLimit 0`），管道名走交接檔；**只在打包版提供安裝**（開發版執行檔可寫＝免 UAC 後門）。
@@ -402,12 +411,12 @@ tag 要與 `package.json` 的 version 一致。
 
 ### 測試（CDP／e2e）
 
-- **在這個 App 裡開發這個 App，一律 `npm run dev:sandbox`**（`scripts/dev-sandbox.js`）：三份 VoiceInk 預設共用 `%APPDATA%\voiceink`，而 `requestSingleInstanceLock()` 綁的是 **userData 路徑**（`main.js` 特地在搶鎖前就套用 `--user-data-dir`）——不換路徑只會把使用者的視窗叫到前面然後自己關掉，還跟他搶資料檔與 AGY 的埠。沙箱在 `%APPDATA%\voiceink-dev`：`models`／`hf-models` 用 junction 接回真的那份（唯讀，30GB 不能複製）；`config.json`／`workspaces.json` **複製**一份（有真資料可用又弄不髒）；會累積的紀錄（usage／code-usage／ agy-logs／dictations／terminals）**不接**；`agyEnabled`／`dictationEnabled`／`sysmonSensors` 強制關掉（只有這三個的影響跑得出 userData 之外）。**寫進沙箱前一律先 `rm` 目的地**——`writeFileSync`／`copyFileSync` 會跟著符號連結寫到對面去，沙箱裡只要有一條指回真 userData 的連結，這支「保護資料」的腳本就會親手覆寫使用者的設定。
+- **在這個 App 裡開發這個 App，一律 `npm run dev:sandbox`**（`scripts/dev-sandbox.js`）：三份 VoiceInk 預設共用 `%APPDATA%\voiceink`，而 `requestSingleInstanceLock()` 綁的是 **userData 路徑**（`main.js` 特地在搶鎖前就套用 `--user-data-dir`）——不換路徑只會把使用者的視窗叫到前面然後自己關掉，還跟他搶資料檔與 AGY 的埠。沙箱在 `%APPDATA%\voiceink-dev`：`models`／`hf-models` 用 junction 接回真的那份（唯讀，30GB 不能複製）；`config.json`／`workspaces.json` **複製**一份（有真資料可用又弄不髒）；會累積的紀錄（usage／code-usage／ agy-logs／dictations／terminals）**不接**；`agyEnabled`／`dictationEnabled`／`sysmonSensors`／檔案頁 `uffsAuto` 強制關掉（這幾個的影響跑得出 userData 之外）。**寫進沙箱前一律先 `rm` 目的地**——`writeFileSync`／`copyFileSync` 會跟著符號連結寫到對面去，沙箱裡只要有一條指回真 userData 的連結，這支「保護資料」的腳本就會親手覆寫使用者的設定。
 - **CDP 收尾只能殺自己**：暫存 `--user-data-dir` ＋只對自己 spawn 的 `child.pid` 跑 `taskkill /PID /T`；**禁止 `/IM VoiceInk.exe`**（會關掉使用者的安裝版）。
 - **不可以用「第一列」或「總數」指涉自己建的東西**（最糟會刪掉使用者的資料）：一律 `[data-id="..."]`，中途建的都要刪掉。
 - 同一時間只能跑一支 CDP 測試；挑主視窗一律用 `/index\.html/`（HUD 也是一個 page target）。
 - **暫存 user-data-dir 會連帶搬走資產**：模型用 junction 接回去（只讀）、`chatProviders` 自己種、埠跟 OS 借（`listen(0)`）。多實例測試的第二／第三份也要帶**同一個** `--user-data-dir`，否則那兩條斷言根本沒測到卻是綠的。
-- UI 斷言要等「量得到尺寸」不要睡固定時間；`Runtime.evaluate` 每次都在同一個全域範圍求值（`const` 要包 IIFE）；新增 nav 分頁時五個腳本裡寫死的頁面清單都要同步更新；開頭要把 `sysmonSensors` 關掉（否則彈 UAC 卡住），`finally` 還原。
+- UI 斷言要等「量得到尺寸」不要睡固定時間；`Runtime.evaluate` 每次都在同一個全域範圍求值（`const` 要包 IIFE）；新增 nav 分頁時五個腳本裡寫死的頁面清單都要同步更新；開頭要把 `sysmonSensors` 關掉（否則彈 UAC 卡住），檔案頁自動授權看 `explorer.json` 的 `uffsAuto`（暫存 userData 也會自己跳過），`finally` 還原。
 - `npx electron <script>` 時 app 名是 `Electron`，開頭要補 `app.setPath('userData', ...voiceink)`。
 - 批次改識別字（sed）時斷言與清單最危險（`=== false` 會變恆假、陣列會塌成重複項），改完 `git diff` 逐條看。
 - **語音輸入的自動化測試必須把 `insert` 換掉**（否則會把文字貼進使用者正在用的程式）。
@@ -422,6 +431,7 @@ tag 要與 `package.json` 的 version 一致。
 | 範圍 | 指令 |
 |---|---|
 | 開發沙箱 | `probe-dev-sandbox.js`（**實測**沙箱讀得到你的模型與供應商，而你正在用的那份一個位元組都沒動；動 `dev-sandbox.js` 前後都要跑）|
+| 檔案總管 | `test-explorer.js`（路徑守衛＋自種暫存目錄）＋ `e2e-explorer-cdp.js`（暫存 user-data-dir，**不點第一列**）＋ `probe-explorer-uffs.js`（機器上真有 `uffs` 才打真搜尋） |
 | 專案工作區 | `test-workspace.js`／`-nav`／`-ui`／`-state`／`-perf` ＋ `e2e-workspace-cdp.js`（暫存 user-data-dir ＋自種專案）；動 Monaco 前後跑 `probe-workspace-monaco.js`，動 PDF 前跑 `probe-workspace-pdf.js`；動編輯器／diff／預覽／專案切換前後跑 `probe-workspace-perf.js`（**打包版**開 1.4MB／4 萬行的檔，數 `createModel` 有沒有重做、量輸入法游標位置、驗專案隔離）；動大檔開關與記憶體前後跑 `probe-workspace-bigfile.js`（**打包版**量 1.4MB／4 萬行的開檔毫秒數、並排變更毫秒數，以及關掉之後堆積回不回得去、預覽的 iframe 有沒有被收掉） |
 | 終端機 | `test-terminal.js` ＋ `test-terminal-ui.js`（輸出合併、輸入法對位）＋ `probe-terminal-flicker.js`（**會叫到最前面**：DOM vs WebGL 量游標重建與 textarea 抖動）＋ `probe-terminal-upgrade.js`（**打包版**驗 WebGL／Unicode 11／字級／搜尋／分割／OSC 標題與 cwd）＋ `probe-terminal-ime.js`（**打包版**真的走一次 Chromium 輸入法組字）＋ `e2e-terminal.js`（真 ConPTY）＋ `e2e-terminal-cdp.js` ＋ `test-terminal-host.js`（獨立宿主）＋ `test-terminal-links.js` ＋ `probe-terminal-links.js`（真 xterm 座標，`npx electron`） ＋ `probe-terminal-editor.js`（Ctrl+G 的 $EDITOR 橋接：真的把那支 batch 跑起來，量它會不會卡住、送出與取消放不放得走） ＋ `probe-terminal-host-version.js`（唯讀：問這台機器上真的跑著的宿主是哪一份執行環境、還活著幾個 shell——「更新了卻沒生效」先跑這支）；動宿主或 `build.files`／`asarUnpack` 前後跑 `probe-terminal-restart.js`（**打包版**真的關 App、覆寫安裝檔再開回來）；管理員 `probe-terminal-admin.js`（免 UAC）／`probe-terminal-admin-elevate.js`（**跳一次 UAC**）；動 `foreground.js` 前後跑 `probe-terminal-foreground.js`（**會開／關記事本**，重現「記事本已經開著」再開第二次）；動配色或桌布前後跑 `probe-terminal-background.js`（**打包版**量桌布那一層畫不畫得出來、字有沒有被 opacity 一起壓掉、拿掉圖之後底色回不回得到不透明）|
 | 聊天／Markdown | `e2e-chat.js`（mock SSE）＋ `e2e-chat-cdp.js` ＋ `test-markdown.js` |

@@ -533,6 +533,30 @@ async function main() {
         String(gitSections).includes('"reviewClosed":true')
         && String(gitSections).includes('"scroll":"auto"')
         && String(gitSections).includes('"files":"visible"'), gitSections)
+      const changeStat = await cdp.eval(`(() => {
+        const host = document.getElementById('wsGitChangesStat')
+        return { height: host?.offsetHeight || 0, text: host?.textContent || '' }
+      })()`)
+      ok('[E] 變更區顯示總增刪行數',
+        changeStat.height > 0 && /\+\d/.test(changeStat.text), JSON.stringify(changeStat))
+      await cdp.eval(`[...document.querySelectorAll('.ws-git-sec-toggle')]
+        .find((one) => one.textContent === '最近提交')?.click()`)
+      ok('[E] 最近提交看得到主旨',
+        await waitInPage(cdp,
+          `document.querySelector('#wsGitLog .ws-git-log-subject')?.textContent.includes('init')`, 8000))
+      const logMeta = await cdp.eval(`(() => {
+        const row = document.querySelector('#wsGitLog .ws-git-log-row')
+        const subject = row?.querySelector('.ws-git-log-subject')
+        return {
+          author: row?.querySelector('.ws-git-log-author')?.textContent || '',
+          hash: row?.querySelector('.ws-git-log-hash')?.textContent || '',
+          wrap: subject ? getComputedStyle(subject).overflowWrap : ''
+        }
+      })()`)
+      ok('[E] 最近提交有作者與可複製的 hash',
+        logMeta.author === 'e2e' && /^[0-9a-f]{7,}$/i.test(logMeta.hash), JSON.stringify(logMeta))
+      ok('[E] 提交主旨會換行而不是截成省略號',
+        logMeta.wrap === 'anywhere', JSON.stringify(logMeta))
     } else {
       console.log('SKIP  [E] 這台沒有 git')
     }

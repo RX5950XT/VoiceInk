@@ -2,7 +2,7 @@
  * VoiceInk — 系統監控頁。
  *
  * 效能是這一頁的驗收標準（原生工作管理員在 400+ 進程時很卡），所以：
- *  1. 只有停在這一頁且視窗看得見時才取樣（`refreshSysmonPage` / `cooldownSysmonPage`）
+ *  1. 取樣器常駐（開機就跑）；這一頁只負責畫、壓力測試離頁才收
  *  2. 進程表**虛擬捲動**：400 列只掛 ~40 個 DOM 節點，捲動時重用同一批節點
  *  3. 每輪更新走 `textContent`，不重建 DOM、不 innerHTML
  *  4. CPU%／速率都由 main 算好，這裡只排序與畫
@@ -2493,7 +2493,7 @@ function loadInventory() {
       state.inventory = res.data
       state.inventoryPolling = false
       fillBenchDisks()
-      if (state.subtab === 'overview') renderBlocks()
+      if (state.active && state.subtab === 'overview') renderBlocks()
       return state.inventory
     }
     if (!state.active || Date.now() > deadline) {
@@ -2505,17 +2505,21 @@ function loadInventory() {
   return tick()
 }
 
-function onSample(sample) {
-  const wasAvailable = state.sample?.sensors?.available
-  state.sample = sample
-  if (!state.inventory) loadInventory()
-  // 感測器狀態變了才動提示（每輪重寫會把使用者正在讀的字閃掉）
-  if (sample.sensors && sample.sensors.available !== wasAvailable) showSensorNote(sample.sensors)
-  // 只畫目前看得見的那個子分頁：切到「處理程序」時沒必要重畫區塊
+function paintSample(sample) {
   if (state.subtab === 'overview') renderBlocks()
   else if (state.subtab === 'processes') rebuildRows()
   else if (state.subtab === 'stress') renderStressGauges()
   else if (state.subtab === 'oc') onOcSample(sample)
+}
+
+function onSample(sample) {
+  const wasAvailable = state.sample?.sensors?.available
+  state.sample = sample
+  if (!state.inventory) loadInventory()
+  if (!state.active || document.hidden) return
+  // 感測器狀態變了才動提示（每輪重寫會把使用者正在讀的字閃掉）
+  if (sample.sensors && sample.sensors.available !== wasAvailable) showSensorNote(sample.sensors)
+  paintSample(sample)
 }
 
 export function initSysmonPage() {
@@ -2599,11 +2603,11 @@ export function initSysmonPage() {
   $('sysmonBenchStart')?.addEventListener('click', runBench)
   $('sysmonBenchStop')?.addEventListener('click', () => electronAPI.sysmon.cancelDiskBench())
 
-  // 視窗被藏起來（縮到系統匣／被完全遮住）時停掉取樣：那條會開 PowerShell，常駐著等於整天在跑
+  // 取樣器常駐：縮到系統匣也不停。被藏住時只略過重畫，回來立刻把上一筆畫上去。
   document.addEventListener('visibilitychange', () => {
-    if (!state.active) return
-    if (document.hidden) electronAPI.sysmon.stop()
-    else electronAPI.sysmon.start(state.intervalKey)
+    if (!state.active || document.hidden || !state.sample) return
+    showSensorNote(state.sample.sensors)
+    paintSample(state.sample)
   })
 
   renderHead()
@@ -2736,5 +2740,4 @@ export function cooldownSysmonPage() {
   // 壓力測試跑在 main，離開分頁不主動收的話它會在背景一直燒到 5 分鐘上限
   electronAPI.sysmon.cpuStress(false, 1)
   electronAPI.sysmon.memStress(false, 1)
-  electronAPI.sysmon.stop()
 }

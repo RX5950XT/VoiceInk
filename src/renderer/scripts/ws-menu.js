@@ -52,6 +52,13 @@ export function showMenu(at, items) {
   menu.className = 'ws-menu'
   menu.setAttribute('role', 'menu')
   for (const item of items) {
+    if (item.sep) {
+      const hr = document.createElement('div')
+      hr.className = 'ws-menu-sep'
+      hr.setAttribute('role', 'separator')
+      menu.appendChild(hr)
+      continue
+    }
     const btn = document.createElement('button')
     btn.type = 'button'
     btn.className = item.danger ? 'ws-menu-item is-danger' : 'ws-menu-item'
