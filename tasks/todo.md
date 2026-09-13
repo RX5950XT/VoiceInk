@@ -1,6 +1,6 @@
 # 2026-09-13 — 補齊未通過項目
 
-- [x] 發行準備：版本更新至 `v1.21.0`，文件同步；尚待提交、推送、合併、打包與 GitHub Release
+- [x] 發行完成：版本更新至 `v1.21.0`，已提交、推送、合併、打包並建立 GitHub Release
 
 - [x] 更新日期解析先紅再修；`test-sysmon-hotfix-date.js` 通過、`test-sysmon.js` 183/0、真 Electron 取樣 63/0
 - [x] 更新監控測試中過期的合併列／多 GPU／畫布父層斷言；打包 `e2e-sysmon-cdp.js` 113/0
@@ -12,7 +12,7 @@
 本輪 UFFS 正式 ZIP SHA-256：`0e0103a25a98e86f698d0b910f6a4bcc706bde443d56c2f999c2abfb26c7a22a`，與官方 CHECKSUMS.txt 一致。經 App `installBroker()` 安裝到 `%APPDATA%/voiceink/uffs/uffs-windows-x64/`，服務已執行；真 `*.txt` 查詢 200 筆且 truncated=true，待下列格式修正後再驗特定檔名與畫面。
 真查已驗：完整 `test-sysmon-hotfix-date.js`、大寫、`*test-sysmon-hotfix-date.js*`、`test-sysmon-hotfix-date.??` 均精準命中一筆；錯誤 `.pdf` 不命中，mtime 與 fs.stat 差 <2ms。含點的一般文字及基本 glob 以跳脫後 regex 避開 UFFS 0.6.40 漏檔；進階 glob（字元集合／大括號／OR／路徑 glob）仍沿用上游語法，未宣稱涵蓋。
 
-Review：本輪新增日期／UFFS 格式／probe userData 回歸先紅再綠，12 支相關 Node 檢查全 exit 0。`e2e-sysmon.js` 真 Electron 63/0；`e2e-sysmon-cdp.js` 113/0。最終 `npm run electron:pack -- --config.directories.output=D:/vi-explorer-review-20260913` exit 0，194 支 JS 與 asar 一致、解包 probe.ps1 與來源逐位元一致。`D:/vi-explorer-review-20260913/probe-explorer-live.js` 在隔離 profile 複製已驗 UFFS binary：畫面一般完整檔名搜尋、mtime 核對、NAS IPC 及原有 explorer 斷言全過。預覽 exe／asar／probe.ps1 與驗收包 SHA-256 一致。尚未測 NAS 遠端寫入與進階 glob；未提交／推送／發行。
+Review：本輪新增日期／UFFS 格式／probe userData 回歸先紅再綠，12 支相關 Node 檢查全 exit 0。`e2e-sysmon.js` 真 Electron 63/0；`e2e-sysmon-cdp.js` 113/0。最終 `npm run electron:pack -- --config.directories.output=D:/vi-explorer-review-20260913` exit 0，194 支 JS 與 asar 一致、解包 probe.ps1 與來源逐位元一致。`D:/vi-explorer-review-20260913/probe-explorer-live.js` 在隔離 profile 複製已驗 UFFS binary：畫面一般完整檔名搜尋、mtime 核對、NAS IPC 及原有 explorer 斷言全過。預覽 exe／asar／probe.ps1 與驗收包 SHA-256 一致。尚未測 NAS 遠端寫入與進階 glob；本輪已提交、推送、合併、打包並發行。
 
 # 2026-09-12 — feat/explorer 上游檢查
 
