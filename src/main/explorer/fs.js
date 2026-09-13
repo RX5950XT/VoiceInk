@@ -490,7 +490,7 @@ async function moveEntry(fromPath, toDir) {
       return { path: next }
     } catch {
       try {
-        await fsp.cp(from, next, { recursive: true, errorOnExist: true, verbatimSymlinks: true })
+        await fsp.cp(from, next, { recursive: true, force: false, errorOnExist: true, verbatimSymlinks: true })
         await paths.removeLinkOrTree(from)
       } catch {
         throw paths.fail('MOVE_FAILED', '搬不過去')
@@ -523,7 +523,7 @@ async function copyEntry(fromPath, toDir) {
     paths.resolveAbs(next)
     if (fs.existsSync(next)) next = uniqueDest(dir, path.basename(from))
     try {
-      await fsp.cp(from, next, { recursive: true, errorOnExist: true, verbatimSymlinks: true })
+      await fsp.cp(from, next, { recursive: true, force: false, errorOnExist: true, verbatimSymlinks: true })
     } catch {
       throw paths.fail('COPY_FAILED', '複製失敗')
     }

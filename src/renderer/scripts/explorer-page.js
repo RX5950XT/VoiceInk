@@ -286,6 +286,7 @@ function setView(next) {
   $('exViewListBtn')?.setAttribute('aria-pressed', view === 'list' ? 'true' : 'false')
   $('exViewGridBtn')?.setAttribute('aria-pressed', view === 'grid' ? 'true' : 'false')
   $('exList')?.classList.toggle('is-grid', view === 'grid')
+  paintSortHead()
   void electronAPI.explorer.saveState({ view })
 }
 
@@ -547,7 +548,7 @@ async function loadDir(dirPath, opts = {}) {
     electronAPI.explorer.listDir(dirPath, { sort: sortBy, desc: sortDesc }),
     '讀不到這個資料夾'
   )
-  if (seq !== navSeq) return
+  if (seq !== navSeq) return false
   cwd = data.path
   entries = data.entries || []
   truncated = Boolean(data.truncated)
@@ -567,12 +568,14 @@ async function loadDir(dirPath, opts = {}) {
   paintRecycleChrome()
   const watch = await electronAPI.explorer.watch(cwd)
   watching = Boolean(watch && watch.ok && watch.data && watch.data.watching)
+  if (seq !== navSeq) return false
   if (!opts.silent) void electronAPI.explorer.saveState({ lastPath: cwd, sort: sortBy, sortDesc })
+  return true
 }
 
 async function navigate(dirPath, opts = {}) {
   clearSearchInput()
-  await loadDir(dirPath)
+  if (!await loadDir(dirPath)) return
   if (opts.skipHistory) return
   history = history.slice(0, histIndex + 1)
   history.push(cwd)
@@ -670,6 +673,9 @@ function sortHits() {
 }
 
 function clearSearchInput() {
+  searchSeq++
+  if (searchTimer) clearTimeout(searchTimer)
+  void electronAPI.explorer.uffsCancel()
   const input = /** @type {HTMLInputElement | null} */ ($('exSearch'))
   if (input) input.value = ''
   hits = []
@@ -683,6 +689,7 @@ function clearSearch() {
 }
 
 function onSearchInput() {
+  searchSeq++
   const input = /** @type {HTMLInputElement | null} */ ($('exSearch'))
   const q = input ? input.value.trim() : ''
   if (searchTimer) clearTimeout(searchTimer)
@@ -1212,6 +1219,8 @@ export async function refreshExplorerPage() {
 }
 
 export function cooldownExplorerPage() {
+  searchSeq++
+  navSeq++
   if (searchTimer) clearTimeout(searchTimer)
   void electronAPI.explorer.uffsCancel()
   void electronAPI.explorer.unwatch()

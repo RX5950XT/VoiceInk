@@ -134,6 +134,9 @@ async function main() {
       15000, 'preload 初始化'
     )
 
+    // 視窗仍隱藏；畫面測試模擬正在觀看，否則新版 onSample 會刻意略過重畫。
+    await cdp.eval(`Object.defineProperty(document, 'hidden', { configurable: true, get: () => false })`)
+
     original = await cdp.eval(`(async () => {
       const keys = ${JSON.stringify(RESTORE_KEYS)}
       const out = {}
@@ -361,17 +364,20 @@ async function main() {
       return {
         domRows: document.querySelectorAll('#sysmonRows .sysmon-row').length,
         visibleRows: rows.length,
-        spacerHeight: parseInt(spacer.style.height, 10) || 0,
+        spacerHeight: spacer.getBoundingClientRect().height,
+        rowHeight: rows[0]?.getBoundingClientRect().height || 0,
+        groups: Number((count.match(/(\\d+)\\s*組/) || [])[1] || 0),
         total,
         cols: document.querySelectorAll('#sysmonHead .sysmon-th').length,
         firstCells: rows[0] ? [...rows[0].children].map((c) => c.textContent) : []
       }
     })()`)
     ok('列出的是整台機器的所有處理程序', table.total > 100, String(table.total))
-    ok('spacer 撐出完整高度', table.spacerHeight >= table.total * 30 - 1,
-      `${table.spacerHeight} vs ${table.total * 30}`)
-    ok('虛擬捲動：DOM 節點遠少於總列數', table.domRows < 60 && table.domRows < table.total,
-      `DOM ${table.domRows} / 總 ${table.total}`)
+    ok('spacer 撐出同名合併後的完整高度', table.groups > 0 && table.groups <= table.total
+      && table.rowHeight > 0 && Math.abs(table.spacerHeight - table.groups * table.rowHeight) < 1,
+      JSON.stringify(table))
+    ok('虛擬捲動：DOM 節點遠少於總列數', table.domRows < 60 && table.domRows < table.groups,
+      `DOM ${table.domRows} / 組 ${table.groups}`)
     ok('有八個欄位', table.cols === 8, String(table.cols))
     ok('第一列有資料', table.firstCells.length === 8 && table.firstCells[0].length > 0,
       JSON.stringify(table.firstCells))
@@ -526,19 +532,23 @@ async function main() {
       // 2×2：四張卡只佔兩種 left 值
       columns: new Set([...document.querySelectorAll('#sysmon-stress .sysmon-stress-card')]
         .map((c) => Math.round(c.getBoundingClientRect().left))).size,
-      canvasShown: !document.getElementById('sysmonStressCanvas').hidden,
+      canvasShown: document.getElementById('sysmonStressCanvas').getClientRects().length > 0
+        && document.getElementById('sysmonStressCanvas').getBoundingClientRect().height > 0,
       gauges: document.querySelectorAll('#sysmon-stress .sysmon-metercell').length,
       gaugeText: document.getElementById('sysmonStressDisks').textContent
         + document.getElementById('sysmonStressCpu').textContent,
-      // CPU／GPU 各四格一排：同一組的四個 left 值相同
+      // CPU／GPU 各四格一排：同一組有四個不同的 left 值
       cpuRow: document.querySelectorAll('#sysmonStressCpu .sysmon-metercell').length,
-      gpuRow: document.querySelectorAll('#sysmonStressGpu .sysmon-metercell').length,
+      gpuCards: [...document.querySelectorAll('#sysmonStressGpu .sysmon-gpu-gauge-card')].map(card => {
+        const cells = [...card.querySelectorAll('.sysmon-metercell')]
+        const boxes = cells.map(cell => cell.getBoundingClientRect())
+        return { count: cells.length, columns: new Set(boxes.map(box => Math.round(box.left))).size,
+          rows: new Set(boxes.map(box => Math.round(box.top))).size,
+          visible: boxes.every(box => box.width > 0 && box.height > 0),
+          labels: cells.map(cell => cell.querySelector('i')?.textContent) }
+      }),
       cpuColumns: new Set(
         [...document.querySelectorAll('#sysmonStressCpu .sysmon-metercell')]
-          .map((el) => Math.round(el.getBoundingClientRect().left))
-      ).size,
-      gpuColumns: new Set(
-        [...document.querySelectorAll('#sysmonStressGpu .sysmon-metercell')]
           .map((el) => Math.round(el.getBoundingClientRect().left))
       ).size,
       diskCells: document.querySelectorAll('#sysmonStressDisks .sysmon-metercell').length,
@@ -554,9 +564,11 @@ async function main() {
     ok('CPU 儀錶四格一排（負載／功耗／溫度／轉速）',
       stressUi.cpuRow === 4 && stressUi.cpuColumns === 4,
       `${stressUi.cpuRow} 格 / ${stressUi.cpuColumns} 欄`)
-    ok('GPU 儀錶四格一排（負載／功耗／溫度／轉速）',
-      stressUi.gpuRow === 4 && stressUi.gpuColumns === 4,
-      `${stressUi.gpuRow} 格 / ${stressUi.gpuColumns} 欄`)
+    ok('每張 GPU 儀錶四格一排（負載／功耗／溫度／轉速）',
+      stressUi.gpuCards.length > 0 && stressUi.gpuCards.every(card =>
+        card.count === 4 && card.columns === 4 && card.rows === 1 && card.visible
+        && card.labels.join('/') === '負載/功耗/溫度/轉速'),
+      JSON.stringify(stressUi.gpuCards))
     ok('閒置時 GPU 畫布收起來（不然那張卡會比別人高一截）', !stressUi.canvasShown)
     // 黃色警告條已移除，說明併進各卡的敘述裡
     ok('沒有黃色警告條', stressUi.warn === 0, String(stressUi.warn))

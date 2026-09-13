@@ -50,7 +50,14 @@ function listPlaces() {
     ['Videos', 'videos', '影片']
   ]
   for (const [folder, id, label] of known) {
-    const item = place(path.join(home, folder), id, label)
+    let full = path.join(home, folder)
+    try {
+      const { app } = require('electron')
+      if (app) full = app.getPath(id)
+    } catch {
+      // 純 Node 或系統位置取不到時，保留家目錄退路。
+    }
+    const item = place(full, id, label)
     if (item) out.push(item)
   }
   return out

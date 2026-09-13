@@ -13,6 +13,7 @@ const os = require('os')
 const path = require('path')
 const crypto = require('crypto')
 const { spawn } = require('child_process')
+const { pipeline } = require('stream/promises')
 const { fail, realOf } = require('./paths')
 
 const MAX_PATTERN = 200
@@ -290,10 +291,13 @@ function sanitizeHit(row) {
     ? row.name
     : path.basename(abs)
   const type = String(row.type || row.Type || '').toLowerCase()
-  const dir = type === 'dir' || type === 'directory' || row.directory === true
+  const dir = type === 'dir' || type === 'directory' || row.directory === true || row.is_directory === true
   const size = Number(row.size || row.Size) || 0
   const written = row.written || row.Written || row.modified || row.mtime
-  const mtimeMs = written ? Date.parse(String(written)) || 0 : 0
+  const parsedTime = typeof written === 'number'
+    ? written === row.modified ? written / 10000 - 11644473600000 : 0 // UFFS modified 是 Windows FILETIME。
+    : written ? Date.parse(String(written)) || 0 : 0
+  const mtimeMs = Number.isFinite(parsedTime) && parsedTime > 0 && parsedTime <= 8640000000000000 ? parsedTime : 0
   return { name, path: abs, dir, size, mtimeMs }
 }
 
@@ -341,8 +345,18 @@ async function search(raw) {
   const exe = findUffs()
   if (!exe) throw fail('UFFS_MISSING', '尚未安裝快速搜尋')
   cancelSearch()
+  // ponytail: UFFS 0.6.40 帶點查詢會漏檔；文字／基本 glob 改用受控 regex，上游修正後移除。
+  // 進階 glob 與路徑 glob 仍交給上游，避免自己重寫整套語法。
+  let query = pattern
+  const glob = /[*?]/.test(pattern)
+  if (pattern.includes('.') && !/[\[\]{}|]/.test(pattern) && (!glob || !/[\\/]/.test(pattern))) {
+    const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    query = glob
+      ? `>(?:^|[\\\\/])${escaped.replace(/\\\*/g, '[^\\\\/]*').replace(/\\\?/g, '[^\\\\/]')}$`
+      : `>.*${escaped}.*`
+  }
   const args = [
-    pattern,
+    query,
     '--format', 'json',
     '--limit', String(SEARCH_LIMIT),
     '--columns', 'path,name,size,written,type',
@@ -467,26 +481,20 @@ async function download(onProgress) {
   if (!res.ok || !res.body) throw fail('UFFS_INSTALL', '下載失敗')
   const total = Number(res.headers.get('content-length')) || 0
   if (total > MAX_ZIP_BYTES) throw fail('UFFS_INSTALL', '下載失敗')
-  const file = fs.createWriteStream(tmp)
   let received = 0
-  const reader = res.body.getReader()
   try {
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      received += value.length
-      if (received > MAX_ZIP_BYTES) throw fail('UFFS_INSTALL', '下載失敗')
-      file.write(Buffer.from(value))
-      if (onProgress) onProgress({ received, total })
-    }
+    await pipeline(res.body, async function* (source) {
+      for await (const value of source) {
+        received += value.length
+        if (received > MAX_ZIP_BYTES) throw fail('UFFS_INSTALL', '下載失敗')
+        if (onProgress) onProgress({ received, total })
+        yield value
+      }
+    }, fs.createWriteStream(tmp))
   } catch (error) {
-    try { file.destroy() } catch { /* 關掉寫入流 */ }
     try { fs.unlinkSync(tmp) } catch { /* 清掉半套 */ }
     throw error && error.code === 'UFFS_INSTALL' ? error : fail('UFFS_INSTALL', '下載失敗')
   }
-  await new Promise((resolve, reject) => {
-    file.end((err) => (err ? reject(err) : resolve()))
-  })
   let sumsText = ''
   try {
     const sums = await fetch(SUMS_URL, { signal: downloadCtl.signal, redirect: 'follow' })

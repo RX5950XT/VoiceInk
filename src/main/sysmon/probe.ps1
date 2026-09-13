@@ -398,9 +398,14 @@ function Emit-Static([string]$seq) {
   # 最近幾筆 Windows 更新（實測 850ms）。QFE 只留 HotFixID 與日期，別把整份描述送出來
   $qfe = @(Get-CimInstance Win32_QuickFixEngineering -EA SilentlyContinue)
   $qfeCount = $qfe.Count
-  $qfe | Sort-Object InstalledOn -Descending | Select-Object -First 5 | ForEach-Object {
-    $on = if ($_.InstalledOn) { $_.InstalledOn.ToString('yyyy-MM-dd') } else { '' }
-    & $add "QFE|$(Esc $_.HotFixID)|$on"
+  $updates = foreach ($update in $qfe) {
+    # InstalledOn 是會解析日期的 ScriptProperty；壞日期只留空，不丟掉整份硬體清單。
+    $on = ''
+    try { if ($update.InstalledOn) { $on = $update.InstalledOn.ToString('yyyy-MM-dd') } } catch { $on = '' }
+    [pscustomobject]@{ HotFixID = $update.HotFixID; InstalledOn = $on }
+  }
+  $updates | Sort-Object InstalledOn -Descending | Select-Object -First 5 | ForEach-Object {
+    & $add "QFE|$(Esc $_.HotFixID)|$($_.InstalledOn)"
   }
   & $add "QFEC|$qfeCount"
   # 擴充插槽：SMBIOS 直接寫著哪一條在用、幾條通道（10ms）

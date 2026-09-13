@@ -8,21 +8,14 @@
 
 'use strict'
 
-const fs = require('fs')
+const os = require('os')
 const path = require('path')
 const uffs = require(path.join(__dirname, '..', 'src/main/explorer/uffs.js'))
 
-function extraHome() {
-  const home = process.env.UFFS_HOME
-  if (!home) return
-  const exe = path.join(home, 'uffs.exe')
-  if (fs.existsSync(exe)) {
-    process.env.PATH = `${home}${path.delimiter}${process.env.PATH || ''}`
-  }
-}
-
 async function main() {
-  extraHome()
+  const userData = process.env.VOICEINK_USER_DATA
+    || path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'voiceink')
+  uffs.configure(userData)
   const exe = uffs.findUffs()
   if (!exe) {
     console.log('SKIP 這台機器沒有 uffs.exe')

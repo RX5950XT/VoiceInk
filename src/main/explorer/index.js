@@ -299,24 +299,23 @@ function setClipboard(items, mode) {
  * @param {unknown} toDir
  */
 async function paste(toDir) {
-  if (!clip.paths.length) throw paths.fail('EMPTY', '剪貼簿是空的')
-  if (recycle.isRecyclePath(toDir)) {
-    if (clip.mode !== 'cut') throw paths.fail('BAD_PATH', '不能複製進資源回收筒')
-    const out = []
-    for (const src of clip.paths) out.push((await files.removeEntry(src)).path)
-    clip = { mode: 'copy', paths: [] }
-    return { paths: out, trashed: true }
-  }
-  const dest = paths.resolveExisting(toDir)
+  let clipboard = clip
+  if (!clipboard.paths.length) throw paths.fail('EMPTY', '剪貼簿是空的')
+  const trashed = recycle.isRecyclePath(toDir)
+  if (trashed && clipboard.mode !== 'cut') throw paths.fail('BAD_PATH', '不能複製進資源回收筒')
+  const dest = trashed ? toDir : paths.resolveExisting(toDir)
+  const pending = clipboard.paths.slice()
   const out = []
-  for (const src of clip.paths) {
-    const result = clip.mode === 'cut'
-      ? await files.moveEntry(src, dest)
-      : await files.copyEntry(src, dest)
+  for (const src of pending) {
+    const result = trashed ? await files.removeEntry(src)
+      : clipboard.mode === 'cut' ? await files.moveEntry(src, dest) : await files.copyEntry(src, dest)
     out.push(result.path)
+    if (clipboard.mode === 'cut' && clip === clipboard) {
+      clip = { ...clipboard, paths: clipboard.paths.filter((item) => item !== src) }
+      clipboard = clip
+    }
   }
-  if (clip.mode === 'cut') clip = { mode: 'copy', paths: [] }
-  return { paths: out }
+  return trashed ? { paths: out, trashed: true } : { paths: out }
 }
 
 /**

@@ -127,6 +127,7 @@ async function main() {
   let cdp = null
   try {
     child = spawn(EXE, [
+      '--hidden',
       `--remote-debugging-port=${PORT}`,
       `--user-data-dir=${USER_DATA_DIR}`
     ], { stdio: 'ignore' })
