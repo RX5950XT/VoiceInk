@@ -84,9 +84,10 @@ async function loadState() {
   return sanitizeState(store.get('state', null))
 }
 
-async function saveState(state) {
+async function updateState(update) {
   const store = await getStore()
-  const sanitized = sanitizeState(state)
+  // 讀取、合併與寫入之間不讓出執行權，避免同步與設定互相蓋掉。
+  const sanitized = sanitizeState(update(sanitizeState(store.get('state', null))))
   store.set('state', sanitized)
   return sanitized
 }
@@ -101,5 +102,5 @@ module.exports = {
   resetStoreForTests,
   sanitizeSettings,
   sanitizeState,
-  saveState
+  updateState
 }

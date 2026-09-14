@@ -14,7 +14,7 @@ async function main() {
   const pending = []
   const context = { catalog, path, AbortController, installs: new Map(), emit() {},
     hub: { listFiles: async () => files, fileUrl: () => 'unused', authHeaders: () => ({}) },
-    library: { has: () => false, dirFor: () => 'unused' },
+    library: { has: () => false, dirFor: () => 'unused', writeMeta() {} },
     download: { downloadVariant: () => new Promise((resolve, reject) => pending.push(reject)) } }
   vm.createContext(context)
   vm.runInContext(bodies, context)

@@ -184,6 +184,7 @@ async function persistTabsNow() {
       url: t.url,
       draftContent: t.dirty ? (t.content || '') : '',
       dirty: Boolean(t.dirty),
+      mtimeMs: t.mtimeMs,
       preview: Boolean(t.preview),
       staged: Boolean(t.staged),
       sessionRow: t.sessionRow
@@ -1714,6 +1715,10 @@ async function saveActiveFile(force = false) {
     return
   }
 
+  if (!force && !tab.mtimeMs) {
+    showExtBanner('草稿缺少原檔版本，請先比較或選擇覆寫')
+    return
+  }
   let saved
   const result = await electronAPI.workspace.writeFile(
     tab.projectId, tab.relPath, content, force ? undefined : (tab.mtimeMs || 0)
@@ -2533,7 +2538,7 @@ async function restoreProjectTabs(proj, generation) {
             unsupported,
             fileSize: file.size || 0,
             fileExt: extOf(item.relPath),
-            mtimeMs: file.mtimeMs || Date.now(),
+            mtimeMs: hasDraft ? (item.mtimeMs || 0) : (file.mtimeMs || Date.now()),
             readonly: file.pdf ? 'PDF 預覽，不能在這裡編輯。'
               : file.audio ? '音訊預覽，不能在這裡編輯。'
               : file.video ? '影片預覽，不能在這裡編輯。'
@@ -2547,7 +2552,8 @@ async function restoreProjectTabs(proj, generation) {
           if (typeof item.draftContent === 'string' && (item.dirty || item.draftContent)) {
             tabs.push({ id: item.id, kind: 'editor', projectId: proj.id,
               title: item.relPath.split('/').pop(), relPath: item.relPath,
-              content: item.draftContent, savedContent: null, dirty: true, preview: false })
+              content: item.draftContent, savedContent: null, dirty: true, preview: false,
+              mtimeMs: item.mtimeMs || 0 })
           }
         }
       } else if (item.kind === 'diff' && item.relPath) {

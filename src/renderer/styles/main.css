@@ -2274,6 +2274,13 @@ option:disabled {
   color: var(--term-bg);
 }
 
+/* 壓過 xterm 重畫時寫入的 inline 座標，連兩幀之間也不能跳；寬高仍由 xterm 管。 */
+.xterm.ime-composing .xterm-helper-textarea,
+.xterm.ime-composing .composition-view {
+  left: var(--ime-left) !important;
+  top: var(--ime-top) !important;
+}
+
 .term-title-row {
   display: flex;
   align-items: center;

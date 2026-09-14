@@ -56,7 +56,7 @@ function classifyError(err) {
   ) {
     return { code: 'REJECTED', message: '語音服務暫時無法使用，請稍後再試' }
   }
-  return { code: 'REJECTED', message: `語音合成失敗：${msg.slice(0, 120)}` }
+  return { code: 'REJECTED', message: '語音合成失敗，請稍後再試' }
 }
 
 /**
@@ -211,7 +211,7 @@ async function synthesize(req) {
 
   const rate = typeof req?.rate === 'string' && req.rate ? req.rate : 'default'
   const chunks = splitChunks(text)
-  const idx = Math.max(0, Math.min(chunks.length - 1, Number(req.chunkIndex) || 0))
+  const idx = Math.max(0, Math.min(chunks.length - 1, Math.trunc(Number(req.chunkIndex) || 0)))
   const myGen = ++ttsGen
 
   const data = await synthesizeChunk(chunks[idx], voice, rate)

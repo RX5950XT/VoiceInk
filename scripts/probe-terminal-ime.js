@@ -295,6 +295,68 @@ async function main() {
       return b.getLine(b.cursorY)?.translateToString(true) || ''
     })()`)
     ok('[C] 組完字之後，中文真的進了終端機那一行', String(committed).includes('注音'), JSON.stringify(committed))
+
+    // [E] 分段重畫：每段可停超過 40ms，且每次 DOM 變動都量實際位置，不能只看 60ms 後。
+    await cdp.eval(`(async () => {
+      const pane = document.querySelector('.term-pane.is-active')
+      const term = window.__testTerminals.get(pane.dataset.id)
+      window.__imeTerm = term
+      await new Promise(r => term.write('\u001b[6;5H', r))
+      await new Promise(r => setTimeout(r, 100))
+      const { syncImeCaret } = await import('./scripts/term-ime.js')
+      syncImeCaret(term)
+      window.__imeSent = []
+      window.__imeData = term.onData(data => window.__imeSent.push(data))
+    })()`)
+    await cdp.send('Input.imeSetComposition', { text: '中文', selectionStart: 2, selectionEnd: 2 })
+    await cdp.eval(`(() => {
+      const term = window.__imeTerm
+      const area = term.textarea
+      const view = term.element.querySelector('.composition-view')
+      const position = el => { const r = el.getBoundingClientRect(); return [r.left, r.top] }
+      const initial = [position(area), position(view)]
+      window.__imeSamples = { samples: 0, moved: 0, maxShift: 0 }
+      window.__imeSample = () => {
+        const s = window.__imeSamples
+        s.samples++
+        const shift = Math.max(...[area, view].map((el, i) => {
+          const at = position(el)
+          return Math.hypot(at[0] - initial[i][0], at[1] - initial[i][1])
+        }))
+        if (shift > 1) s.moved++
+        s.maxShift = Math.max(s.maxShift, shift)
+      }
+      window.__imeObserver = new MutationObserver(window.__imeSample)
+      window.__imeObserver.observe(term.element, { subtree: true, attributes: true, attributeFilter: ['style'] })
+    })()`)
+    for (let i = 0; i < 12; i++) {
+      await cdp.eval(`new Promise(r => window.__imeTerm.write('\u001b[${i % 2 ? 6 : 2};${i % 2 ? 5 : 20}H', r))`)
+      await cdp.send('Input.imeSetComposition', { text: i % 2 ? '中文' : '中文ㄅ', selectionStart: 2, selectionEnd: 2 })
+      await cdp.eval(`window.__imeSample()`)
+      if (i === 5) await cdp.eval(`import('./scripts/term-ime.js').then(m => m.syncImeCaret(window.__imeTerm))`)
+      await sleep(75)
+    }
+    const samples = await cdp.eval(`(() => {
+      window.__imeSample()
+      window.__imeObserver.disconnect()
+      return window.__imeSamples
+    })()`)
+    ok('[E] 分段重畫＋連續組字，輸入框與組字文字從未離開原位',
+      samples.samples >= 12 && samples.moved === 0, JSON.stringify(samples))
+    await cdp.send('Input.insertText', { text: '中文' })
+    await sleep(300)
+    const sent = await cdp.eval(`window.__imeData.dispose(); window.__imeSent.join('')`)
+    ok('[E] 重畫期間組字只送出一次，沒有漏字或重複', sent === '中文', JSON.stringify(sent))
+    const unlocked = await cdp.eval(`(async () => {
+      const term = window.__imeTerm
+      await new Promise(r => term.write('\u001b[8;10H', r))
+      const { syncImeCaret } = await import('./scripts/term-ime.js')
+      syncImeCaret(term)
+      const a = term.textarea.getBoundingClientRect()
+      const caret = ${CARET_CELL}
+      return Math.hypot(a.left - caret.x, a.top - caret.y) < 2
+    })()`)
+    ok('[E] 組字結束後恢復跟隨游標', unlocked)
   } finally {
     if (cdp && createdId) {
       try { await cdp.eval(`window.electronAPI.terminal.delete(${JSON.stringify(createdId)})`) } catch { /* 收尾 */ }

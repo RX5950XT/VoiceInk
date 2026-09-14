@@ -601,6 +601,7 @@ async function transcribeFileCloud(req, onProgress) {
       } catch (e) {
         throw e instanceof Error ? e : new Error(String(e))
       }
+      if (killed || gen !== jobGen) throw new Error('轉錄已取消')
       if (text) parts.push(text)
       report(
         10 + ((i + 1) / files.length) * 80,

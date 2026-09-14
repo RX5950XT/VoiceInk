@@ -230,25 +230,25 @@ async function readSse(response, onPayload, onActivity) {
   try {
     for (;;) {
       const { done, value } = await reader.read()
-      if (done) break
-      onActivity()
-      buffer += decoder.decode(value, { stream: true })
-      let index = buffer.indexOf('\n\n')
+      if (!done) onActivity()
+      buffer += done ? decoder.decode() + '\n' : decoder.decode(value, { stream: true })
+      let index = buffer.indexOf('\n')
       while (index >= 0) {
-        const frame = buffer.slice(0, index)
-        buffer = buffer.slice(index + 2)
-        for (const line of frame.split('\n')) {
-          if (!line.startsWith('data:')) continue
+        const line = buffer.slice(0, index).trim()
+        buffer = buffer.slice(index + 1)
+        if (line.startsWith('data:')) {
           const data = line.slice(5).trim()
-          if (!data || data === '[DONE]') continue
-          try {
-            onPayload(JSON.parse(data))
-          } catch {
-            // 上游偶爾夾雜非 JSON 的心跳，跳過
+          if (data && data !== '[DONE]') {
+            try {
+              onPayload(JSON.parse(data))
+            } catch {
+              // 上游偶爾夾雜非 JSON 的心跳，跳過
+            }
           }
         }
-        index = buffer.indexOf('\n\n')
+        index = buffer.indexOf('\n')
       }
+      if (done) break
     }
   } finally {
     reader.releaseLock()

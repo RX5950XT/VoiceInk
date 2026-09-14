@@ -127,6 +127,7 @@ function sanitizeTabsState(raw) {
     if (typeof t.relPath === 'string') tab.relPath = t.relPath
     if (typeof t.url === 'string') tab.url = /^https?:\/\//i.test(t.url) ? t.url : ''
     if (typeof t.dirty === 'boolean') tab.dirty = t.dirty
+    if (Number.isFinite(t.mtimeMs) && t.mtimeMs > 0) tab.mtimeMs = t.mtimeMs
     if (typeof t.preview === 'boolean') tab.preview = t.preview
     if (typeof t.staged === 'boolean') tab.staged = t.staged
     if (typeof t.sessionId === 'string') tab.sessionId = t.sessionId

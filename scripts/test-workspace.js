@@ -72,6 +72,14 @@ console.log('\n[A] 路徑逃逸守衛')
   ok('`.` 也是根目錄', files.resolveIn(ROOT_DIR, '.') === ROOT_DIR)
   ok('非字串當成根目錄', files.resolveIn(ROOT_DIR, undefined) === ROOT_DIR)
   ok('toRel 一律回 / 分隔', files.toRel(ROOT_DIR, path.join(ROOT_DIR, 'a', 'b.js')) === 'a/b.js')
+  const driveRoot = path.parse(__filename).root
+  try {
+    ok('磁碟根專案可以解析現有子檔案', files.resolveIn(driveRoot, path.relative(driveRoot, __filename)) === __filename)
+    const newPath = path.join(__dirname, 'not-created-root-boundary.txt')
+    ok('磁碟根專案可以解析尚未建立的子檔案', files.resolveIn(driveRoot, path.relative(driveRoot, newPath)) === newPath)
+  } catch (error) {
+    ok('磁碟根專案可以解析子檔案', false, error.code)
+  }
 }
 
 /** 1×1 透明 PNG（真的含 NUL byte，所以能證明圖片沒被判成二進位檔） */
@@ -166,6 +174,14 @@ async function fileRoundTrip() {
       ok('改名', moved.rel === 'sub/renamed.txt'
         && fs.existsSync(path.join(tmp, 'sub', 'renamed.txt'))
         && !fs.existsSync(path.join(tmp, 'sub', 'new.txt')))
+      try {
+        const cased = await files.renameEntry(tmp, 'sub/renamed.txt', 'RENAMED.txt')
+        ok('只改大小寫也要真的改名', cased.rel === 'sub/RENAMED.txt'
+          && fs.readdirSync(path.join(tmp, 'sub')).includes('RENAMED.txt'))
+        await files.renameEntry(tmp, cased.rel, 'renamed.txt')
+      } catch (error) {
+        ok('只改大小寫也要真的改名', false, error.code)
+      }
 
       let rootRename = false
       try {

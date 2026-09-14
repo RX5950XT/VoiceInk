@@ -196,11 +196,13 @@ tag 要與 `package.json` 的 version 一致。
   Claude Code／Codex 那類整塊重畫的 CLI 才會**。組字中不是我們在對位，是 xterm 自己的
   `updateCompositionElements()`，它讀**當下的 `buffer.x/y`**；Ink 每一幀把游標拉到上面幾行再走回輸入行，
   按鍵落在哪個瞬間就被擺到哪（實測 12 個組字鍵落在 3 個位置）。**DOM 與 WebGL 量到一模一樣，不要往
-  renderer 找**。`term-ime.js` 的釘法三件缺一不可：錨點等游標**安靜 40ms** 才取（取 `compositionstart`
-  當下或下一個 rAF 都還會抓到重畫中途的位置，實測是 `0,0` 與 `0px,60px`）、整段組字**每一幀**把
-  `left/top` 釘回去（只補在 `compositionupdate` 後面贏不了 xterm，實測 12 次被蓋掉 9 次）、`compositionupdate`
-  之後再補一次（等下一幀那十幾毫秒足夠讓系統問到錯位置）。**寬高不准動**（那是 xterm 撐組字文字用的）。
-  回歸 `probe-terminal-flicker.js` 的組字那段。
+  renderer 找**。`term-ime.js` 的釘法：錨點等游標**安靜 40ms** 才取（取 `compositionstart`
+  當下或下一個 rAF 都還會抓到重畫中途的位置，實測是 `0,0` 與 `0px,60px`）；組字開始時把錨點寫進
+  `--ime-left／--ime-top` 並加 `.ime-composing`，由 `main.css` 用 `!important` 壓過 xterm 寫的 inline 座標，
+  組字中 `syncImeCaret` 與游標移動都不准改錨點。**不要改回「每一幀用 JS 擺回去」**：兩幀之間仍會被拉走
+  （舊打包版 40 次取樣移位 20 次、最大 159px），而且只補在 `compositionupdate` 後面贏不了 xterm。
+  **寬高不准動**（那是 xterm 撐組字文字用的）；關分頁要呼叫 `bindImeCaret` 回傳的 dispose。
+  回歸 `probe-terminal-ime.js` 的 [E]（連續重畫＋組字，量實際位置）與 `probe-terminal-flicker.js`。
 - **對好位置還不夠，那個 `<textarea>` 還必須真的被畫出來**：xterm 給它 `opacity: 0`，
   而 `opacity: 0` 的東西 Chromium 不畫，Windows 就問不到「游標的方框在哪」，注音的組字與
   候選字視窗會退回預設位置（視窗右下角）。要改用**透明的文字／游標／底色**藏

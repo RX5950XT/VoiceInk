@@ -67,6 +67,7 @@ function mergeAccountState(currentRaw, previousRaw, nowMs = Date.now()) {
 
   if (canUseSoftCache && cacheIsFresh) {
     current.windows = previous.windows.map((window) => ({ ...window }))
+    current.lastUpdated = previous.lastUpdated
     current.accuracy = 'estimated'
     current.notes = appendCacheNote(current.notes)
   } else if (restoredAntigravity && current.accuracy === 'official') {
@@ -140,12 +141,12 @@ async function performSync() {
     diagnostics,
     nowMs
   })
-  return usageStore.saveState({
-    accounts: orderAccounts(accounts, previous.settings),
-    settings: previous.settings,
+  return usageStore.updateState((current) => ({
+    accounts: orderAccounts(accounts, current.settings),
+    settings: current.settings,
     lastSyncedAt: nowMs,
     diagnostics
-  })
+  }))
 }
 
 async function load() {
@@ -158,13 +159,12 @@ function sync() {
 }
 
 async function saveSettings(raw) {
-  const current = await usageStore.loadState()
   const settings = usageStore.sanitizeSettings(raw)
-  return usageStore.saveState({
+  return usageStore.updateState((current) => ({
     ...current,
     settings,
     accounts: orderAccounts(current.accounts, settings)
-  })
+  }))
 }
 
 async function getDiagnostics() {

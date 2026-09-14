@@ -106,6 +106,10 @@ console.log('\n[D] 單層列目錄與增刪改')
 
   const renamed = await files.renameEntry(made.path, 'renamed')
   ok('改名', fs.existsSync(renamed.path) && !fs.existsSync(made.path))
+  const cased = await files.renameEntry(renamed.path, 'RENAMED')
+  ok('只改大小寫也要真的改名', path.basename(cased.path) === 'RENAMED'
+    && fs.readdirSync(dir).includes('RENAMED'))
+  await files.renameEntry(cased.path, 'renamed')
 
   const copied = await files.copyEntry(path.join(dir, 'hello.txt'), renamed.path)
   ok('複製檔案', fs.existsSync(copied.path) && fs.readFileSync(copied.path, 'utf8') === 'hi')

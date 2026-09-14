@@ -29,7 +29,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 
 /** batch 內容改版時一起改，舊的會被覆寫 */
-const SHIM_VERSION = 1
+const SHIM_VERSION = 2
 
 /**
  * 卡住等 `.done` 的 batch。兩個地雷：
@@ -47,12 +47,16 @@ set "REQ=%~dp0requests"
 if not exist "%REQ%" mkdir "%REQ%"
 set "ID=%RANDOM%%RANDOM%%RANDOM%"
 copy /y /b "%~f1" "%REQ%\\%ID%.in" > nul
+if errorlevel 1 exit /b 1
 :wait
 if exist "%REQ%\\%ID%.done" goto done
 ping -n 2 127.0.0.1 > nul
 goto wait
 :done
-if exist "%REQ%\\%ID%.out" copy /y /b "%REQ%\\%ID%.out" "%~f1" > nul
+if exist "%REQ%\\%ID%.out" (
+copy /y /b "%REQ%\\%ID%.out" "%~f1" > nul
+if errorlevel 1 exit /b 1
+)
 del "%REQ%\\%ID%.in" "%REQ%\\%ID%.out" "%REQ%\\%ID%.done" > nul 2>&1
 exit /b 0
 `

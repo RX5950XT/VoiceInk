@@ -14,6 +14,7 @@
 
 const fs = require('fs')
 const path = require('path')
+const catalog = require('./catalog')
 
 const META_FILE = 'voiceink-meta.json'
 /** 跟 `catalog.safeId` 產出的形狀一致 */
@@ -69,6 +70,10 @@ function ggufsIn(dir) {
   }
 }
 
+function hasCompleteModel(files) {
+  return catalog.groupVariants(files.map((name) => ({ name }))).some(catalog.isComplete)
+}
+
 /**
  * @param {string} id
  * @returns {Record<string, any>}
@@ -114,7 +119,7 @@ function list() {
     if (!entry.isDirectory() || !isValidId(entry.name)) continue
     const dir = path.join(root(), entry.name)
     const files = ggufsIn(dir)
-    if (!files.length) continue
+    if (!has(entry.name)) continue
     const mmproj = files.find((name) => /^mmproj/i.test(name)) || ''
     let bytes = 0
     for (const name of files) {
@@ -136,8 +141,17 @@ function list() {
  * @param {string} id
  * @returns {boolean}
  */
-function has(id) {
-  return isValidId(id) && ggufsIn(dirFor(id)).length > 0
+function has(id, expectedFiles) {
+  if (!isValidId(id) || !hasCompleteModel(ggufsIn(dirFor(id)))) return false
+  const expected = expectedFiles ?? readMeta(id).files
+  if (!Array.isArray(expected)) return true
+  return expected.every((file) => {
+    if (typeof file?.name !== 'string' || path.basename(file.name) !== file.name) return false
+    try {
+      const stat = fs.statSync(path.join(dirFor(id), file.name))
+      return stat.isFile() && (file.size > 0 ? stat.size === file.size : stat.size > 0)
+    } catch { return false }
+  })
 }
 
 /**

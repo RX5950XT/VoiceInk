@@ -340,7 +340,8 @@ async function inspect(repoId) {
   const repoName = String(repoId).split('/')[1] || ''
   const variants = catalog.groupVariants(files, { repoName }).map((variant) => ({
     ...variant,
-    installed: library.has(variant.id),
+    installed: library.has(variant.id, variant.files.concat(variant.mmproj ? [variant.mmproj] : [])
+      .map((file) => ({ ...file, name: path.basename(file.name) }))),
     installing: installs.has(variant.id)
   }))
   return { repoId, variants }
@@ -477,14 +478,17 @@ async function install(repoId, variantId) {
   if (!variant) throw new Error('找不到這個模型變體')
   if (!catalog.isComplete(variant)) throw new Error('模型分片不完整，請選擇其他變體')
   if (installs.has(variant.id)) throw new Error('這個模型正在下載中')
-  if (library.has(variant.id)) throw new Error('這個模型已經在模型庫裡了')
+  const files = variant.files.concat(variant.mmproj ? [variant.mmproj] : [])
+  const localFiles = files.map((file) => ({ name: path.basename(file.name), size: file.size }))
+  if (library.has(variant.id, localFiles)) throw new Error('這個模型已經在模型庫裡了')
 
   const controller = new AbortController()
   installs.set(variant.id, { controller, received: 0, total: variant.bytes })
   emit({ type: 'install-start', id: variant.id, repoId, total: variant.bytes })
 
-  const files = variant.files.concat(variant.mmproj ? [variant.mmproj] : [])
   try {
+    // 留下完整清單，取消於 mmproj 或分片之間時，模型庫仍能辨識尚未完成。
+    library.writeMeta(variant.id, { files: localFiles })
     const result = await download.downloadVariant({
       dir: library.dirFor(variant.id),
       // 網址在這裡組（renderer 只給得出 repoId 與 variantId）
@@ -506,6 +510,7 @@ async function install(repoId, variantId) {
       repoId,
       quant: variant.quant,
       multimodal: variant.multimodal,
+      files: localFiles,
       installedAt: new Date().toISOString()
     })
     await writePresets()

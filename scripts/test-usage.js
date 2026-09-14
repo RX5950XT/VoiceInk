@@ -820,6 +820,11 @@ test('6 小時 soft cache 只保留近期且仍連線的額度', () => {
   assert.equal(cached.accuracy, 'estimated')
   assert.match(cached.notes, /上次/)
 
+  const retryMs = nowMs + 2 * 60 * 1000
+  const retry = { ...connected, lastUpdated: new Date(retryMs).toISOString() }
+  assert.equal(mergeAccountState(retry, cached, retryMs).windows.length, 0,
+    '重試失敗不可把快取期限延長，距離上次成功超過 6 小時就應失效')
+
   previous.lastUpdated = new Date(nowMs - 361 * 60 * 1000).toISOString()
   assert.equal(mergeAccountState(connected, previous, nowMs).windows.length, 0)
 

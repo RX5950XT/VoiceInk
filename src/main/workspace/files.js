@@ -109,7 +109,7 @@ function resolveIn(root, relPath) {
   const rel = typeof relPath === 'string' ? relPath : ''
   if (rel.includes('\0')) throw fail('BAD_PATH', '路徑不合法')
   const full = path.resolve(base, rel)
-  if (full !== base && !full.startsWith(base + path.sep)) {
+  if (full !== base && !full.startsWith(path.join(base, path.sep))) {
     throw fail('BAD_PATH', '路徑超出專案範圍')
   }
   assertInsideReal(base, full)
@@ -151,7 +151,7 @@ function assertInsideReal(base, full) {
     const real = realOf(probe)
     if (real) {
       const target = tail ? path.resolve(real, tail) : real
-      if (target !== realRoot && !target.startsWith(realRoot + path.sep)) {
+      if (target !== realRoot && !target.startsWith(path.join(realRoot, path.sep))) {
         throw fail('BAD_PATH', '路徑超出專案範圍')
       }
       return
@@ -394,7 +394,9 @@ async function renameEntry(root, relPath, rawName) {
   if (full === path.resolve(root)) throw fail('BAD_PATH', '不能改專案資料夾本身的名字')
   const next = resolveIn(root, path.join(path.dirname(toRel(root, full)), name))
   if (next === full) return { rel: toRel(root, full) }
-  if (fs.existsSync(next)) throw fail('EXISTS', '這個名字已經有東西了')
+  // 大小寫別名可以改；若目錄區分大小寫、確實有另一筆同名項目，仍拒絕覆蓋。
+  if (fs.existsSync(next) && (next.toLowerCase() !== full.toLowerCase()
+    || fs.readdirSync(path.dirname(full)).includes(name))) throw fail('EXISTS', '這個名字已經有東西了')
   try {
     await fsp.rename(full, next)
   } catch {

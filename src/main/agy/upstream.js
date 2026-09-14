@@ -158,9 +158,8 @@ async function pumpSse(response, onFrame) {
   try {
     for (;;) {
       const { done, value } = await reader.read()
-      if (done) break
-      arm(firstFrame ? IDLE_TIMEOUT_MS : FIRST_TOKEN_TIMEOUT_MS)
-      buffer += decoder.decode(value, { stream: true })
+      if (!done) arm(firstFrame ? IDLE_TIMEOUT_MS : FIRST_TOKEN_TIMEOUT_MS)
+      buffer += done ? decoder.decode() + '\n' : decoder.decode(value, { stream: true })
 
       let index = buffer.indexOf('\n')
       while (index !== -1) {
@@ -177,6 +176,7 @@ async function pumpSse(response, onFrame) {
           // 單格壞掉不該中斷整串；上游偶爾會塞入非 JSON 的 keep-alive
         }
       }
+      if (done) break
     }
   } finally {
     if (timer) clearTimeout(timer)

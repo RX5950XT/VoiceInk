@@ -16,6 +16,7 @@
 
 const fs = require('fs')
 const path = require('path')
+const { pipeline } = require('node:stream/promises')
 
 const TIMEOUT_MS = 60_000
 /** 進度回報節流：多 GB 的下載每個 chunk 都送一次等於在洗 IPC */
@@ -50,11 +51,13 @@ async function downloadFile(options) {
     throw new Error('下載網址不正確')
   }
   const fetchImpl = options.fetchImpl || globalThis.fetch
+  if (options.signal?.aborted) throw new Error('下載已取消')
   const part = `${dest}.part`
   fs.mkdirSync(path.dirname(dest), { recursive: true })
 
   let already = sizeOf(part)
   const expected = Number(options.expectedBytes) || 0
+  if (expected && sizeOf(dest) === expected) return { bytes: expected, resumed: true }
   if (expected && already > expected) {
     // 上次寫壞了（或換了一版檔案），接下去只會拿到一個大小對不上的檔案
     fs.rmSync(part, { force: true })
@@ -80,6 +83,9 @@ async function downloadFile(options) {
   let response
   try {
     response = await fetchImpl(url, { headers, signal: controller.signal })
+  } catch (error) {
+    options.signal?.removeEventListener('abort', onAbort)
+    throw error
   } finally {
     clearTimeout(timer)
   }
@@ -98,25 +104,23 @@ async function downloadFile(options) {
 
   const total = expected
     || (Number(response.headers?.get?.('content-length')) || 0) + already
-  const stream = fs.createWriteStream(part, { flags: already > 0 ? 'a' : 'w' })
   let received = already
   let lastReport = 0
 
   try {
-    for await (const chunk of response.body) {
-      if (!stream.write(Buffer.from(chunk))) {
-        await new Promise((resolve) => stream.once('drain', resolve))
+    await pipeline(response.body, async function* (chunks) {
+      for await (const chunk of chunks) {
+        received += chunk.length
+        const now = Date.now()
+        if (options.onProgress && now - lastReport >= PROGRESS_INTERVAL_MS) {
+          lastReport = now
+          options.onProgress({ received, total })
+        }
+        yield chunk
       }
-      received += chunk.length
-      const now = Date.now()
-      if (options.onProgress && now - lastReport >= PROGRESS_INTERVAL_MS) {
-        lastReport = now
-        options.onProgress({ received, total })
-      }
-    }
+    }, fs.createWriteStream(part, { flags: already > 0 ? 'a' : 'w' }), { signal: controller.signal })
   } finally {
     options.signal?.removeEventListener('abort', onAbort)
-    await new Promise((resolve) => stream.end(resolve))
   }
 
   const finalBytes = sizeOf(part)

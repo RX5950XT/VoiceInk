@@ -427,8 +427,10 @@ async function renameEntry(target, rawName) {
   paths.assertMutable(full)
   const next = path.join(path.dirname(full), name)
   paths.resolveAbs(next)
-  if (next.toLowerCase() === full.toLowerCase()) return { path: full }
-  if (fs.existsSync(next)) throw paths.fail('EXISTS', '這個名字已經有東西了')
+  if (next === full) return { path: full }
+  // 大小寫別名可以改；若目錄區分大小寫、確實有另一筆同名項目，仍拒絕覆蓋。
+  if (fs.existsSync(next) && (next.toLowerCase() !== full.toLowerCase()
+    || fs.readdirSync(path.dirname(full)).includes(name))) throw paths.fail('EXISTS', '這個名字已經有東西了')
   try {
     await fsp.rename(full, next)
   } catch {

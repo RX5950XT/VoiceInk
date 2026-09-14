@@ -58,7 +58,7 @@ let catalog = { shells: [], presets: [], maxSessions: 20 }
 
 /**
  * @typedef {{
- *   term: Terminal, fit: FitAddon, search: SearchAddon, pane: HTMLElement,
+ *   term: Terminal, fit: FitAddon, search: SearchAddon, pane: HTMLElement, disposeIme: () => void,
  *   seq: number, ready: boolean, writing: boolean, queue: Array<{ seq: number, data: string }>
  * }} Pane
  */
@@ -403,7 +403,7 @@ function createPane(id) {
     return false
   })
   // 輸入法的候選字視窗要跟著游標，而且組字期間不准被 CLI 的重畫拉走（見 `term-ime.js`）
-  bindImeCaret(term)
+  const disposeIme = bindImeCaret(term)
 
   // 一般終端機的習慣：選起來就進剪貼簿、右鍵就貼上
   pane.addEventListener('mouseup', (event) => {
@@ -439,7 +439,7 @@ function createPane(id) {
   })
 
   /** @type {Pane} */
-  const entry = { term, fit, search, pane, seq: 0, ready: false, writing: false, queue: [] }
+  const entry = { term, fit, search, pane, disposeIme, seq: 0, ready: false, writing: false, queue: [] }
   panes.set(id, entry)
   // 登記好了才畫得出來（`order`、並排狀態都要有這一格在 `panes` 裡才算得出來）
   paintPanes()
@@ -516,6 +516,7 @@ function disposePane(id) {
   panes.delete(id)
   writeChains.delete(id)
   visibleIds = visibleIds.filter((key) => key !== id)
+  entry.disposeIme()
   entry.term.dispose()
   entry.pane.remove()
   paintPanes()

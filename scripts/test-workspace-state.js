@@ -3,6 +3,9 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const vm = require('node:vm')
 const path = require('node:path')
+const os = require('node:os')
+const files = require('../src/main/workspace/files')
+const store = require('../src/main/workspace/store')
 
 /** 真正的 renderer 狀態流程；只有 IPC 與畫面容器換成小型測試替身。 */
 async function main() {
@@ -29,7 +32,7 @@ async function main() {
     document: { dispatchEvent: (event) => activeFileEvents.push(event) },
     window: { clearTimeout, setTimeout: () => 0 },
     electronAPI: { workspace: {
-      saveTabsState: async (id, data) => { saved.set(id, data); return { ok: true } },
+      saveTabsState: async (id, data) => { saved.set(id, store.sanitizeTabsState(data)); return { ok: true } },
       getTabsState: async (id) => ({ ok: true, data: saved.get(id) }),
       readFile: async () => ({ ok: true, data: { content: 'disk', mtimeMs: 1 } }),
       getFileMtime: async () => ({ ok: true, data: { mtimeMs: 1 } })
@@ -37,7 +40,7 @@ async function main() {
     } } }
   vm.createContext(context)
   vm.runInContext(`${source}\nthis.api = { setActiveProject, persistTabsNow,
-    seed: () => { project = {id:'A'}; tabs = [{id:'e:A:a.txt',kind:'editor',projectId:'A',relPath:'a.txt',content:'',dirty:true}]; activeId=tabs[0].id },
+    seed: () => { project = {id:'A'}; tabs = [{id:'e:A:a.txt',kind:'editor',projectId:'A',relPath:'a.txt',content:'',dirty:true,mtimeMs:3}]; activeId=tabs[0].id },
     saveActiveFile,
     openEditorTab,
     retargetTabs,
@@ -50,6 +53,7 @@ async function main() {
   const restored = context.api.state().tabs[0]
   assert.equal(restored.content, '', '刪光內容的空草稿也要還原')
   assert.equal(restored.dirty, true)
+  assert.equal(restored.mtimeMs, 3, '還原草稿要保留原檔版本，不可拿外部新版本取代')
   await context.api.setActiveProject({ id: 'A' })
   assert.equal(context.api.state().tabs[0], restored, '重按同一專案不能重建草稿')
   context.api.edit('saving')
@@ -65,6 +69,7 @@ async function main() {
   context.electronAPI.workspace.readFile = async () => ({ ok: false })
   await context.api.setActiveProject({ id: 'A' })
   assert.equal(context.api.state().tabs[0]?.content, 'new typing', '磁碟檔案消失也不能丟掉草稿')
+  assert.equal(context.api.state().tabs[0]?.mtimeMs, 7, '磁碟檔案消失也要保留版本，普通儲存才能擋住重建')
   const lastActive = activeFileEvents[activeFileEvents.length - 1]
   assert.equal(lastActive?.type, 'ws:active-file', '切分頁要通知檔案樹目前開著哪個檔案')
   assert.deepEqual({ ...lastActive.detail }, { projectId: 'A', rel: 'a.txt' })
@@ -124,6 +129,57 @@ async function main() {
   assert.equal(target.dirty, true, '存檔被擋下來時草稿仍然是未存狀態')
   assert.equal(target.content, '我打的內容', '被擋下來不可以動到草稿內容')
 
-  console.log('PASS 專案切換隔離、空草稿還原、同專案不重載、切分頁通知檔案樹、慢回應作廢、改名接軌、存檔守衛')
+  // ── 真檔案：跨專案還原草稿後，不可蓋掉外部修改或重建已刪檔案 ──
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vi-draft-version-'))
+  try {
+    const full = path.join(dir, 'a.txt')
+    fs.writeFileSync(full, 'original')
+    const before = await files.readFile(dir, 'a.txt')
+    context.api.seed()
+    context.api.state().tabs[0].mtimeMs = before.mtimeMs
+    vm.runInContext('el.editorText = null', context)
+    await context.api.setActiveProject({ id: 'B' })
+    fs.writeFileSync(full, 'external')
+    fs.utimesSync(full, new Date(), new Date(before.mtimeMs + 2000))
+    context.electronAPI.workspace.readFile = async (_, rel) => {
+      try { return { ok: true, data: await files.readFile(dir, rel) } }
+      catch (error) { return { ok: false, error: { code: error.code } } }
+    }
+    const writes = []
+    context.electronAPI.workspace.writeFile = async (_, rel, content, mtime) => {
+      writes.push(mtime)
+      try { return { ok: true, data: await files.writeFile(dir, rel, content, mtime) } }
+      catch (error) { return { ok: false, error: { code: error.code, message: error.userMessage } } }
+    }
+    await context.api.setActiveProject({ id: 'A' })
+    context.api.edit('draft')
+    await context.api.saveActiveFile()
+    assert.equal(writes.at(-1), before.mtimeMs)
+    assert.equal(fs.readFileSync(full, 'utf8'), 'external', '還原後普通儲存不能覆蓋外部修改')
+    assert.equal(context.api.state().tabs[0].dirty, true)
+    await context.api.setActiveProject({ id: 'B' })
+    fs.unlinkSync(full)
+    await context.api.setActiveProject({ id: 'A' })
+    context.api.edit('draft')
+    await context.api.saveActiveFile()
+    assert.equal(fs.existsSync(full), false, '還原後普通儲存不能重建已刪除的檔案')
+    await context.api.saveActiveFile(true)
+    assert.equal(fs.readFileSync(full, 'utf8'), 'draft', '明確覆寫仍可恢復草稿')
+    await context.api.setActiveProject({ id: 'B' })
+    delete saved.get('A').tabs[0].mtimeMs
+    saved.get('A').tabs[0].dirty = true
+    saved.get('A').tabs[0].draftContent = 'legacy draft'
+    await context.api.setActiveProject({ id: 'A' })
+    context.api.edit('legacy draft')
+    const writeCount = writes.length
+    await context.api.saveActiveFile()
+    assert.equal(writes.length, writeCount, '舊草稿沒有原檔版本時，普通儲存要先提示比較或覆寫')
+    await context.api.saveActiveFile(true)
+    assert.equal(fs.readFileSync(full, 'utf8'), 'legacy draft')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+
+  console.log('PASS 專案切換隔離、空草稿還原、同專案不重載、切分頁通知檔案樹、慢回應作廢、改名接軌、存檔守衛、草稿版本持久化與真檔案衝突')
 }
 main().catch((error) => { console.error(error); process.exitCode = 1 })
