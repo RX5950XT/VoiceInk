@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
-    "electron:pack": "vite build && electron-builder --win dir",
+    "electron:pack": "node scripts/pack-preview.js",
     "dev:sandbox": "node scripts/dev-sandbox.js",
     "electron:build": "vite build && electron-builder --publish never",
     "start": "electron .",
