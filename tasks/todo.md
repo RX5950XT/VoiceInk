@@ -115,3 +115,44 @@ Review：上述問題均先重現再修復；未提交或推送。`test-explorer
 - [x] 預設刪除進資源回收筒，可還原／清空；永久刪除另走
 - [x] 複製／搬移撞名給唯一名；新增檔案；listDir 排序
 - [x] 右鍵選單、Shift／Ctrl+A、拖放、側欄資源回收筒
+# 2026-09-14 — AI CLI 中文組字閃爍
+
+- [x] 用 Chromium 組字與連續定位取樣重現背景重畫造成的閃動：舊打包版 40 次取樣／20 次移位，最大 159.85px
+- [x] 修正組字定位，保留正常輸入、中文送出與分頁生命週期：CSS 固定位置、組字期間凍結錨點，移除逐幀補救並在關分頁時清理事件
+- [x] 驗證：`node scripts/test-terminal-ui.js` 12/0、`node scripts/test-terminal.js` 102/0；`npm run electron:pack -- --config.directories.output=D:/vi-build-ime-20260914` exit 0
+- [x] 打包版：`VOICEINK_EXE=D:/vi-build-ime-20260914/win-unpacked/VoiceInk.exe` 下 `node scripts/probe-terminal-ime.js` 13/0（25 次取樣、0 次移位、0px）；`node scripts/e2e-terminal-cdp.js` 48/0
+- [x] Review：打包內三支修改檔與來源逐位元組一致；已同步 `dist/win-unpacked`，exe／asar 的 SHA-256 一致；未動正在運行的安裝版
+- 邊界：以真 Chromium IME＋模擬 CLI 分段重畫驗證，未操作前景 Windows 原生注音選字窗，也未發行新版本。
+
+# 2026-09-14 — 全代碼庫檢查與修復
+
+- [x] 盤點既有改動、模組與測試，建立本輪基準（58 支本機測試全過；194 支 JS 語法檢查通過）
+- [x] 分組追查檔案／工作區、AI、代理／統計／監控、終端機與共用邊界
+- [x] 對確認的 bug 先跑失敗回歸，再做最小修復
+- [x] 執行本機檢查、打包與隔離背景驗收，記錄結果及未涵蓋範圍
+
+本輪修復：
+- 工作區草稿保存原檔 mtime，切專案或重開後仍能擋住外部修改／刪檔；舊草稿缺版本時先比較或明確覆寫。
+- 工作區與整機檔案總管可只改檔名大小寫，仍禁止覆蓋另一個項目；磁碟根目錄作為專案時可正常讀取子項。
+- HF 下載寫入失敗回傳錯誤、不崩潰；失敗清掉取消監聽；續傳跳過已完成分片，分片／投影檔全部完成才算已安裝。
+- 雲端轉錄在最後一段等候期間取消，回覆抵達後不再誤報成功。
+- 額度同步保留同步期間的新排序／顯示設定；失敗重試不再延長舊額度的 6 小時期限。
+- CC 閘道接受 CRLF 串流；CC／AGY 保留沒有結尾換行的最後一段文字。
+- Ctrl+G 來源讀取失敗不死等，寫回失敗回傳非零並保留 .out 編輯內容；TTS 不回送外部錯誤，段落編號收斂為整數。
+
+Review／實際驗證：
+- `node dist/audit-20260914/run-final.cjs`：64 支本機 test 全 exit 0（初始基準 58 支全過）。新增回歸及工作區／額度擴充覆蓋上述失敗路徑。
+- `node scripts/e2e-ccswitch-gateway.js`：40 passed, 0 failed。
+- `node dist/audit-20260914/run-integration.cjs`：真 Electron 聊天 140/0、AGY 98/0、系統取樣器 63/0；聊天／代理上游使用本機測試服務。
+- `npm run electron:pack -- --config.directories.output=D:/vi-build-audit-20260914`：exit 0；194 支 source JS 與 asar 逐位元組一致。
+- `node dist/audit-20260914/run-packaged.cjs`：9 支全部 exit 0；workspace 180/0、explorer 24 項、terminal 48/0、HF 44 項、CC 125 項、sysmon 113/0、screentime 19/0、visual 77 項、IME 13/0（25 次取樣、0 次移位）。全部使用隔離 userData／隱藏視窗，不操作使用者的安裝版。
+- `dist/win-unpacked` 已同步驗收包，exe／asar SHA-256 一致，且預覽包內 194 支 JS 仍與 source 一致。詳細 log、結果 JSON 與 hash 在 `dist/audit-20260914/`。
+- 保留進場時六個未提交檔案的既有終端機／輸入法改動；本輪沒有 commit、push 或發行。
+- 未涵蓋：真實付費 API、HF 遠端大檔下載／GPU 推論、NAS 寫入、提權風扇／超頻、Windows 原生語音輸入插入、NSIS 安裝更新。上述界線不代表已證實的 bug；本輪確認的 bug 均已修復並驗證。
+
+# 2026-09-15 — 提交上述兩輪、清理專案外殘留
+
+- [x] 審查兩輪未提交改動（無新問題）；`CLAUDE.md`／`AGENTS.md` 組字地雷改成 CSS 固定位置的新做法；`CONTEXT.md` 補變更紀錄
+- [x] 刪除專案外殘留：`D:\vi-build-*` 打包輸出、`%TEMP%` 約 260 個測試暫存；剩被其他程式鎖住的 3 個
+- [x] `e2e-chat-cdp.js` 收尾改成 taskkill 自己的程序樹＋刪暫存 userData（之前每跑一次留一個 `voiceink-cdp-*`）
+- [x] 與聊天那輪合在一起重驗：18 支單元測試全 exit 0、`e2e-ccswitch-gateway.js` 40/0、`e2e-chat.js` 195/0；打包版 `e2e-chat-cdp.js` 62/0、`probe-terminal-ime.js` 13/0、`e2e-terminal-cdp.js` 48/0，`%TEMP%` 無新增；打包輸出驗完已刪

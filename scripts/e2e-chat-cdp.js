@@ -7,7 +7,7 @@
  * 這點很重要：這支會建立／改名／刪除供應商，真的存下去等於幫使用者亂改設定。
  */
 
-const { spawn } = require('child_process')
+const { spawn, execFileSync } = require('child_process')
 const path = require('path')
 const os = require('os')
 const fs = require('fs')
@@ -768,9 +768,19 @@ async function main() {
     fail(`執行失敗：${error.message}`)
   } finally {
     cdp?.close()
-    child.kill()
+    // 只收自己 spawn 的那棵程序樹（renderer／GPU 子程序還抓著暫存 userData 就刪不掉）
+    try {
+      execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
+    } catch {
+      child.kill()
+    }
     fake.server.close()
     await sleep(500)
+    try {
+      fs.rmSync(USER_DATA_DIR, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+    } catch {
+      console.warn(`暫存資料夾刪不掉，請手動刪：${USER_DATA_DIR}`)
+    }
   }
 
   console.log('')
