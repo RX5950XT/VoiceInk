@@ -10,6 +10,8 @@
 
 const chatStore = require('./chat-store')
 const chatImages = require('./chat-images')
+const chatParams = require('./chat-params')
+const chatTitle = require('./chat-title')
 
 const DEFAULT_CHAT_API_URL = 'https://openrouter.ai/api/v1'
 const DEFAULT_CHAT_MODEL = 'google/gemini-3-flash-preview'
@@ -49,8 +51,12 @@ const MAX_PROMPT_CONTENT = 4000
 /** @type {import('electron-store') | null} */
 let store = null
 
-/** 同時只允許一個請求 @type {{ reqId: string, controller: AbortController, reason: string } | null} */
-let inflight = null
+/**
+ * 進行中的請求：一個對話同時只有一條，不同對話可以同時跑（不設總數上限）。
+ * @typedef {{ reqId: string, conversationId: string, controller: AbortController, reason: string }} Inflight
+ * @type {Map<string, Inflight>} conversationId → 請求
+ */
+const inflight = new Map()
 
 /**
  * @param {import('electron-store')} value
@@ -88,6 +94,22 @@ let ensureLocalModel = async () => false
 function setLocalSource(source, ensure) {
   localSource = typeof source === 'function' ? source : () => null
   if (typeof ensure === 'function') ensureLocalModel = ensure
+}
+
+/** 同一顆本機模型同時被好幾個對話要求載入時，只載一次 @type {Map<string, Promise<boolean>>} */
+const localLoads = new Map()
+
+/**
+ * @param {string} modelId
+ * @returns {Promise<boolean>}
+ */
+function ensureLocalOnce(modelId) {
+  let pending = localLoads.get(modelId)
+  if (!pending) {
+    pending = Promise.resolve(ensureLocalModel(modelId)).finally(() => localLoads.delete(modelId))
+    localLoads.set(modelId, pending)
+  }
+  return pending
 }
 
 /**
@@ -305,14 +327,15 @@ function sanitizePrompts(raw) {
  * 從最舊丟起；最後一則（使用者剛送出的）永遠保留，即使自己就超標。
  * @param {Array<{role: string, content: string, imageUrls?: string[]}>} history
  * @param {string} systemPrompt
+ * @param {number} [maxCount] 最多帶幾則（對話參數的「上下文則數」）
  */
-function buildMessages(history, systemPrompt) {
+function buildMessages(history, systemPrompt, maxCount = Infinity) {
   const kept = []
   let total = 0
   for (let i = history.length - 1; i >= 0; i--) {
     const msg = history[i]
     const size = msg.content.length
-    if (kept.length && total + size > MAX_CONTEXT_CHARS) break
+    if (kept.length && (total + size > MAX_CONTEXT_CHARS || kept.length >= maxCount)) break
     kept.unshift(msg)
     total += size
   }
@@ -388,6 +411,7 @@ async function readSseStream(res, onDelta, onActivity, maxBuffer = MAX_SSE_BUFFE
       const payload = trimmed.slice(5).trim()
       if (payload === '[DONE]') return content
       const delta = extractDelta(payload)
+      if (delta.tokens) onDelta(String(delta.tokens), 'usage')
       for (const url of delta.images) onDelta(url, 'image')
       if (delta.reasoning) onDelta(delta.reasoning, 'reasoning')
       if (delta.content) {
@@ -406,7 +430,7 @@ async function readSseStream(res, onDelta, onActivity, maxBuffer = MAX_SSE_BUFFE
 
 /**
  * @param {string} payload
- * @returns {{ content: string, reasoning: string, images: string[] }}
+ * @returns {{ content: string, reasoning: string, images: string[], tokens: number }}
  */
 function extractDelta(payload) {
   try {
@@ -415,14 +439,18 @@ function extractDelta(payload) {
     const delta = choice?.delta || choice?.message || {}
     // reasoning_content：DeepSeek／Qwen；reasoning：OpenRouter。物件形式一律忽略
     const raw = delta.reasoning_content ?? delta.reasoning
+    // 用量：OpenRouter／llama-server 會在最後一格主動附上。**不另外送 `stream_options`**
+    // 去要（舊端點看到不認得的欄位會 400），有給就記、沒給就算了
+    const tokens = data?.usage?.completion_tokens
     return {
       content: typeof delta.content === 'string' ? delta.content : '',
       reasoning: typeof raw === 'string' ? raw : '',
-      images: extractImages(delta)
+      images: extractImages(delta),
+      tokens: Number.isInteger(tokens) && tokens > 0 ? tokens : 0
     }
   } catch {
     // 部分供應商會夾雜 keep-alive 註解或非 JSON 行，忽略即可
-    return { content: '', reasoning: '', images: [] }
+    return { content: '', reasoning: '', images: [], tokens: 0 }
   }
 }
 
@@ -443,39 +471,67 @@ function extractImages(delta) {
 }
 
 /**
+ * 送出前的純驗證（不碰任何狀態）
+ * @param {any} req
+ * @returns {{ error: string } | { reqId: string, conversationId: string, regenerate: boolean, text: string, rawImages: unknown[] }}
+ */
+function parseRequest(req) {
+  const reqId = typeof req?.reqId === 'string' ? req.reqId : ''
+  const conversationId = typeof req?.conversationId === 'string' ? req.conversationId : ''
+  const regenerate = req?.regenerate === true
+  const text = typeof req?.text === 'string' ? req.text.trim() : ''
+  const rawImages = Array.isArray(req?.images) ? req.images : []
+  if (!reqId) return { error: '缺少請求識別碼' }
+  if (!conversationId) return { error: '找不到這個對話' }
+  if (!regenerate && !text && !rawImages.length) return { error: '訊息不可為空' }
+  if (text.length > MAX_INPUT_CHARS) return { error: `訊息過長（上限 ${MAX_INPUT_CHARS} 字）` }
+  if (rawImages.length > chatImages.MAX_IMAGES_PER_MESSAGE) {
+    return { error: `一次最多 ${chatImages.MAX_IMAGES_PER_MESSAGE} 張圖片` }
+  }
+  return { reqId, conversationId, regenerate, text, rawImages }
+}
+
+/**
+ * 重新生成：先在記憶體裡拿掉結尾的助理訊息（**不落盤**，上游失敗時要能還原）。
+ * 最後一則是「還沒有回覆的使用者訊息」（上次失敗、或剛編輯過）也可以直接重送。
+ * @param {{ messages: Array<{ role: string }> }} existing
+ * @returns {{ messages: Array<object>, dropped: boolean } | null}
+ */
+function withoutTrailingAssistant(existing) {
+  const messages = existing.messages.slice()
+  let dropped = false
+  while (messages.length && messages[messages.length - 1].role === 'assistant') {
+    messages.pop()
+    dropped = true
+  }
+  return messages.length && messages[messages.length - 1].role === 'user' ? { messages, dropped } : null
+}
+
+/**
  * 送出一則訊息並串流回覆
  * @param {{ reqId: string, conversationId: string, text?: string, images?: string[], regenerate?: boolean }} req
  * @param {import('electron').WebContents} sender
  * @returns {Promise<{ ok: boolean, content?: string, aborted?: boolean, error?: string }>}
  */
 async function send(req, sender) {
-  const reqId = typeof req?.reqId === 'string' ? req.reqId : ''
-  const regenerate = req?.regenerate === true
-  const text = typeof req?.text === 'string' ? req.text.trim() : ''
-  const rawImages = Array.isArray(req?.images) ? req.images : []
-  if (!reqId) return { ok: false, error: '缺少請求識別碼' }
-  if (!regenerate && !text && !rawImages.length) return { ok: false, error: '訊息不可為空' }
-  if (text.length > MAX_INPUT_CHARS) {
-    return { ok: false, error: `訊息過長（上限 ${MAX_INPUT_CHARS} 字）` }
-  }
-  if (rawImages.length > chatImages.MAX_IMAGES_PER_MESSAGE) {
-    return { ok: false, error: `一次最多 ${chatImages.MAX_IMAGES_PER_MESSAGE} 張圖片` }
-  }
-  if (inflight) return { ok: false, error: '仍在回應中，請先停止' }
+  const parsed = parseRequest(req)
+  if ('error' in parsed) return { ok: false, error: parsed.error }
+  const { reqId, conversationId, regenerate, text, rawImages } = parsed
+  if (inflight.has(conversationId)) return { ok: false, error: '這個對話仍在回應中，請先停止' }
 
   // 佔位一定要跟守衛在同一個同步區塊裡。中間只要有一個 await（讀對話、存圖片、
-  // 寫使用者訊息都是），第二個請求就會在指派前先通過守衛：兩條串流同時開，
+  // 寫使用者訊息都是），同一個對話的第二個請求就會在指派前先通過守衛：兩條串流同時開，
   // 兩則使用者訊息連在一起寫進同一個對話，先開的那條被後者覆蓋掉——
   // 「停止」按鈕再也找不到它，逾時計時器也會去改到別人的 reason。
-  const controller = new AbortController()
-  inflight = { reqId, controller, reason: '' }
+  /** @type {Inflight} */
+  const entry = { reqId, conversationId, controller: new AbortController(), reason: '' }
+  inflight.set(conversationId, entry)
   /** @type {{ clear: () => void, touch: () => void } | null} */
   let timers = null
   /** @type {{ id: string, messages: Array<object> } | null} */
   let conversation = null
   // 中斷／逾時時已收到的部分要存檔，所以累加器必須活在 try 之外
-  let partial = ''
-  let reasoning = ''
+  const acc = { partial: '', reasoning: '', tokens: 0, model: '', startedAt: Date.now() }
   /** 生圖模型吐回來的 data URL（尚未落檔） @type {string[]} */
   const generatedImages = []
   /** @type {string[]} */
@@ -486,42 +542,38 @@ async function send(req, sender) {
     if (!cfg.apiUrl) return { ok: false, error: '尚未設定聊天供應商，請到設定新增一組' }
     if (!cfg.apiKey) return { ok: false, error: `供應商「${cfg.providerName}」尚未填 API Key` }
     if (!cfg.modelId) return { ok: false, error: '目前的聊天模型不在模型清單內，請到設定重新選擇' }
+    acc.model = cfg.modelId
+    const local = cfg.providerId === LOCAL_PROVIDER_ID
 
     // 本機模型：沒載入就先載（「一鍵部署」＝直接開始聊）。
-    // **這一步一定要在 inflight 佔位之後**：載一顆大模型要好幾十秒，
-    // 放到守衛與佔位中間的話第二個請求會在佔位前通過守衛（那條老地雷）。
-    if (cfg.providerId === LOCAL_PROVIDER_ID) {
-      const ready = await ensureLocalModel(cfg.modelId)
-      if (!ready) return { ok: false, error: '本機模型載入失敗，請到「HF模型」→ 執行環境查看' }
+    // **這一步一定要在 inflight 佔位之後**：載一顆大模型要好幾十秒。
+    if (local && !(await ensureLocalOnce(cfg.modelId))) {
+      return { ok: false, error: '本機模型載入失敗，請到「HF模型」→ 執行環境查看' }
     }
 
     // 先確認對話存在再落圖片檔，否則失敗會留下沒人引用的圖
-    const existing = await chatStore.get(req?.conversationId)
+    const existing = await chatStore.get(conversationId)
     if (!existing) return { ok: false, error: '找不到這個對話' }
 
     if (regenerate) {
-      // 舊助理先不要落盤刪掉：上游失敗／尚未吐字就停止時必須能還原
-      const msgs = existing.messages.slice()
-      let dropped = false
-      while (msgs.length && msgs[msgs.length - 1].role === 'assistant') {
-        msgs.pop()
-        dropped = true
-      }
-      if (!dropped) return { ok: false, error: '沒有可重新生成的訊息' }
-      replaceTrailing = true
-      conversation = { ...existing, messages: msgs }
+      const trimmed = withoutTrailingAssistant(existing)
+      if (!trimmed) return { ok: false, error: '沒有可重新生成的訊息' }
+      replaceTrailing = trimmed.dropped
+      conversation = { ...existing, messages: trimmed.messages }
     } else {
       heldImages = await chatImages.saveMany(rawImages)
       chatImages.hold(heldImages)
-      conversation = await chatStore.appendMessage(req.conversationId, 'user', text, { images: heldImages })
+      conversation = await chatStore.appendMessage(conversationId, 'user', text, { images: heldImages })
       if (!conversation) return { ok: false, error: '找不到這個對話' }
     }
 
-    timers = createTimers(controller)
+    timers = createTimers(entry)
+    const params = chatParams.sanitize(existing.params)
     const body = {
+      ...chatParams.toRequestFields(params),
       model: cfg.modelId,
       stream: true,
-      messages: buildMessages(await withImageUrls(conversation.messages), cfg.systemPrompt)
+      messages: buildMessages(await withImageUrls(conversation.messages), cfg.systemPrompt, params.contextCount)
     }
     // 關閉時完全不帶欄位：舊端點看到不認得的參數會直接 400
     if (cfg.thinking) body.reasoning_effort = REASONING_EFFORT
@@ -534,7 +586,7 @@ async function send(req, sender) {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify(body),
-      signal: controller.signal
+      signal: entry.controller.signal
     })
     if (!res.ok || !res.body) {
       if (res.body) await res.body.cancel().catch(() => {})
@@ -544,6 +596,10 @@ async function send(req, sender) {
     const content = await readSseStream(
       res,
       (piece, kind) => {
+        if (kind === 'usage') {
+          acc.tokens = Number(piece)
+          return
+        }
         if (kind === 'image') {
           // 圖不走 delta 事件（一張好幾 MB，逐塊丟給 renderer 沒有意義）：
           // 收齊後存檔，finishStream 會從 chats.json 重畫整串訊息。
@@ -551,13 +607,13 @@ async function send(req, sender) {
           return
         }
         if (kind === 'reasoning') {
-          if (reasoning.length >= chatStore.MAX_CONTENT) return
-          reasoning += piece
+          if (acc.reasoning.length >= chatStore.MAX_CONTENT) return
+          acc.reasoning += piece
         } else {
-          if (partial.length >= MAX_INPUT_CHARS) return
-          partial += piece
+          if (acc.partial.length >= MAX_INPUT_CHARS) return
+          acc.partial += piece
         }
-        emitDelta(sender, reqId, piece, kind)
+        emitDelta(sender, entry, piece, kind)
       },
       () => timers.touch(),
       cfg.image ? MAX_SSE_BUFFER_IMAGE : MAX_SSE_BUFFER
@@ -567,42 +623,53 @@ async function send(req, sender) {
       chatImages.hold(savedImages)
       heldImages = heldImages.concat(savedImages)
     }
-    if (content || reasoning || savedImages.length) {
+    if (content || acc.reasoning || savedImages.length) {
       if (replaceTrailing) await chatStore.dropTrailingAssistant(conversation.id)
       await chatStore.appendMessage(conversation.id, 'assistant', content, {
-        reasoning,
+        ...replyMeta(acc),
         images: savedImages
       })
+      // 第一輪回覆後補一個 AI 標題；不 await，回覆早就可以先結束
+      // `chatAutoTitle` 不在 allowlist、App 裡永遠是預設的開；只給 e2e 的假 store 關掉，免得背景請求打亂上游計數
+      if (content && !cfg.image && store?.get('chatAutoTitle', true) !== false) {
+        void chatTitle.maybeGenerate(conversation.id, cfg, (id, title) => emitTitle(sender, id, title))
+      }
     }
     return { ok: true, content }
   } catch (e) {
-    if ((partial || reasoning) && replaceTrailing && conversation?.id) {
+    if ((acc.partial || acc.reasoning) && replaceTrailing && conversation?.id) {
       await chatStore.dropTrailingAssistant(conversation.id)
     }
-    return await handleStreamError(e, conversation?.id || '', partial, reasoning)
+    return await handleStreamError(e, entry, conversation?.id || '', acc)
   } finally {
     if (heldImages.length) chatImages.release(heldImages)
     timers?.clear()
-    inflight = null
+    // 只收自己那一格：delete 別人的佔位會讓「同一個對話只能一條」的守衛失效
+    if (inflight.get(conversationId) === entry) inflight.delete(conversationId)
   }
 }
 
 /**
- * 首 token / 閒置雙逾時
- * @param {AbortController} controller
+ * @param {{ reasoning: string, tokens: number, model: string, startedAt: number }} acc
  */
-function createTimers(controller) {
-  let timer = setTimeout(() => {
-    if (inflight) inflight.reason = 'timeout'
-    controller.abort()
-  }, FIRST_TOKEN_TIMEOUT_MS)
+function replyMeta(acc) {
+  return { reasoning: acc.reasoning, model: acc.model, ms: Date.now() - acc.startedAt, tokens: acc.tokens }
+}
+
+/**
+ * 首 token / 閒置雙逾時
+ * @param {Inflight} entry
+ */
+function createTimers(entry) {
+  const expire = () => {
+    entry.reason = 'timeout'
+    entry.controller.abort()
+  }
+  let timer = setTimeout(expire, FIRST_TOKEN_TIMEOUT_MS)
   return {
     touch() {
       clearTimeout(timer)
-      timer = setTimeout(() => {
-        if (inflight) inflight.reason = 'timeout'
-        controller.abort()
-      }, IDLE_TIMEOUT_MS)
+      timer = setTimeout(expire, IDLE_TIMEOUT_MS)
     },
     clear() {
       clearTimeout(timer)
@@ -612,49 +679,86 @@ function createTimers(controller) {
 
 /**
  * @param {import('electron').WebContents} sender
- * @param {string} reqId
+ * @param {Inflight} entry
  * @param {string} piece
  * @param {'content'|'reasoning'} [kind]
  */
-function emitDelta(sender, reqId, piece, kind) {
+function emitDelta(sender, entry, piece, kind) {
   if (!sender || sender.isDestroyed?.()) return
-  sender.send('chat:delta', { reqId, text: piece, kind: kind === 'reasoning' ? 'reasoning' : 'content' })
+  sender.send('chat:delta', {
+    reqId: entry.reqId,
+    conversationId: entry.conversationId,
+    text: piece,
+    kind: kind === 'reasoning' ? 'reasoning' : 'content'
+  })
+}
+
+/**
+ * @param {import('electron').WebContents} sender
+ * @param {string} conversationId
+ * @param {string} title
+ */
+function emitTitle(sender, conversationId, title) {
+  if (!sender || sender.isDestroyed?.()) return
+  sender.send('chat:title', { conversationId, title })
 }
 
 /**
  * 中斷／逾時／網路錯誤；已收到的部分內容仍要存檔
  * @param {any} error
+ * @param {Inflight} entry
  * @param {string} conversationId
- * @param {string} partial 中斷前已累積的內容
- * @param {string} reasoning 中斷前已累積的思考過程
+ * @param {{ partial: string, reasoning: string, tokens: number, model: string, startedAt: number }} acc
  */
-async function handleStreamError(error, conversationId, partial, reasoning) {
-  if (partial || reasoning) {
-    await chatStore.appendMessage(conversationId, 'assistant', partial, { reasoning })
+async function handleStreamError(error, entry, conversationId, acc) {
+  if (acc.partial || acc.reasoning) {
+    await chatStore.appendMessage(conversationId, 'assistant', acc.partial, replyMeta(acc))
   }
   if (error?.name === 'AbortError') {
-    if (inflight?.reason === 'timeout') return { ok: false, error: '回應逾時', aborted: true }
-    return { ok: true, content: partial, aborted: true }
+    if (entry.reason === 'timeout') return { ok: false, error: '回應逾時', aborted: true }
+    return { ok: true, content: acc.partial, aborted: true }
   }
   console.error('[chat] stream request failed')
   return { ok: false, error: '連線失敗：請檢查 API 設定與網路狀態' }
 }
 
 /**
- * 中斷目前請求
- * @param {string} [reqId] 不給則中斷任何進行中的請求
+ * 中斷請求
+ * @param {string} [reqId] 不給則中斷全部
+ * @returns {boolean}
  */
 function abort(reqId) {
-  if (!inflight) return false
-  if (reqId && inflight.reqId !== reqId) return false
-  inflight.reason = 'user'
-  inflight.controller.abort()
-  return true
+  let hit = false
+  for (const entry of inflight.values()) {
+    if (reqId && entry.reqId !== reqId) continue
+    entry.reason = 'user'
+    entry.controller.abort()
+    hit = true
+  }
+  return hit
 }
 
-/** 目前是否有請求進行中 */
-function isBusy() {
-  return !!inflight
+/**
+ * 中斷某個對話的請求（刪對話前用）
+ * @param {string} conversationId
+ * @returns {boolean}
+ */
+function abortConversation(conversationId) {
+  const entry = inflight.get(conversationId)
+  return entry ? abort(entry.reqId) : false
+}
+
+/**
+ * @param {string} [conversationId] 不給＝有沒有任何請求進行中
+ * @returns {boolean}
+ */
+function isBusy(conversationId) {
+  return conversationId === undefined ? inflight.size > 0 : inflight.has(conversationId)
+}
+
+/** 正在回應的對話 id（側欄狀態用） @returns {string[]} */
+function activeConversationIds() {
+  return [...inflight.keys()]
 }
 
 module.exports = {
@@ -662,7 +766,9 @@ module.exports = {
   setLocalSource,
   send,
   abort,
+  abortConversation,
   isBusy,
+  activeConversationIds,
   buildMessages,
   sanitizeModels,
   sanitizePrompts,

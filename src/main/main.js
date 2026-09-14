@@ -26,6 +26,7 @@ const models = require('./models')
 const chat = require('./chat')
 const modelScope = require('./model-scope')
 const chatStore = require('./chat-store')
+const chatParams = require('./chat-params')
 const { sanitizeTtsVoices, DEFAULT_TTS_VOICES, VOICES_BY_LANG, listVoices } = require('./tts-voices')
 
 /** 設定頁試聽用的範例句（main 的固定表，renderer 不送文字） */
@@ -188,6 +189,8 @@ const STORE_ALLOWLIST = new Set([
   'chatPrompts',
   'chatPromptId',
   'chatThinking',
+  // 新對話的取樣參數預設值（每個對話自己那份存在 chats.json）
+  'chatParams',
   'sysmonInterval',
   'sysmonSort',
   'sysmonSensors',
@@ -1071,6 +1074,7 @@ ipcMain.handle('store:get', async (event, key, defaultValue) => {
   if (key === 'termBgOpacity') return sanitizeBgOpacity(val)
   if (key === 'termFontSize') return sanitizeFontSize(val)
   if (key === 'chatThinking') return val === true
+  if (key === 'chatParams') return chatParams.sanitize(val)
   if (key === 'dictationEnabled') return val === true
   if (key === 'dictationLang') return DICTATION_LANGS.has(val) ? val : 'zh-TW'
   if (key === 'fileAsr' || key === 'liveAsr' || key === 'dictationAsr') {
@@ -1230,6 +1234,10 @@ ipcMain.handle('store:set', async (event, key, value) => {
   }
   if (key === 'chatThinking') {
     store.set(key, value === true)
+    return true
+  }
+  if (key === 'chatParams') {
+    store.set(key, chatParams.sanitize(value))
     return true
   }
   if (key === 'dictationEnabled') {
@@ -1586,14 +1594,55 @@ ipcMain.handle('engine:status', () => loadEngine().status())
 
 // ===== 聊天 =====
 // 會話內容與 model 都由 main 擁有；renderer 只給 conversationId 與文字
-ipcMain.handle('chat:list', () => chatStore.list())
+// 不同對話可以同時串流；`streaming` 讓 renderer 重載後仍知道哪幾個還在跑
+ipcMain.handle('chat:list', async () => {
+  const active = new Set(chat.activeConversationIds())
+  return (await chatStore.list()).map((c) => ({ ...c, streaming: active.has(c.id) }))
+})
 ipcMain.handle('chat:get', (event, id) => chatStore.get(id))
-ipcMain.handle('chat:create', (event, projectId) => chatStore.create(projectId))
-// 對話歸屬的專案：renderer 只送 id，格式由 chat-store 的 sanitizeProjectId 卡死
-ipcMain.handle('chat:setProject', (event, id, projectId) => chatStore.setProject(id, projectId))
-ipcMain.handle('chat:delete', (event, id) => chatStore.remove(id))
+// 新對話的取樣參數一律由 main 從預設值給，renderer 只能指定放哪個資料夾
+ipcMain.handle('chat:create', async (event, folderId) => {
+  if (!store) await initStore()
+  return chatStore.create({ folderId, params: store.get('chatParams', {}) })
+})
+ipcMain.handle('chat:delete', (event, id) => {
+  chat.abortConversation(id)
+  return chatStore.remove(id)
+})
 ipcMain.handle('chat:rename', (event, id, title) => chatStore.rename(id, title))
-ipcMain.handle('chat:reorder', (event, ids) => chatStore.reorder(ids))
+ipcMain.handle('chat:reorder', (event, items) => chatStore.reorder(items))
+ipcMain.handle('chat:setParams', (event, id, params) => chatStore.setParams(id, params))
+// 改寫／刪除訊息會跟串流搶同一串訊息：那個對話還在回應時一律不收
+ipcMain.handle('chat:editMessage', (event, id, index, text) =>
+  chat.isBusy(id) ? null : chatStore.editUserMessage(id, index, text))
+ipcMain.handle('chat:deleteMessage', (event, id, index) =>
+  chat.isBusy(id) ? false : chatStore.deleteMessage(id, index))
+ipcMain.handle('chat:fork', (event, id, index) => chatStore.fork(id, index))
+ipcMain.handle('chat:folders', () => chatStore.listFolders())
+ipcMain.handle('chat:createFolder', (event, name) => chatStore.createFolder(name))
+ipcMain.handle('chat:updateFolder', (event, id, patch) => chatStore.updateFolder(id, patch))
+ipcMain.handle('chat:deleteFolder', (event, id) => chatStore.removeFolder(id))
+ipcMain.handle('chat:reorderFolders', (event, ids) => chatStore.reorderFolders(ids))
+ipcMain.handle('chat:moveToFolder', (event, id, folderId) => chatStore.moveToFolder(id, folderId))
+// 匯出：內容由 main 從 chats.json 取、路徑由系統存檔對話框決定，renderer 只給 id
+ipcMain.handle('chat:export', async (event, id) => {
+  const conv = await chatStore.get(id)
+  if (!conv) return { ok: false, error: '找不到這個對話' }
+  const safeName = conv.title.replace(/[\\/:*?"<>|]+/g, ' ').trim() || '對話'
+  const result = await dialog.showSaveDialog(BrowserWindow.fromWebContents(event.sender) || undefined, {
+    title: '匯出對話',
+    defaultPath: `${safeName}.md`,
+    filters: [{ name: 'Markdown', extensions: ['md'] }]
+  })
+  if (result.canceled || !result.filePath) return { ok: true, saved: false }
+  try {
+    await fs.promises.writeFile(result.filePath, chatStore.toMarkdown(conv), 'utf8')
+  } catch (e) {
+    console.error('[chat] export failed:', e?.code || 'unknown')
+    return { ok: false, error: '寫入檔案失敗' }
+  }
+  return { ok: true, saved: true }
+})
 
 /**
  * 聊天模型選單的選項來源。
@@ -1634,7 +1683,8 @@ ipcMain.handle('chat:send', async (event, req) => {
   if (!store) await initStore()
   return chat.send(req || {}, event.sender)
 })
-ipcMain.handle('chat:abort', (event, reqId) => chat.abort(reqId))
+// 一定要指名哪一條：不帶 id 的 abort() 會停掉所有對話（不同對話可以同時回應）
+ipcMain.handle('chat:abort', (event, reqId) => (typeof reqId === 'string' && reqId ? chat.abort(reqId) : false))
 // 圖片實體存在 <userData>/chat-images/；renderer 只拿得到檔名，讀取由 main 驗證
 ipcMain.handle('chat:image', (event, name) => loadChatImages().toDataUrl(name))
 

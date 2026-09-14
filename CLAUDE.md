@@ -13,7 +13,7 @@ nav：聊天（預設，**工作區與終端機同一頁**）｜檔案｜CC代�
 
 | 模組 | 一句話 |
 |---|---|
-| 聊天 | 多組供應商（`chatProviders`），雲端翻譯共用同一份清單；會話存 `chats.json`，圖片存 `chat-images/` |
+| 聊天 | 多組供應商（`chatProviders`），雲端翻譯共用同一份清單；會話存 `chats.json`（含側欄資料夾與每對話取樣參數），圖片存 `chat-images/`；不同對話可同時回應 |
 | 終端機 | `@lydell/node-pty` ConPTY ＋ xterm.js，開在工作區的分頁列上；PTY 由 userData 裡的獨立宿主持有（更新／關 App 只斷線）；可用管理員身分（提權 host 代開）|
 | 專案工作區 | `src/main/workspace/`：專案＝本機資料夾（`workspaces.json`）；中間分頁列（終端機／Monaco 編輯器／`<webview>` 瀏覽器），右側欄＝檔案總管／Git／AI 記錄／監聽埠 |
 | 檔案 | 整機檔案總管（`src/main/explorer/`）；瀏覽本機資料夾；檔名搜尋走 UFFS（MFT），不自己 walk 整碟 |
@@ -125,7 +125,10 @@ tag 要與 `package.json` 的 version 一致。
 ### 聊天
 
 - **model 與訊息歷史所有權在 main**；模型必須對「目前這組供應商」驗證（只檢查「在不在任何清單裡」會拿 A 的模型打 B）。
-- **`chat.send` 的 inflight 佔位必須跟守衛同一個同步區塊**（中間不得有 await）。
+- **`chat.send` 的 inflight 佔位必須跟守衛同一個同步區塊**（中間不得有 await）。佔位是「每個對話一格」的 Map：不同對話可以同時跑（**不設總數上限**），同一個對話仍只能一條；`finally` 只刪**自己那一格**。`chat:abort` 一定要帶 reqId（`abort()` 不帶 id ＝停掉所有對話，IPC 那層擋掉空值）。
+- **renderer 的串流狀態也要照 conversationId 分開**：delta 帶 `conversationId`，背景對話照收不畫，切回來再 `attachLiveView` 補齊；`regenerate` 那條在 chats.json 裡舊回覆還在，切回來畫面時要藏掉。改寫／刪除訊息在那個對話回應中時 main 一律拒絕。
+- **取樣參數只收最通用的 temperature／top_p／max_tokens／stop（外加不送上游的上下文則數），而且沒勾的完全不送**（top_k、penalty、seed 各家支援不一，有的直接 400）；每對話一份存 `chats.json` 的 `params`，`chatParams`（allowlist）只是新對話預設；`sanitize` 在 `chat-params.js`。body 要先展開參數再寫 `model`／`stream`／`messages`，不能反過來。
+- **AI 自動取標題只在「第一輪回覆後、標題還是暫定那份」時跑**（`chat-title.js`，同一組供應商／模型、非串流、不 await）；寫回走 `replaceAutoTitle(id, 暫定, 新)`，產生途中使用者改了名就不蓋；第一則訊息也只在標題還是預設「新對話」時才定暫定標題（送出前改的名字不能被蓋）。e2e 的假 store 要設 `chatAutoTitle: false`，否則背景那一發會打亂假上游的請求計數。
 - **重新生成在上游成功前不得 `dropTrailingAssistant`**；`chats.json` 的 read-modify-write 一律走 `withStore`。
 - 圖片不進 `chats.json`（只存檔名）；只送最近 6 則且**只送 user 的圖**；生圖 SSE buffer 要 24MB。
 - thinking 關閉時**完全不帶** `reasoning_effort`；串流不可用 `AbortSignal.timeout`（首 token 60s ＋閒置 120s 雙計時器）；中斷時已收到的內容仍要存檔（累加器宣告在 try 之外）。
@@ -151,7 +154,7 @@ tag 要與 `package.json` 的 version 一致。
   列上的動作鈕**常駐不做 hover-only**（見「UI／CSS」：hover 才出現的操作等於沒有）。
 - worktree：路徑由 main 組（repo 的兄弟資料夾）、移除拿 `worktree list` 當白名單、不准移主工作樹、不加 `--force`、移除前先 `check`。
 - **資料夾監看一次只看一個專案**；`.git` 底下的變動只當成「Git 狀態變了」；事件要合併；監看不起來安靜退回手動。
-- 對話與終端機的 `projectId` 是**可選**欄位（缺值＝未分類，卡 `^[A-Za-z0-9_-]{1,64}$`）；`workspaces.json` 的路徑不存在只標 `missing`。
+- 終端機的 `projectId` 是**可選**欄位（缺值＝未分類，卡 `^[A-Za-z0-9_-]{1,64}$`）；對話的專案歸屬已拿掉，改用聊天側欄自己的資料夾（`folderId`）。`workspaces.json` 的路徑不存在只標 `missing`。
 - 搜尋只收字串不收 regex，四個上限（命中 200／掃 8000 檔／單檔 1MB／15 秒）少一個都會凍住 UI；快速開檔與搜尋共用同一份 `walk`，模糊比對沒命中要回 `null` 不是 `-1`。
 - **圖片先看副檔名回 `data:` URI**，不可走「二進位檔」那條（PNG 含 NUL 會被判成不能編輯）。Electron 43 **沒有內建 PDF 檢視器**，只能用 pdf.js 畫 canvas，且 `workerSrc` 不能給空字串。
 - **Monaco 只能走 AMD 的 `min/vs`**（ESM 那份有 98 個 `import './x.css'`）；`build.files` 只放行 `monaco-editor/min/**`；codicon 是 `data:` 字型、Worker 是 blob（CSP 那兩條少一條就是「看起來壞掉但不報錯」，**沒有 Worker 時 diff 算不出來**）。那份 `<textarea>` 還在（存檔／草稿／尋找取代退路讀它），但 Monaco 在時**只用防抖同步**——

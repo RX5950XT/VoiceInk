@@ -1,3 +1,38 @@
+# 2026-09-14 — 聊天：併發、側欄資料夾與狀態、對話參數
+
+- [x] main：inflight 改成每對話一格（第二輪拿掉總數上限）、`abortConversation`、`activeConversationIds`；本機模型載入去重
+- [x] main：`chat-params.js`（驗證＋轉 API 欄位，沒勾不送）；回覆記 model／ms／tokens
+- [x] store：拿掉 `projectId`；資料夾 CRUD、`reorder` 帶 folderId、編輯／刪除／分叉訊息、`toMarkdown`
+- [x] IPC／preload：刪 `chat:setProject`，加 folders／params／edit／delete／fork／export；`chatParams` 進 allowlist
+- [x] renderer：`chat-sidebar.js`（資料夾、狀態點、⋯ 選單）、`chat-params-panel.js`、串流照對話分開、訊息操作
+- [x] 測試：`e2e-chat.js` 新增 P／Q／R／S（P 在舊碼上先紅）→ 185 passed；`test-workspace.js` 235 passed
+- [x] 打包版 `e2e-chat-cdp.js`：新增 19 項 UI 斷言全過（57/58）；唯一失敗是既有的「刪除供應商」測試還在 mock `window.confirm`（`e093589` 起已改 `askConfirm`），與本次無關
+- [x] 截圖檢查側欄資料夾／狀態點／⋯ 選單／參數彈窗（深色）；修掉彈窗開啟時整塊捲動區的焦點框
+
+### 第二輪（使用者追加）
+
+- [x] 拿掉同時回應上限 8（`e2e-chat.js` 改測 12 個同時放行）
+- [x] 資料夾本身拖曳排序（`reorderFolders`＋側欄第二組 list-reorder，拖完不誤觸收合）
+- [x] AI 自動取標題（`chat-title.js`；`[T]` 7 項）
+- [x] 參數只留 Temperature／Top P／Max tokens／Stop＋上下文則數；舊資料的非通用欄位 sanitize 丟掉
+- [x] 新斷言在拿掉改動時紅（6 項 FAIL）→ 還原後 `e2e-chat.js` 194 passed
+- [x] CDP 抓到：送出前改的名字會被第一則訊息蓋掉（既有行為，AI 標題讓它更明顯）→ 只在預設「新對話」時定暫定標題；先紅後綠，`e2e-chat.js` 195 passed
+- [x] 打包版 `e2e-chat-cdp.js` 61/62（資料夾拖曳、AI 標題、取標題只打一次都過；失敗仍是既有的刪除供應商測試）
+
+### 合併前審查（2026-09-15）
+
+- [x] 全份 diff 逐檔審查（main／store／側欄／聊天頁／參數面板／選單）
+- [x] 修：`chat:abort` 空 reqId 會停掉所有對話 → IPC 層擋掉
+- [x] 修：`e2e-workspace-cdp.js` [AC] 還在呼叫已刪的 `chat.setProject`；參數鈕提示還寫 Top K
+- [x] `e2e-chat.js` 195 passed；`test-workspace.js` 235；`test-error-hygiene.js` 85；`test-markdown.js` 23；`test-ipc-invoke.js` 11
+- [x] 修：`e2e-chat-cdp.js`「刪除供應商」還在假裝 `window.confirm`（程式早改 `askConfirm`）→ 真的點彈窗；修前 61/62、修後 62/62
+- [x] 打包版（asar 抽三檔與原始碼雜湊一致）`e2e-chat-cdp.js` 62/0、`e2e-workspace-cdp.js` 179/0
+- [x] 合併進 master 推送、清理分支
+
+## Review
+
+- CDP 在背景跑時 Chromium 會延後 `<dialog>` 的 `close` 事件，靠它回結果的彈窗（`askInput`）在自動化裡等不到；參數彈窗改成按鈕直接結算。
+
 # 2026-09-13 — 補齊未通過項目
 
 - [x] 發行完成：版本更新至 `v1.21.0`，已提交、推送、合併、打包並建立 GitHub Release

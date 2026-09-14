@@ -1535,19 +1535,15 @@ async function main() {
     ok('[AB] 通知也說了「Git 狀態可能變了」',
       await cdp.eval(`(window.__wsChanged || []).some((row) => row.git === true)`))
 
-    // ── [AC] 對話歸屬：可選欄位，缺值＝未分類 ──
+    // ── [AC] 對話的專案歸屬已拿掉（改用聊天側欄資料夾）：專案 id 當資料夾 id 傳進去也掛不上 ──
     const owned = await cdp.eval(`(async () => {
       const made = await window.electronAPI.chat.create(${JSON.stringify(PROJECT_ID)})
-      const listed = await window.electronAPI.chat.list()
-      const mine = listed.find((one) => one.id === made.id)
-      await window.electronAPI.chat.setProject(made.id, '')
-      const after = (await window.electronAPI.chat.list()).find((one) => one.id === made.id)
+      const mine = (await window.electronAPI.chat.list()).find((one) => one.id === made.id)
       await window.electronAPI.chat.delete(made.id)
-      return JSON.stringify({ created: mine?.projectId, cleared: after?.projectId })
+      return JSON.stringify({ projectId: mine?.projectId ?? null, folderId: mine?.folderId, setProject: typeof window.electronAPI.chat.setProject })
     })()`)
-    ok('[AC] 在專案裡開的新對話掛在那個專案底下',
-      String(owned).includes(`"created":"${PROJECT_ID}"`), String(owned))
-    ok('[AC] 取消歸屬之後變成未分類', String(owned).includes('"cleared":""'), String(owned))
+    ok('[AC] 新對話不帶專案歸屬、落在未分類',
+      String(owned) === '{"projectId":null,"folderId":"","setProject":"undefined"}', String(owned))
 
     // ── [AD] 選取的內容帶進聊天 ──
     const toChat = await cdp.eval(`(async () => {

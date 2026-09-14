@@ -4,13 +4,16 @@
  * 純雲端，不佔用 ASR／LLM 引擎，所以不做 engine.acquire。
  * 訊息與 model 的所有權在 main：這裡只送 conversationId、文字與圖片 data URL，
  * 串流結束後重新向 main 取整份會話，確保畫面與 chats.json 一致。
+ *
+ * 不同對話可以同時回應：串流狀態照 conversationId 各存一份，畫面只畫「目前看著的」那一條；
+ * 側欄（`chat-sidebar.js`）顯示每個對話是回應中、已完成（還沒看）還是失敗。
  */
 
 import { showToast, electronAPI, cleanIpcError, openSettingsPage, setChatPaneMode } from './app.js'
 import { renderMarkdown } from './markdown.js'
-import { mergeVisibleOrder } from './usage-reorder.js'
-import { createListReorder } from './list-reorder.js'
 import { askConfirm } from './app-dialog.js'
+import { createChatSidebar } from './chat-sidebar.js'
+import { openParamsDialog, countParams } from './chat-params-panel.js'
 
 const DEFAULT_CHAT_API_URL = 'https://openrouter.ai/api/v1'
 const DEFAULT_CHAT_MODEL = 'google/gemini-3-flash-preview'
@@ -42,6 +45,7 @@ let attachmentsEl = null
 let fileInput = null
 let attachBtn = null
 let thinkBtn = null
+let paramsBtn = null
 let sendBtn = null
 let newBtn = null
 let modelSelect = null
@@ -92,19 +96,23 @@ let promptNameInput = null
 let promptContentInput = null
 
 // ===== 狀態 =====
-/** @type {Array<{ id: string, title: string, updatedAt: number, messageCount: number, projectId?: string }>} */
-let conversations = []
 let currentId = ''
-let searchTerm = ''
+/** @type {ReturnType<typeof createChatSidebar> | null} */
+let sidebar = null
 /**
- * 側欄現在選著哪個專案（由 workspace-page 發 `ws:project` 事件推過來，
- * 用事件而不是互相 import——兩個模組誰先載入不固定）。
+ * 進行中的串流，照對話分開。
+ * `regenerate` 的那條在 chats.json 裡還留著舊回覆（上游成功前不刪），切回來畫面時要藏掉。
+ * @typedef {{ reqId: string, raw: string, reasoning: string, dirty: boolean, regenerate: boolean }} Stream
+ * @type {Map<string, Stream>}
  */
-let activeProject = { id: '', name: '' }
-/** projectId → 專案名稱，只為了在列上標一下歸屬 */
-let projectNames = new Map()
-/** @type {{ reqId: string, raw: string, reasoning: string, contentEl: HTMLElement, bodyEl: HTMLElement, thinkBody: HTMLElement | null, dirty: boolean, timer: number } | null} */
-let streaming = null
+const streams = new Map()
+/** 在背景跑完、還沒被看過的對話 @type {Map<string, { state: 'done'|'error', error: string }>} */
+const finished = new Map()
+/** 畫面上那顆「回應中」泡泡屬於哪個對話 @type {{ id: string, contentEl: HTMLElement, bodyEl: HTMLElement, thinkBody: HTMLElement | null } | null} */
+let liveView = null
+let flushTimer = 0
+/** 連點兩個對話時只認最後一次 */
+let openSeq = 0
 /** 待送出的圖片 @type {Array<{ id: string, dataUrl: string }>} */
 let attachments = []
 /** 圖片檔名 → data URL，避免每次重畫都跟 main 要一次 */
@@ -112,8 +120,6 @@ const imageCache = new Map()
 /** 提示管理彈窗的草稿 @type {Array<{ id: string, name: string, content: string }>} */
 let promptDraft = []
 let promptDraftId = ''
-/** 處於「再按一次確認刪除」狀態的按鈕 @type {HTMLButtonElement | null} */
-let armedDeleteBtn = null
 let inited = false
 
 /**
@@ -130,6 +136,7 @@ export function initChatPage() {
   fileInput = document.getElementById('chatFileInput')
   attachBtn = document.getElementById('chatAttachBtn')
   thinkBtn = document.getElementById('chatThinkBtn')
+  paramsBtn = document.getElementById('chatParamsBtn')
   sendBtn = document.getElementById('chatSendBtn')
   newBtn = document.getElementById('chatNewBtn')
   modelSelect = document.getElementById('chatModelSelect')
@@ -157,15 +164,26 @@ export function initChatPage() {
   promptListEl = document.getElementById('promptList')
   promptNameInput = document.getElementById('promptNameInput')
   promptContentInput = document.getElementById('promptContentInput')
-  if (!messagesEl) return
+  if (!messagesEl || !listEl) return
   inited = true
 
+  sidebar = createChatSidebar({
+    listEl,
+    searchInput,
+    getCurrentId: () => currentId,
+    statusOf,
+    onOpen: (id) => void openConversation(id),
+    onNew: (folderId) => void handleNew(folderId),
+    onDeleted
+  })
+
   sendBtn?.addEventListener('click', handleSend)
-  newBtn?.addEventListener('click', handleNew)
+  newBtn?.addEventListener('click', () => void handleNew())
+  document.getElementById('chatNewFolderBtn')?.addEventListener('click', () => void sidebar.createFolder())
+  paramsBtn?.addEventListener('click', () => void handleParams())
   modelSelect?.addEventListener('change', handleModelChange)
   promptSelect?.addEventListener('change', handlePromptChange)
   promptManageBtn?.addEventListener('click', openPromptDialog)
-  searchInput?.addEventListener('input', onSearchInput)
   messagesEl.addEventListener('click', onMessagesClick)
   addModelBtn?.addEventListener('click', () => appendModelRow('', { focus: true }))
   providerSelect?.addEventListener('change', handleProviderSwitch)
@@ -183,7 +201,6 @@ export function initChatPage() {
 
   initComposer()
   initPromptDialog()
-  initProjectScope()
 
   // 工作區把「選取的那幾行」或「整包審閱意見」丟過來（`ws-review.js` 發的事件）
   document.addEventListener('chat:insert', (event) => {
@@ -197,41 +214,21 @@ export function initChatPage() {
   })
 
   electronAPI.chat.onDelta(onDelta)
+  // AI 取好標題：側欄重讀一次（重畫本身會避開正在改名的輸入框）
+  electronAPI.chat.onTitle?.(() => void sidebar.reload())
 }
 
 /**
  * 切到聊天頁時呼叫
  */
-/**
- * 對話歸屬：接側欄的專案切換（新對話要記到哪個專案、列上標誰的）。
- * **不做「只看這個專案」的過濾**——清單本來就短，多一顆開關只是雜訊。
- */
-function initProjectScope() {
-  document.addEventListener('ws:project', (event) => {
-    const detail = /** @type {CustomEvent<{ id: string, name: string }>} */ (event).detail
-    activeProject = { id: detail?.id || '', name: detail?.name || '' }
-    renderList()
-  })
-}
-
-async function reloadProjectNames() {
-  try {
-    const res = await electronAPI.workspace.listProjects()
-    const list = res?.ok ? res.data : []
-    projectNames = new Map((list || []).map((one) => [one.id, one.name]))
-  } catch {
-    // 讀不到就不標歸屬，不是錯誤
-  }
-}
-
 export async function refreshChatPage() {
   initChatPage()
   if (!inited) return
   await Promise.all([refreshModelSelect(), refreshPromptSelect(), refreshThinkToggle(), refreshBanner()])
-  await reloadProjectNames()
-  await reloadList()
-  if (!currentId || !conversations.some((c) => c.id === currentId)) {
-    if (conversations.length) await openConversation(conversations[0].id)
+  await sidebar.reload()
+  const list = sidebar.list()
+  if (!currentId || !list.some((c) => c.id === currentId)) {
+    if (list.length) await openConversation(list[0].id)
     else await handleNew()
   }
   autoGrowInput()
@@ -239,302 +236,103 @@ export async function refreshChatPage() {
 
 // ===== 會話 =====
 
-async function reloadList() {
-  try {
-    conversations = await electronAPI.chat.list()
-  } catch (e) {
-    conversations = []
-    showError(cleanIpcError(e))
-  }
-  renderList()
+/**
+ * @param {string} id
+ * @param {{ streaming?: boolean }} [conv] main 回報的狀態（renderer 重載後自己的 streams 是空的）
+ * @returns {'running'|'done'|'error'|''}
+ */
+function statusOf(id, conv) {
+  if (streams.has(id) || conv?.streaming) return 'running'
+  return finished.get(id)?.state || ''
 }
 
-function onSearchInput() {
-  searchTerm = (searchInput?.value || '').trim().toLowerCase()
-  renderList()
-}
-
-function renderList() {
-  if (!listEl) return
-  // 重畫會把待確認的刪除鈕整顆換掉，計時器得先收乾淨
-  disarmDelete()
-  listEl.replaceChildren()
-  const visible = searchTerm
-    ? conversations.filter((c) => c.title.toLowerCase().includes(searchTerm))
-    : conversations
-  if (!visible.length) {
-    const empty = document.createElement('p')
-    empty.className = 'prompt-list-empty'
-    empty.textContent = searchTerm ? '沒有符合的對話' : '還沒有對話'
-    listEl.appendChild(empty)
+/**
+ * @param {string} id
+ */
+async function onDeleted(id) {
+  finished.delete(id)
+  if (id !== currentId) {
+    await sidebar.reload()
     return
   }
-  for (const conv of visible) listEl.appendChild(buildListItem(conv))
+  currentId = ''
+  liveView = null
+  await refreshChatPage()
 }
-
-/**
- * 側欄的一列：開啟鈕 ＋ 改名／刪除，整列可拖曳排序
- * @param {{ id: string, title: string, messageCount: number }} conv
- * @returns {HTMLElement}
- */
-function buildListItem(conv) {
-  const item = document.createElement('div')
-  item.className = conv.id === currentId ? 'chat-list-item active' : 'chat-list-item'
-  item.dataset.id = conv.id
-
-  const open = document.createElement('button')
-  open.type = 'button'
-  open.className = 'chat-list-open'
-  const title = document.createElement('span')
-  title.className = 'chat-list-title'
-  title.textContent = conv.title
-  const meta = document.createElement('span')
-  meta.className = 'chat-list-meta'
-  meta.textContent = `${conv.messageCount} 則`
-  const owner = conv.projectId ? projectNames.get(conv.projectId) : ''
-  if (owner) {
-    const tag = document.createElement('span')
-    tag.className = 'chat-list-proj'
-    tag.textContent = owner
-    meta.append(document.createTextNode(' · '), tag)
-  }
-  open.append(title, meta)
-  open.addEventListener('click', () => openConversation(conv.id))
-
-  const actions = document.createElement('span')
-  actions.className = 'chat-list-actions'
-  const trash = listActionButton(ICON_TRASH, '刪除對話', () => armDelete(trash, conv))
-  actions.append(listActionButton(ICON_PENCIL, '重新命名', () => startRename(item, conv)), trash)
-  // 選著專案時多一顆「歸到這個專案／取消歸屬」
-  if (activeProject.id) {
-    const owned = conv.projectId === activeProject.id
-    const btn = listActionButton(
-      ICON_FOLDER,
-      owned ? `取消歸屬（目前屬於 ${activeProject.name}）` : `歸到 ${activeProject.name}`,
-      () => void assignProject(conv, owned ? '' : activeProject.id)
-    )
-    if (owned) btn.classList.add('is-on')
-    actions.insertBefore(btn, actions.firstChild)
-  }
-
-  item.append(open, actions)
-  // 拖曳與 Alt+方向鍵排序；搜尋中不排序，否則存回去的順序會缺少被過濾掉的那些
-  item.addEventListener('pointerdown', onItemPointerDown)
-  item.addEventListener('keydown', onItemKeydown)
-  return item
-}
-
-/** 側欄圖示：跟 composer 的按鈕同一套線條風格，不用 emoji（Segoe 下的 🗑 會縮成一條細線） */
-const ICON_PENCIL = ['M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3Z', 'M14.5 6.5l3 3']
-const ICON_TRASH = ['M5 7h14', 'M10 5h4', 'M7 7l1 12h8l1-12', 'M10.5 10.5v6', 'M13.5 10.5v6']
-const ICON_CHECK = ['M5 12.5l4.5 4.5L19 7.5']
-/** 資料夾：對話歸屬用 */
-const ICON_FOLDER = ['M4 7.5h5l1.6 2H20v8.5H4Z']
-
-const SVG_NS = 'http://www.w3.org/2000/svg'
-
-/**
- * @param {HTMLElement} btn
- * @param {string[]} paths SVG path 的 d
- */
-function setIconPaths(btn, paths) {
-  const svg = document.createElementNS(SVG_NS, 'svg')
-  svg.setAttribute('viewBox', '0 0 24 24')
-  svg.setAttribute('aria-hidden', 'true')
-  for (const d of paths) {
-    const path = document.createElementNS(SVG_NS, 'path')
-    path.setAttribute('d', d)
-    svg.appendChild(path)
-  }
-  btn.querySelector('svg')?.remove()
-  btn.appendChild(svg)
-}
-
-/**
- * @param {string[]} paths SVG path 的 d
- * @param {string} label
- * @param {() => void} onClick
- * @returns {HTMLButtonElement}
- */
-function listActionButton(paths, label, onClick) {
-  const btn = document.createElement('button')
-  btn.type = 'button'
-  btn.className = 'chat-list-btn'
-  btn.title = label
-  btn.setAttribute('aria-label', label)
-  setIconPaths(btn, paths)
-  btn.addEventListener('click', (event) => {
-    event.stopPropagation()
-    onClick()
-  })
-  return btn
-}
-
-/**
- * 就地改名：標題換成輸入框，Enter／失焦送出，Esc 取消。
- * @param {HTMLElement} item
- * @param {{ id: string, title: string }} conv
- */
-function startRename(item, conv) {
-  const title = item.querySelector('.chat-list-title')
-  if (!title || item.querySelector('.chat-list-rename')) return
-  const input = document.createElement('input')
-  input.type = 'text'
-  input.className = 'chat-list-rename'
-  input.value = conv.title
-  input.maxLength = 60
-  input.setAttribute('aria-label', '對話標題')
-  let done = false
-  const finish = async (commit) => {
-    if (done) return
-    done = true
-    const next = input.value.trim()
-    if (commit && next && next !== conv.title) {
-      await electronAPI.chat.rename(conv.id, next)
-      await reloadList()
-    } else {
-      input.replaceWith(title)
-    }
-  }
-  input.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') { event.preventDefault(); void finish(true) }
-    else if (event.key === 'Escape') { event.preventDefault(); void finish(false) }
-  })
-  input.addEventListener('blur', () => void finish(true))
-  // 輸入框裡的拖曳／點擊不該被當成排序或切換對話
-  input.addEventListener('pointerdown', (event) => event.stopPropagation())
-  title.replaceWith(input)
-  input.focus()
-  input.select()
-}
-
-/**
- * 刪除的二次確認：按鈕就地變成紅色的勾，再按一次才真的刪，逾時自動復原。
- * 不用 `window.confirm`——原生彈窗會擋住整個 App，樣式也跟 Aurora 完全不搭。
- * @param {HTMLButtonElement} btn
- * @param {{ id: string, title: string }} conv
- */
-function armDelete(btn, conv) {
-  if (btn.dataset.armed === '1') {
-    clearTimeout(Number(btn.dataset.timer))
-    void deleteConversation(conv)
-    return
-  }
-  disarmDelete()
-  btn.dataset.armed = '1'
-  btn.classList.add('is-armed')
-  btn.title = '再按一次確認刪除'
-  btn.setAttribute('aria-label', `再按一次確認刪除「${conv.title}」`)
-  setIconPaths(btn, ICON_CHECK)
-  btn.dataset.timer = String(setTimeout(disarmDelete, DELETE_ARM_MS))
-  armedDeleteBtn = btn
-}
-
-/** 復原目前處於「待確認」的刪除鈕（同時只會有一顆） */
-function disarmDelete() {
-  const btn = armedDeleteBtn
-  armedDeleteBtn = null
-  if (!btn) return
-  clearTimeout(Number(btn.dataset.timer))
-  delete btn.dataset.armed
-  delete btn.dataset.timer
-  btn.classList.remove('is-armed')
-  btn.title = '刪除對話'
-  btn.setAttribute('aria-label', '刪除對話')
-  setIconPaths(btn, ICON_TRASH)
-}
-
-/**
- * @param {{ id: string, title: string }} conv
- */
-async function deleteConversation(conv) {
-  disarmDelete()
-  if (streaming && conv.id === currentId) {
-    showToast('串流進行中，無法刪除這個對話', 'error')
-    return
-  }
-  await electronAPI.chat.delete(conv.id)
-  if (conv.id === currentId) {
-    currentId = ''
-    await refreshChatPage()
-  } else {
-    await reloadList()
-  }
-}
-
-// ===== 側欄排序 =====
-
-/**
- * 目前 DOM 上的完整順序（被搜尋藏起來的維持原相對位置，不會被拖曳順序洗掉）。
- *
- * 只回 `shown` 的話 `persistOrder` 會把沒顯示的對話從記憶體與 `chats.json` 的
- * 順序裡整批擠到後面。沒有過濾時 `mergeVisibleOrder` 的結果就等於 `shown`，所以一律走它。
- */
-function currentOrder() {
-  const shown = [...listEl.querySelectorAll('.chat-list-item')].map((el) => el.dataset.id)
-  return mergeVisibleOrder(conversations.map((c) => c.id), shown)
-}
-
-async function persistOrder() {
-  const ids = currentOrder()
-  conversations = ids
-    .map((id) => conversations.find((c) => c.id === id))
-    .filter(Boolean)
-  await electronAPI.chat.reorder(ids)
-}
-
-// 拖曳與 Alt+方向鍵的實作與終端機側欄完全一樣 → 共用 list-reorder.js，不各寫一份
-const reorder = createListReorder({
-  getList: () => listEl,
-  itemSelector: '.chat-list-item',
-  ignoreSelector: '.chat-list-btn, .chat-list-rename',
-  onCommit: () => void persistOrder()
-})
-const onItemPointerDown = reorder.onPointerDown
-const onItemKeydown = reorder.onKeydown
 
 /**
  * @param {string} id
  */
 async function openConversation(id) {
-  if (streaming) return
   // 聊天與終端機同頁：點對話就是切回對話主區
   setChatPaneMode('chat')
+  const seq = ++openSeq
   const conv = await electronAPI.chat.get(id)
+  if (seq !== openSeq) return
   if (!conv) {
-    await reloadList()
+    await sidebar.reload()
     return
   }
   currentId = conv.id
-  renderMessages(conv.messages)
-  renderList()
-  hideError()
+  showConversation(conv)
+  const seen = finished.get(conv.id)
+  finished.delete(conv.id)
+  sidebar.render()
+  if (seen?.state === 'error' && seen.error) showError(seen.error)
+  else hideError()
 }
 
 /**
- * 把一段對話掛到某個專案（空字串＝收回未分類）。
- * @param {{ id: string }} conv
- * @param {string} projectId
+ * 把一個對話畫到主區；它還在回應的話接上那條串流。
+ * @param {{ id: string, messages: Array<object>, params?: Record<string, unknown> }} conv
  */
-async function assignProject(conv, projectId) {
-  try {
-    await electronAPI.chat.setProject(conv.id, projectId)
-  } catch (e) {
-    showError(cleanIpcError(e))
-    return
-  }
-  await reloadList()
+function showConversation(conv) {
+  const stream = streams.get(conv.id)
+  liveView = null
+  renderMessages(stream?.regenerate ? withoutTrailingAssistant(conv.messages) : conv.messages)
+  if (stream) attachLiveView(conv.id, stream)
+  paintParamsBtn(conv.params)
+  syncComposer()
 }
 
-async function handleNew() {
-  if (streaming) return
+/**
+ * @param {Array<{ role: string }>} messages
+ */
+function withoutTrailingAssistant(messages) {
+  let end = messages.length
+  while (end > 0 && messages[end - 1].role === 'assistant') end -= 1
+  return messages.slice(0, end)
+}
+
+/**
+ * @param {string} [folderId] 從資料夾選單開的就放進那個資料夾
+ */
+async function handleNew(folderId = '') {
   setChatPaneMode('chat')
-  // 在專案裡開的新對話就掛在那個專案底下（沒選專案就是未分類）
-  const conv = await electronAPI.chat.create(activeProject.id)
+  openSeq += 1
+  const conv = await electronAPI.chat.create(folderId)
   currentId = conv.id
-  renderMessages([])
-  await reloadList()
+  showConversation(conv)
+  hideError()
+  await sidebar.reload()
   inputEl?.focus()
+}
+
+async function handleParams() {
+  if (!currentId) return
+  const params = await openParamsDialog(currentId)
+  if (params) paintParamsBtn(params)
+}
+
+/**
+ * @param {Record<string, unknown> | undefined} params
+ */
+function paintParamsBtn(params) {
+  if (!paramsBtn) return
+  const count = countParams(params)
+  paramsBtn.classList.toggle('is-on', count > 0)
+  const label = paramsBtn.querySelector('span')
+  if (label) label.textContent = count ? `參數 ${count}` : '參數'
 }
 
 // ===== 訊息渲染 =====
@@ -552,28 +350,22 @@ function renderMessages(messages) {
     messagesEl.appendChild(empty)
     return
   }
-  const lastAssistant = findLastAssistantIndex(messages)
+  const last = messages.length - 1
   messages.forEach((msg, i) => {
-    appendBubble(msg, { canRegenerate: i === lastAssistant })
+    appendBubble(msg, {
+      index: i,
+      // 最後一則是助理＝可以重新生成；是還沒有回覆的使用者訊息（上次失敗）＝可以重新送出
+      canRegenerate: i === last
+    })
   })
   scrollToBottom()
 }
 
 /**
- * @param {Array<{ role: string }>} messages
- * @returns {number}
- */
-function findLastAssistantIndex(messages) {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === 'assistant') return i
-  }
-  return -1
-}
-
-/**
  * 建一則訊息泡泡
- * @param {{ role: string, content: string, images?: string[], imageUrls?: string[], reasoning?: string }} msg
- * @param {{ canRegenerate?: boolean, pending?: boolean }} [opts]
+ * @param {{ role: string, content: string, images?: string[], imageUrls?: string[], reasoning?: string,
+ *   model?: string, ms?: number, tokens?: number }} msg
+ * @param {{ index?: number, canRegenerate?: boolean, pending?: boolean }} [opts]
  * @returns {{ wrap: HTMLElement, body: HTMLElement, content: HTMLElement }}
  */
 function appendBubble(msg, opts = {}) {
@@ -581,6 +373,7 @@ function appendBubble(msg, opts = {}) {
   const isUser = msg.role === 'user'
   const wrap = document.createElement('div')
   wrap.className = `chat-msg chat-msg-${isUser ? 'user' : 'assistant'}`
+  if (Number.isInteger(opts.index)) wrap.dataset.index = String(opts.index)
   // 複製鈕要拿原文，掛成屬性即可（不進 DOM，不必擔心 XSS 或 dataset 爆長）
   wrap.__rawText = msg.content || ''
 
@@ -609,7 +402,7 @@ function appendBubble(msg, opts = {}) {
   body.appendChild(content)
   wrap.appendChild(body)
 
-  if (!opts.pending) wrap.appendChild(buildActions(msg, opts.canRegenerate === true))
+  if (!opts.pending) wrap.appendChild(buildActions(msg, opts))
   messagesEl.appendChild(wrap)
   return { wrap, body, content }
 }
@@ -684,30 +477,60 @@ function buildThinkBlock(text, open) {
 }
 
 /**
- * @param {{ role: string }} msg
- * @param {boolean} canRegenerate
+ * 會改到訊息串的操作（編輯、刪除、重新生成）標 `data-busy-hide`：
+ * 那個對話回應中時由 CSS 藏起來（main 那邊也會拒絕）。
+ * @param {{ role: string, model?: string, ms?: number, tokens?: number }} msg
+ * @param {{ canRegenerate?: boolean }} opts
  * @returns {HTMLElement}
  */
-function buildActions(msg, canRegenerate) {
+function buildActions(msg, opts) {
   const row = document.createElement('div')
   row.className = 'chat-msg-actions'
   row.appendChild(actionButton('複製', 'copy'))
-  if (msg.role === 'assistant' && canRegenerate) {
-    row.appendChild(actionButton('重新生成', 'regenerate'))
+  if (msg.role === 'user') row.appendChild(actionButton('編輯', 'edit', true))
+  if (opts.canRegenerate) {
+    row.appendChild(actionButton(msg.role === 'user' ? '重新送出' : '重新生成', 'regenerate', true))
+  }
+  row.appendChild(actionButton('分叉', 'fork'))
+  row.appendChild(actionButton('刪除', 'delete', true))
+  const meta = msg.role === 'assistant' ? replyMeta(msg) : ''
+  if (meta) {
+    const info = document.createElement('span')
+    info.className = 'chat-msg-meta'
+    info.textContent = meta
+    row.appendChild(info)
   }
   return row
 }
 
 /**
+ * 「模型 · 3.2 秒 · 120 tokens · 37.5 tok/s」
+ * @param {{ model?: string, ms?: number, tokens?: number }} msg
+ * @returns {string}
+ */
+function replyMeta(msg) {
+  const parts = []
+  if (msg.model) parts.push(msg.model)
+  if (msg.ms) parts.push(`${(msg.ms / 1000).toFixed(1)} 秒`)
+  if (msg.tokens) {
+    parts.push(`${msg.tokens} tokens`)
+    if (msg.ms) parts.push(`${(msg.tokens / (msg.ms / 1000)).toFixed(1)} tok/s`)
+  }
+  return parts.join(' · ')
+}
+
+/**
  * @param {string} label
  * @param {string} action
+ * @param {boolean} [busyHide]
  * @returns {HTMLButtonElement}
  */
-function actionButton(label, action) {
+function actionButton(label, action, busyHide = false) {
   const btn = document.createElement('button')
   btn.type = 'button'
   btn.className = 'chat-msg-action'
   btn.dataset.action = action
+  if (busyHide) btn.dataset.busyHide = '1'
   btn.textContent = label
   return btn
 }
@@ -745,13 +568,21 @@ function onMessagesClick(event) {
   const action = target.closest?.('.chat-msg-action')
   if (!action) return
   const wrap = action.closest('.chat-msg')
-  if (action.dataset.action === 'copy') {
+  const index = Number(wrap?.dataset.index)
+  const kind = action.dataset.action
+  if (kind === 'copy') {
     copyText(wrap?.__rawText || '')
     const prev = action.textContent
     action.textContent = '✓ 已複製'
     setTimeout(() => { action.textContent = prev }, 1500)
-  } else if (action.dataset.action === 'regenerate') {
-    handleRegenerate()
+  } else if (kind === 'regenerate') {
+    void handleRegenerate()
+  } else if (kind === 'edit') {
+    startEdit(wrap, index)
+  } else if (kind === 'fork') {
+    void handleFork(index)
+  } else if (kind === 'delete') {
+    armMessageDelete(action, index)
   }
 }
 
@@ -764,6 +595,114 @@ function copyText(text) {
     () => showToast('已複製'),
     () => showToast('複製失敗', 'error')
   )
+}
+
+// ===== 訊息操作 =====
+
+/**
+ * 就地編輯一則使用者訊息：送出後，這則之後的訊息全部拿掉、重新生成回覆。
+ * @param {HTMLElement} wrap
+ * @param {number} index
+ */
+function startEdit(wrap, index) {
+  const convId = currentId
+  const contentEl = wrap.querySelector('.chat-msg-content')
+  const actions = /** @type {HTMLElement | null} */ (wrap.querySelector('.chat-msg-actions'))
+  if (streams.has(convId) || !contentEl || wrap.querySelector('.chat-edit')) return
+  const box = document.createElement('div')
+  box.className = 'chat-edit'
+  const area = document.createElement('textarea')
+  area.className = 'chat-edit-input'
+  area.value = wrap.__rawText || ''
+  area.setAttribute('aria-label', '編輯訊息')
+  const bar = document.createElement('div')
+  bar.className = 'chat-edit-bar'
+  const hint = document.createElement('span')
+  hint.className = 'composer-hint'
+  hint.textContent = '送出後，這則之後的訊息會被取代'
+  const cancel = document.createElement('button')
+  cancel.type = 'button'
+  cancel.className = 'btn btn-secondary btn-sm'
+  cancel.textContent = '取消'
+  const save = document.createElement('button')
+  save.type = 'button'
+  save.className = 'btn btn-primary btn-sm'
+  save.textContent = '送出'
+  bar.append(hint, cancel, save)
+  box.append(area, bar)
+
+  const close = () => {
+    box.replaceWith(contentEl)
+    if (actions) actions.hidden = false
+  }
+  const submit = async () => {
+    save.disabled = true
+    const conv = await electronAPI.chat.editMessage(convId, index, area.value)
+    if (!conv) {
+      save.disabled = false
+      showToast('這則訊息現在不能編輯', 'error')
+      return
+    }
+    if (convId !== currentId) return
+    showConversation(conv)
+    await startStream({ regenerate: true })
+  }
+  cancel.addEventListener('click', close)
+  save.addEventListener('click', () => void submit())
+  area.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') { event.preventDefault(); close() }
+    else if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); void submit() }
+  })
+  area.addEventListener('input', () => {
+    area.style.height = 'auto'
+    area.style.height = `${Math.min(area.scrollHeight, Math.round(window.innerHeight * INPUT_MAX_RATIO))}px`
+  })
+  contentEl.replaceWith(box)
+  if (actions) actions.hidden = true
+  area.dispatchEvent(new Event('input'))
+  area.focus()
+}
+
+/**
+ * 從這一則（含）往前複製成新對話並切過去
+ * @param {number} index
+ */
+async function handleFork(index) {
+  const conv = await electronAPI.chat.fork(currentId, index)
+  if (!conv) {
+    showToast('分叉失敗', 'error')
+    return
+  }
+  await openConversation(conv.id)
+  await sidebar.reload()
+}
+
+/**
+ * 刪除單則訊息：按鈕就地變「確認刪除」，再按一次才刪
+ * @param {HTMLButtonElement} btn
+ * @param {number} index
+ */
+function armMessageDelete(btn, index) {
+  if (btn.dataset.armed !== '1') {
+    btn.dataset.armed = '1'
+    btn.classList.add('is-armed')
+    btn.textContent = '確認刪除'
+    btn.dataset.timer = String(setTimeout(() => {
+      delete btn.dataset.armed
+      btn.classList.remove('is-armed')
+      btn.textContent = '刪除'
+    }, DELETE_ARM_MS))
+    return
+  }
+  clearTimeout(Number(btn.dataset.timer))
+  const convId = currentId
+  void (async () => {
+    const ok = await electronAPI.chat.deleteMessage(convId, index)
+    if (!ok) showToast('這則訊息現在不能刪除', 'error')
+    const conv = await electronAPI.chat.get(convId)
+    if (conv && convId === currentId) showConversation(conv)
+    await sidebar.reload()
+  })()
 }
 
 // ===== 輸入區 =====
@@ -951,8 +890,9 @@ async function refreshThinkToggle() {
 // ===== 送出與串流 =====
 
 async function handleSend() {
-  if (streaming) {
-    await electronAPI.chat.abort(streaming.reqId)
+  const running = streams.get(currentId)
+  if (running) {
+    await electronAPI.chat.abort(running.reqId)
     return
   }
   const text = (inputEl?.value || '').trim()
@@ -962,7 +902,7 @@ async function handleSend() {
 }
 
 async function handleRegenerate() {
-  if (streaming) return
+  if (streams.has(currentId)) return
   await startStream({ regenerate: true })
 }
 
@@ -971,6 +911,8 @@ async function handleRegenerate() {
  */
 async function startStream({ text = '', images = [], regenerate = false }) {
   if (!currentId) await handleNew()
+  const convId = currentId
+  if (streams.has(convId)) return
   hideError()
   if (regenerate) {
     // 舊回覆先從畫面拿掉，串流結束會以 main 的存檔為準重畫
@@ -981,98 +923,106 @@ async function startStream({ text = '', images = [], regenerate = false }) {
     appendBubble({ role: 'user', content: text, imageUrls: images })
     clearAttachments()
   }
-  const holder = appendBubble({ role: 'assistant', content: '' }, { pending: true })
-  scrollToBottom()
 
   const reqId = `r_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
-  streaming = {
-    reqId,
-    raw: '',
-    reasoning: '',
-    contentEl: holder.content,
-    bodyEl: holder.body,
-    thinkBody: null,
-    dirty: false,
-    timer: setInterval(flushStream, RENDER_THROTTLE_MS)
-  }
-  setSendingState(true)
+  const stream = { reqId, raw: '', reasoning: '', dirty: false, regenerate }
+  streams.set(convId, stream)
+  finished.delete(convId)
+  attachLiveView(convId, stream)
+  scrollToBottom()
+  if (!flushTimer) flushTimer = setInterval(flushStream, RENDER_THROTTLE_MS)
+  syncComposer()
+  sidebar.paintStatus(convId)
+
   let result
   try {
-    result = await electronAPI.chat.send({
-      reqId,
-      conversationId: currentId,
-      text,
-      images,
-      regenerate
-    })
+    result = await electronAPI.chat.send({ reqId, conversationId: convId, text, images, regenerate })
   } catch (e) {
     result = { ok: false, error: cleanIpcError(e) }
   }
-  await finishStream(result)
+  await finishStream(convId, result)
 }
 
 /**
- * @param {{ reqId: string, text: string, kind?: string }} payload
+ * 在主區尾端掛一顆「回應中」泡泡，接上那條串流目前收到的內容
+ * @param {string} convId
+ * @param {Stream} stream
+ */
+function attachLiveView(convId, stream) {
+  const holder = appendBubble({ role: 'assistant', content: '' }, { pending: true })
+  liveView = { id: convId, contentEl: holder.content, bodyEl: holder.body, thinkBody: null }
+  stream.dirty = true
+  flushStream()
+}
+
+/**
+ * 背景的對話也照收，只是不畫；切回去時 `attachLiveView` 一次補齊
+ * @param {{ reqId: string, conversationId: string, text: string, kind?: string }} payload
  */
 function onDelta(payload) {
-  if (!streaming || payload?.reqId !== streaming.reqId) return
-  if (payload.kind === 'reasoning') streaming.reasoning += payload.text || ''
-  else streaming.raw += payload.text || ''
-  streaming.dirty = true
+  const stream = streams.get(payload?.conversationId)
+  if (!stream || payload.reqId !== stream.reqId) return
+  if (payload.kind === 'reasoning') stream.reasoning += payload.text || ''
+  else stream.raw += payload.text || ''
+  stream.dirty = true
 }
 
 function flushStream() {
-  if (!streaming || !streaming.dirty) return
+  const stream = liveView && liveView.id === currentId ? streams.get(liveView.id) : null
+  if (!stream || !stream.dirty) return
   const stick = isAtBottom()
-  if (streaming.reasoning) {
-    if (!streaming.thinkBody) {
+  if (stream.reasoning) {
+    if (!liveView.thinkBody) {
       const block = buildThinkBlock('', true)
-      streaming.thinkBody = block.querySelector('.chat-think-body')
-      streaming.bodyEl.insertBefore(block, streaming.contentEl)
+      liveView.thinkBody = block.querySelector('.chat-think-body')
+      liveView.bodyEl.insertBefore(block, liveView.contentEl)
     }
-    streaming.thinkBody.textContent = streaming.reasoning
+    liveView.thinkBody.textContent = stream.reasoning
   }
-  if (streaming.raw) streaming.contentEl.replaceChildren(renderMarkdown(streaming.raw))
-  streaming.dirty = false
+  if (stream.raw) liveView.contentEl.replaceChildren(renderMarkdown(stream.raw))
+  stream.dirty = false
   if (stick) scrollToBottom()
 }
 
 /**
+ * @param {string} convId
  * @param {{ ok: boolean, content?: string, aborted?: boolean, error?: string }} result
  */
-async function finishStream(result) {
-  if (streaming) {
-    clearInterval(streaming.timer)
-    streaming.dirty = true
+async function finishStream(convId, result) {
+  if (liveView?.id === convId) {
     flushStream()
-    streaming = null
+    liveView = null
   }
-  setSendingState(false)
-  if (!result?.ok && result?.error) showError(result.error)
-  // 以 main 的實際存檔為準重畫，避免樂觀更新與 chats.json 不同步
-  if (currentId) {
-    const conv = await electronAPI.chat.get(currentId)
-    if (conv) renderMessages(conv.messages)
+  streams.delete(convId)
+  if (!streams.size && flushTimer) {
+    clearInterval(flushTimer)
+    flushTimer = 0
   }
-  await reloadList()
-  inputEl?.focus()
+  const error = !result?.ok && result?.error ? result.error : ''
+  if (convId === currentId) {
+    if (error) showError(error)
+    // 以 main 的實際存檔為準重畫，避免樂觀更新與 chats.json 不同步
+    const conv = await electronAPI.chat.get(convId)
+    // 等 main 回來的期間使用者可能已經切走、或在這個對話又送出了新的一則
+    if (conv && convId === currentId && !streams.has(convId)) showConversation(conv)
+    // 使用者正在別處打字（改名、編輯訊息）時不搶焦點
+    const active = document.activeElement
+    if (!active || active === document.body || active === sendBtn || active === inputEl) inputEl?.focus()
+  } else if (sidebar.list().some((c) => c.id === convId)) {
+    finished.set(convId, { state: error ? 'error' : 'done', error })
+  }
+  syncComposer()
+  await sidebar.reload()
 }
 
-/**
- * @param {boolean} sending
- */
-function setSendingState(sending) {
+/** 送出鈕與訊息操作只看「目前這個對話」有沒有在回應 */
+function syncComposer() {
+  const busy = streams.has(currentId)
   if (sendBtn) {
-    sendBtn.textContent = sending ? '停止' : '送出'
-    sendBtn.classList.toggle('btn-danger', sending)
+    sendBtn.textContent = busy ? '停止' : '送出'
+    sendBtn.classList.toggle('btn-danger', busy)
   }
-  if (newBtn) newBtn.disabled = sending
-  // 側欄的改名／刪除鈕在串流中一併鎖住（切換對話本來就被 openConversation 擋掉）
-  listEl?.classList.toggle('is-busy', sending)
-  if (modelSelect) modelSelect.disabled = sending
-  if (promptSelect) promptSelect.disabled = sending
-  if (attachBtn) attachBtn.disabled = sending
-  if (thinkBtn) thinkBtn.disabled = sending
+  messagesEl?.classList.toggle('is-busy', busy)
 }
 
 // ===== 模型與系統提示 =====

@@ -1873,9 +1873,244 @@ option:disabled {
   color: var(--text-primary);
 }
 
-.chat-list.is-busy .chat-list-btn {
-  pointer-events: none;
-  opacity: 0.4;
+/* ── 側欄：新對話＋新資料夾 ── */
+.chat-panel-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.chat-panel-actions .chat-new-btn {
+  flex: 1;
+  width: auto;
+}
+
+.chat-new-folder-btn {
+  flex-shrink: 0;
+  padding: 0 9px;
+}
+
+.chat-new-folder-btn svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ── 側欄：資料夾分組 ── */
+.chat-folder,
+.chat-root {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chat-folder-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 6px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  transition: var(--transition);
+}
+
+.chat-folder-head:hover {
+  background-color: var(--bg-tertiary);
+}
+
+.chat-folder-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  padding: 7px 4px 7px 6px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-folder-chevron {
+  display: inline-flex;
+  flex-shrink: 0;
+  transition: transform 0.18s var(--ease-out);
+}
+
+.chat-folder-chevron svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chat-folder-toggle[aria-expanded='true'] .chat-folder-chevron {
+  transform: rotate(90deg);
+}
+
+.chat-folder-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.chat-folder-count {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.chat-folder-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: 12px;
+}
+
+.chat-folder-body[hidden] {
+  display: none;
+}
+
+/* 空的資料夾展開時也要有一點落點高度，拖得進去 */
+.chat-folder:not(.is-collapsed) .chat-folder-body:empty {
+  min-height: 8px;
+}
+
+.chat-root-head {
+  padding: 8px 6px 4px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.chat-root-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 8px;
+}
+
+/* 資料夾的「⋯」常駐（它是唯一的入口，不能 hover 才出現） */
+.chat-list-btn.is-persistent {
+  opacity: 1;
+}
+
+/* ── 側欄：回應狀態 ── */
+.chat-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-secondary);
+}
+
+.chat-status::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background-color: var(--text-tertiary);
+}
+
+.chat-status[data-state='running'] {
+  color: var(--accent-primary);
+}
+
+.chat-status[data-state='running']::before {
+  background-color: var(--accent-primary);
+  animation: chat-status-pulse 1.2s var(--ease-in-out) infinite;
+}
+
+.chat-status[data-state='done'] {
+  color: var(--success);
+}
+
+.chat-status[data-state='done']::before {
+  background-color: var(--success);
+}
+
+.chat-status[data-state='error'] {
+  color: var(--danger);
+}
+
+.chat-status[data-state='error']::before {
+  background-color: var(--danger);
+}
+
+@keyframes chat-status-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.75); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-status[data-state='running']::before {
+    animation: none;
+  }
+}
+
+/* ── 側欄的小選單（掛在 body 上） ── */
+.chat-menu {
+  position: fixed;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  min-width: 180px;
+  max-width: 280px;
+  max-height: min(420px, calc(100vh - 16px));
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--glass-border-strong);
+  border-radius: var(--radius-md);
+  background-color: var(--surface-glass-strong);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(12px);
+}
+
+.chat-menu-item {
+  padding: 7px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.chat-menu-item:hover:not(:disabled),
+.chat-menu-item:focus-visible {
+  background-color: var(--surface-hover);
+  outline: none;
+}
+
+.chat-menu-item[aria-checked='true'] {
+  background-color: var(--accent-soft);
+  color: var(--accent-primary);
+}
+
+.chat-menu-item.is-danger {
+  color: var(--danger);
+}
+
+.chat-menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background-color: var(--glass-border);
 }
 
 .chat-main {
@@ -4117,14 +4352,6 @@ body:has(.ws-monaco .find-widget.visible) .workbench-hover-container {
 }
 
 /* ── 對話歸屬（哪一段對話屬於哪個專案）── */
-.chat-list-proj {
-  color: var(--accent-primary);
-}
-
-.chat-list-btn.is-on {
-  color: var(--accent-primary);
-}
-
 /* ── AI 記錄：來源標籤與直接接續 ── */
 .ws-agent-row-wrap {
   position: relative;
@@ -4573,6 +4800,66 @@ body:has(.ws-monaco .find-widget.visible) .workbench-hover-container {
   color: var(--text-primary);
 }
 
+.chat-msg-actions[hidden] {
+  display: none;
+}
+
+/* 那個對話還在回應時，會改到訊息串的操作先藏起來（main 也會拒絕） */
+.chat-messages.is-busy .chat-msg-action[data-busy-hide] {
+  display: none;
+}
+
+.chat-msg-action.is-armed {
+  background-color: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: var(--danger);
+}
+
+.chat-msg-meta {
+  align-self: center;
+  margin-left: 4px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+/* 就地編輯使用者訊息 */
+.chat-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: min(520px, 70vw);
+}
+
+.chat-edit-input {
+  width: 100%;
+  min-height: 60px;
+  padding: 8px 10px;
+  border: 1px solid var(--glass-border-strong);
+  border-radius: var(--radius-sm);
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.6;
+  resize: none;
+}
+
+.chat-edit-input:focus {
+  border-color: var(--accent-primary);
+  outline: none;
+}
+
+.chat-edit-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.chat-edit-bar .composer-hint {
+  margin-right: auto;
+}
+
 @media (hover: none), (pointer: coarse) {
   .chat-msg-actions {
     opacity: 1;
@@ -4753,6 +5040,102 @@ body:has(.ws-monaco .find-widget.visible) .workbench-hover-container {
 .composer-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+.chat-params-btn.is-on {
+  border-color: var(--accent-primary);
+  background-color: var(--accent-soft);
+  color: var(--accent-primary);
+}
+
+/* ── 對話參數彈窗 ── */
+.chat-params-dialog {
+  width: min(640px, calc(100vw - 32px));
+}
+
+.chat-params-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: min(60vh, 560px);
+  overflow-y: auto;
+  padding: 4px 24px 0;
+}
+
+.chat-param-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(90px, 160px) 96px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--glass-border);
+}
+
+.chat-param-row:last-child {
+  border-bottom: none;
+}
+
+.chat-param-row-wide {
+  grid-template-columns: minmax(0, 1fr) minmax(160px, 260px);
+}
+
+.chat-param-row.is-off .chat-param-name {
+  color: var(--text-tertiary);
+}
+
+.chat-param-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.chat-param-name {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.chat-param-hint {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.chat-param-range {
+  width: 100%;
+  accent-color: var(--accent-primary);
+}
+
+.chat-param-number {
+  width: 100%;
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-param-stop {
+  min-height: 52px;
+  resize: vertical;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.chat-params-dialog .chat-params-left {
+  margin-right: auto;
+}
+
+@media (max-width: 640px) {
+  .chat-param-row {
+    grid-template-columns: auto minmax(0, 1fr) 88px;
+  }
+
+  .chat-param-range {
+    grid-column: 2 / -1;
+  }
+
+  .chat-param-row-wide {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .composer-toggle[aria-pressed='false'] {

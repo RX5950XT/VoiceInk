@@ -20,8 +20,10 @@ src/main/
   main.js             frameless 主窗、IPC 註冊、store allowlist 與一次性遷移、單一實例鎖與系統匣
   updater.js          App 內自動更新（electron-updater ＋ GitHub Releases 的 latest.yml）；
                       結束前在 app.exit(0) 前一行靜默安裝（autoInstallOnAppQuit 對本 App 無效）
-  chat.js             雲端聊天 SSE；單一 in-flight、雙逾時、上下文裁切、model allowlist、圖片與生圖、重新生成
-  chat-store.js / chat-images.js / chat-models.js   會話持久化、圖片附件、/models 掃描（與 ccswitch 共用）
+  chat.js             雲端聊天 SSE；每個對話一條 in-flight（不同對話可併發）、雙逾時、上下文裁切、model allowlist、圖片與生圖、重新生成
+  chat-params.js      每對話取樣參數（只收通用的 Temperature／Top P／Max tokens／Stop）的驗證與轉 API 欄位
+  chat-title.js       第一輪回覆後 AI 自動取標題（改過名就不動）
+  chat-store.js / chat-images.js / chat-models.js   會話＋側欄資料夾持久化（編輯／刪除／分叉訊息、匯出 Markdown）、圖片附件、/models 掃描
   ipc-invoke.js       十組模組 IPC 的共用外殼 makeInvoke()：主視窗守衛 ＋ { ok, data|error } ＋ userMessage 白名單
   terminal/           ConPTY：pty.js、status.js（OSC 133 ＋ 靜默雙軌，純函式）、store.js（固定表）、
                       ipc.js、links.js（畫面上的網址／路徑，主行程驗存在再開）、
@@ -54,7 +56,7 @@ src/main/
   local-llm.js  translate-clean.js  file-transcribe.js  models.js  edge-tts.js  engine.js  opencc.js
 
 src/renderer/scripts/
-  app.js  chat-page.js  markdown.js（零 innerHTML）  terminal-page.js  ccswitch-page.js  sysmon-page.js
+  app.js  chat-page.js（串流照對話分開）  chat-sidebar.js（資料夾／狀態）  chat-params-panel.js  chat-menu.js  markdown.js（零 innerHTML）  terminal-page.js  ccswitch-page.js  sysmon-page.js
   usage-page.js  code-usage-page.js  agy-page.js  stt-page.js  transcribe.js  live-caption.js  vad.js
   translate-page.js  dictation.js  model-picker.js  custom-select.js（共用 ARIA listbox）
   workspace-page.js（專案側欄＋右側欄四面板＋檔案樹）  explorer-page.js（整機檔案總管）
@@ -71,7 +73,7 @@ scripts/ 測試與探針（指令表見 CLAUDE.md「驗證方式」），dev-san
 | 檔案 | 內容 | 存取 |
 |---|---|---|
 | `config.json` | 一般設定 | `store:*`（**key 僅 allowlist**） |
-| `chats.json` ／ `chat-images/` | 聊天會話（不含圖片）／圖片附件 | `chat:*`；檔名由 main 產生 |
+| `chats.json` ／ `chat-images/` | 聊天會話＋資料夾＋每對話參數（不含圖片）／圖片附件 | `chat:*`；檔名由 main 產生 |
 | `terminals.json` | 終端機 metadata（不存畫面內容） | `terminal:*` |
 | `workspaces.json` | 專案清單（`{ id, name, path }`＋`tabsState`） | `workspace:*` |
 | `explorer.json` | 檔案總管上次路徑／檢視模式 | `explorer:*` |
@@ -92,6 +94,16 @@ AGY 設定、終端機、聊天、語音輸入紀錄**刻意不進** `STORE_ALLO
 翻譯與 TTS 頁不在這組（維持全域 key）。
 
 ## 最近變更
+
+### 2026-09-14 — 聊天：併發、側欄資料夾與狀態、對話參數
+
+- **不同對話可以同時回應**：main 的 inflight 改成照 conversationId 的 Map（不設總數上限，同一對話仍一條）；renderer 串流也照對話分開，切走不中斷。
+- 側欄每列顯示「回應中／已完成（還沒看）／失敗」；收起來的資料夾在標題上掛狀態點。`chat:list` 帶 `streaming`，重載 renderer 也看得到。
+- **對話的專案歸屬拿掉**（`projectId`、`chat:setProject`、`ws:project` 事件都刪了），改成側欄資料夾：建立／改名／收合／刪除（對話移回未分類）、資料夾本身拖曳排序、對話拖進拖出、「⋯」選單搬移與匯出 Markdown。
+- **對話參數**（勾選才送，只留各家都支援的）：Temperature、Top P、最大輸出 tokens、停止字串，外加不送上游的上下文訊息數；可存為新對話預設（`chatParams`）。
+- **AI 自動取標題**：第一輪回覆後用同一顆模型補一發非串流請求換掉暫定標題，側欄收到 `chat:title` 重讀；改過名就不動。
+- 訊息操作：編輯使用者訊息並重送、刪除單則、從某則分叉成新對話；最後一則是沒回覆的使用者訊息時可「重新送出」。回覆下方標模型、耗時、token 與 tok/s（上游有給 `usage` 才有 token）。
+- 合併前審查：`chat:abort` 不帶 reqId 一律不動（以前會停掉全部對話）；`e2e-workspace-cdp.js` 的 [AC] 改驗「對話不再帶專案歸屬」；`e2e-chat-cdp.js` 刪除供應商改走 `askConfirm` 彈窗（背景視窗要手動補送 `close`）。
 
 ### 2026-09-12 — 系統監控取樣器常駐
 
