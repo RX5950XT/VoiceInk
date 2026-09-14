@@ -443,7 +443,6 @@ async function reloadList() {
   projects = await call(electronAPI.workspace.listProjects(), '讀不到專案清單')
   if (currentId && !projects.some((item) => item.id === currentId)) {
     currentId = ''
-    announceProject()
     // 沒有專案了就把監看收掉（那個 watcher 掛在一個已經不在清單裡的資料夾上）
     void electronAPI.workspace.unwatch?.().catch(() => {})
   }
@@ -540,22 +539,10 @@ async function selectProject(id) {
   lastGitStatus = null
   if (el.gitFilter) /** @type {HTMLInputElement} */ (el.gitFilter).value = ''
   setChatPaneMode('workspace')
-  announceProject()
   startWatching(project.id)
   renderList()
   await renderPanel(project, seq)
   return seq === projectSeq
-}
-
-/**
- * 告訴別的模組「現在選著哪個專案」（聊天側欄靠它決定新對話掛在哪）。
- * 用事件而不是互相 import：兩邊都是 lazy load 的，載入順序不固定。
- */
-function announceProject() {
-  const project = currentProject()
-  document.dispatchEvent(new CustomEvent('ws:project', {
-    detail: { id: project?.id || '', name: project?.name || '' }
-  }))
 }
 
 /**
@@ -2766,7 +2753,6 @@ export function initWorkspacePage() {
 
 export function refreshWorkspacePage() {
   initWorkspacePage()
-  announceProject()
   void reloadList().then(() => renderPanel()).catch(() => {})
 }
 

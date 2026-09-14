@@ -18,11 +18,13 @@ const DRAG_THRESHOLD_PX = 4
  *   getList: () => HTMLElement | null,
  *   itemSelector: string,
  *   ignoreSelector: string,
- *   onCommit: () => void
- * }} config
+ *   onCommit: () => void,
+ *   dropZone?: (x: number, y: number) => HTMLElement | null
+ * }} config dropZone：游標底下若是「可以整個丟進去」的容器（例如收合的資料夾標題），
+ *   回傳要放進去的那個容器；拖曳的那一列會被搬進它的尾端。
  * @returns {{ onPointerDown: (event: PointerEvent) => void, onKeydown: (event: KeyboardEvent) => void }}
  */
-export function createListReorder({ getList, itemSelector, ignoreSelector, onCommit }) {
+export function createListReorder({ getList, itemSelector, ignoreSelector, onCommit, dropZone }) {
   /** @type {{ id: string, el: HTMLElement, startX: number, startY: number, active: boolean } | null} */
   let dragState = null
 
@@ -42,6 +44,11 @@ export function createListReorder({ getList, itemSelector, ignoreSelector, onCom
       dragState.active = true
       dragState.el.classList.add('is-dragging')
       listEl.classList.add('is-reordering')
+    }
+    const zone = dropZone?.(event.clientX, event.clientY)
+    if (zone) {
+      if (dragState.el.parentElement !== zone) zone.appendChild(dragState.el)
+      return
     }
     const items = [...listEl.querySelectorAll(itemSelector)]
     const rects = items.map((el) => {

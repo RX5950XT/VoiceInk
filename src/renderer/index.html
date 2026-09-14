@@ -126,9 +126,24 @@
                 </section>
 
                 <section class="sidebar-panel" id="chatPanel" role="tabpanel">
-                  <button type="button" id="chatNewBtn" class="btn btn-primary btn-sm chat-new-btn">
-                    ＋ 新對話
-                  </button>
+                  <div class="chat-panel-actions">
+                    <button type="button" id="chatNewBtn" class="btn btn-primary btn-sm chat-new-btn">
+                      ＋ 新對話
+                    </button>
+                    <button
+                      type="button"
+                      id="chatNewFolderBtn"
+                      class="btn btn-secondary btn-sm chat-new-folder-btn"
+                      title="新增資料夾"
+                      aria-label="新增資料夾"
+                    >
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M4 7.5h5l1.6 2H20v8.5H4Z" />
+                        <path d="M12 12v4" />
+                        <path d="M10 14h4" />
+                      </svg>
+                    </button>
+                  </div>
                   <input
                     type="search"
                     id="chatSearchInput"
@@ -192,6 +207,22 @@
                         <path d="M9.8 21.2h4.4" />
                       </svg>
                       <span>思考</span>
+                    </button>
+                    <button
+                      type="button"
+                      id="chatParamsBtn"
+                      class="composer-btn chat-params-btn"
+                      title="這個對話的取樣參數（Temperature、Top P、Max tokens、Stop）"
+                    >
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M5 7h9" />
+                        <path d="M18 7h1" />
+                        <circle cx="16" cy="7" r="2" />
+                        <path d="M5 17h3" />
+                        <path d="M12 17h7" />
+                        <circle cx="10" cy="17" r="2" />
+                      </svg>
+                      <span>參數</span>
                     </button>
                     <div class="chat-toolbar-group">
                       <select id="chatPromptSelect" class="select chat-prompt-select" aria-label="系統提示"></select>

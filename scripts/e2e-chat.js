@@ -76,6 +76,8 @@ function makeStore(overrides = {}) {
     chatPrompts: [],
     chatPromptId: '',
     chatThinking: false,
+    // AI 取標題會對同一個假上游多打一次請求；只有 [T] 打開
+    chatAutoTitle: false,
     ...rest
   }
   return {
@@ -958,6 +960,259 @@ async function caseO() {
   chat.setLocalSource(() => null)
 }
 
+async function caseP() {
+  console.log('\n[P] 不同對話可以同時回應')
+  const server = await startServer((req, res) => {
+    sseHead(res)
+    const tag = req.headers['x-none'] || ''
+    res.write(sseChunk(`開頭${tag}`))
+    // 不結束：兩條要同時開著才算併發
+    setInterval(() => {
+      if (!res.writableEnded) res.write(': keep-alive\n\n')
+    }, 50).unref()
+  })
+  chat.setStore(makeStore({ chatApiUrl: server.url }))
+  const a = await chatStore.create()
+  const b = await chatStore.create()
+  const sender = makeSender()
+  const pa = chat.send({ reqId: 'p1', conversationId: a.id, text: '甲' }, sender)
+  const pb = chat.send({ reqId: 'p2', conversationId: b.id, text: '乙' }, sender)
+  await sleep(300)
+  ok('兩條上游連線同時開著', server.state.requests === 2, `requests=${server.state.requests}`)
+  ok('兩個對話都是 busy', chat.isBusy(a.id) && chat.isBusy(b.id))
+  ok('activeConversationIds 列出兩個', chat.activeConversationIds().sort().join() === [a.id, b.id].sort().join())
+  ok('delta 帶 conversationId', sender.deltas.some((d) => d.conversationId === a.id)
+    && sender.deltas.some((d) => d.conversationId === b.id), JSON.stringify(sender.deltas))
+  const same = await chat.send({ reqId: 'p3', conversationId: a.id, text: '插隊' }, sender)
+  ok('同一個對話仍然只能一條', !same.ok && same.error.includes('仍在回應中'), same.error)
+
+  ok('abortConversation 只停那一個', chat.abortConversation(a.id) === true)
+  const ra = await pa
+  ok('甲回報 aborted', ra.aborted === true, JSON.stringify(ra))
+  ok('乙還在跑', chat.isBusy(b.id) === true && chat.isBusy(a.id) === false)
+  chat.abort('p2')
+  await pb
+  ok('全部停完不留 inflight', chat.isBusy() === false)
+
+  // 不設總數上限：12 個對話同時開（舊版上限 8 會擋掉後面 4 個）
+  const convs = []
+  for (let i = 0; i < 12; i++) convs.push(await chatStore.create())
+  const beforeMany = server.state.requests
+  const pending = convs.map((c, i) => chat.send({ reqId: `pm${i}`, conversationId: c.id, text: 'x' }, makeSender()))
+  await sleep(500)
+  ok('12 個對話同時回應都放行', server.state.requests - beforeMany === 12 && chat.activeConversationIds().length === 12,
+    `requests=${server.state.requests - beforeMany} active=${chat.activeConversationIds().length}`)
+  chat.abort()
+  await Promise.all(pending)
+  ok('abort() 不帶 id 會全部停掉', chat.isBusy() === false)
+  for (const c of [a, b, ...convs]) await chatStore.remove(c.id)
+  server.close()
+}
+
+async function caseQ() {
+  console.log('\n[Q] 對話參數與回覆資訊')
+  const params = require('../src/main/chat-params')
+  const clean = params.sanitize({
+    temperature: 5, topP: 'x', maxTokens: 99.6, stop: ['a', '', 'a', 'b', 'c', 'd', 'e'], contextCount: 3, evil: 1
+  })
+  ok('超出範圍會夾回、整數會取整', clean.temperature === 2 && clean.maxTokens === 100, JSON.stringify(clean))
+  ok('型別不對的丟掉、未知欄位丟掉', !('topP' in clean) && !('evil' in clean))
+  ok('stop 去重去空、最多 4 個', JSON.stringify(clean.stop) === '["a","b","c","d"]', JSON.stringify(clean.stop))
+  // 各家支援不一的參數一律不收：舊資料裡存著也不會送出去
+  const legacy = params.toRequestFields({
+    topK: 20, minP: 0.1, repeatPenalty: 1.1, presencePenalty: 1, frequencyPenalty: 1, seed: 3, reasoningEffort: 'high', contextCount: 3
+  })
+  ok('非通用參數與 contextCount 都不送上游', Object.keys(legacy).length === 0, JSON.stringify(legacy))
+  const full = params.toRequestFields({ temperature: 0.5, topP: 0.9, maxTokens: 256, stop: ['END'] })
+  ok('四個通用參數照 API 欄位名送出', full.temperature === 0.5 && full.top_p === 0.9 && full.max_tokens === 256
+    && full.stop[0] === 'END', JSON.stringify(full))
+  ok('沒勾的完全不送', Object.keys(params.toRequestFields({})).length === 0)
+
+  const server = await startServer((req, res) => {
+    sseHead(res)
+    res.write(sseChunk('答'))
+    res.write(`data: ${JSON.stringify({ choices: [], usage: { completion_tokens: 7 } })}\n\n`)
+    res.write('data: [DONE]\n\n')
+    res.end()
+  })
+  chat.setStore(makeStore({ chatApiUrl: server.url, chatThinking: true }))
+  const conv = await chatStore.create({ params: { temperature: 0.3, maxTokens: 64, contextCount: 1, topK: 10 } })
+  ok('建立時帶的參數有存起來（非通用的丟掉）', conv.params.temperature === 0.3 && conv.params.maxTokens === 64
+    && !('topK' in conv.params), JSON.stringify(conv.params))
+  await chatStore.appendMessage(conv.id, 'user', '舊問題')
+  await chatStore.appendMessage(conv.id, 'assistant', '舊回答')
+  await chat.send({ reqId: 'q1', conversationId: conv.id, text: '新問題' }, makeSender())
+  const body = server.state.lastBody
+  ok('temperature／max_tokens 送出、top_k 不送', body.temperature === 0.3 && body.max_tokens === 64 && !('top_k' in body),
+    JSON.stringify(body))
+  ok('思考開著時照舊送 medium', body.reasoning_effort === 'medium', body.reasoning_effort)
+  ok('上下文則數＝1 只帶最後一則', body.messages.length === 1 && body.messages[0].content === '新問題',
+    JSON.stringify(body.messages))
+  ok('model／stream 不會被參數蓋掉', body.model === 'test/model-a' && body.stream === true)
+  const reply = (await chatStore.get(conv.id)).messages.at(-1)
+  ok('回覆記下模型、耗時、token', reply.model === 'test/model-a' && Number.isFinite(reply.ms) && reply.tokens === 7,
+    JSON.stringify(reply))
+
+  const updated = await chatStore.setParams(conv.id, { temperature: 1 })
+  ok('setParams 整份取代', JSON.stringify(updated) === '{"temperature":1}', JSON.stringify(updated))
+  await chatStore.remove(conv.id)
+  server.close()
+}
+
+async function caseR() {
+  console.log('\n[R] 編輯、刪除、分叉、重新送出')
+  let round = 0
+  const server = await startServer((req, res) => {
+    round++
+    sseHead(res)
+    res.write(sseChunk(`回覆${round}`))
+    res.write('data: [DONE]\n\n')
+    res.end()
+  })
+  chat.setStore(makeStore({ chatApiUrl: server.url }))
+  const conv = await chatStore.create()
+  await chat.send({ reqId: 'r1', conversationId: conv.id, text: '第一問' }, makeSender())
+  await chat.send({ reqId: 'r2', conversationId: conv.id, text: '第二問' }, makeSender())
+  ok('四則訊息', (await chatStore.get(conv.id)).messages.length === 4)
+
+  const forked = await chatStore.fork(conv.id, 1)
+  ok('分叉複製到那一則（含）', forked.messages.length === 2 && forked.messages[1].content === '回覆1',
+    JSON.stringify(forked?.messages))
+  ok('分叉排在原對話正下方', (await chatStore.list()).findIndex((c) => c.id === forked.id)
+    === (await chatStore.list()).findIndex((c) => c.id === conv.id) + 1)
+  ok('分叉的索引不合法回 null', (await chatStore.fork(conv.id, 99)) === null)
+
+  ok('只能編輯使用者訊息', (await chatStore.editUserMessage(conv.id, 1, '改助理')) === null)
+  const edited = await chatStore.editUserMessage(conv.id, 0, '改過的第一問')
+  ok('編輯後這則之後全部拿掉', edited.messages.length === 1 && edited.messages[0].content === '改過的第一問',
+    JSON.stringify(edited?.messages))
+
+  // 最後一則是沒有回覆的使用者訊息 → regenerate 直接重送
+  const resent = await chat.send({ reqId: 'r3', conversationId: conv.id, regenerate: true }, makeSender())
+  ok('重新送出成功', resent.ok, JSON.stringify(resent))
+  const after = await chatStore.get(conv.id)
+  ok('沒有多出使用者訊息', after.messages.length === 2 && after.messages[0].content === '改過的第一問',
+    JSON.stringify(after.messages))
+
+  ok('刪除單則', (await chatStore.deleteMessage(conv.id, 1)) === true
+    && (await chatStore.get(conv.id)).messages.length === 1)
+  ok('刪除索引不合法回 false', (await chatStore.deleteMessage(conv.id, -1)) === false)
+  await chatStore.remove(conv.id)
+  await chatStore.remove(forked.id)
+  server.close()
+}
+
+async function caseS() {
+  console.log('\n[S] 資料夾')
+  const f1 = await chatStore.createFolder('  工作  ')
+  const f2 = await chatStore.createFolder('')
+  ok('建資料夾會整理名稱', f1.name === '工作' && f2.name === '新資料夾', JSON.stringify([f1, f2]))
+  const inFolder = await chatStore.create({ folderId: f1.id })
+  const bogus = await chatStore.create({ folderId: 'f_not_exist' })
+  const plain = await chatStore.create()
+  ok('建在資料夾裡', inFolder.folderId === f1.id)
+  ok('不存在的資料夾收斂成未分類', bogus.folderId === '')
+
+  ok('搬進資料夾', (await chatStore.moveToFolder(plain.id, f2.id)) === true
+    && (await chatStore.get(plain.id)).folderId === f2.id)
+  ok('搬到不存在的資料夾被拒', (await chatStore.moveToFolder(plain.id, 'f_nope')) === false)
+
+  await chatStore.reorder([{ id: inFolder.id, folderId: '' }, { id: plain.id, folderId: f1.id }, bogus.id])
+  const listed = await chatStore.list()
+  ok('reorder 同時改順序與歸屬', listed[0].id === inFolder.id && listed[0].folderId === ''
+    && listed[1].id === plain.id && listed[1].folderId === f1.id, JSON.stringify(listed.slice(0, 3)))
+
+  ok('收合狀態存得起來', (await chatStore.updateFolder(f1.id, { collapsed: true })) === true
+    && (await chatStore.listFolders()).find((f) => f.id === f1.id).collapsed === true)
+  ok('資料夾拖曳排序', (await chatStore.reorderFolders([f2.id, 'f_nope', f1.id])) === true
+    && (await chatStore.listFolders()).map((f) => f.id).join() === [f2.id, f1.id].join())
+  ok('資料夾排序只給一部分時，其餘接在後面', (await chatStore.reorderFolders([f1.id])) === true
+    && (await chatStore.listFolders()).map((f) => f.id).join() === [f1.id, f2.id].join())
+  ok('刪資料夾', (await chatStore.removeFolder(f1.id)) === true)
+  ok('裡面的對話回到未分類、沒有被刪', (await chatStore.get(plain.id))?.folderId === '')
+
+  const md = chatStore.toMarkdown({ title: '標題', messages: [
+    { role: 'user', content: '問' }, { role: 'assistant', content: '答', model: 'm/x', reasoning: '想' }
+  ] })
+  ok('匯出 Markdown', md.startsWith('# 標題') && md.includes('## 助理（m/x）') && md.includes('思考過程'), md)
+
+  for (const c of [inFolder, bogus, plain]) await chatStore.remove(c.id)
+  await chatStore.removeFolder(f2.id)
+}
+
+async function caseT() {
+  console.log('\n[T] AI 自動取標題')
+  const title = require('../src/main/chat-title')
+  ok('清掉引號、前綴與句尾標點', title.cleanTitle('標題：「週末露營清單」。') === '週末露營清單', title.cleanTitle('標題：「週末露營清單」。'))
+  ok('清掉思考區塊、只取第一行', title.cleanTitle('<think>想一下</think>\n\n旅行計畫\n多餘') === '旅行計畫')
+
+  const titleBodies = []
+  const server = await startServer((req, res, state) => {
+    if (state.lastBody?.stream === false) {
+      titleBodies.push(state.lastBody)
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ choices: [{ message: { content: '「東京三日遊」' } }] }))
+      return
+    }
+    sseHead(res)
+    res.write(sseChunk('建議第一天去淺草'))
+    res.write('data: [DONE]\n\n')
+    res.end()
+  })
+  chat.setStore(makeStore({ chatApiUrl: server.url, chatAutoTitle: true }))
+  const sender = makeSender()
+  const titles = []
+  sender.send = ((original) => function (channel, payload) {
+    if (channel === 'chat:title') titles.push(payload)
+    return original.call(this, channel, payload)
+  })(sender.send)
+
+  const conv = await chatStore.create()
+  await chat.send({ reqId: 't1', conversationId: conv.id, text: '幫我排東京三天的行程' }, sender)
+  const renamed = await (async () => {
+    for (let i = 0; i < 40; i++) {
+      const got = await chatStore.get(conv.id)
+      if (got.title !== '幫我排東京三天的行程') return got.title
+      await sleep(50)
+    }
+    return ''
+  })()
+  ok('第一輪回覆後換成 AI 標題', renamed === '東京三日遊', renamed)
+  ok('通知 renderer', titles.some((t) => t.conversationId === conv.id && t.title === '東京三日遊'), JSON.stringify(titles))
+  ok('取標題用同一顆模型、非串流', titleBodies[0]?.model === 'test/model-a' && titleBodies[0]?.stream === false)
+
+  // 第二輪不再取
+  await chat.send({ reqId: 't2', conversationId: conv.id, text: '第二天呢' }, sender)
+  await sleep(300)
+  ok('只有第一輪會取標題', titleBodies.length === 1, `title requests=${titleBodies.length}`)
+
+  // 使用者先改過名 → 不動
+  const mine = await chatStore.create()
+  await chatStore.appendMessage(mine.id, 'user', '隨便問問')
+  await chatStore.rename(mine.id, '我自己取的')
+  await chatStore.dropTrailingAssistant(mine.id)
+  await chat.send({ reqId: 't3', conversationId: mine.id, regenerate: true }, sender)
+  await sleep(300)
+  ok('改過名的不取標題', (await chatStore.get(mine.id)).title === '我自己取的' && titleBodies.length === 1)
+
+  // 送出前就先改名 → 第一則訊息不蓋、AI 也不取
+  const early = await chatStore.create()
+  await chatStore.rename(early.id, '先取好的名字')
+  await chat.send({ reqId: 't4', conversationId: early.id, text: '這則不該變成標題' }, sender)
+  await sleep(300)
+  ok('送出前改的名字不被第一則訊息蓋掉', (await chatStore.get(early.id)).title === '先取好的名字'
+    && titleBodies.length === 1, `${(await chatStore.get(early.id)).title} / ${titleBodies.length}`)
+
+  // 產生途中被改名 → replaceAutoTitle 不蓋
+  const racing = await chatStore.create()
+  await chatStore.appendMessage(racing.id, 'user', '暫定')
+  ok('標題已經不是暫定那份時不蓋', (await chatStore.replaceAutoTitle(racing.id, '別的暫定', '新標題')) === false
+    && (await chatStore.get(racing.id)).title === '暫定')
+
+  for (const c of [conv, mine, early, racing]) await chatStore.remove(c.id)
+  server.close()
+}
+
 async function main() {
   await app.whenReady()
   try {
@@ -978,6 +1233,11 @@ async function main() {
     await caseM()
     await caseN()
     await caseO()
+    await caseP()
+    await caseQ()
+    await caseR()
+    await caseS()
+    await caseT()
   } catch (e) {
     failed++
     console.error('\n未預期例外：', e)

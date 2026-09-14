@@ -568,15 +568,27 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // ===== 聊天（雲端串流）=====
   chat: {
-    /** @returns {Promise<Array<{ id: string, title: string, updatedAt: number, messageCount: number }>>} */
+    /** @returns {Promise<Array<{ id: string, title: string, updatedAt: number, folderId: string, messageCount: number, streaming: boolean }>>} */
     list: () => ipcRenderer.invoke('chat:list'),
     get: (id) => ipcRenderer.invoke('chat:get', id),
-    create: (projectId) => ipcRenderer.invoke('chat:create', projectId),
-    setProject: (id, projectId) => ipcRenderer.invoke('chat:setProject', id, projectId),
+    /** @param {string} [folderId] 放進哪個資料夾（空＝未分類）；取樣參數由 main 帶預設值 */
+    create: (folderId) => ipcRenderer.invoke('chat:create', folderId),
     delete: (id) => ipcRenderer.invoke('chat:delete', id),
     rename: (id, title) => ipcRenderer.invoke('chat:rename', id, title),
-    /** @param {string[]} ids 側欄拖曳後的完整順序；main 只接受既有 id */
-    reorder: (ids) => ipcRenderer.invoke('chat:reorder', ids),
+    /** @param {Array<string | { id: string, folderId: string }>} items 側欄拖曳後的完整順序；main 只接受既有 id */
+    reorder: (items) => ipcRenderer.invoke('chat:reorder', items),
+    setParams: (id, params) => ipcRenderer.invoke('chat:setParams', id, params),
+    editMessage: (id, index, text) => ipcRenderer.invoke('chat:editMessage', id, index, text),
+    deleteMessage: (id, index) => ipcRenderer.invoke('chat:deleteMessage', id, index),
+    fork: (id, index) => ipcRenderer.invoke('chat:fork', id, index),
+    export: (id) => ipcRenderer.invoke('chat:export', id),
+    folders: () => ipcRenderer.invoke('chat:folders'),
+    createFolder: (name) => ipcRenderer.invoke('chat:createFolder', name),
+    updateFolder: (id, patch) => ipcRenderer.invoke('chat:updateFolder', id, patch),
+    deleteFolder: (id) => ipcRenderer.invoke('chat:deleteFolder', id),
+    /** @param {string[]} ids 資料夾拖曳後的順序；main 只接受既有 id */
+    reorderFolders: (ids) => ipcRenderer.invoke('chat:reorderFolders', ids),
+    moveToFolder: (id, folderId) => ipcRenderer.invoke('chat:moveToFolder', id, folderId),
     scanModels: (providerId) => ipcRenderer.invoke('chat:scanModels', providerId),
     /**
      * 模型選單的選項（含 main 合成的「本機模型」那一組）。
@@ -601,6 +613,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       const handler = (_event, payload) => callback(payload)
       ipcRenderer.on('chat:delta', handler)
       return () => ipcRenderer.removeListener('chat:delta', handler)
+    },
+    /** AI 取好標題時通知 @param {(payload: { conversationId: string, title: string }) => void} callback */
+    onTitle: (callback) => {
+      const handler = (_event, payload) => callback(payload)
+      ipcRenderer.on('chat:title', handler)
+      return () => ipcRenderer.removeListener('chat:title', handler)
     }
   },
 

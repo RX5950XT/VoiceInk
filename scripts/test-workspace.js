@@ -485,13 +485,9 @@ async function reviewParsing() {
  */
 async function projectOwnership() {
   console.log('\n[Y] 對話與終端機的專案歸屬')
-  const chatStore = require(path.join(ROOT, 'src/main/chat-store.js'))
+  // 對話的專案歸屬已拿掉（改成聊天側欄自己的資料夾），這裡只剩終端機
   const termStore = require(path.join(ROOT, 'src/main/terminal/store.js'))
-  ok('合法的 id 收得下', chatStore.sanitizeProjectId('w_abc_123') === 'w_abc_123')
-  ok('缺值＝未分類', chatStore.sanitizeProjectId(undefined) === '')
-  ok('路徑之類的字串一律丟掉', chatStore.sanitizeProjectId('../../etc') === '')
-  ok('太長的丟掉', chatStore.sanitizeProjectId('w'.repeat(65)) === '')
-  ok('終端機那邊同一套', termStore.normalizeProjectId('w_abc_123') === 'w_abc_123'
+  ok('終端機的 projectId 收合法 id', termStore.normalizeProjectId('w_abc_123') === 'w_abc_123'
     && termStore.normalizeProjectId({}) === '')
 
   const rows = termStore.sanitizeAll([
