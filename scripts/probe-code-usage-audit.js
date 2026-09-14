@@ -23,6 +23,7 @@ const { app } = require('electron')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 
 const ROOT = path.join(__dirname, '..')
 const DAY_MS = 86_400_000
@@ -185,7 +186,7 @@ function auditCodexForkReplay() {
   ok('重播的每一筆都能在母檔裡核銷（＝丟掉不會少算）', missing === 0, `${missing} 筆對不到`)
 }
 
-const tmpUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-usage-audit-'))
+const tmpUserData = tempDir('voiceink-usage-audit-')
 app.setPath('userData', tmpUserData)
 
 app.whenReady().then(async () => {
@@ -264,7 +265,7 @@ app.whenReady().then(async () => {
     failed++
   } finally {
     try {
-      fs.rmSync(tmpUserData, { recursive: true, force: true })
+      removeTree(tmpUserData)
     } catch {
       // Windows 上 SQLite 釋放較慢，刪不掉就留給系統的暫存清理
     }

@@ -21,6 +21,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const { spawn } = require('node:child_process')
 
 const bridge = require('../src/main/terminal/editor-bridge')
@@ -41,7 +42,7 @@ async function until(check, timeoutMs = 15000) {
 }
 
 async function main() {
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-editbridge-'))
+  const userData = tempDir('voiceink-editbridge-')
   const target = path.join(userData, '提示詞.md')
   fs.writeFileSync(target, '原本的提示詞\n', 'utf8')
 
@@ -145,7 +146,7 @@ async function main() {
   ok('[F] EDITOR／VISUAL 是 notepad 時橋接照樣接手，真的編輯器則放行')
 
   bridge.stop()
-  try { fs.rmSync(userData, { recursive: true, force: true }) } catch { /* 暫存目錄清不掉就算了 */ }
+  try { removeTree(userData) } catch { /* 暫存目錄清不掉就算了 */ }
   console.log(`\n${passed} passed, 0 failed`)
 }
 

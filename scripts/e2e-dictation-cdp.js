@@ -10,6 +10,7 @@
  */
 const { spawn } = require('child_process')
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const http = require('http')
 const os = require('os')
 const fs = require('fs')
@@ -93,7 +94,7 @@ async function waitFor(action, timeoutMs, label) {
 }
 
 async function main() {
-  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-dict-cdp-'))
+  const userDataDir = tempDir('voiceink-dict-cdp-')
   const child = spawn(EXE, [
     `--remote-debugging-port=${PORT}`,
     `--user-data-dir=${userDataDir}`,
@@ -429,7 +430,7 @@ async function main() {
     for (let i = 0; i < 5; i++) {
       await sleep(500)
       try {
-        fs.rmSync(userDataDir, { recursive: true, force: true })
+        removeTree(userDataDir)
         break
       } catch { /* retry */ }
     }

@@ -6,6 +6,7 @@
  */
 const { spawn } = require('child_process')
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const os = require('os')
 const fs = require('fs')
 const http = require('http')
@@ -13,7 +14,7 @@ const http = require('http')
 const PORT = 9235
 // 暫存 user-data-dir：使用者正在用（常駐）的 App 佔著 single-instance lock，
 // 沒有自己的資料夾會被它擋掉（second-instance 轉交後退出，CDP 連不上）
-const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-smoke-'))
+const USER_DATA_DIR = tempDir('voiceink-smoke-')
 // 模型 registry 在 userData/models（正式環境 7GB）。暫存環境用 junction 接過去，
 // 翻譯那段才跑得起來；junction 刪掉不動原資料夾。
 const REAL_MODELS = path.join(process.env.APPDATA, 'voiceink', 'models')
@@ -674,7 +675,7 @@ async function main() {
     stopChildTree(child)
     // Windows 釋放暫存 SQLite 較慢，有限重試
     for (let i = 0; i < 5; i += 1) {
-      try { fs.rmSync(USER_DATA_DIR, { recursive: true, force: true }); break } catch { await sleep(600) }
+      try { removeTree(USER_DATA_DIR); break } catch { await sleep(600) }
     }
   }
 

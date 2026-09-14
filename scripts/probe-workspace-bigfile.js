@@ -14,13 +14,14 @@
  */
 const { spawn, execFileSync } = require('child_process')
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const http = require('http')
 const os = require('os')
 const fs = require('fs')
 
 const PORT = 9253
 const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
-const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-bigfile-'))
+const USER_DATA_DIR = tempDir('voiceink-bigfile-')
 fs.writeFileSync(path.join(USER_DATA_DIR, 'config.json'), JSON.stringify({ sysmonSensors: false }))
 
 const PROJECT = path.join(USER_DATA_DIR, 'proj')
@@ -300,7 +301,7 @@ async function main() {
     if (cdp) cdp.close()
     try { execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' }) } catch { /* 已結束 */ }
     await sleep(600)
-    try { fs.rmSync(USER_DATA_DIR, { recursive: true, force: true }) } catch { /* 檔案還被抓著 */ }
+    try { removeTree(USER_DATA_DIR) } catch { /* 檔案還被抓著 */ }
   }
 
   const failed = results.filter((r) => !r.pass)

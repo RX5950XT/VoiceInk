@@ -5,9 +5,10 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const { spawn, execFileSync } = require('node:child_process')
 const root = path.join(__dirname, '..')
-const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-translate-long-'))
+const dir = tempDir('voiceink-translate-long-')
 const cfg = JSON.parse(fs.readFileSync(path.join(process.env.APPDATA, 'voiceink/config.json'), 'utf8'))
 fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({
   translator: 'cloud', chatProviders: cfg.chatProviders,
@@ -90,5 +91,5 @@ main().catch((e) => { console.error(e.message); process.exitCode = 1 }).finally(
     try { execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' }) } catch { /* 已結束 */ }
   }
   await sleep(500)
-  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 })
+  removeTree(dir)
 })

@@ -36,21 +36,22 @@
  */
 const { spawn, execFileSync } = require('child_process')
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const http = require('http')
 const os = require('os')
 const fs = require('fs')
 
 const PORT = 9274
 const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
-const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-e2e-ws-'))
+const USER_DATA_DIR = tempDir('voiceink-e2e-ws-')
 fs.writeFileSync(path.join(USER_DATA_DIR, 'config.json'), JSON.stringify({ sysmonSensors: false }))
-const PROJECT_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-proj-'))
-const DROP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-drop-'))
+const PROJECT_DIR = tempDir('voiceink-proj-')
+const DROP_DIR = tempDir('voiceink-drop-')
 /** 專案外面的資料夾：用來驗「專案裡的資料夾連結指到這裡會被擋下來」 */
-const OUTSIDE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-outside-'))
+const OUTSIDE_DIR = tempDir('voiceink-outside-')
 const PROJECT_ID = 'w_e2e_workspace'
 /** 第二個專案：只用來驗「每個專案自己一組分頁」，裡面不放東西 */
-const PROJECT2_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-proj2-'))
+const PROJECT2_DIR = tempDir('voiceink-proj2-')
 const PROJECT2_ID = 'w_e2e_workspace_2'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -1590,19 +1591,19 @@ async function main() {
     cdp?.close()
     stopTestApp(child)
     for (let i = 0; i < 5; i++) {
-      try { fs.rmSync(USER_DATA_DIR, { recursive: true, force: true }); break } catch { await sleep(600) }
+      try { removeTree(USER_DATA_DIR); break } catch { await sleep(600) }
     }
     for (let i = 0; i < 5; i++) {
-      try { fs.rmSync(PROJECT_DIR, { recursive: true, force: true }); break } catch { await sleep(600) }
+      try { removeTree(PROJECT_DIR); break } catch { await sleep(600) }
     }
     for (let i = 0; i < 5; i++) {
-      try { fs.rmSync(DROP_DIR, { recursive: true, force: true }); break } catch { await sleep(600) }
+      try { removeTree(DROP_DIR); break } catch { await sleep(600) }
     }
     for (let i = 0; i < 5; i += 1) {
-      try { fs.rmSync(OUTSIDE_DIR, { recursive: true, force: true }); break } catch { await sleep(600) }
+      try { removeTree(OUTSIDE_DIR); break } catch { await sleep(600) }
     }
     for (let i = 0; i < 5; i++) {
-      try { fs.rmSync(PROJECT2_DIR, { recursive: true, force: true }); break } catch { await sleep(600) }
+      try { removeTree(PROJECT2_DIR); break } catch { await sleep(600) }
     }
   }
 

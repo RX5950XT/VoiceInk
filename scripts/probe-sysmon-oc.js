@@ -11,9 +11,10 @@ const { execFileSync } = require('child_process')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
+const { tempFile } = require('./lib/test-temp')
 
 const EXE = path.join(__dirname, '..', 'resources', 'sensors', 'VoiceInkSensors.exe')
-const LOG = path.join(os.tmpdir(), 'voiceink-oc-probe.jsonl')
+const LOG = tempFile('oc-probe.jsonl')
 
 function smi() {
   const raw = execFileSync('nvidia-smi', [

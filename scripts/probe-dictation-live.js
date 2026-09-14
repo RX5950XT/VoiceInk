@@ -15,6 +15,7 @@
  */
 const { spawn } = require('child_process')
 const path = require('path')
+const { tempFile } = require('./lib/test-temp')
 const http = require('http')
 const os = require('os')
 const fs = require('fs')
@@ -116,7 +117,7 @@ async function makeAudio(outPath) {
 }
 
 async function main() {
-  const wav = path.join(os.tmpdir(), `voiceink-dictation-probe-${process.pid}.wav`)
+  const wav = tempFile('dictation-probe.wav')
   console.log(`[1/5] 合成測試語音：「${SENTENCE}」`)
   await makeAudio(wav)
   console.log(`      → ${wav}（${(fs.statSync(wav).size / 1024).toFixed(0)} KB）`)

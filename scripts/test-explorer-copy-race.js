@@ -5,10 +5,11 @@ const fs = require('node:fs')
 const fsp = require('node:fs/promises')
 const os = require('node:os')
 const path = require('node:path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const files = require('../src/main/explorer/fs')
 
 async function main() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-copy-race-'))
+  const root = tempDir('voiceink-copy-race-')
   const copy = fsp.cp
   const rename = fsp.rename
   try {
@@ -30,7 +31,7 @@ async function main() {
   } finally {
     fsp.cp = copy
     fsp.rename = rename
-    fs.rmSync(root, { recursive: true, force: true })
+    removeTree(root)
   }
 }
 main().catch(error => { console.error(error); process.exitCode = 1 })

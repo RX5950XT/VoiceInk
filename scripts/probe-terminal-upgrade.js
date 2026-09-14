@@ -12,13 +12,14 @@
  */
 const { spawn, execFileSync } = require('child_process')
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const http = require('http')
 const os = require('os')
 const fs = require('fs')
 
 const PORT = 9251
 const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
-const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-probe-termup-'))
+const USER_DATA_DIR = tempDir('voiceink-probe-termup-')
 fs.writeFileSync(path.join(USER_DATA_DIR, 'config.json'), JSON.stringify({ sysmonSensors: false }))
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -332,7 +333,7 @@ async function main() {
     }
     cdp?.close()
     stopTestApp(child)
-    try { fs.rmSync(USER_DATA_DIR, { recursive: true, force: true }) } catch { /* 稍後由系統清理 */ }
+    try { removeTree(USER_DATA_DIR) } catch { /* 稍後由系統清理 */ }
   }
 
   const failed = results.filter((r) => !r.pass)

@@ -28,6 +28,7 @@ const { app, BrowserWindow } = require('electron')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 
 const ROOT = path.join(__dirname, '..')
 const MODULES = path.join(ROOT, 'node_modules', '@xterm')
@@ -233,7 +234,7 @@ const PAGE = [
 ].join('\n')
 
 async function main() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vi-flicker-'))
+  const dir = tempDir('vi-flicker-')
   const page = path.join(dir, 'probe.html')
   fs.writeFileSync(page, PAGE, 'utf8')
 
@@ -367,7 +368,7 @@ async function main() {
   }
 
   win.destroy()
-  fs.rmSync(dir, { recursive: true, force: true })
+  removeTree(dir)
   console.log(`\n${failed ? `${failed} failed` : '全部通過'}`)
   app.exit(failed ? 1 : 0)
 }

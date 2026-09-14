@@ -31,6 +31,7 @@
 
 const fs = require('fs')
 const path = require('path')
+const { removeTree } = require('./lib/test-temp')
 const { spawn } = require('child_process')
 
 const ROOT = path.join(__dirname, '..')
@@ -63,7 +64,7 @@ const has = (flag) => args.includes(flag)
 function unlinkDest(name) {
   const to = path.join(SANDBOX, name)
   try {
-    if (fs.lstatSync(to)) fs.rmSync(to, { recursive: true, force: true })
+    if (fs.lstatSync(to)) removeTree(to)
   } catch {
     // 本來就不存在
   }
@@ -107,7 +108,7 @@ function linkDir(name) {
 function seed() {
   const done = []
   if (has('--reset') && fs.existsSync(SANDBOX)) {
-    fs.rmSync(SANDBOX, { recursive: true, force: true })
+    removeTree(SANDBOX)
     done.push('清掉舊沙箱')
   }
   fs.mkdirSync(SANDBOX, { recursive: true })

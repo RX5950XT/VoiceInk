@@ -27,6 +27,7 @@
  */
 const { spawn, execFileSync } = require('child_process')
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const http = require('http')
 const os = require('os')
 const fs = require('fs')
@@ -34,7 +35,7 @@ const zlib = require('zlib')
 
 const PORT = 9257
 const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
-const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-probe-bg-'))
+const USER_DATA_DIR = tempDir('voiceink-probe-bg-')
 
 /** 8×8 的純紅 PNG（夠大到量得出 background-image，夠小到寫死在這裡） */
 const RED_PNG = Buffer.from(
@@ -369,7 +370,7 @@ async function main() {
       try { execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' }) } catch { /* 已結束 */ }
     }
     await sleep(600)
-    try { fs.rmSync(USER_DATA_DIR, { recursive: true, force: true }) } catch { /* 佔用中就留著 */ }
+    try { removeTree(USER_DATA_DIR) } catch { /* 佔用中就留著 */ }
   }
 
   const failed = results.filter((r) => !r.pass)

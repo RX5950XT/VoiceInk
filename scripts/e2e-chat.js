@@ -5,12 +5,13 @@
  * userData 指向暫存目錄，不會動到真正的 chats.json。
  */
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const os = require('os')
 const fs = require('fs')
 const http = require('http')
 const { app } = require('electron')
 
-const TMP = path.join(os.tmpdir(), `voiceink-e2e-chat-${process.pid}`)
+const TMP = tempDir('e2e-chat-')
 fs.mkdirSync(TMP, { recursive: true })
 app.setPath('userData', TMP)
 
@@ -1243,7 +1244,7 @@ async function main() {
     console.error('\n未預期例外：', e)
   }
   console.log(`\n${failed === 0 ? 'ALL PASS' : 'FAILED'}  ${passed} passed, ${failed} failed\n`)
-  fs.rmSync(TMP, { recursive: true, force: true })
+  removeTree(TMP)
   app.exit(failed === 0 ? 0 : 1)
 }
 

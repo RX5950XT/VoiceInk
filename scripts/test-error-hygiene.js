@@ -17,6 +17,7 @@
 const http = require('http')
 const os = require('os')
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const fs = require('fs')
 const Module = require('module')
 const vm = require('vm')
@@ -26,7 +27,7 @@ const ROOT = path.join(__dirname, '..')
 // local-llm 會 require('electron')（只為了 app.getPath）：用 stub 讓它能在純 node 載入
 const realResolve = Module._resolveFilename
 const STUB = path.join(__dirname, '_electron-stub-error-hygiene.js')
-fs.writeFileSync(STUB, "module.exports = { app: { getPath: () => require('os').tmpdir(), isPackaged: false } }\n")
+fs.writeFileSync(STUB, `module.exports = { app: { getPath: () => ${JSON.stringify(tempDir('hygiene-userdata-'))}, isPackaged: false } }\n`)
 Module._resolveFilename = function (request, ...rest) {
   if (request === 'electron') return STUB
   return realResolve.call(this, request, ...rest)
@@ -330,7 +331,7 @@ async function testUsageApiProviders() {
   const { syncCommandCode } = require(path.join(ROOT, 'src/main/usage/commandcode.js'))
   const KEY = 'sk-hygiene-sentinel-key'
   const BODY = '<<upstream-secret-echo sk-hygiene-sentinel-key>>'
-  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-hygiene-usage-'))
+  const homeDir = tempDir('voiceink-hygiene-usage-')
   try {
     for (const [name, sync, envVar] of [
       ['opencode-go', syncOpenCode, 'OPENCODE_API_KEY'],
@@ -353,7 +354,7 @@ async function testUsageApiProviders() {
       }
     }
   } finally {
-    fs.rmSync(homeDir, { recursive: true, force: true })
+    removeTree(homeDir)
   }
 }
 

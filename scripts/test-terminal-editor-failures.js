@@ -3,11 +3,12 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const { spawn, execFileSync } = require('node:child_process')
 const bridge = require('../src/main/terminal/editor-bridge')
 
 async function main() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-editor-failure-'))
+  const root = tempDir('voiceink-editor-failure-')
   const failures = []
   const children = []
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
@@ -53,7 +54,7 @@ async function main() {
       if (child.exitCode !== null) continue
       try { execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }) } catch { /* 已退出 */ }
     }
-    fs.rmSync(root, { recursive: true, force: true })
+    removeTree(root)
   }
   assert.equal(failures.length, 0, failures.map(error => error.message).join('\n'))
   console.log('PASS 編輯器讀取失敗不死等、寫回失敗回報錯誤並保留內容')

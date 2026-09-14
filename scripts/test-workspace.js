@@ -16,6 +16,7 @@
 'use strict'
 
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const os = require('os')
 const fs = require('fs')
 const fsp = require('fs/promises')
@@ -91,7 +92,7 @@ const PNG_1PX = Buffer.from(
 // ===== [B] 真的讀寫一輪 =====
 async function fileRoundTrip() {
   console.log('\n[B] 檔案讀寫（暫存資料夾）')
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vi-ws-'))
+  const tmp = tempDir('vi-ws-')
   try {
     fs.mkdirSync(path.join(tmp, 'sub'))
     fs.writeFileSync(path.join(tmp, 'a.md'), '# 標題\n')
@@ -243,7 +244,7 @@ async function fileRoundTrip() {
     }
 
   } finally {
-    fs.rmSync(tmp, { recursive: true, force: true })
+    removeTree(tmp)
   }
 }
 
@@ -255,7 +256,7 @@ async function fileRoundTrip() {
  */
 async function linkEscape() {
   console.log('\n[U] 連結逃逸守衛')
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'vi-link-'))
+  const base = tempDir('vi-link-')
   const proj = path.join(base, 'proj')
   const outside = path.join(base, 'outside')
   fs.mkdirSync(proj)
@@ -320,7 +321,7 @@ async function linkEscape() {
       ok('專案根目錄本身是連結時照常運作', read.content === 'ok')
     }
   } finally {
-    fs.rmSync(base, { recursive: true, force: true })
+    removeTree(base)
   }
 }
 
@@ -329,7 +330,7 @@ async function linkEscape() {
  */
 async function staleWrite() {
   console.log('\n[V] 存檔版本守衛')
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vi-stale-'))
+  const tmp = tempDir('vi-stale-')
   try {
     fs.writeFileSync(path.join(tmp, 'a.txt'), 'v1')
     const first = await files.readFile(tmp, 'a.txt')
@@ -379,7 +380,7 @@ async function staleWrite() {
     ok('併發存檔不會寫出混在一起的內容', raced === 'A'.repeat(5000) || raced === 'B'.repeat(5000))
     ok('沒有留下暫存檔', fs.readdirSync(tmp).every((n) => !n.includes('voiceink-tmp')))
   } finally {
-    fs.rmSync(tmp, { recursive: true, force: true })
+    removeTree(tmp)
   }
 }
 
@@ -392,7 +393,7 @@ async function staleWrite() {
  */
 async function agentHomes() {
   console.log('\n[W] AI 記錄的家目錄與去重')
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'vi-agent-homes-'))
+  const base = tempDir('vi-agent-homes-')
   const home = path.join(base, 'home')
   const runtime = path.join(base, 'runtime')
   fs.mkdirSync(path.join(home, '.codex', 'sessions'), { recursive: true })
@@ -444,7 +445,7 @@ async function agentHomes() {
     else process.env.CODEX_HOME = originalCodexHome
     if (originalClaudeDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
     else process.env.CLAUDE_CONFIG_DIR = originalClaudeDir
-    fs.rmSync(base, { recursive: true, force: true })
+    removeTree(base)
   }
 
   // 純函式：去重規則本身
@@ -507,8 +508,8 @@ async function projectOwnership() {
     && termStore.normalizeProjectId({}) === '')
 
   const rows = termStore.sanitizeAll([
-    { id: 't1', shell: 'pwsh', preset: 'shell', cwd: os.tmpdir(), projectId: 'w_1' },
-    { id: 't2', shell: 'pwsh', preset: 'shell', cwd: os.tmpdir() }
+    { id: 't1', shell: 'pwsh', preset: 'shell', cwd: os.tmpdir(), projectId: 'w_1' }, // temp-ok: 只當字串資料，不建檔
+    { id: 't2', shell: 'pwsh', preset: 'shell', cwd: os.tmpdir() } // temp-ok: 只當字串資料，不建檔
   ])
   ok('舊檔沒有這個欄位也讀得起來', rows.length === 2 && rows[1].projectId === '')
   ok('有值的讀得回來', rows[0].projectId === 'w_1')
@@ -530,7 +531,7 @@ async function watchClassify() {
 
   // 事件一直來時，純 trailing debounce 會永遠等不到安靜（npm install 就是這樣），
   // 而那正好是最需要更新畫面的時候 → 最久 MAX_WAIT_MS 一定要送一次。
-  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'vi-watch-'))
+  const dir = tempDir('vi-watch-')
   try {
     let sent = 0
     const started = watch.start('p-watch', dir, () => { sent += 1 })
@@ -676,7 +677,7 @@ async function main() {
     ])
     ok('Codex 新格式讀得到 id 與標題', currentFormatHead.sessionId === 'xyz-789' && currentFormatHead.title === '目前格式的提問')
 
-    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'vi-codex-detail-'))
+    const codexHome = tempDir('vi-codex-detail-')
     const codexDir = path.join(codexHome, '.codex', 'sessions')
     fs.mkdirSync(codexDir, { recursive: true })
     fs.writeFileSync(path.join(codexDir, 'rollout-xyz-789.jsonl'), [
@@ -741,7 +742,7 @@ async function main() {
       else process.env.CODEX_HOME = originalCodexHome
       if (originalClaudeDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
       else process.env.CLAUDE_CONFIG_DIR = originalClaudeDir
-      fs.rmSync(codexHome, { recursive: true, force: true })
+      removeTree(codexHome)
     }
     ok('Codex 讀得到標題', head.title === '幫我加測試')
 
@@ -906,7 +907,7 @@ console.log('\n[L] 分頁狀態持久化 sanitizeTabsState')
 // ===== [M] 外部變更偵測 getFileMtime =====
 console.log('\n[M] 外部變更偵測 getFileMtime')
 {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vi-mtime-'))
+  const tmpDir = tempDir('vi-mtime-')
   try {
     const testFile = path.join(tmpDir, 'test.txt')
     fs.writeFileSync(testFile, 'hello')
@@ -922,7 +923,7 @@ console.log('\n[M] 外部變更偵測 getFileMtime')
     }
     ok('逃逸路徑取 mtime 被擋', escapeBlocked)
   } finally {
-    fs.rmSync(tmpDir, { recursive: true, force: true })
+    removeTree(tmpDir)
   }
 }
 
@@ -1016,7 +1017,7 @@ console.log('\n[Q2] ipc.js／main.js／preload 三份清單對得起來')
 // 不一致的話會出現「搜尋找得到但 Ctrl+P 找不到」（或反過來）這種說不清的怪事。
 console.log('\n[R] 快速開檔的檔案清單 listFiles')
 {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vi-ws-qo-'))
+  const dir = tempDir('vi-ws-qo-')
   fs.mkdirSync(path.join(dir, 'src'), { recursive: true })
   fs.mkdirSync(path.join(dir, 'node_modules', 'pkg'), { recursive: true })
   fs.mkdirSync(path.join(dir, '.git'), { recursive: true })
@@ -1031,7 +1032,7 @@ console.log('\n[R] 快速開檔的檔案清單 listFiles')
   ok('跳過 node_modules 與 .git', rels.length === 2, rels.join(', '))
   ok('路徑一律是正斜線的相對路徑', rels.every((rel) => !rel.includes('\\') && !path.isAbsolute(rel)))
   ok('沒有超過上限時 truncated 是 false', result.truncated === false)
-  fs.rmSync(dir, { recursive: true, force: true })
+  removeTree(dir)
 }
 
 // ===== [S] 拖曳搬檔 files.moveEntry =====
@@ -1053,7 +1054,7 @@ console.log('\n[S] 拖曳搬檔 files.moveEntry')
     }
   }
 
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vi-ws-move-'))
+  const dir = tempDir('vi-ws-move-')
   fs.mkdirSync(path.join(dir, 'src', 'lib'), { recursive: true })
   fs.mkdirSync(path.join(dir, 'docs'), { recursive: true })
   fs.writeFileSync(path.join(dir, 'a.txt'), 'A')
@@ -1078,7 +1079,7 @@ console.log('\n[S] 拖曳搬檔 files.moveEntry')
   const same = await files.moveEntry(dir, 'a.txt', '')
   ok('搬到原本就在的那一層＝什麼都不做', same.rel === 'a.txt', same.rel)
 
-  fs.rmSync(dir, { recursive: true, force: true })
+  removeTree(dir)
 }
 
 // ===== [T] git worktree =====
@@ -1130,8 +1131,8 @@ console.log('\n[T] git worktree 的解析與分支名白名單')
   console.log('\n[T] check-ignore')
   {
     const { execFile } = require('child_process')
-    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'ws-ignore-'))
-    const plain = await fsp.mkdtemp(path.join(os.tmpdir(), 'ws-plain-'))
+    const dir = tempDir('ws-ignore-')
+    const plain = tempDir('ws-plain-')
     const runGit = (args) =>
       new Promise((resolve) => execFile('git', args, { cwd: dir }, () => resolve()))
     await runGit(['init'])
@@ -1158,7 +1159,7 @@ console.log('\n[T] git worktree 的解析與分支名白名單')
   console.log('\n[U] 變更行數')
   {
     const { execFile } = require('child_process')
-    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'ws-lines-'))
+    const dir = tempDir('ws-lines-')
     const runGit = (args) =>
       new Promise((resolve) => execFile('git', args, { cwd: dir }, () => resolve()))
     await runGit(['init'])

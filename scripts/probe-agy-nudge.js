@@ -16,6 +16,7 @@ const { execFile, spawn } = require('child_process')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 
 const TIMEOUT_MS = 25000
 
@@ -104,7 +105,7 @@ async function main() {
     console.log('找不到 agy.exe，跳過')
     return
   }
-  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-nocred-'))
+  const sandbox = tempDir('agy-nocred-')
   const blindEnv = {
     ...process.env,
     USERPROFILE: sandbox,
@@ -160,7 +161,7 @@ async function main() {
     if (r.out) console.log(`  stdout: ${r.out}`)
     if (r.err) console.log(`  stderr: ${r.err}`)
   }
-  try { fs.rmSync(sandbox, { recursive: true, force: true }) } catch { /* best effort */ }
+  try { removeTree(sandbox) } catch { /* best effort */ }
 }
 
 main()

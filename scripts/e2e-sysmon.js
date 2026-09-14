@@ -21,11 +21,12 @@
 
 const { app, dialog } = require('electron')
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const os = require('os')
 const fs = require('fs')
 const { spawn, execFileSync } = require('child_process')
 
-const SANDBOX = path.join(os.tmpdir(), `voiceink-e2e-sysmon-${process.pid}`)
+const SANDBOX = tempDir('e2e-sysmon-')
 fs.mkdirSync(SANDBOX, { recursive: true })
 app.setPath('userData', SANDBOX)
 
@@ -235,7 +236,7 @@ async function main() {
     ['cpu', 'memory', 'diskTotal', 'gpu', 'gpuMemory', 'name', 'pid'].every((k) => k in metrics.SORT_KEYS))
 
   console.log(`\n${passed} passed, ${failed} failed`)
-  try { fs.rmSync(SANDBOX, { recursive: true, force: true }) } catch { /* Windows 有時晚一點才放手 */ }
+  try { removeTree(SANDBOX) } catch { /* Windows 有時晚一點才放手 */ }
   app.exit(failed === 0 ? 0 : 1)
 }
 

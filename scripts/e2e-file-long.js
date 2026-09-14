@@ -8,6 +8,7 @@
  */
 const { app } = require('electron')
 const path = require('path')
+const { tempFile } = require('./lib/test-temp')
 const fs = require('fs')
 const os = require('os')
 
@@ -47,10 +48,10 @@ app.whenReady().then(async () => {
   ok('MIN_GUARANTEED = 2h', fileTranscribe.MIN_GUARANTEED_DURATION_SEC === 2 * 3600)
 
   // 3) 大小上限
-  const fakeHuge = path.join(os.tmpdir(), 'voiceink-e2e-huge.wav')
+  const fakeHuge = tempFile('huge.wav')
   // 不真的建 200MB，只測 validate 對 path 不存在／副檔名
   try {
-    fileTranscribe.validateFilePath(path.join(os.tmpdir(), 'no-such-voiceink-xyz.mp3'))
+    fileTranscribe.validateFilePath(tempFile('no-such-voiceink-xyz.mp3'))
     ok('missing file throws', false)
   } catch (e) {
     ok('missing file throws', /不存在/.test(e.message), e.message)
@@ -64,7 +65,7 @@ app.whenReady().then(async () => {
   }
 
   // 4) 產生 60s 16k mono wav（≥ 2 個 28s 段）
-  const wavPath = path.join(os.tmpdir(), 'voiceink-e2e-60s.wav')
+  const wavPath = tempFile('60s.wav')
   const seconds = 60
   const sampleRate = 16000
   const nSamples = seconds * sampleRate

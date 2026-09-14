@@ -3,9 +3,12 @@
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
+const { removeTree } = require('./lib/test-temp')
 const net = require('node:net')
 const { spawn } = require('node:child_process')
 const root = path.resolve(__dirname, '..')
+// 還沒 build 過的 checkout 沒有 dist/
+fs.mkdirSync(path.join(root, 'dist'), { recursive: true })
 
 if (!process.versions.electron) {
   const child = spawn(path.join(root, 'node_modules/electron/dist/electron.exe'), [__filename], {
@@ -52,7 +55,7 @@ if (!process.versions.electron) {
     const savedPath = process.env.PATH
     process.env.PATH = ''
     try { assert.ok(connection(poisoned, true)?.token, '找不到 whoami／icacls 就建不出宿主資料夾') }
-    finally { process.env.PATH = savedPath; fs.rmSync(poisoned, { recursive: true, force: true }) }
+    finally { process.env.PATH = savedPath; removeTree(poisoned) }
     console.log('PASS 建立宿主資料夾不靠 PATH 找 whoami／icacls')
 
     const snapshots = await Promise.all([

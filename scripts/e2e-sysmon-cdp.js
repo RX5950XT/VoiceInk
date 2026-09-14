@@ -16,6 +16,7 @@
  */
 const { spawn } = require('child_process')
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const os = require('os')
 const fs = require('fs')
 const http = require('http')
@@ -26,7 +27,7 @@ const PORT = 9247
 const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
 // 暫存 user-data-dir：使用者開著的正式實例佔 single-instance lock，
 // 沒有自己的資料夾會被擋掉（second-instance 轉交後退出，CDP 等不到主視窗）
-const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-cdp-'))
+const USER_DATA_DIR = tempDir('voiceink-cdp-')
 fs.writeFileSync(path.join(USER_DATA_DIR, 'config.json'), JSON.stringify({ sysmonSensors: false }))
 const RESTORE_KEYS = ['sysmonInterval', 'sysmonSort', 'sysmonSensors']
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -717,7 +718,7 @@ async function main() {
     }
     // 暫存資料夾清掉（Windows 釋放 SQLite 較慢，有限重試）
     for (let i = 0; i < 5; i += 1) {
-      try { fs.rmSync(USER_DATA_DIR, { recursive: true, force: true }); break } catch { await sleep(600) }
+      try { removeTree(USER_DATA_DIR); break } catch { await sleep(600) }
     }
   }
 

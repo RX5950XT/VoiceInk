@@ -8,13 +8,14 @@
  */
 const { spawn } = require('child_process')
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const os = require('os')
 const fs = require('fs')
 const http = require('http')
 
 const PORT = 9241
 const ROOT = path.join(__dirname, '..')
-const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-dialog-'))
+const USER_DATA_DIR = tempDir('voiceink-dialog-')
 const IS_WIN = process.platform === 'win32'
 
 const results = []
@@ -242,7 +243,7 @@ async function main() {
     cdp?.close()
     stopTree(electron)
     stopTree(vite)
-    try { fs.rmSync(USER_DATA_DIR, { recursive: true, force: true }) } catch { /* 佔用中就留著 */ }
+    try { removeTree(USER_DATA_DIR) } catch { /* 佔用中就留著 */ }
   }
 
   const failed = results.filter((r) => !r.pass)

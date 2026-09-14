@@ -4,10 +4,11 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const Module = require('node:module')
 const drives = require('../src/main/explorer/drives')
 
-const root = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-places-test-'))
+const root = tempDir('voiceink-places-test-')
 const originalLoad = Module._load
 const originalHome = os.homedir
 const folders = ['Desktop', 'Downloads', 'Documents', 'Pictures', 'Music', 'Videos']
@@ -38,5 +39,5 @@ try {
 } finally {
   Module._load = originalLoad
   os.homedir = originalHome
-  fs.rmSync(root, { recursive: true, force: true })
+  removeTree(root)
 }

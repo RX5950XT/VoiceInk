@@ -13,6 +13,7 @@
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 
 const ROOT = path.join(__dirname, '..')
 const gguf = require(path.join(ROOT, 'src/main/hfmodels/gguf.js'))
@@ -72,7 +73,7 @@ function buildGguf() {
   ])
 }
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-hfmodels-'))
+const tmp = tempDir('voiceink-hfmodels-')
 try {
   console.log('\n[A] GGUF 檔頭解析')
   {
@@ -403,7 +404,7 @@ try {
     ok('壞路徑組不出網址', threw === 'INVALID_PATH', threw)
   }
 } finally {
-  fs.rmSync(tmp, { recursive: true, force: true })
+  removeTree(tmp)
 }
 
 // ===== 需要非同步的段落 =====
@@ -428,7 +429,7 @@ function fakeFetch(spec) {
 }
 
 async function asyncSections() {
-  const tmp2 = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-hfmodels-b-'))
+  const tmp2 = tempDir('voiceink-hfmodels-b-')
   try {
     console.log('\n[H] 本機模型庫')
     {
@@ -609,7 +610,7 @@ async function asyncSections() {
       ok('沒有留下 .tmp', !fs.existsSync(`${file}.tmp`))
     }
   } finally {
-    fs.rmSync(tmp2, { recursive: true, force: true })
+    removeTree(tmp2)
   }
 }
 

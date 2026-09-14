@@ -4,9 +4,10 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const { spawnSync } = require('node:child_process')
 
-const root = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-download-test-'))
+const root = tempDir('voiceink-download-test-')
 try {
   fs.mkdirSync(path.join(root, 'uffs', 'uffs-windows-x64.zip.part'), { recursive: true })
   const script = `
@@ -31,5 +32,5 @@ try {
   assert.match(result.stdout, /UFFS_INSTALL/)
   console.log('PASS: 下載寫入失敗回傳 UFFS_INSTALL，不產生 uncaughtException')
 } finally {
-  fs.rmSync(root, { recursive: true, force: true })
+  removeTree(root)
 }

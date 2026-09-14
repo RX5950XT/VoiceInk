@@ -12,12 +12,13 @@
 const assert = require('assert')
 const fs = require('fs')
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const Module = require('module')
 
 const ROOT = path.join(__dirname, '..')
-const resources = fs.mkdtempSync(path.join(require('os').tmpdir(), 'vi-update-test-'))
+const resources = tempDir('vi-update-test-')
 process.resourcesPath = resources
-process.on('exit', () => fs.rmSync(resources, { recursive: true, force: true }))
+process.on('exit', () => removeTree(resources))
 
 /** 假的 electron-updater：把 on() 收下來，測試自己觸發 */
 function makeFakeAutoUpdater() {

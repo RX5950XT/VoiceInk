@@ -10,6 +10,7 @@
 'use strict'
 
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const fs = require('fs')
 const os = require('os')
 
@@ -581,7 +582,7 @@ async function testPawnIo() {
     return child
   }
   const fakeFetch = async () => ({ ok: true, status: 200, arrayBuffer: async () => new Uint8Array(64).buffer })
-  const tmp = fs.mkdtempSync(path.join(require('os').tmpdir(), 'voiceink-pawnio-test-'))
+  const tmp = tempDir('voiceink-pawnio-test-')
   try {
     // isInstalledFn 固定回 false，測試機本來就裝了 PawnIO 也走得到驗簽那一段
     await pawnio.install({ fetchFn: fakeFetch, spawnFn: fakeSpawn, tmpDir: tmp, isInstalledFn: () => false })
@@ -593,7 +594,7 @@ async function testPawnIo() {
     ok('簽章不符時沒有跑過 Start-Process', !calls.some((c) => c.includes('Start-Process')))
     ok('中止後不留下安裝檔', fs.readdirSync(tmp).length === 0)
   }
-  fs.rmSync(tmp, { recursive: true, force: true })
+  removeTree(tmp)
 
   // 真的走一次 WinVerifyTrust：微軟簽的檔案「簽章有效」但簽署者不是 PawnIO 作者，必須回 false。
   // （正向案例需要真的下載安裝檔，留給 e2e-sysmon-sensors.js）

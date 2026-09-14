@@ -8,7 +8,7 @@ const path = require('path')
 const os = require('os')
 
 const SRC = path.join(process.env.APPDATA, 'voiceink')
-const DST = path.join(os.tmpdir(), 'voiceink-preview')
+const DST = path.join(os.tmpdir(), 'voiceink-preview') // temp-ok: 預覽版的固定 userData，要留著給下次開
 
 function copyFile(name) {
   const from = path.join(SRC, name)

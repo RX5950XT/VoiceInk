@@ -3,6 +3,7 @@
  */
 const http = require('http')
 const path = require('path')
+const { tempDir } = require('./lib/test-temp')
 const os = require('os')
 const fs = require('fs')
 const { spawn } = require('child_process')
@@ -13,7 +14,7 @@ const PORT = 9251
 const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
 // 暫存 user-data-dir：使用者開著的正式實例佔 single-instance lock，
 // 沒有自己的資料夾會被擋掉（second-instance 轉交後退出，CDP 等不到主視窗）
-const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-cdp-'))
+const USER_DATA_DIR = tempDir('voiceink-cdp-')
 // 模型放在 `<userData>/models`，換了 user-data-dir 就等於一顆模型都沒裝（轉錄會直接失敗）。
 // 用 junction 把真正的模型資料夾接進來——只讀不寫，設定仍然各自獨立。
 {

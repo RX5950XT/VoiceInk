@@ -15,11 +15,12 @@ const { spawn, execFileSync } = require('child_process')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const http = require('http')
 
 const PORT = 9271
 const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
-const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-probe-preview-'))
+const USER_DATA_DIR = tempDir('voiceink-probe-preview-')
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 function getJson(url) {
@@ -157,7 +158,7 @@ async function main() {
   } finally {
     cdp?.close()
     stopTestApp(child)
-    try { fs.rmSync(USER_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }) } catch { /* 慢慢釋放 */ }
+    try { removeTree(USER_DATA_DIR) } catch { /* 慢慢釋放 */ }
   }
 }
 

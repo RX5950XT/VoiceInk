@@ -5,6 +5,7 @@
  */
 const { spawn, execFileSync } = require('child_process')
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const http = require('http')
 const os = require('os')
 const fs = require('fs')
@@ -19,7 +20,7 @@ const REAL_CLI = process.env.PROBE_REAL_CLI || ''
 const DROP = process.env.PROBE_DROP === '1'
 const PASTE_TEXT = process.env.PROBE_LONG === '1' ? 'PASTEPROBE-' + 'x'.repeat(180) : 'PASTEPROBE'
 const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
-const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-probe-paste-'))
+const USER_DATA_DIR = tempDir('voiceink-probe-paste-')
 fs.writeFileSync(path.join(USER_DATA_DIR, 'config.json'), JSON.stringify({ sysmonSensors: false }))
 const PROJECT_DIR = path.join(USER_DATA_DIR, 'project')
 fs.mkdirSync(PROJECT_DIR)
@@ -222,7 +223,7 @@ async function main() {
     if (createdId && cdp) { try { await cdp.eval(`window.electronAPI.terminal.forget(${JSON.stringify(createdId)})`) } catch { /* 已收掉 */ } }
     cdp?.close()
     if (child.pid) { try { execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' }) } catch { /* 已結束 */ } }
-    try { fs.rmSync(USER_DATA_DIR, { recursive: true, force: true }) } catch { /* 佔用中 */ }
+    try { removeTree(USER_DATA_DIR) } catch { /* 佔用中 */ }
   }
   process.exit(pass ? 0 : 1)
 }

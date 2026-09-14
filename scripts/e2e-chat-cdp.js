@@ -9,6 +9,7 @@
 
 const { spawn, execFileSync } = require('child_process')
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const os = require('os')
 const fs = require('fs')
 const http = require('http')
@@ -19,7 +20,7 @@ const PORT = 9245
 const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
 // 暫存 user-data-dir：使用者開著的正式實例佔 single-instance lock，
 // 沒有自己的資料夾會被擋掉（second-instance 轉交後退出，CDP 等不到主視窗）
-const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-cdp-'))
+const USER_DATA_DIR = tempDir('voiceink-cdp-')
 const DEFAULT_CHAT_MODEL = 'google/gemini-3-flash-preview'
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -777,7 +778,7 @@ async function main() {
     fake.server.close()
     await sleep(500)
     try {
-      fs.rmSync(USER_DATA_DIR, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+      removeTree(USER_DATA_DIR)
     } catch {
       console.warn(`暫存資料夾刪不掉，請手動刪：${USER_DATA_DIR}`)
     }

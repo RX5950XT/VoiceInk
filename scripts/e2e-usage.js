@@ -4,6 +4,7 @@ const assert = require('assert/strict')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const { app } = require('electron')
 
 const PROVIDERS = ['claude-code', 'codex', 'antigravity', 'opencode-go', 'grok', 'ollama', 'commandcode']
@@ -45,7 +46,7 @@ async function collectSecrets(homeDir, antigravity) {
 }
 
 async function main() {
-  const tempUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-usage-e2e-'))
+  const tempUserData = tempDir('voiceink-usage-e2e-')
   app.setPath('userData', tempUserData)
   try {
     await app.whenReady()
@@ -115,7 +116,7 @@ async function main() {
     console.log('PASS credentials absent from state and diagnostics')
     console.log(`\n${PROVIDERS.length + 1}/${PROVIDERS.length + 1} passed`)
   } finally {
-    fs.rmSync(tempUserData, { recursive: true, force: true })
+    removeTree(tempUserData)
     app.quit()
   }
 }

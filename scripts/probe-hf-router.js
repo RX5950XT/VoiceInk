@@ -25,6 +25,7 @@
 
 const { spawn, execFileSync } = require('child_process')
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const os = require('os')
 const fs = require('fs')
 const net = require('net')
@@ -171,7 +172,7 @@ async function main() {
   console.log(`白老鼠模型：${pickedKey} → ${path.basename(pickedGguf)}\n`)
 
   // ---- 佈置暫存 models-dir：一顆單檔（junction 省複製）、一顆多模態子資料夾 ----
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-router-'))
+  const root = tempDir('voiceink-router-')
   const modelsDir = path.join(root, 'hf-models')
   fs.mkdirSync(modelsDir, { recursive: true })
 
@@ -385,7 +386,7 @@ async function main() {
       }
     }
     if (KEEP) console.log(`\n暫存保留在：${root}`)
-    else fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 })
+    else removeTree(root)
     console.log(`\n${failures === 0 ? 'PASS' : `FAIL（${failures} 項）`}`)
     process.exit(failures === 0 ? 0 : 1)
   }

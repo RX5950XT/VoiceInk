@@ -14,6 +14,7 @@
  */
 const { spawn, spawnSync } = require('child_process')
 const path = require('path')
+const { tempFile } = require('./lib/test-temp')
 const fs = require('fs')
 const os = require('os')
 
@@ -75,7 +76,7 @@ async function main() {
     console.log('只在 Windows 上有意義，略過')
     return
   }
-  const file = path.join(os.tmpdir(), `voiceink-fg-probe-${Date.now()}.txt`)
+  const file = tempFile(`fg-probe-${Date.now()}.txt`)
   fs.writeFileSync(file, '提示詞測試\n', 'utf8')
 
   console.log('[A] 記事本先開著（重現使用者手上的狀態）')

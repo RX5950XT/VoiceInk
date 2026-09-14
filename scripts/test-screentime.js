@@ -8,6 +8,7 @@ const assert = require('assert')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
+const { tempDir } = require('./lib/test-temp')
 const http = require('http')
 const crypto = require('crypto')
 const util = require('../src/main/screentime/util')
@@ -45,7 +46,7 @@ function check(name, fn) {
 const TAI_DATA = 'D:\\Workspace\\PG\\Tai1.5.0.6\\Data'
 
 function tmpDir() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'vi-screentime-'))
+  return tempDir('vi-screentime-')
 }
 
 console.log('test-screentime')

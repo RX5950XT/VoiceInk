@@ -14,6 +14,7 @@
 
 const { app, BrowserWindow } = require('electron')
 const path = require('path')
+const { tempDir } = require('./lib/test-temp')
 const fs = require('fs')
 const os = require('os')
 
@@ -42,7 +43,7 @@ function tinyPdf() {
   return Buffer.from(out, 'latin1')
 }
 
-const TMP = os.tmpdir()
+const TMP = tempDir('probe-pdf-')
 
 /**
  * @param {{ plugins: boolean, mode: 'blob' | 'file', base64: string, pdfPath: string, tag: string }} req

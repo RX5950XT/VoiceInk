@@ -13,13 +13,14 @@
  */
 const { spawn, execFileSync } = require('child_process')
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const http = require('http')
 const os = require('os')
 const fs = require('fs')
 
 const PORT = 9251
 const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
-const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-perf-'))
+const USER_DATA_DIR = tempDir('voiceink-perf-')
 fs.writeFileSync(path.join(USER_DATA_DIR, 'config.json'), JSON.stringify({ sysmonSensors: false }))
 
 const PROJECT_A = path.join(USER_DATA_DIR, 'proj-a')
@@ -345,7 +346,7 @@ async function main() {
     // 只殺自己 spawn 的那一個 pid，絕不用 /IM
     try { execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' }) } catch { /* 已結束 */ }
     await sleep(1200)
-    try { fs.rmSync(USER_DATA_DIR, { recursive: true, force: true }) } catch { /* 佔用中 */ }
+    try { removeTree(USER_DATA_DIR) } catch { /* 佔用中 */ }
   }
 
   const failed = results.filter((r) => !r.pass)

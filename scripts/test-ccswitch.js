@@ -12,6 +12,7 @@
 'use strict'
 
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const fs = require('fs')
 const os = require('os')
 const { createHash } = require('crypto')
@@ -34,7 +35,7 @@ function ok(name, cond, detail = '') {
   }
 }
 
-const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-ccswitch-'))
+const tmpHome = tempDir('voiceink-ccswitch-')
 claudeSettings.configure({
   homeDir: tmpHome,
   backupDir: path.join(tmpHome, 'backup')
@@ -1023,7 +1024,7 @@ asyncSections
   .then(() => {
     // 收尾：把暫存家目錄刪乾淨
     try {
-      fs.rmSync(tmpHome, { recursive: true, force: true })
+      removeTree(tmpHome)
     } catch {
       // 刪不掉不影響結果
     }

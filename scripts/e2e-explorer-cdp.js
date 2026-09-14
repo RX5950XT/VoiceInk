@@ -12,11 +12,12 @@ const { spawn, execFileSync } = require('child_process')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const http = require('http')
 
 const PORT = 9281
 const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
-const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-e2e-ex-'))
+const USER_DATA_DIR = tempDir('voiceink-e2e-ex-')
 const SEED_DIR = path.join(USER_DATA_DIR, 'seed-folder')
 fs.mkdirSync(SEED_DIR, { recursive: true })
 fs.writeFileSync(path.join(SEED_DIR, 'hello.txt'), 'hello')
@@ -280,7 +281,7 @@ async function main() {
   } finally {
     if (cdp) cdp.close()
     stopTestApp(child)
-    try { fs.rmSync(USER_DATA_DIR, { recursive: true, force: true }) } catch { /* 暫存 */ }
+    try { removeTree(USER_DATA_DIR) } catch { /* 暫存 */ }
   }
 }
 

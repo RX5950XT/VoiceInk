@@ -18,6 +18,7 @@
 const { app, BrowserWindow } = require('electron')
 const http = require('http')
 const path = require('path')
+const { tempFile } = require('./lib/test-temp')
 const fs = require('fs')
 const os = require('os')
 
@@ -42,7 +43,7 @@ async function main() {
   const html = `<!doctype html><body style="margin:0">
 <webview id="w" partition="persist:probe" style="width:100%;height:100%" src="${target}"></webview>
 </body>`
-  const page = path.join(os.tmpdir(), `vi-probe-webview-${Date.now()}.html`)
+  const page = tempFile(`probe-webview-${Date.now()}.html`)
   fs.writeFileSync(page, html, 'utf8')
 
   const win = new BrowserWindow({

@@ -10,6 +10,7 @@
 'use strict'
 
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const os = require('os')
 const fs = require('fs')
 const { pathToFileURL } = require('url')
@@ -166,7 +167,7 @@ async function main() {
 
   // ===== 主行程：路徑解析 =====
   console.log('\n[主行程：路徑解析]')
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'vi-links-'))
+  const base = tempDir('vi-links-')
   try {
     const dir = path.join(base, 'sub dir')
     fs.mkdirSync(dir)
@@ -184,7 +185,7 @@ async function main() {
     ok('超長字串回 null', links.resolveCandidate(base, 'a'.repeat(600)) === null)
     ok('非字串回 null', links.resolveCandidate(base, { full: file }) === null)
   } finally {
-    fs.rmSync(base, { recursive: true, force: true })
+    removeTree(base)
   }
 
   // ===== 三份清單 =====

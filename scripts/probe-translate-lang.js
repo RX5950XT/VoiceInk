@@ -8,13 +8,14 @@ const fs = require('fs')
 const http = require('http')
 const os = require('os')
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 
 const PORT = 9251
 const ROOT = path.join(__dirname, '..')
 const EXE = process.env.VOICEINK_EXE ||
   path.join(ROOT, 'node_modules', 'electron', 'dist', 'electron.exe')
 const APP_ARGS = process.env.VOICEINK_EXE ? [] : [ROOT]
-const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-probe-lang-'))
+const USER_DATA_DIR = tempDir('voiceink-probe-lang-')
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 function getJson(url) {
@@ -196,7 +197,7 @@ async function main() {
     }
     await sleep(600)
     for (let i = 0; i < 5; i++) {
-      try { fs.rmSync(USER_DATA_DIR, { recursive: true, force: true }); break } catch { await sleep(400) }
+      try { removeTree(USER_DATA_DIR); break } catch { await sleep(400) }
     }
   }
 }

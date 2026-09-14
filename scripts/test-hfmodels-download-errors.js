@@ -3,6 +3,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const { spawnSync } = require('node:child_process')
 const { getEventListeners } = require('node:events')
 const { downloadFile } = require('../src/main/hfmodels/download')
@@ -17,7 +18,7 @@ async function main() {
     console.log('PASS 寫入失敗回傳 rejection')
     return
   }
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-hf-errors-'))
+  const dir = tempDir('voiceink-hf-errors-')
   let failed = 0
   async function check(name, fn) {
     try { await fn(); console.log(`PASS ${name}`) }
@@ -71,7 +72,7 @@ async function main() {
       assert.equal(library.has('vision', files), true)
       assert.equal(library.list().some(model => model.id === 'vision'), true)
     })
-  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+  } finally { removeTree(dir) }
   process.exitCode = failed ? 1 : 0
 }
 main().catch(error => { console.error(error); process.exitCode = 1 })

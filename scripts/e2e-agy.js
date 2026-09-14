@@ -12,6 +12,7 @@ const { app } = require('electron')
 const http = require('http')
 const os = require('os')
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const fs = require('fs')
 
 const AGY = path.join(__dirname, '..', 'src', 'main', 'agy')
@@ -154,7 +155,7 @@ function sseData(text) {
 }
 
 async function main() {
-  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-e2e-'))
+  const userDataPath = tempDir('agy-e2e-')
   const mock = await startMockUpstream()
   const mockPort = mock.address().port
 
@@ -788,7 +789,7 @@ async function main() {
 
   logs.close()
   mock.close()
-  fs.rmSync(userDataPath, { recursive: true, force: true })
+  removeTree(userDataPath)
 
   console.log(`\n${passed} passed, ${failures.length} failed\n`)
   if (failures.length) console.log(`失敗項目：\n  - ${failures.join('\n  - ')}\n`)

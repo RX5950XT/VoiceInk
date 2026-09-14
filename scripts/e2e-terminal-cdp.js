@@ -10,6 +10,7 @@
  */
 const { spawn, execFileSync } = require('child_process')
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const http = require('http')
 const os = require('os')
 const fs = require('fs')
@@ -18,7 +19,7 @@ const PORT = 9247
 // Windows 偶爾會有別的東西鎖住 dist/win-unpacked（打包失敗、防毒掃描中），
 // 這時可以打包到別的資料夾再用 VOICEINK_EXE 指過去，測試不必等鎖放掉
 const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
-const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-e2e-terminal-'))
+const USER_DATA_DIR = tempDir('voiceink-e2e-terminal-')
 fs.writeFileSync(path.join(USER_DATA_DIR, 'config.json'), JSON.stringify({ sysmonSensors: false }))
 const PROJECT_DIR = path.join(USER_DATA_DIR, 'project')
 fs.mkdirSync(PROJECT_DIR)
@@ -647,7 +648,7 @@ async function main() {
     }
     cdp?.close()
     stopTestApp(child)
-    try { fs.rmSync(USER_DATA_DIR, { recursive: true, force: true }) } catch { /* 程序剛結束，稍後由系統清理 */ }
+    try { removeTree(USER_DATA_DIR) } catch { /* 程序剛結束，稍後由系統清理 */ }
   }
 
   const failed = results.filter((r) => !r.pass)

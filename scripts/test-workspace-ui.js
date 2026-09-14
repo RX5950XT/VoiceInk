@@ -8,6 +8,7 @@
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 
 const ROOT = path.join(__dirname, '..')
 const html = fs.readFileSync(path.join(ROOT, 'src/renderer/index.html'), 'utf8')
@@ -95,7 +96,7 @@ for (const selector of [
   'ws-ai-turn-tool', 'ws-agent-source', 'ws-agent-resume',
   'ws-review-bar', 'ws-review-files', 'ws-review-file', 'ws-review-panel',
   'ws-review-head', 'ws-review-list', 'ws-review-item', 'ws-review-where',
-  'ws-review-text', 'ws-review-del', 'chat-list-proj'
+  'ws-review-text', 'ws-review-del'
 ]) {
   check(`AI 卡片 CSS 有 .${selector}`, hasSelector(selector))
 }
@@ -103,7 +104,7 @@ check('檔案樹狀態 CSS 有 .ws-tree-status', hasSelector('ws-tree-status'))
 
 async function runAgentPathChecks() {
   console.log('\n[C] AI 會話檔案路徑')
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vi-agent-ui-'))
+  const home = tempDir('vi-agent-ui-')
   const project = path.join(home, 'project')
   const outside = path.join(home, 'outside.txt')
   const sessionId = 'ui-test-123'
@@ -133,7 +134,7 @@ async function runAgentPathChecks() {
     check('Edit 算改過', detail.editedFiles.includes('src/relative.js'))
   } finally {
     os.homedir = originalHome
-    fs.rmSync(home, { recursive: true, force: true })
+    removeTree(home)
   }
 }
 

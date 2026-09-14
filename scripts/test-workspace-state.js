@@ -3,6 +3,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const vm = require('node:vm')
 const path = require('node:path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const os = require('node:os')
 const files = require('../src/main/workspace/files')
 const store = require('../src/main/workspace/store')
@@ -130,7 +131,7 @@ async function main() {
   assert.equal(target.content, '我打的內容', '被擋下來不可以動到草稿內容')
 
   // ── 真檔案：跨專案還原草稿後，不可蓋掉外部修改或重建已刪檔案 ──
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vi-draft-version-'))
+  const dir = tempDir('vi-draft-version-')
   try {
     const full = path.join(dir, 'a.txt')
     fs.writeFileSync(full, 'original')
@@ -177,7 +178,7 @@ async function main() {
     await context.api.saveActiveFile(true)
     assert.equal(fs.readFileSync(full, 'utf8'), 'legacy draft')
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true })
+    removeTree(dir)
   }
 
   console.log('PASS 專案切換隔離、空草稿還原、同專案不重載、切分頁通知檔案樹、慢回應作廢、改名接軌、存檔守衛、草稿版本持久化與真檔案衝突')

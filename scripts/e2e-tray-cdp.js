@@ -13,6 +13,7 @@
  */
 const { spawn, execFileSync } = require('child_process')
 const path = require('path')
+const { tempDir } = require('./lib/test-temp')
 const os = require('os')
 const fs = require('fs')
 const http = require('http')
@@ -23,7 +24,7 @@ const PORT = 9243
 const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
 // 暫存 user-data-dir：使用者開著的正式實例佔 single-instance lock，
 // 沒有自己的資料夾會被擋掉（second-instance 轉交後退出，CDP 等不到主視窗）
-const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-cdp-'))
+const USER_DATA_DIR = tempDir('voiceink-cdp-')
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 

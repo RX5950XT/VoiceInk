@@ -18,11 +18,12 @@ const { spawn, execFileSync } = require('child_process')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const http = require('http')
 
 const PORT = 9249
 const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
-const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-e2e-hf-'))
+const USER_DATA_DIR = tempDir('voiceink-e2e-hf-')
 /** 模型庫指到這裡（不是使用者的 hf-models） */
 const MODELS_DIR = path.join(USER_DATA_DIR, 'hf-models-test')
 /** 種進去的模型 id；用 `[data-id]` 指涉自己建的東西，不用「第一列」 */
@@ -502,7 +503,7 @@ async function main() {
   } finally {
     cdp?.close()
     stopTestApp(child)
-    fs.rmSync(USER_DATA_DIR, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+    removeTree(USER_DATA_DIR)
   }
 }
 

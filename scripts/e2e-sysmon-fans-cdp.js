@@ -13,13 +13,14 @@
  */
 const { spawn } = require('child_process')
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const os = require('os')
 const fs = require('fs')
 const http = require('http')
 
 const PORT = 9248
 const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
-const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-fans-cdp-'))
+const USER_DATA_DIR = tempDir('voiceink-fans-cdp-')
 fs.writeFileSync(path.join(USER_DATA_DIR, 'config.json'), JSON.stringify({ sysmonSensors: false }))
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -260,7 +261,7 @@ async function main() {
       try { spawn('taskkill', ['/F', '/T', '/PID', String(child.pid)], { stdio: 'ignore' }) } catch { /* ignore */ }
     }
     for (let i = 0; i < 5; i += 1) {
-      try { fs.rmSync(USER_DATA_DIR, { recursive: true, force: true }); break } catch { await sleep(600) }
+      try { removeTree(USER_DATA_DIR); break } catch { await sleep(600) }
     }
   }
 

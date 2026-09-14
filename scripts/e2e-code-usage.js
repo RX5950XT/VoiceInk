@@ -14,6 +14,7 @@ const { app } = require('electron')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 
 const ROOT = path.join(__dirname, '..')
 
@@ -29,7 +30,7 @@ function ok(name, cond, detail = '') {
   }
 }
 
-const tmpUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-codeusage-e2e-'))
+const tmpUserData = tempDir('voiceink-codeusage-e2e-')
 app.setPath('userData', tmpUserData)
 
 app.whenReady().then(async () => {
@@ -97,7 +98,7 @@ app.whenReady().then(async () => {
   }
 
   try {
-    fs.rmSync(tmpUserData, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+    removeTree(tmpUserData)
   } catch {
     // 刪不掉不影響結果
   }

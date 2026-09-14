@@ -2,6 +2,7 @@ const assert = require('assert/strict')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 
 const tests = []
 const test = (name, fn) => tests.push({ name, fn })
@@ -59,7 +60,7 @@ test('未知例外轉為不洩漏原訊息的公開錯誤', () => {
 
 test('本機 JSON 只讀取普通且大小受限的檔案', async () => {
   const { constants, shared } = loadShared()
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-usage-shared-'))
+  const dir = tempDir('voiceink-usage-shared-')
   try {
     const validPath = path.join(dir, 'valid.json')
     fs.writeFileSync(validPath, '{"ok":true}')
@@ -77,7 +78,7 @@ test('本機 JSON 只讀取普通且大小受限的檔案', async () => {
       (error) => error.code === 'INVALID_FILE'
     )
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true })
+    removeTree(dir)
   }
 })
 
@@ -128,7 +129,7 @@ test('HTTP JSON 解析受大小限制並依狀態決定重試', async () => {
 
 test('Claude Code 將 OAuth usage 正規化為 5h、weekly 與 Opus weekly', async () => {
   const { syncClaude } = require('../src/main/usage/claude')
-  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-usage-claude-'))
+  const homeDir = tempDir('voiceink-usage-claude-')
   const token = 'claude-sentinel-token'
   try {
     fs.mkdirSync(path.join(homeDir, '.claude'))
@@ -172,13 +173,13 @@ test('Claude Code 將 OAuth usage 正規化為 5h、weekly 與 Opus weekly', asy
     }, Date.parse('2026-08-20T12:00:00Z'), 'pro')
     assert.deepEqual(pro.windows.map((window) => window.id), ['claude-5h', 'claude-weekly'])
   } finally {
-    fs.rmSync(homeDir, { recursive: true, force: true })
+    removeTree(homeDir)
   }
 })
 
 test('Codex 將 wham primary/secondary 視窗映射為 5h/weekly', async () => {
   const { syncCodex } = require('../src/main/usage/codex')
-  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-usage-codex-'))
+  const homeDir = tempDir('voiceink-usage-codex-')
   const token = 'codex-sentinel-token'
   try {
     fs.mkdirSync(path.join(homeDir, '.codex'))
@@ -207,13 +208,13 @@ test('Codex 將 wham primary/secondary 視窗映射為 5h/weekly', async () => {
     assert.equal(account.planName, 'ChatGPT Pro')
     assert.ok(!JSON.stringify(account).includes(token))
   } finally {
-    fs.rmSync(homeDir, { recursive: true, force: true })
+    removeTree(homeDir)
   }
 })
 
 test('Grok 支援 wrapped 與 flat billing 並送出 CLI header', async () => {
   const { syncGrok, applyGrokBilling } = require('../src/main/usage/grok')
-  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-usage-grok-'))
+  const homeDir = tempDir('voiceink-usage-grok-')
   const token = 'grok-sentinel-token'
   try {
     fs.mkdirSync(path.join(homeDir, '.grok'))
@@ -251,7 +252,7 @@ test('Grok 支援 wrapped 與 flat billing 並送出 CLI header', async () => {
     assert.equal(flat.windows[0].used, 12.5)
     assert.equal(flat.planName, 'Grok')
   } finally {
-    fs.rmSync(homeDir, { recursive: true, force: true })
+    removeTree(homeDir)
   }
 })
 
@@ -264,7 +265,7 @@ test('訂閱方案取自本機憑證：Claude subscriptionType／Codex id_token�
     Buffer.from(JSON.stringify(claims)).toString('base64url'),
     'sig'
   ].join('.')
-  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-usage-plan-'))
+  const homeDir = tempDir('voiceink-usage-plan-')
   const nowMs = Date.parse('2026-08-20T12:00:00Z')
   try {
     // Claude：方案在 .credentials.json，usage API 不回。
@@ -319,7 +320,7 @@ test('訂閱方案取自本機憑證：Claude subscriptionType／Codex id_token�
     })
     assert.equal(grok.planName, 'Grok Tier 1')
   } finally {
-    fs.rmSync(homeDir, { recursive: true, force: true })
+    removeTree(homeDir)
   }
 })
 
@@ -327,7 +328,7 @@ test('缺少本機憑證時三個雲端 provider 都回 disconnected', async () 
   const { syncClaude } = require('../src/main/usage/claude')
   const { syncCodex } = require('../src/main/usage/codex')
   const { syncGrok } = require('../src/main/usage/grok')
-  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-usage-missing-'))
+  const homeDir = tempDir('voiceink-usage-missing-')
   try {
     const args = { homeDir, nowMs: 0, fetchImpl: async () => { throw new Error('must not fetch') }, log: () => {} }
     const accounts = await Promise.all([
@@ -338,7 +339,7 @@ test('缺少本機憑證時三個雲端 provider 都回 disconnected', async () 
     assert.ok(accounts.every((account) => account.status === 'disconnected'))
     assert.ok(accounts.every((account) => account.windows.length === 0))
   } finally {
-    fs.rmSync(homeDir, { recursive: true, force: true })
+    removeTree(homeDir)
   }
 })
 
@@ -351,7 +352,7 @@ function writeOpenCodeAuth(homeDir, entries) {
 
 test('OpenCode Go 讀官方 usage 端點的三個百分比視窗', async () => {
   const { syncOpenCode } = require('../src/main/usage/opencode')
-  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-usage-opencode-'))
+  const homeDir = tempDir('voiceink-usage-opencode-')
   const key = 'sk-opencode-sentinel'
   const nowMs = Date.parse('2026-08-20T12:00:00Z')
   try {
@@ -385,13 +386,13 @@ test('OpenCode Go 讀官方 usage 端點的三個百分比視窗', async () => {
     assert.equal(account.status, 'available')
     assert.ok(!JSON.stringify(account).includes(key))
   } finally {
-    fs.rmSync(homeDir, { recursive: true, force: true })
+    removeTree(homeDir)
   }
 })
 
 test('OpenCode Go 的 403（沒訂閱）與 401（金鑰壞掉）是兩件事', async () => {
   const { syncOpenCode } = require('../src/main/usage/opencode')
-  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-usage-opencode-403-'))
+  const homeDir = tempDir('voiceink-usage-opencode-403-')
   try {
     writeOpenCodeAuth(homeDir, { 'opencode-go': { type: 'api', key: 'sk-x' } })
     const body = JSON.stringify({ error: { type: 'EntitlementError', message: 'OpenCode Go subscription required.' } })
@@ -427,13 +428,13 @@ test('OpenCode Go 的 403（沒訂閱）與 401（金鑰壞掉）是兩件事', 
     })
     assert.equal(flaky.status, 'connected')
   } finally {
-    fs.rmSync(homeDir, { recursive: true, force: true })
+    removeTree(homeDir)
   }
 })
 
 test('沒有 OpenCode 金鑰時回 disconnected，且金鑰解析順序是 env → auth.json', async () => {
   const { syncOpenCode } = require('../src/main/usage/opencode')
-  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-usage-opencode-missing-'))
+  const homeDir = tempDir('voiceink-usage-opencode-missing-')
   try {
     const missing = await syncOpenCode({ homeDir, env: {}, nowMs: 0, log: () => {} })
     assert.equal(missing.status, 'disconnected')
@@ -453,13 +454,13 @@ test('沒有 OpenCode 金鑰時回 disconnected，且金鑰解析順序是 env �
     })
     assert.equal(seen, 'Bearer from-env')
   } finally {
-    fs.rmSync(homeDir, { recursive: true, force: true })
+    removeTree(homeDir)
   }
 })
 
 test('Ollama Cloud 讀 monthly usage 且不編造重置時間', async () => {
   const { syncOllama, applyOllamaUsage, toPercent } = require('../src/main/usage/ollama')
-  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-usage-ollama-'))
+  const homeDir = tempDir('voiceink-usage-ollama-')
   const key = 'ollama-sentinel-key'
   try {
     writeOpenCodeAuth(homeDir, { 'ollama-cloud': { type: 'api', key } })
@@ -497,13 +498,13 @@ test('Ollama Cloud 讀 monthly usage 且不編造重置時間', async () => {
     assert.equal(empty.windows.length, 0)
     assert.equal(empty.status, 'connected')
   } finally {
-    fs.rmSync(homeDir, { recursive: true, force: true })
+    removeTree(homeDir)
   }
 })
 
 test('Command Code 讀 billing/credits 的三個視窗與訂閱重置時間', async () => {
   const { applyCommandCodeUsage, syncCommandCode, toIsoReset } = require('../src/main/usage/commandcode')
-  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-usage-cmdcode-'))
+  const homeDir = tempDir('voiceink-usage-cmdcode-')
   const key = 'commandcode-sentinel-key'
   try {
     fs.mkdirSync(path.join(homeDir, '.commandcode'))
@@ -557,7 +558,7 @@ test('Command Code 讀 billing/credits 的三個視窗與訂閱重置時間', as
     assert.equal(toIsoReset(1788063241), '2026-08-30T04:14:01.000Z')
     assert.ok(!JSON.stringify(account).includes(key))
   } finally {
-    fs.rmSync(homeDir, { recursive: true, force: true })
+    removeTree(homeDir)
   }
 })
 
@@ -585,7 +586,7 @@ test('Command Code 不把 usage/summary 的花費報表當成額度，缺 cap �
 
 test('沒有 Command Code 金鑰時回 disconnected，env 優先於 auth.json', async () => {
   const { syncCommandCode } = require('../src/main/usage/commandcode')
-  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-usage-cmdcode-none-'))
+  const homeDir = tempDir('voiceink-usage-cmdcode-none-')
   try {
     const missing = await syncCommandCode({ homeDir, env: {}, nowMs: 0, fetchImpl: async () => {
       throw new Error('沒有金鑰就不該打上游')
@@ -624,7 +625,7 @@ test('沒有 Command Code 金鑰時回 disconnected，env 優先於 auth.json', 
     })
     assert.equal(seen, 'Bearer from-env')
   } finally {
-    fs.rmSync(homeDir, { recursive: true, force: true })
+    removeTree(homeDir)
   }
 })
 

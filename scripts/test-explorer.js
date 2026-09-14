@@ -11,6 +11,7 @@
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 
 const ROOT = path.join(__dirname, '..')
 const paths = require(path.join(ROOT, 'src/main/explorer/paths.js'))
@@ -91,7 +92,7 @@ console.log('\n[C] checkName')
 
 console.log('\n[D] 單層列目錄與增刪改')
 {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vi-ex-'))
+  const dir = tempDir('vi-ex-')
   fs.writeFileSync(path.join(dir, 'hello.txt'), 'hi')
   fs.mkdirSync(path.join(dir, 'sub'))
   const listed = await files.listDir(dir)
@@ -129,7 +130,7 @@ console.log('\n[D] 單層列目錄與增刪改')
   await denies('同名檔案拒絕', () => files.createEntry(dir, 'blank.txt', false), 'EXISTS')
 
   await denies('不能刪磁碟根目錄', () => files.removeEntry('C:\\'), 'PROTECTED')
-  fs.rmSync(dir, { recursive: true, force: true })
+  removeTree(dir)
 }
 
 console.log('\n[E] UFFS pattern 消毒')
@@ -199,7 +200,7 @@ console.log('\n[F] 本機位置與磁碟')
 
 console.log('\n[G] 複製／搬移碰撞給唯一名，不覆寫')
 {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vi-ex-col-'))
+  const dir = tempDir('vi-ex-col-')
   fs.writeFileSync(path.join(dir, 'hello.txt'), 'alpha')
   const dest = path.join(dir, 'dest')
   fs.mkdirSync(dest)
@@ -223,12 +224,12 @@ console.log('\n[G] 複製／搬移碰撞給唯一名，不覆寫')
   } catch (error) {
     ok('複製／搬移碰撞', false, `${error && error.code}: ${error && error.message}`)
   }
-  fs.rmSync(dir, { recursive: true, force: true })
+  removeTree(dir)
 }
 
 console.log('\n[H] 排序是 listDir 的真實轉換（資料夾在前）')
 {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vi-ex-sort-'))
+  const dir = tempDir('vi-ex-sort-')
   const fileA = path.join(dir, 'a.txt')
   const fileC = path.join(dir, 'c.txt')
   const folder = path.join(dir, 'b-dir')
@@ -252,7 +253,7 @@ console.log('\n[H] 排序是 listDir 的真實轉換（資料夾在前）')
   ok('日期：舊的在前', byDate.entries.filter((e) => !e.dir).map((e) => e.name).join(',') === 'c.txt,a.txt')
   const bySizeDesc = await files.listDir(dir, { sort: 'size', desc: true })
   ok('大小遞減', bySizeDesc.entries.filter((e) => !e.dir).map((e) => e.name).join(',') === 'a.txt,c.txt')
-  fs.rmSync(dir, { recursive: true, force: true })
+  removeTree(dir)
 }
 
 console.log('\n[I] 預設刪除進資源回收筒，可還原；永久刪除是另一支')
@@ -261,7 +262,7 @@ console.log('\n[I] 預設刪除進資源回收筒，可還原；永久刪除是�
   const round = recycle.parseIFile(recycle.encodeIFile('C:\\Temp\\a.txt', 4, 1_700_000_000_000))
   ok('$I 中繼資料往返', Boolean(round && round.originalPath === 'C:\\Temp\\a.txt' && round.size === 4))
 
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vi-ex-bin-'))
+  const dir = tempDir('vi-ex-bin-')
   const file = path.join(dir, `gone-${Date.now()}.txt`)
   const marker = `voiceink-recycle-${Date.now()}`
   fs.writeFileSync(file, marker)
@@ -294,7 +295,7 @@ console.log('\n[I] 預設刪除進資源回收筒，可還原；永久刪除是�
   } catch (error) {
     ok('資源回收筒流程', false, `${error && error.code}: ${error && error.message}`)
   }
-  try { fs.rmSync(dir, { recursive: true, force: true }) } catch { /* 暫存 */ }
+  try { removeTree(dir) } catch { /* 暫存 */ }
 }
 
 console.log('\n[J] 複製貼進回收筒不刪來源；剪下才丟（走 index.paste）')
@@ -313,7 +314,7 @@ console.log('\n[J] 複製貼進回收筒不刪來源；剪下才丟（走 index.
   } finally {
     Module._load = origLoad
   }
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vi-ex-paste-'))
+  const dir = tempDir('vi-ex-paste-')
   const copied = path.join(dir, `keep-${Date.now()}.txt`)
   const cut = path.join(dir, `cut-${Date.now()}.txt`)
   fs.writeFileSync(copied, 'copy-me')
@@ -345,7 +346,7 @@ console.log('\n[J] 複製貼進回收筒不刪來源；剪下才丟（走 index.
   } catch (error) {
     ok('貼進回收筒流程', false, `${error && error.code}: ${error && error.message}`)
   }
-  try { fs.rmSync(dir, { recursive: true, force: true }) } catch { /* 暫存 */ }
+  try { removeTree(dir) } catch { /* 暫存 */ }
 }
 
 console.log('\n[K] Enter 在頁面快捷鍵裡（點選 rebuild 後焦點不在列上）')
@@ -381,7 +382,7 @@ console.log('\n[L] 家目錄可新增子項；受保護的是家目錄本身')
 
 console.log('\n[M] junction 刪的是連結不是目標')
 {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vi-ex-junc-'))
+  const dir = tempDir('vi-ex-junc-')
   const secret = path.join(dir, 'secret')
   const link = path.join(dir, 'link')
   fs.mkdirSync(secret)
@@ -392,7 +393,7 @@ console.log('\n[M] junction 刪的是連結不是目標')
   ], { windowsHide: true, encoding: 'utf8' })
   if (made.status !== 0) {
     console.log('  SKIP junction（mklink 失敗）')
-    fs.rmSync(dir, { recursive: true, force: true })
+    removeTree(dir)
   } else {
     const resolved = paths.resolveExisting(link)
     ok('resolveExisting 回連結路徑', resolved.toLowerCase() === link.toLowerCase(), resolved)
@@ -403,35 +404,35 @@ console.log('\n[M] junction 刪的是連結不是目標')
     } catch (error) {
       ok('刪掉 junction 本身', false, `${error && error.code}: ${error && error.message}`)
     }
-    fs.rmSync(dir, { recursive: true, force: true })
+    removeTree(dir)
   }
-  const tree = fs.mkdtempSync(path.join(os.tmpdir(), 'vi-ex-self-'))
+  const tree = tempDir('vi-ex-self-')
   const nested = path.join(tree, 'tree')
   const inner = path.join(nested, 'inner')
   fs.mkdirSync(nested)
   fs.mkdirSync(inner)
   fs.writeFileSync(path.join(inner, 'x.txt'), 'x')
   await denies('不能複製進自己底下', () => files.copyEntry(nested, inner), 'BAD_PATH')
-  fs.rmSync(tree, { recursive: true, force: true })
+  removeTree(tree)
 }
 
 console.log('\n[N] UFFS 只認安裝目錄；checksum 缺就失敗')
 {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vi-ex-uffs-'))
+  const tmp = tempDir('vi-ex-uffs-')
   uffs.configure(tmp)
   ok('空安裝目錄找不到 exe', uffs.findUffs() === '')
   const boxed = path.join(tmp, 'uffs')
   fs.mkdirSync(boxed)
   fs.writeFileSync(path.join(boxed, 'uffs.exe'), 'fake')
   ok('只認 userData/uffs', uffs.findUffs().toLowerCase() === path.join(boxed, 'uffs.exe').toLowerCase())
-  const decoy = fs.mkdtempSync(path.join(os.tmpdir(), 'vi-ex-uffs-path-'))
+  const decoy = tempDir('vi-ex-uffs-path-')
   fs.writeFileSync(path.join(decoy, 'uffs.exe'), 'decoy')
   const prevPath = process.env.PATH
   process.env.PATH = decoy + path.delimiter + prevPath
   uffs.configure('')
   ok('不認 PATH 上的 exe', uffs.findUffs() === '')
   process.env.PATH = prevPath
-  fs.rmSync(decoy, { recursive: true, force: true })
+  removeTree(decoy)
   ok('checksumFor 能解析', uffs.checksumFor('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  uffs-windows-x64.zip\n', 'uffs-windows-x64.zip') === 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')
   await denies('checksum 缺就失敗', () => uffs.verifyZipHash(
     path.join(boxed, 'uffs.exe'),
@@ -450,7 +451,7 @@ console.log('\n[N] UFFS 只認安裝目錄；checksum 缺就失敗')
   const emptyFn = emptySrc.slice(emptySrc.indexOf('async function empty()'), emptySrc.indexOf('module.exports'))
   ok('清空不走 list 的 2000 上限', /async function empty\(\)/.test(emptyFn)
     && !emptyFn.includes('await list()') && !emptyFn.includes('2000'))
-  fs.rmSync(tmp, { recursive: true, force: true })
+  removeTree(tmp)
 }
 
 console.log('\n[O] 搜尋結果相關度排序')
@@ -517,7 +518,7 @@ console.log('\n[P] 側欄位置消毒與合併')
 
 console.log('\n[R] 詳情 inspect：類型／時間／文字預覽')
 {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vi-ex-inspect-'))
+  const dir = tempDir('vi-ex-inspect-')
   const txt = path.join(dir, 'readme.txt')
   fs.writeFileSync(txt, 'hello inspect\nsecond line\n')
   try {
@@ -540,7 +541,7 @@ console.log('\n[R] 詳情 inspect：類型／時間／文字預覽')
   } catch (error) {
     ok('inspect 可用', false, `${error && error.code}: ${error && error.message}`)
   }
-  fs.rmSync(dir, { recursive: true, force: true })
+  removeTree(dir)
 }
 
 console.log('\n[S] 路徑列可輸入、詳情鈕在上、右鍵補強、側欄可改')

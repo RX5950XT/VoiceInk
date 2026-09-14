@@ -10,6 +10,7 @@
 'use strict'
 
 const path = require('path')
+const { tempDir, tempFile } = require('./lib/test-temp')
 const os = require('os')
 const Module = require('module')
 const fs = require('fs')
@@ -214,7 +215,7 @@ console.log('\n[信任邊界]')
     Object.keys(store.PRESETS).join(',') === 'shell,claude,codex,opencode,agy,grok'
   )
 
-  const missing = path.join(os.tmpdir(), 'voiceink-no-such-dir-' + Date.now())
+  const missing = tempFile('no-such-dir-' + Date.now())
   ok('不存在的 cwd 退回家目錄', store.normalizeCwd(missing) === os.homedir())
   ok('檔案（非目錄）也退回家目錄', store.normalizeCwd(__filename) === os.homedir())
   ok('非字串退回家目錄', store.normalizeCwd({ toString: () => '/' }) === os.homedir())
@@ -353,7 +354,7 @@ console.log('\n[宿主版本]')
 {
   const { HostClient } = require(path.join(ROOT, 'src/main/terminal/host-client.js'))
   const want = 'runtime-aaaaaaaaaaaaaaaaaaaaaaaa'
-  const client = new HostClient(os.tmpdir(), () => {})
+  const client = new HostClient(tempDir('host-client-'), () => {})
   ok('沒連上就沒有舊程式碼可談', client.stale(want) === false)
   client.socket = { destroyed: false }
   ok('不回報 runtime 的舊宿主算舊版', client.stale(want) === true)

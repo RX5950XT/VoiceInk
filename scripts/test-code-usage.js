@@ -11,6 +11,7 @@
 'use strict'
 
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const fs = require('fs')
 const os = require('os')
 
@@ -494,7 +495,7 @@ let asyncSections = Promise.resolve()
 // ===== 增量掃描 =====
 console.log('\n[F] 增量掃描')
 {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-codeusage-'))
+  const tmp = tempDir('voiceink-codeusage-')
   const file = path.join(tmp, 'a.jsonl')
   const mkLine = (id) => JSON.stringify({
     type: 'assistant',
@@ -623,7 +624,7 @@ console.log('\n[F] 增量掃描')
 
     // 掃到一半還在重播（fork 檔正在寫）：重播旗標沒跟著游標留下來的話，
     // 剩下那半份重播會在下一次被當成新用量收進去
-    const fkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vi-usage-fork-'))
+    const fkDir = tempDir('vi-usage-fork-')
     const fkFile = path.join(fkDir, 'rollout-fork.jsonl')
     fs.writeFileSync(fkFile, `${JSON.stringify({
       type: 'session_meta', timestamp: new Date().toISOString(), payload: { forked_from_id: 'parent' }
@@ -643,7 +644,7 @@ console.log('\n[F] 增量掃描')
     const fk3 = []
     await scan.scanSource(fkSource, fkCursors, (event) => fk3.push(event), 0)
     ok('turn_context 之後的新用量照收', fk3.length === 1 && fk3[0].model === 'gpt-5.6-sol', String(fk3.length))
-    fs.rmSync(fkDir, { recursive: true, force: true })
+    removeTree(fkDir)
 
     // session 檔從 sessions/ 搬進 archived_sessions/：游標若認絕對路徑，
     // 搬完整份從 0 重讀、整個 session 的用量算兩次。keyOf 給「跟著檔案走」的 key
@@ -685,7 +686,7 @@ console.log('\n[F] 增量掃描')
     scan.pruneCursors(cursors)
     ok('檔案不見時游標清掉', Object.keys(cursors).length === 0)
 
-    fs.rmSync(tmp, { recursive: true, force: true })
+    removeTree(tmp)
   }
 
   asyncSections = run()

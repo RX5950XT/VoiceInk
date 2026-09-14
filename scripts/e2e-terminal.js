@@ -17,11 +17,12 @@
 
 const { app, dialog } = require('electron')
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const os = require('os')
 const fs = require('fs')
 
 // 必須在任何 electron-store 實例化之前
-const SANDBOX = path.join(os.tmpdir(), `voiceink-e2e-terminal-${process.pid}`)
+const SANDBOX = tempDir('e2e-terminal-')
 fs.mkdirSync(SANDBOX, { recursive: true })
 app.setPath('userData', SANDBOX)
 
@@ -98,7 +99,8 @@ app.whenReady().then(async () => {
       cwd: path.join(__dirname, '..')
     })
     ok('建立工作階段', Boolean(meta.id) && meta.state === 'stopped')
-    ok('標題預設用資料夾名', meta.title === 'VoiceInk', meta.title)
+    // 資料夾名不寫死：worktree 裡跑時專案根目錄不叫 VoiceInk
+    ok('標題預設用資料夾名', meta.title === path.basename(path.join(__dirname, '..')), meta.title)
 
     const opened = await terminal.openSession(meta.id, 100, 30)
     ok('開起來就是 idle 或 running', ['idle', 'running'].includes(opened.state), opened.state)
@@ -183,6 +185,6 @@ app.whenReady().then(async () => {
   }
 
   console.log(`\n${passed} passed, ${failed} failed`)
-  try { fs.rmSync(SANDBOX, { recursive: true, force: true }) } catch { /* best effort */ }
+  try { removeTree(SANDBOX) } catch { /* best effort */ }
   process.exit(failed === 0 ? 0 : 1)
 })

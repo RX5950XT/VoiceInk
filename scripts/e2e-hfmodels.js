@@ -17,6 +17,7 @@ const { execFileSync } = require('child_process')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 
 const ROOT = path.join(__dirname, '..')
 // `npx electron <script>` 時 app 名是 Electron，不設就找不到已下載的模型
@@ -64,7 +65,7 @@ function findGguf() {
 const MODEL_ID = 'e2e-probe-model'
 
 async function main() {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-hfmodels-e2e-'))
+  const tmp = tempDir('voiceink-hfmodels-e2e-')
   const before = countLlamaServers()
   try {
     hfmodels.init({ userDataPath: tmp })
@@ -169,7 +170,7 @@ async function main() {
     ok('刪完模型庫就空了', (await hfmodels.listLocal()).length === 0)
   } finally {
     try { hfmodels.shutdown() } catch { /* 已經收掉了 */ }
-    fs.rmSync(tmp, { recursive: true, force: true })
+    removeTree(tmp)
   }
 }
 

@@ -13,12 +13,13 @@
 'use strict'
 
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const fs = require('fs')
 const os = require('os')
 const { app, BrowserWindow } = require('electron')
 
 const ROOT = path.join(__dirname, '..')
-app.setPath('userData', path.join(os.tmpdir(), `voiceink-probe-links-${process.pid}`))
+app.setPath('userData', tempDir('probe-links-'))
 
 const url = (p) => require('url').pathToFileURL(path.join(ROOT, p)).href
 
@@ -158,7 +159,7 @@ app.whenReady().then(async () => {
 
   console.log(`\n${passed} passed, ${failed} failed`)
   win.destroy()
-  try { fs.rmSync(app.getPath('userData'), { recursive: true, force: true }) } catch {}
+  try { removeTree(app.getPath('userData')) } catch {}
   app.exit(failed === 0 ? 0 : 1)
 }).catch((error) => {
   console.error(error)

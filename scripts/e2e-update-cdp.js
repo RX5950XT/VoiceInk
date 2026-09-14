@@ -16,12 +16,13 @@
  */
 const { spawn } = require('child_process')
 const path = require('path')
+const { tempDir, removeTree } = require('./lib/test-temp')
 const os = require('os')
 const fs = require('fs')
 const http = require('http')
 
 const PORT = 9243
-const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-update-'))
+const USER_DATA_DIR = tempDir('voiceink-update-')
 const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
 const APP_UPDATE_YML = path.join(path.dirname(EXE), 'resources', 'app-update.yml')
 
@@ -194,7 +195,7 @@ async function main() {
     // 只刪自己補的那份，正式安裝版本來就有的不要動
     if (madeYml) { try { fs.unlinkSync(APP_UPDATE_YML) } catch {} }
     for (let i = 0; i < 5; i++) {
-      try { fs.rmSync(USER_DATA_DIR, { recursive: true, force: true }); break } catch { await sleep(800) }
+      try { removeTree(USER_DATA_DIR); break } catch { await sleep(800) }
     }
   }
   const failed = results.filter((r) => !r).length

@@ -15,6 +15,7 @@ const { app } = require('electron')
 const http = require('http')
 const os = require('os')
 const path = require('path')
+const { tempDir } = require('./lib/test-temp')
 const fs = require('fs')
 
 let passed = 0
@@ -73,7 +74,7 @@ function makeStore(values) {
 
 async function main() {
   // 紀錄與字典會落在 userData，測試用暫存目錄，不碰使用者的檔案
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-dictation-'))
+  const tmp = tempDir('voiceink-dictation-')
   app.setPath('userData', tmp)
   await app.whenReady()
 

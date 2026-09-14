@@ -13,13 +13,14 @@
 
 const { spawn, execFileSync } = require('child_process')
 const path = require('path')
+const { tempDir } = require('./lib/test-temp')
 const os = require('os')
 const fs = require('fs')
 const http = require('http')
 
 const PORT = 9261
 const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
-const USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'voiceink-cdp-'))
+const USER_DATA_DIR = tempDir('voiceink-cdp-')
 // 模型放在 `<userData>/models`，換了 user-data-dir 就等於一顆都沒裝
 {
   const real = path.join(process.env.APPDATA || os.homedir(), 'voiceink', 'models')
