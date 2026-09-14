@@ -34,7 +34,7 @@ nav：聊天（預設，**工作區與終端機同一頁**）｜檔案｜CC代�
 ```bash
 npm run electron:dev     # 開發（vite + electron）
 npm run dev:sandbox      # 沙箱實例：不干擾你正在用的那份，但接得到原本的模型與專案
-npm run electron:pack    # 免安裝預覽 → dist/win-unpacked/VoiceInk.exe（UI／功能改完必跑）
+npm run electron:pack    # 免安裝預覽 → dist/win-unpacked/VoiceInk.exe（UI／功能改完必跑；自動打到專案外→驗 asar→同步→刪外部輸出）
 npm run electron:build   # 完整打包：NSIS 安裝檔＋ win-unpacked → dist/
 npm run build:sensors    # 系統監控提權感測器 sidecar（需 .NET 8 SDK）→ resources/sensors/
 npm run build:hook       # 語音輸入原生熱鍵 sidecar（需 .NET 8 SDK）→ resources/hook/
@@ -83,6 +83,9 @@ tag 要與 `package.json` 的 version 一致。
 
 ### 安全底線（跨模組）
 
+- **遞迴刪資料夾不准用 `fs.rmSync(..., { recursive: true })`，一律 `src/main/safe-rm.js` 的 `removeTreeSync`**（腳本裡是 `test-temp.js` 的 `removeTree`）：Node 24（＝Electron 43 內建）的同步遞迴刪除**會穿過 junction 把對面的真資料刪掉**（實測純 Node 24 與 Electron 主程序都會；Node 22 不會；非同步 `fs.promises.rm` 不會）。CDP 的暫存 userData 裡有 junction 指著使用者 6.9GB 的模型，系統 Node 一升級就是整包刪光。守門 `test-temp-hygiene.js`、回歸 `test-safe-rm.js`。
+- **碰「使用者任意路徑」的模組用 `src/main/raw-fs.js`（Electron 下＝`original-fs`）**：Electron 的 `fs` 把 `.asar` 當資料夾打開而且**開了不關**——檔案總管列一次打包輸出、終端機把印出來的路徑偵測成連結、工作區搜尋掃到 `dist/`，那個 `app.asar` 就被 VoiceInk 鎖到關 App 為止（刪不掉、下次打包 `EBUSY: unlink app.asar`）。目前 `explorer/*`、`workspace/*`、`terminal/links.js` 已換；App 自己的程式碼與資源（在 asar 裡）**不要**用它讀。回歸 `test-asar-lock.js`（`npx electron`）。
+
 - **雲端路徑的 HTTP 錯誤只記狀態摘要**：上游 response body／token／外部 `error.message` 一律不進 console／IPC／UI（API URL 是使用者自填的，閘道原樣回音等於在 UI 印出自己的金鑰）。回歸 `test-error-hygiene.js`。
 - **代理／閘道不透傳上游狀態碼**：只有 429（含 `retry-after`）原樣回，其餘一律 502；每個端點走同一個 `statusFor`。
 - **不收 renderer 給的網址**：模型掃描只收 providerId，上游位址一律由 main 從 store 取。
@@ -96,11 +99,13 @@ tag 要與 `package.json` 的 version 一致。
 
 - 保留 `asar.smartUnpack: false`；`asarUnpack` 要含 sherpa-onnx*、`@node-llama-cpp/win-x64`、`@reflink`、Antigravity `.ps1`、`sysmon/probe.ps1`、`screentime/observer.ps1`、`uiohook-napi`、`@lydell/node-pty*`（`node-pty` 的 JS 與 `node-pty-win32-x64` 兩份都要）。
 - **`fs.cpSync` 讀不了 asar 裡的東西**（`copyFileSync` 可以）：終端機宿主複製 node-pty 時只會留下半套 `node_modules`，開發版全綠、打包版靜靜地開不起終端機。要複製整個資料夾就先 `asarUnpack`，路徑再換成 `app.asar.unpacked`。回歸只有 `probe-terminal-restart.js` 抓得到。
+  **從 asar 裡複製單一檔案也不要用 `copyFileSync`**：Electron 會先把它解壓成 `%TEMP%\<uuid>.tmp<副檔名>` 當中繼，程序被強制結束（CDP 收尾的 `taskkill /F`）就永遠留在那裡（實測累積 609 個終端機宿主的 `.tmp.js`）。改成 `writeFileSync(to, readFileSync(from))`——`readFileSync` 直接讀 archive、不經暫存檔。
 - **外部程序（PowerShell、conhost）執行不了 asar 內檔案**，路徑要換成 `app.asar.unpacked`。
 - **`node-llama-cpp/llama` 整包排掉會讓打包版的本地 LLM 靜默失效**（runtime 讀 `binariesGithubRelease.json`）：排除後要 include 回那支 json。動 `build.files` 前後跑 `probe-packed-local-llm.js`。
 - 打包跑的是 `src/` 原始碼；**新增任何產物資料夾都要記得排除**（`dist-hud/` 曾讓 asar 525MB → 1.46GB，`native/` 漏排時 asar 631MB **打包直接失敗**在 `EBUSY: unlink app.asar`）。
 - **`app.asar` 被別的程式抓著 → 產出的 asar 會安靜錯位**（每個檔案拿到前一個的內容，整頁 SyntaxError，electron-builder **exit 0**）。兇手實測是 `Orca.exe`（連 `%TEMP%` 也監看）。解法：打包到工作區外 → `cd` 到暫存目錄跑 `npx @electron/asar extract-file <app.asar> package.json` 驗過（**這指令會把檔案寫進當下工作目錄**，在專案根目錄跑會蓋掉自己的 `package.json`）→ `robocopy /MIR /XF app.asar` 覆寫回去，asar 用 `[IO.File]::Open(dst,'Open','Write','Read')` 就地覆寫＋`SetLength`，**`VoiceInk.exe` 一定要一起換**（完整性雜湊嵌在它裡面）。
 - **「工作區外」是指 `D:\Workspace` 之外**（實測：打到 `D:/Workspace/vi-pack-…` 一樣錯位，打到 `D:/vi-build-…` 才乾淨）；**打包期間不可以動到任何會被打包的檔案**——連改一行 `CLAUDE.md` 都會讓後面每個檔案位移（實測四次：中途編輯過的三次全錯位，全程沒碰的兩次乾淨）；**驗證要抽一支 renderer 的 `.js`**，只驗 `package.json` 過得了關卻仍然是錯的（`extract-file` 的路徑要用反斜線）。症狀：App 開得起來但整頁功能沒反應，console 一堆 `SyntaxError: Unexpected token '}'`，而且指的是你根本沒改過的檔案。
+  **這整套已經是 `npm run electron:pack` 本身**（`scripts/pack-preview.js`：打到磁碟根的 `vi-build-<時間>` → asar 裡每一支 `src/` 跟原始碼逐位元組比對 → robocopy＋asar 就地覆寫進 `dist/win-unpacked` → 不論成敗刪掉外部輸出）。**不要再手動 `--config.directories.output=D:/vi-build-…`**，那會把幾百 MB 留在專案外；CDP 一律測 `dist/win-unpacked`。
 - **NSIS 的警告會被當成錯誤**：`build/installer.nsh` 會被安裝程式與解除安裝程式**各編譯一次**，
   而 `customInstall` 只插進安裝程式那一份——在那裡宣告 `Var` 卻只在 `customInstall` 用到，
   解除安裝程式那次就是「宣告了沒人用」（warning 6001），`electron:build` 直接失敗。
@@ -417,6 +422,7 @@ tag 要與 `package.json` 的 version 一致。
 ### 測試（CDP／e2e）
 
 - **在這個 App 裡開發這個 App，一律 `npm run dev:sandbox`**（`scripts/dev-sandbox.js`）：三份 VoiceInk 預設共用 `%APPDATA%\voiceink`，而 `requestSingleInstanceLock()` 綁的是 **userData 路徑**（`main.js` 特地在搶鎖前就套用 `--user-data-dir`）——不換路徑只會把使用者的視窗叫到前面然後自己關掉，還跟他搶資料檔與 AGY 的埠。沙箱在 `%APPDATA%\voiceink-dev`：`models`／`hf-models` 用 junction 接回真的那份（唯讀，30GB 不能複製）；`config.json`／`workspaces.json` **複製**一份（有真資料可用又弄不髒）；會累積的紀錄（usage／code-usage／ agy-logs／dictations／terminals）**不接**；`agyEnabled`／`dictationEnabled`／`sysmonSensors`／檔案頁 `uffsAuto` 強制關掉（這幾個的影響跑得出 userData 之外）。**寫進沙箱前一律先 `rm` 目的地**——`writeFileSync`／`copyFileSync` 會跟著符號連結寫到對面去，沙箱裡只要有一條指回真 userData 的連結，這支「保護資料」的腳本就會親手覆寫使用者的設定。
+- **腳本不准自己往 `%TEMP%` 撒東西**：暫存一律 `scripts/lib/test-temp.js` 的 `tempDir(prefix)`／`tempFile(name)`——全部收在 `%TEMP%\voiceink-tests\run-<pid>-*`，程序結束（含 Ctrl+C、`npx electron` 的 `app.exit()`）自動刪，當掉沒刪成的超過 6 小時由下一支腳本清掉（以前 76 支各自 `mkdtemp`，累積 260 多個資料夾）。守門 `test-temp-hygiene.js`；真的要留的那一行加 `// temp-ok: 原因`。
 - **CDP 收尾只能殺自己**：暫存 `--user-data-dir` ＋只對自己 spawn 的 `child.pid` 跑 `taskkill /PID /T`；**禁止 `/IM VoiceInk.exe`**（會關掉使用者的安裝版）。
 - **不可以用「第一列」或「總數」指涉自己建的東西**（最糟會刪掉使用者的資料）：一律 `[data-id="..."]`，中途建的都要刪掉。
 - 同一時間只能跑一支 CDP 測試；挑主視窗一律用 `/index\.html/`（HUD 也是一個 page target）。
@@ -452,4 +458,4 @@ tag 要與 `package.json` 的 version 一致。
 | ASR／即時字幕 | `e2e-llama-asr.js`／`e2e-asr-threads.js`／`e2e-stt-cdp.js`／`probe-cloud-asr.js`（真金鑰打真上游）；`test-vad.js` ＋ `e2e-live-pipeline.js` ＋ `e2e-live-cdp.js` |
 | 翻譯 | `probe-prompt-path.js`（prompt 逐 token）＋ `verify-chat-wrapper-fix.js` ＋ `probe-packed-local-llm.js`（動 `build.files` 前後）＋ `probe-translate-lang.js` |
 | 彈窗 | `e2e-app-dialog-cdp.js`（自己開 vite ＋ electron，**會叫到最前面**：驗確認／輸入／告知三種都是 `app-dialog` 且套到玻璃樣式、Esc 與取消回得對、節點會收掉）|
-| 跨模組 | `test-taskbar-identity.js`（工作列身分與圖示）＋ `probe-taskbar-icon.js`（量安裝好的捷徑解析得到 App 圖示；動 `build/installer.nsh` 前後跑）／`test-error-hygiene.js`（錯誤衛生）／`test-ipc-invoke.js`（IPC 外殼）／`e2e-tray-cdp.js`（常駐）／`test-updater.js` ＋ `e2e-update-cdp.js`（會連 GitHub）／`e2e-visual-cdp.js`（七頁 × 主題 × 三尺寸）／`e2e-ux-tweaks-cdp.js`（**會叫到最前面**）／`e2e-cdp-smoke.js` |
+| 跨模組 | `test-taskbar-identity.js`（工作列身分與圖示）＋ `probe-taskbar-icon.js`（量安裝好的捷徑解析得到 App 圖示；動 `build/installer.nsh` 前後跑）／`test-error-hygiene.js`（錯誤衛生）／`test-ipc-invoke.js`（IPC 外殼）／`e2e-tray-cdp.js`（常駐）／`test-updater.js` ＋ `e2e-update-cdp.js`（會連 GitHub）／`e2e-visual-cdp.js`（七頁 × 主題 × 三尺寸）／`e2e-ux-tweaks-cdp.js`（**會叫到最前面**）／`e2e-cdp-smoke.js`／`test-temp-hygiene.js`（腳本不撒暫存、沒有遞迴 rmSync）＋ `test-safe-rm.js`（junction 不被穿過，另可用 Electron 內建 Node 24 跑）＋ `test-asar-lock.js`（`npx electron`：列資料夾不鎖 `app.asar`）|

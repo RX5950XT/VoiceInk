@@ -95,6 +95,15 @@ AGY 設定、終端機、聊天、語音輸入紀錄**刻意不進** `STORE_ALLO
 
 ## 最近變更
 
+### 2026-09-15 — 根治專案外殘留
+
+- **App 不再鎖住 `app.asar`**：`src/main/raw-fs.js`（Electron 下＝`original-fs`）給檔案總管、工作區、終端機連結偵測用；以前列一次打包輸出，那個 asar 就被鎖到關 App。
+- **同步遞迴刪除改走 `src/main/safe-rm.js`**：Node 24（Electron 43 內建）的 `rmSync` 遞迴會穿過 junction 刪到對面；模型庫刪模型、GPU 套件、終端機宿主暫存都換掉。
+- **從 asar 複製檔案改讀進來再寫**（終端機宿主、ffmpeg、GPU 套件）：`copyFileSync` 會在 `%TEMP%` 留 `<uuid>.tmp.*` 中繼檔。
+- **腳本暫存統一**：`scripts/lib/test-temp.js`（`%TEMP%\voiceink-tests`，結束自動刪、過期清），74 支腳本改用；`test-temp-hygiene.js` 守門（也擋遞迴 rmSync）。
+- **`npm run electron:pack` 改成 `scripts/pack-preview.js`**：打到專案外 → asar 內 `src/` 逐檔比對 → 同步 `dist/win-unpacked` → 刪外部輸出。
+- 順手修三支過期測試：`test-workspace-ui.js` 還查已刪的 `.chat-list-proj`、`e2e-terminal.js` 寫死專案資料夾名、`test-terminal-host.js` 假設 `dist/` 已存在。
+
 ### 2026-09-14 — 終端機組字閃爍與全代碼庫修復
 
 - **終端機組字不再被 AI CLI 重畫拉走**：`term-ime.js` 改成組字期間用 CSS 變數＋`!important` 固定輸入框與組字文字位置（不再每幀用 JS 擺回去）；`bindImeCaret` 回傳 dispose，關分頁時收事件。

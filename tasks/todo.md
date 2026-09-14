@@ -1,3 +1,18 @@
+# 2026-09-15 — 根治專案外殘留
+
+- [x] App：碰使用者任意路徑的模組改用 `raw-fs`（Electron 下＝`original-fs`）；`test-asar-lock.js` 修前 6/8 紅、修後 8/8
+- [x] 追出第四個源頭：從 asar `copyFileSync` 會留 `%TEMP%\<uuid>.tmp.*`（累積 609 個）→ 終端機宿主／ffmpeg／GPU 套件改讀再寫；實測 copyFileSync 多 1 個、讀再寫 0 個
+- [x] **發現 Node 24（Electron 43）`rmSync` 遞迴會穿過 junction 刪真資料**（純 Node 24 與 Electron 都重現、Node 22 不會）→ `src/main/safe-rm.js`；App 5 處、腳本 94 處換掉；`test-safe-rm.js` 在 Node 22／24 皆 6/0（Node 24 對照組 followed=true）；確認使用者模型 63 檔 6.9GB 完好、`hf-models` 自 9/2 建立後未變動
+- [x] 測試暫存：`scripts/lib/test-temp.js`；74 支腳本改用；`test-temp-hygiene.js`（暫存＋遞迴 rmSync 兩條）對修改前版本紅、修改後綠
+- [x] 打包：`electron:pack` → `scripts/pack-preview.js`；故意改一個換行會被 asar 比對擋下
+- [x] 順手修三支過期測試（`.chat-list-proj`、寫死資料夾名、`dist/` 不存在）
+- [x] 文件：CLAUDE／AGENTS（安全底線兩條、打包、測試、驗證表）、CONTEXT、lessons
+- [x] 第五個源頭：electron-builder（@electron/get）每次打包在 `%TEMP%` 留空的 `electron-download-*`（183 個）→ `pack-preview.js` 把子程序 TEMP 指進 test-temp 管的資料夾；重打一次 0 → 0
+- [x] 清掉既有殘留：空 `electron-download-*` 183 個、asar 中繼檔 612 個
+- [x] 最終驗證：29 支單元＋4 支 Electron e2e 全綠；新流程打包（209 支 src 逐檔比對）；打包版 CDP 工作區 179/0、終端機 48/0、聊天 62/0、檔案總管 exit 0；`<uuid>.tmp.*` 612 → 612（修前每跑一次終端機 +7）；`%TEMP%`、磁碟根、`voiceink-tests` 皆零新增
+
+Review：還留著 `D:\vi-build-ime-20260914`（使用者的 VoiceInk 安裝版鎖著，新版裝上後重開 App 才放得掉）；安裝版要等下一次發行才會帶到 `raw-fs` 修正。
+
 # 2026-09-14 — 聊天：併發、側欄資料夾與狀態、對話參數
 
 - [x] main：inflight 改成每對話一格（第二輪拿掉總數上限）、`abortConversation`、`activeConversationIds`；本機模型載入去重
