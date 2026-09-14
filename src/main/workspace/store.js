@@ -12,7 +12,7 @@
  * 絕對路徑一律由這裡解析（見 `files.js` 的 `resolveIn`）。
  */
 
-const fs = require('fs')
+const fs = require('../raw-fs')
 const path = require('path')
 
 /** 最多幾個專案 */

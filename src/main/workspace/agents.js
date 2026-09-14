@@ -19,8 +19,8 @@
  * renderer 只送 `{ agent, sessionId }`，指令字串在這裡組。
  */
 
-const fs = require('fs')
-const fsp = require('fs/promises')
+const fs = require('../raw-fs')
+const fsp = require('../raw-fs').promises
 const os = require('os')
 const path = require('path')
 

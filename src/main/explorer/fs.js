@@ -4,8 +4,8 @@
  * 整機檔案操作（Main Process）。所有路徑都過 `paths.resolveAbs`。
  */
 
-const fs = require('fs')
-const fsp = require('fs/promises')
+const fs = require('../raw-fs')
+const fsp = require('../raw-fs').promises
 const path = require('path')
 const paths = require('./paths')
 const recycle = require('./recycle')

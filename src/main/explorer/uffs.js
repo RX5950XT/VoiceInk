@@ -8,7 +8,7 @@
  * 關 App **不停** daemon。
  */
 
-const fs = require('fs')
+const fs = require('../raw-fs')
 const os = require('os')
 const path = require('path')
 const crypto = require('crypto')

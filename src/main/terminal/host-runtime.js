@@ -89,7 +89,9 @@ function stageRuntime(root, execPath = process.execPath) {
     try {
       fs.copyFileSync(execPath, path.join(staging, 'VoiceInkTerminalHost.exe'))
       for (const file of RUNTIME_FILES) fs.copyFileSync(path.join(path.dirname(execPath), file), path.join(staging, file))
-      for (const file of HOST_FILES) fs.copyFileSync(path.join(__dirname, file), path.join(staging, file))
+      // 這幾支在 app.asar 裡：copyFileSync 會先解壓成 %TEMP%\<uuid>.tmp.js 當中繼，程序被強制結束就留在那裡；
+      // readFileSync 直接讀 archive，不經暫存檔
+      for (const file of HOST_FILES) fs.writeFileSync(path.join(staging, file), fs.readFileSync(path.join(__dirname, file)))
       const modules = path.join(staging, 'node_modules/@lydell')
       fs.mkdirSync(modules, { recursive: true })
       fs.cpSync(ptyRoot, path.join(modules, 'node-pty'), { recursive: true })
@@ -99,7 +101,8 @@ function stageRuntime(root, execPath = process.execPath) {
       fs.renameSync(staging, dir)
     } catch (error) {
       // 半套的執行環境跑不起來又佔 248MB，建到一半就整個收掉。
-      fs.rmSync(staging, { recursive: true, force: true })
+      // 在函式裡才 require：這支也會被複製進宿主的執行環境，那裡沒有 safe-rm.js（只有主程序會走到這裡）
+      require('../safe-rm').removeTreeSync(staging)
       throw error
     }
   }
@@ -117,7 +120,7 @@ function pruneRuntimes(root, keep) {
     if (!fs.existsSync(path.join(dir, 'ready'))) continue
     try {
       fs.closeSync(fs.openSync(path.join(dir, 'VoiceInkTerminalHost.exe'), 'r+'))
-      fs.rmSync(dir, { recursive: true, force: true })
+      require('../safe-rm').removeTreeSync(dir)
     } catch { /* 還有宿主跑在這一份，或檔案被鎖住 */ }
   }
 }

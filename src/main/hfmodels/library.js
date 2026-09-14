@@ -15,6 +15,7 @@
 const fs = require('fs')
 const path = require('path')
 const catalog = require('./catalog')
+const { removeTreeSync } = require('../safe-rm')
 
 const META_FILE = 'voiceink-meta.json'
 /** 跟 `catalog.safeId` 產出的形狀一致 */
@@ -166,7 +167,8 @@ function remove(id) {
     throw new Error('模型路徑不在模型庫裡')
   }
   if (!fs.existsSync(dir)) return false
-  fs.rmSync(dir, { recursive: true, force: true })
+  // 模型資料夾可能是使用者自己接的 junction：只拆連結，不刪對面的檔案（rmSync 遞迴會穿過去）
+  removeTreeSync(dir)
   return true
 }
 

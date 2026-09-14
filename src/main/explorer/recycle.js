@@ -9,8 +9,8 @@
  */
 
 const crypto = require('crypto')
-const fs = require('fs')
-const fsp = require('fs/promises')
+const fs = require('../raw-fs')
+const fsp = require('../raw-fs').promises
 const path = require('path')
 const { spawnSync } = require('child_process')
 const paths = require('./paths')

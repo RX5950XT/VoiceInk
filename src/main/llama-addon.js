@@ -8,6 +8,7 @@
  */
 
 const fs = require('fs')
+const { removeTreeSync } = require('./safe-rm')
 const path = require('path')
 const { pathToFileURL } = require('url')
 
@@ -43,7 +44,8 @@ function copyDir(src, dest) {
     const from = path.join(src, entry.name)
     const to = path.join(dest, entry.name)
     if (entry.isDirectory()) copyDir(from, to)
-    else fs.copyFileSync(from, to)
+    // 來源在 app.asar 裡：copyFileSync 會先在 %TEMP% 解壓一份中繼檔（程序被強制結束就留著），讀進來再寫不經暫存檔
+    else fs.writeFileSync(to, fs.readFileSync(from))
   }
 }
 
@@ -106,9 +108,9 @@ function ensureLlamaAddon(pkgName) {
   const dest = path.join(addonRoot(), pkgName)
   if (!destMatchesSource(src, dest)) {
     const tmp = `${dest}.tmp`
-    fs.rmSync(tmp, { recursive: true, force: true })
+    removeTreeSync(tmp)
     copyDir(src, tmp)
-    fs.rmSync(dest, { recursive: true, force: true })
+    removeTreeSync(dest)
     fs.renameSync(tmp, dest)
   }
   destByPackage.set(pkgName, dest)

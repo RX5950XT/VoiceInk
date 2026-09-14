@@ -51,7 +51,8 @@ function resolveFfmpegPath() {
     const dest = path.join(app.getPath('userData'), 'native', 'ffmpeg.exe')
     if (!fs.existsSync(dest) || fs.statSync(dest).size === 0) {
       fs.mkdirSync(path.dirname(dest), { recursive: true })
-      fs.copyFileSync(bin, dest)
+      // 不用 copyFileSync：從 asar 複製會先在 %TEMP% 解壓一份 80MB 的中繼檔，程序被強制結束就留著
+      fs.writeFileSync(dest, fs.readFileSync(bin))
     }
     return dest
   }

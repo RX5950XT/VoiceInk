@@ -7,7 +7,7 @@
  * 沒有軟碟的 A:／B: 與空光碟機會卡住好幾秒。用量再 `statfsSync`。
  */
 
-const fs = require('fs')
+const fs = require('../raw-fs')
 const os = require('os')
 const path = require('path')
 const { spawnSync } = require('child_process')

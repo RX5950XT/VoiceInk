@@ -11,7 +11,7 @@
  * 邊界一律在這裡收：`resolveIn` 決定走得到哪裡，其餘四個上限決定會不會把 UI 弄死。
  */
 
-const fsp = require('fs/promises')
+const fsp = require('../raw-fs').promises
 const path = require('path')
 const files = require('./files')
 

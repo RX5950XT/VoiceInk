@@ -11,8 +11,8 @@
  * `resolveIn` 是那道門：組完之後必須仍在根目錄底下，否則一律拒絕。
  */
 
-const fs = require('fs')
-const fsp = require('fs/promises')
+const fs = require('../raw-fs')
+const fsp = require('../raw-fs').promises
 const path = require('path')
 
 /** 單層目錄最多列幾筆（`node_modules` 那種一層幾千個的不要把 UI 弄死） */

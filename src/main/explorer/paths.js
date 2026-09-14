@@ -12,8 +12,8 @@
  * 不收 `\\.\`／`\\?\`／named pipe／NTFS ADS（第二個冒號）。
  */
 
-const fs = require('fs')
-const fsp = require('fs/promises')
+const fs = require('../raw-fs')
+const fsp = require('../raw-fs').promises
 const path = require('path')
 const os = require('os')
 

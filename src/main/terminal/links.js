@@ -12,7 +12,7 @@
  * 沒報過（`cmd.exe`、或 shell 沒設定 OSC 7）就退回開起來時的那個目錄。
  */
 
-const fs = require('node:fs')
+const fs = require('../raw-fs')
 const os = require('node:os')
 const path = require('node:path')
 const store = require('./store')

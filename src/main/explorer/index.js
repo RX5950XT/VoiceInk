@@ -9,7 +9,7 @@
 
 const { shell, dialog, BrowserWindow } = require('electron')
 const os = require('os')
-const fs = require('fs')
+const fs = require('../raw-fs')
 const path = require('path')
 const { spawnSync } = require('child_process')
 const paths = require('./paths')

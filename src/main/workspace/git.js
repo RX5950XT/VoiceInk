@@ -16,7 +16,7 @@
  */
 
 const { spawn } = require('child_process')
-const fsp = require('fs/promises')
+const fsp = require('../raw-fs').promises
 const store = require('./store')
 const files = require('./files')
 

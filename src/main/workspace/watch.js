@@ -19,7 +19,7 @@
  *    回 `{ watching: false }` 讓 UI 安靜退回「手動重新整理」，不要跳錯誤。
  */
 
-const fs = require('fs')
+const fs = require('../raw-fs')
 const path = require('path')
 const files = require('./files')
 

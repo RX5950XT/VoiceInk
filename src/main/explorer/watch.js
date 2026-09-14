@@ -7,7 +7,7 @@
  * 解壓縮時把畫面刷死。
  */
 
-const fs = require('fs')
+const fs = require('../raw-fs')
 const paths = require('./paths')
 
 const DEBOUNCE_MS = 250
