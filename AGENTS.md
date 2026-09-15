@@ -74,7 +74,7 @@ tag 要與 `package.json` 的 version 一致。
 - 所有外部輸入都要驗證；例外不可靜默吞掉，邊界回結構化錯誤。
 - 設定走 electron-store IPC，**key 僅 allowlist**。以下**不走** `store:*`，各有獨立 store／IPC：聊天／終端機／工作區／檔案總管／AGY／語音輸入紀錄／用量統計。`hfToken`、`agyEnabled`、`ocControl` 刻意不進 allowlist。
 - 十組模組 IPC 的共用外殼在 `src/main/ipc-invoke.js`（主視窗守衛＋`{ ok, data|error }`＋`userMessage` 白名單），**handler 仍要各模組自己逐一列舉**。
-- 兩窗 `sandbox: true`；CSP `connect-src 'self' https: http:`、`font-src 'self' data:`、`worker-src 'self' blob:`（後兩條是 Monaco 要的，不可拿掉）。
+- 兩窗 `sandbox: true`；CSP `connect-src 'self' https: http: vi-media:`、`font-src 'self' data:`、`worker-src 'self' blob:`（後兩條是 Monaco 要的，不可拿掉）；`img-src`／`media-src` 也要有 `vi-media:`（工作區媒體預覽）。
 - **UI 改完先跑 `npm run electron:pack`** 更新免安裝預覽；完整安裝檔僅發佈時打。
 
 ---
@@ -146,7 +146,7 @@ tag 要與 `package.json` 的 version 一致。
 - **三份清單要對起來**：`ipc.js` 用到的每個 `service.X` 都要在 `main.js` 的逐一列舉白名單裡、每支 `workspace:*` 都要在 preload 接得到；`index.js` 的 `module.exports` 列一個沒定義的名字＝**載入期 ReferenceError**，症狀是每支 IPC 都回通用錯誤，而 `node --check` 與單元測試全綠。回歸 `test-workspace.js` 的 [Q][Q2]。（AGY／sysmon／usage 同一條）
 - **AI 記錄的家目錄不只 `~/.claude`／`~/.codex`**：要掃 `CLAUDE_CONFIG_DIR`／`CODEX_HOME` 與其他工作台的 runtime home（實測本機 Codex 記錄全在 Orca 那邊），照 `agent + id` 去重。`codeusage` 的 `jsonlSources()` 相反——**維持只掃預設家目錄**（游標鍵是檔名）。
 -「讀過」跟「改過」要分開回；工具名不認得時算「讀過」，**不可以憑空說人家改過**。
-- **存檔一定要帶開檔當下的 mtime**（`STALE` → 提示條給比較／重新載入／覆寫／保留編輯，草稿一個字都不能動）；同一檔案的寫入要排隊（Windows 上兩個 rename 指向同一目的地會 EPERM）；草稿上限要跟 `MAX_WRITE_CHARS` 同一個數字（4MB）。
+- **存檔一定要帶開檔當下的 mtime**（`STALE` → 提示條給比較／重新載入／覆寫／保留編輯，草稿一個字都不能動）；同一檔案的寫入要排隊（Windows 上兩個 rename 指向同一目的地會 EPERM）；草稿上限（4MB，main 與 renderer 同一個數字）比存檔上限（50MB）小，超過的草稿**整個欄位不送**並提示先存檔（送空字串會把分頁還原成空白的未存狀態）。
 - **開分頁的每一次 await 之後都要核對 `projectSwitch`，回來還要再 `findTab` 一次**；改名／搬檔後要 `retargetTabs`（分頁 id 內嵌相對路徑，不接的話存檔會把舊檔重新建出來）。
 - `git status` 用 `--porcelain=v2 -b -z`；欄位是**位置**決定的，改名（`2`）那型後面還跟著一格原檔名。衝突（`u`）要自成一組。`git log` 的欄位分隔用 `%x1f`，**不能跟 `-z` 混用**；`for-each-ref` **不吃 `%x1f`**。
 - 跟分支比要比 `merge-base` 不是分支頂端；`--numstat` 一定要配 `--no-renames`。切到非 git 專案時 `renderGit` 的提早 return **要把工作樹、分支下拉、審閱清單三塊都清乾淨**。
@@ -161,8 +161,9 @@ tag 要與 `package.json` 的 version 一致。
 - **資料夾監看一次只看一個專案**；`.git` 底下的變動只當成「Git 狀態變了」；事件要合併；監看不起來安靜退回手動。
 - 終端機的 `projectId` 是**可選**欄位（缺值＝未分類，卡 `^[A-Za-z0-9_-]{1,64}$`）；對話的專案歸屬已拿掉，改用聊天側欄自己的資料夾（`folderId`）。`workspaces.json` 的路徑不存在只標 `missing`。
 - 搜尋只收字串不收 regex，四個上限（命中 200／掃 8000 檔／單檔 1MB／15 秒）少一個都會凍住 UI；快速開檔與搜尋共用同一份 `walk`，模糊比對沒命中要回 `null` 不是 `-1`。
-- **圖片先看副檔名回 `data:` URI**，不可走「二進位檔」那條（PNG 含 NUL 會被判成不能編輯）。Electron 43 **沒有內建 PDF 檢視器**，只能用 pdf.js 畫 canvas，且 `workerSrc` 不能給空字串。
-- **讀檔上限分兩條**：圖片／PDF／影音（base64 過 IPC）2MB；純文字 50MB（Monaco 虛擬捲動，幾十萬行 JSON 開得動），但**超過 `MAX_WRITE_CHARS`（4MB）的回 `readonly`**（存不回去、草稿也放不下）。回歸 `test-workspace.js` ＋ `probe-workspace-bigfile.js` 的 [F]。
+- **圖片／PDF／影音先看副檔名**，不可走「二進位檔」那條（PNG 含 NUL 會被判成不能編輯），而且**不讀內容、不轉 base64**：`readFile` 只回 `media` 種類，`index.js` 補上 `vi-media://<每次啟動的隨機 token>/<projectId>/<relPath>`，由 `workspace/media.js` 用 `protocol.handle` 串流（自己解 Range 回 206，影片才拖得動進度條；路徑走 `rootOf`＋`resolveIn`、只送媒體副檔名、錯的一律 404）。token 只經主視窗 IPC 發出，`<webview>` 裡的網頁猜不到。CSP 的 `img-src`／`media-src`／`connect-src` 三條都要有 `vi-media:`（pdf.js 用 fetch 讀，缺一條就是「看起來壞掉但不報錯」）；`registerSchemesAsPrivileged` 要在 app ready 之前。Electron 43 **沒有內建 PDF 檢視器**，只能用 pdf.js 畫 canvas（給網址＋`disableStream`／`disableAutoFetch`，只讀看得到的頁），且 `workerSrc` 不能給空字串。
+- **純文字讀／寫上限都是 50MB**（Monaco 虛擬捲動）。大檔（>1MB）打字時 `ws-monaco.js` **停手 300ms 才 `getValue()`**（每個字複製整份＝12MB 的檔連打 40 字就是近 500MB 垃圾，停下來被 GC 卡半秒），期間 `onChange(null)` 只標未存；**`stash()` 開頭一定要先 `flushChange()`**（activeId 換掉之後才交出去會記到下一個分頁上），換 model 時丟掉晚到的那次。大檔也不倒進影子 `<textarea>`（`SHADOW_MAX_CHARS`）。回歸 `test-workspace.js` ＋ `probe-workspace-bigfile.js` 的 [F][F2][G]。
+- **行首是 `(` 的那一行會跟上一行接起來**（沒有分號）：`releasePreviewMedia` 曾寫成 `el.removeAttribute('src')` 下一行 `/** @type */ (el).load()`，結果是 `el.removeAttribute('src')(el).load()`——關任何影音分頁都丟例外、之後工作區點什麼都沒反應。型別轉換先存進一個變數。
 - **Monaco 只能走 AMD 的 `min/vs`**（ESM 那份有 98 個 `import './x.css'`）；`build.files` 只放行 `monaco-editor/min/**`；codicon 是 `data:` 字型、Worker 是 blob（CSP 那兩條少一條就是「看起來壞掉但不報錯」，**沒有 Worker 時 diff 算不出來**）。那份 `<textarea>` 還在（存檔／草稿／尋找取代退路讀它），但 Monaco 在時**只用防抖同步**——
   每敲一個字整份倒過去，2MB 的檔就是每個字搬 2MB；跳行要等 model 掛上（`pendingGoto`）。
 - **大檔案的成本都在「每次都重做」，不是「做得慢」**：`showTab` 不可以用 `getValue()` 比對（那是把整份再複製一次，

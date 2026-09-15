@@ -8,7 +8,7 @@ import { parseUnifiedDiff, renderDiffLines } from './ws-diff.js'
 import {
   loadMonaco, ensureEditor, showTab as showMonacoTab, runAction,
   disposeModel, disposeModelsExcept, retargetModel, revealLine, cursorInfo, currentValue, pushValue, showDiff,
-  selectionInfo, diffGoTo, diffChangeCount, diffCursor, releaseEditors
+  selectionInfo, diffGoTo, diffChangeCount, diffCursor, releaseEditors, flushChange
 } from './ws-monaco.js'
 import { paintAiSession } from './ws-ai-session.js'
 import { nextZoom } from './ws-zoom.js'
@@ -154,9 +154,9 @@ function schedulePersistTabs() {
  * 立即儲存分頁與草稿狀態至 workspaces.json
  */
 /**
- * 草稿存進 `workspaces.json` 的長度上限。**跟 main 的 `files.MAX_WRITE_CHARS` 同一個數字**：
- * 兩邊不一致的話，會出現「編輯器讓你打、存檔也存得下，但關掉分頁草稿就沒了」——
- * 而且完全沒有訊息。超過就當場講，不要安靜丟掉。
+ * 草稿存進 `workspaces.json` 的長度上限（＝ main 的 `store.js` 那個數字）。
+ * 編輯器與存檔都收得下更大的檔（50MB），但幾十 MB 的草稿不該每 400ms 寫一次設定檔——
+ * 超過就**不送**（送了 main 也會丟）並當場講，不要安靜丟掉。
  */
 const MAX_DRAFT_CHARS = 4 * 1024 * 1024
 /** 同一個分頁只嘮叨一次 */
@@ -182,7 +182,8 @@ async function persistTabsNow() {
       projectId: t.projectId,
       relPath: t.relPath,
       url: t.url,
-      draftContent: t.dirty ? (t.content || '') : '',
+      // 太大的草稿整個欄位不帶：帶空字串的話，重開專案會把分頁還原成空白的「未存」狀態
+      draftContent: !t.dirty ? '' : (t.content || '').length <= MAX_DRAFT_CHARS ? (t.content || '') : undefined,
       dirty: Boolean(t.dirty),
       mtimeMs: t.mtimeMs,
       preview: Boolean(t.preview),
@@ -721,6 +722,8 @@ function stash() {
   const tab = findTab(activeId)
   if (!tab) return
   if (tab.kind === 'editor' && el.editorText) {
+    // 大檔還沒交出去的那次變動要趁 activeId 還沒換之前交（不然會記到下一個分頁上）
+    if (monaco) flushChange()
     // Monaco 開著的時候它才是真的內容來源；textarea 只是同步過去的一份影子
     const live = monaco ? currentValue() : null
     tab.content = typeof live === 'string'
@@ -1032,7 +1035,6 @@ function readonlyNote(file, isSvg) {
     : file.image && !isSvg ? '圖片預覽，不能在這裡編輯。'
     : file.binary ? '這是二進位檔案，不能在這裡編輯。'
     : file.tooLarge ? '這個檔案太大，不在這裡開啟。'
-    : file.readonly ? '檔案超過 4MB，只能預覽，不能在這裡存檔。'
     : ''
 }
 
@@ -1232,10 +1234,18 @@ async function useMonaco(tab) {
  * 停下來再倒一次就夠（存檔與切分頁那兩條路都不靠它，各自有更新的來源）。
  */
 let shadowValue = null
+/** 超過就不再倒進影子 textarea（見 `scheduleShadowSync`） */
+const SHADOW_MAX_CHARS = 1024 * 1024
 let shadowTimer = 0
 
 /** @param {string} value */
 function scheduleShadowSync(value) {
+  // 大檔不倒進影子 textarea（12MB 塞一次就是一兩百毫秒的卡頓）；Monaco 在時存檔、
+  // 切分頁、尋找取代都直接讀 Monaco，這份影子只剩「Monaco 不在」的退路在用
+  if (value.length > SHADOW_MAX_CHARS) {
+    cancelShadowSync()
+    return
+  }
   shadowValue = value
   if (shadowTimer) return
   shadowTimer = window.setTimeout(flushShadowSync, 200)
@@ -1260,11 +1270,19 @@ function cancelShadowSync() {
 /**
  * Monaco 改了內容。「髒了沒」「草稿存檔」照舊，只有那份影子 textarea 與
  * 行號欄／狀態列改成不再每個字重算一遍（見 `scheduleShadowSync`）。
- * @param {string} value
+ * @param {string | null} value null＝大檔打字中、內容停手後才來（`ws-monaco.js` 的 `flushChange`）
  */
 function onMonacoValue(value) {
-  scheduleShadowSync(value)
   const tab = findTab(activeId)
+  if (value === null) {
+    if (tab && tab.kind === 'editor' && !tab.dirty) {
+      tab.dirty = true
+      renderTabs()
+    }
+    paintMonacoStatus()
+    return
+  }
+  scheduleShadowSync(value)
   if (tab && tab.kind === 'editor') {
     if (typeof tab.savedContent !== 'string') tab.savedContent = tab.content || ''
     const changed = value !== tab.content
@@ -1407,10 +1425,13 @@ function releasePreviewMedia(box) {
   const previewMedia = box.querySelectorAll('iframe, video, audio')
   if (!previewMedia.length && !hadPdf) return
   const media = box.querySelectorAll('video, audio')
-  for (const mediaEl of media) {
-    /** @type {HTMLMediaElement} */ (mediaEl).pause()
+  for (const node of media) {
+    // 不可以寫成 `(el).load()` 開頭的一行：沒有分號時會跟上一行接成
+    // `el.removeAttribute('src')(el).load()`，關任何影音分頁都丟例外、工作區整個卡住
+    const mediaEl = /** @type {HTMLMediaElement} */ (node)
+    mediaEl.pause()
     mediaEl.removeAttribute('src')
-    /** @type {HTMLMediaElement} */ (mediaEl).load()
+    mediaEl.load()
   }
   box.replaceChildren()
   previewKey = { id: '', source: null }
@@ -1591,10 +1612,11 @@ async function paintPdf(tab, box, generation) {
       ).href
     }
     if (!isCurrent()) return
-    const bin = atob(tab.pdf || '')
-    const bytes = new Uint8Array(bin.length)
-    for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i)
-    const doc = await pdfLib.getDocument({ data: bytes, isEvalSupported: false }).promise
+    // `tab.pdf` 是 main 給的 `vi-media://` 網址：pdf.js 用 Range 只讀看得到的那幾頁
+    // （關掉串流與自動預抓，幾百 MB 的 PDF 也不會整份搬進記憶體）
+    const doc = await pdfLib.getDocument({
+      url: tab.pdf || '', isEvalSupported: false, disableStream: true, disableAutoFetch: true
+    }).promise
     if (!isCurrent()) { await destroyPdfDocument(doc); return }
     let page = 1
 
@@ -1706,7 +1728,8 @@ async function saveActiveFile(force = false) {
   if (!tab || tab.kind !== 'editor' || !text || tab.readonly) return
   const live = monaco ? currentValue() : null
   const content = typeof live === 'string' ? live : text.value
-  text.value = content
+  // 大檔不倒回影子（見 `scheduleShadowSync`）：存 12MB 的檔光這一行就多卡好幾百毫秒
+  if (!monaco || content.length <= SHADOW_MAX_CHARS) text.value = content
 
   // Ctrl+G 開的提示詞分頁：沒有專案也沒有相對路徑，存的地方是 main 手上的暫存檔
   // （見 `terminal/editor-bridge.js`）。**存完分頁還開著**——真的送回終端機是關掉

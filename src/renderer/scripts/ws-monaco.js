@@ -136,6 +136,41 @@ export function languageFor(monaco, relPath) {
 let editor = null
 let diffEditor = null
 
+/** 超過這個長度的 model 改成停手才交出內容（見 `ensureEditor`） */
+const LAZY_VALUE_CHARS = 1024 * 1024
+/** @type {(value: string | null) => void} */
+let changeListener = () => {}
+/** 還沒交出去的那次變動 @type {{ model: any, timer: number }} */
+let pending = { model: null, timer: 0 }
+
+/**
+ * 換掉畫面上的 model 時丟掉還沒交出去的那次：晚到的內容會被記到別的分頁上。
+ * 丟掉不會掉字——內容還在 model 裡，`modelText` 與分頁那份一起停在舊值，
+ * 切回來時 `showTab` 不會拿舊值蓋它；存檔一律直接讀 model。
+ */
+function dropPending() {
+  if (pending.timer) window.clearTimeout(pending.timer)
+  pending = { model: null, timer: 0 }
+}
+
+/** @param {any} model */
+function emitChange(model) {
+  const value = model.getValue()
+  modelText.set(model, value)
+  changeListener(value)
+}
+
+/**
+ * 把還沒交出去的變動立刻交出去。**切分頁／換 model 之前一定要先叫**：
+ * 晚到的那一次會被記到「當下作用中」的分頁上，那時可能已經是別的檔案了。
+ */
+export function flushChange() {
+  const { model } = pending
+  dropPending()
+  // model 已經不在畫面上（被收掉或換走）就不交：切走時 `stash()` 已經直接讀過它
+  if (model && !model.isDisposed() && editor?.getModel() === model) emitChange(model)
+}
+
 /** 共用的編輯器選項 */
 const OPTIONS = {
   automaticLayout: true,
@@ -157,18 +192,28 @@ const OPTIONS = {
  *
  * @param {any} monaco
  * @param {HTMLElement} host
- * @param {(value: string) => void} onChange 內容變動（同步回 textarea，其餘流程照舊）
+ * @param {(value: string | null) => void} onChange 內容變動（同步回 textarea，其餘流程照舊）；
+ *   大檔打字中給 null（內容停手後才給，見 `flushChange`）
  * @param {() => void} onCursor 游標／選取變動（餵狀態列）
  * @returns {any}
  */
 export function ensureEditor(monaco, host, onChange, onCursor) {
   if (editor) return editor
   editor = monaco.editor.create(host, { ...OPTIONS, value: '', language: 'plaintext' })
+  changeListener = onChange
   editor.onDidChangeModelContent(() => {
-    const value = editor.getValue()
     const model = editor.getModel()
-    if (model) modelText.set(model, value)
-    onChange(value)
+    if (!model) return
+    // 大檔：`getValue()` 是整份複製一次，每個字都做的話 12MB 的檔連打 40 個字就是
+    // 近 500MB 的垃圾，停下來時被 GC 卡上半秒。停手之後再交出去就好。
+    if (model.getValueLength() > LAZY_VALUE_CHARS) {
+      dropPending()
+      pending = { model, timer: window.setTimeout(flushChange, 300) }
+      // null＝「改了，內容晚點給」：分頁要當場標成未存（外部變更偵測看的是它）
+      onChange(null)
+      return
+    }
+    emitChange(model)
   })
   editor.onDidChangeCursorSelection(() => onCursor())
   return editor
@@ -198,7 +243,10 @@ export function showTab(monaco, tab) {
     }
     if (model.getLanguageId() !== language) monaco.editor.setModelLanguage(model, language)
   }
-  if (editor.getModel() !== model) editor.setModel(model)
+  if (editor.getModel() !== model) {
+    dropPending()
+    editor.setModel(model)
+  }
   editor.updateOptions({ readOnly: Boolean(tab.readonly) })
 }
 
@@ -235,6 +283,7 @@ export function disposeModel(tabId) {
   // **先讓編輯器放手再 dispose**：dispose 只是把 model 標成死的，
   // 它那份 PieceTree（1.4MB 的檔就是 1.4MB）要等沒人參考才會被回收——
   // 而編輯器切到別的分頁時不會自己把上一顆放掉，等於每關一個大檔就漏一份。
+  if (model && pending.model === model) dropPending()
   if (editor && editor.getModel() === model) editor.setModel(null)
   if (model && !model.isDisposed()) model.dispose()
   const pair = diffModels.get(tabId)
@@ -281,6 +330,7 @@ export function disposeModelsExcept(keepIds) {
  * Monaco 的**程式碼本身**（那 16MB 的 AMD 包）不在這裡面，它載了就一直在。
  */
 export function releaseEditors() {
+  dropPending()
   if (editor) {
     editor.setModel(null)
     editor.dispose()

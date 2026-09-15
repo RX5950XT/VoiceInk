@@ -7,7 +7,9 @@
  *   [C] 兩個分頁都關掉、強制 GC 之後，堆積有沒有掉回接近開檔前
  *   [D] 關掉 HTML 預覽分頁之後，那個 `<iframe>`（會一直跑腳本）有沒有被收掉
  *   [E] 關掉影片預覽分頁之後，`<video>`（會一直緩衝）有沒有被收掉
- *   [F] 12MB／30 萬行 JSON 用編輯器唯讀打開；3MB 的仍可編輯
+ *   [F] 3MB 與 12MB／30 萬行 JSON 用編輯器打開、可以編輯
+ *   [F2] 12MB 檔上每打一個字的耗時、停下來後背景同步的卡頓、存檔寫得回去
+ *   [G] 大圖片／影片（拖進度條）／音訊／PDF 走 `vi-media://` 串流；協定擋錯 token、越界、非媒體檔
  *
  * 全程用自己的暫存 user-data-dir，收尾只殺自己 spawn 的那個 pid。
  *
@@ -34,7 +36,7 @@ const bigOriginal = Array.from({ length: BIG_LINES }, (_, i) => `const line${i} 
 const bigModified = bigOriginal.replace(/const line100 = 100/, 'const line100 = 999')
 fs.writeFileSync(path.join(PROJECT, 'big.js'), bigOriginal)
 fs.writeFileSync(path.join(PROJECT, 'page.html'), '<h1>預覽</h1><script>setInterval(() => {}, 50)</script>')
-/** [F] 約 12MB（超過 4MB 存檔上限＝唯讀）與約 3MB（超過舊的 2MB 上限、仍可編輯） */
+/** [F] 約 12MB 與約 3MB 的 JSON（舊版超過 2MB 就不給開），兩個都要能編輯 */
 const HUGE_LINES = 300000
 const MID_LINES = 75000
 const jsonLines = (n) => `[\n${Array.from({ length: n - 2 }, (_, i) => `  {"id": ${i}, "name": "item-${i}"}`).join(',\n')}\n]`
@@ -48,6 +50,83 @@ git('config', 'user.name', 'probe')
 git('add', '-A')
 git('commit', '-qm', 'seed')
 fs.writeFileSync(path.join(PROJECT, 'big.js'), bigModified)
+
+// ===== [G] 大媒體（舊版整份 base64 過 IPC，上限 2MB）。放在 commit 之後，不必進 git =====
+const IMG_SIDE = 3000
+const PDF_PAGES = 400
+const AUDIO_SECONDS = 180
+const VIDEO_SECONDS = 20
+
+/** 3000×3000 雜訊 PNG（壓不小，約 27MB） */
+function writeNoisePng(file, side) {
+  const zlib = require('zlib')
+  const raw = require('crypto').randomBytes((side * 3 + 1) * side)
+  for (let y = 0; y < side; y += 1) raw[y * (side * 3 + 1)] = 0
+  const chunk = (type, data) => {
+    const len = Buffer.alloc(4)
+    len.writeUInt32BE(data.length)
+    const body = Buffer.concat([Buffer.from(type), data])
+    const crc = Buffer.alloc(4)
+    crc.writeUInt32BE(zlib.crc32(body))
+    return Buffer.concat([len, body, crc])
+  }
+  const ihdr = Buffer.alloc(13)
+  ihdr.writeUInt32BE(side, 0)
+  ihdr.writeUInt32BE(side, 4)
+  ihdr[8] = 8
+  ihdr[9] = 2
+  fs.writeFileSync(file, Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw, { level: 1 })), chunk('IEND', Buffer.alloc(0))
+  ]))
+}
+
+/** 400 頁、每頁一大串小方塊的 PDF（純 ASCII，xref 位移直接數位元組） */
+function writeBigPdf(file, pages) {
+  const objs = []
+  const kids = []
+  const boxes = Array.from({ length: 1500 }, (_, i) => `${(i * 37) % 560 + 20} ${(i * 53) % 760 + 20} 6 6 re f`).join('\n')
+  for (let p = 0; p < pages; p += 1) {
+    const pageId = 3 + p * 2
+    const content = `BT /F1 24 Tf 72 720 Td (Page ${p + 1}) Tj ET\n${boxes}\n`
+    kids.push(`${pageId} 0 R`)
+    objs[pageId] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents ${pageId + 1} 0 R /Resources << /Font << /F1 ${3 + pages * 2} 0 R >> >> >>`
+    objs[pageId + 1] = `<< /Length ${content.length} >>\nstream\n${content}endstream`
+  }
+  objs[1] = '<< /Type /Catalog /Pages 2 0 R >>'
+  objs[2] = `<< /Type /Pages /Kids [${kids.join(' ')}] /Count ${pages} >>`
+  objs[3 + pages * 2] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'
+  let out = '%PDF-1.4\n'
+  const offsets = []
+  for (let i = 1; i < objs.length; i += 1) {
+    offsets[i] = out.length
+    out += `${i} 0 obj\n${objs[i]}\nendobj\n`
+  }
+  const xref = out.length
+  out += `xref\n0 ${objs.length}\n0000000000 65535 f \n${offsets.slice(1).map((o) => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}`
+  out += `trailer\n<< /Size ${objs.length} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`
+  fs.writeFileSync(file, out)
+}
+
+/** 3 分鐘 44.1kHz 立體聲 16-bit 靜音 WAV（約 30MB） */
+function writeSilentWav(file, seconds) {
+  const dataLen = seconds * 44100 * 4
+  const head = Buffer.alloc(44)
+  head.write('RIFF', 0); head.writeUInt32LE(36 + dataLen, 4); head.write('WAVE', 8)
+  head.write('fmt ', 12); head.writeUInt32LE(16, 16); head.writeUInt16LE(1, 20); head.writeUInt16LE(2, 22)
+  head.writeUInt32LE(44100, 24); head.writeUInt32LE(44100 * 4, 28); head.writeUInt16LE(4, 32); head.writeUInt16LE(16, 34)
+  head.write('data', 36); head.writeUInt32LE(dataLen, 40)
+  fs.writeFileSync(file, Buffer.concat([head, Buffer.alloc(dataLen)]))
+}
+
+writeNoisePng(path.join(PROJECT, 'noise.png'), IMG_SIDE)
+writeBigPdf(path.join(PROJECT, 'big.pdf'), PDF_PAGES)
+writeSilentWav(path.join(PROJECT, 'long.wav'), AUDIO_SECONDS)
+execFileSync(require('ffmpeg-static'), ['-v', 'error', '-y', '-f', 'lavfi', '-i', `testsrc2=size=1920x1080:rate=30`,
+  '-t', String(VIDEO_SECONDS), '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '8', '-pix_fmt', 'yuv420p',
+  path.join(PROJECT, 'big.mp4')])
+const mediaSizes = Object.fromEntries(['noise.png', 'big.pdf', 'long.wav', 'big.mp4']
+  .map((name) => [name, fs.statSync(path.join(PROJECT, name)).size]))
 
 fs.writeFileSync(path.join(USER_DATA_DIR, 'workspaces.json'), JSON.stringify({
   projects: [{ id: 'w_big', name: '大檔', path: PROJECT, createdAt: Date.now() }]
@@ -307,8 +386,8 @@ async function main() {
 
     // ===== [F] 超過舊的 2MB 上限：幾十萬行的 JSON 要像 VS Code 一樣開得起來 =====
     for (const spec of [
-      { rel: 'huge.json', lines: HUGE_LINES, readonly: true },
-      { rel: 'mid.json', lines: MID_LINES, readonly: false }
+      { rel: 'mid.json', lines: MID_LINES },
+      { rel: 'huge.json', lines: HUGE_LINES }
     ]) {
       await cdp.eval(`window.__t0 = performance.now(); document.querySelector('#wsTree .ws-tree-row[data-rel="${spec.rel}"]').click()`)
       const shown = await waitInPage(cdp, `!!window.monaco && window.monaco.editor.getModels().some((m) => m.getLineCount() >= ${spec.lines})`, 60000)
@@ -320,13 +399,145 @@ async function main() {
         saveHidden: document.getElementById('wsEditorSaveBtn').hidden
       })`)
       ok(`[F] ${spec.rel}（${spec.lines} 行）用編輯器打開，不是「無法預覽」`, shown && !state.unsupported && state.monaco, `${ms}ms`)
-      ok(`[F] ${spec.rel} ${spec.readonly ? '唯讀、藏掉儲存' : '可以編輯存檔'}`,
-        spec.readonly ? (state.saveHidden && /4MB/.test(state.note)) : (!state.saveHidden && !state.note), JSON.stringify(state))
-      await cdp.eval(`(async () => {
-        document.querySelector('#wsTabStrip .ws-tab .ws-tab-close').click()
-        await new Promise((r) => setTimeout(r, 500))
-      })()`)
+      ok(`[F] ${spec.rel} 可以編輯存檔`, !state.saveHidden && !state.note, JSON.stringify(state))
     }
+
+    // ===== [F2] 12MB 的檔上打字與存檔（huge.json 還開著） =====
+    // 同步連打 40 個字，量每一下花多少（Monaco 自己的編輯＋我們的 onChange）；
+    // 之後停 2 秒讓防抖的影子同步與草稿存檔跑完，量這段期間最長的卡頓（long task）
+    const typing = await cdp.eval(`(() => {
+      window.__long = []
+      new PerformanceObserver((list) => { for (const e of list.getEntries()) window.__long.push(Math.round(e.duration)) })
+        .observe({ type: 'longtask', buffered: false })
+      const ed = window.monaco.editor.getEditors()[0]
+      ed.focus()
+      ed.setPosition({ lineNumber: 150000, column: 1 })
+      const times = []
+      for (let i = 0; i < 40; i += 1) {
+        const t = performance.now()
+        ed.trigger('keyboard', 'type', { text: 'x' })
+        times.push(performance.now() - t)
+      }
+      times.sort((a, b) => a - b)
+      return { avg: Math.round(times.reduce((s, v) => s + v, 0) / times.length * 10) / 10, p95: Math.round(times[37] * 10) / 10 }
+    })()`)
+    ok('[F2] 分頁當場標成未存', await cdp.eval(`!!document.querySelector('#wsTabStrip .ws-tab.is-active .ws-tab-dirty')`))
+    await sleep(2500)
+    const longTasks = await cdp.eval('window.__long.slice()')
+    const worst = longTasks.length ? Math.max(...longTasks) : 0
+    ok('[F2] 12MB 檔每打一個字 < 16ms（一幀內）', typing.avg < 16 && typing.p95 < 32, `平均 ${typing.avg}ms、p95 ${typing.p95}ms`)
+    ok('[F2] 打完停下來，背景同步沒有卡超過 200ms', worst < 200, `long tasks: ${JSON.stringify(longTasks)}`)
+    // 大檔的內容是停手 300ms 才交出去：再打幾個字馬上切去別的分頁，不可以記到那一頁上
+    const tabOf = (rel) => `[...document.querySelectorAll('#wsTabStrip .ws-tab')].find((t) => t.textContent.includes('${rel}'))`
+    await cdp.eval(`(() => {
+      const ed = window.monaco.editor.getEditors()[0]
+      const midTab = ${tabOf('mid.json')}
+      for (let i = 0; i < 5; i += 1) ed.trigger('keyboard', 'type', { text: 'y' })
+      midTab.querySelector('.ws-tab-open').click()
+    })()`)
+    await sleep(1000)
+    const midState = await cdp.eval(`({
+      dirty: !!${tabOf('mid.json')}.querySelector('.ws-tab-dirty'),
+      lines: window.monaco.editor.getEditors()[0].getModel().getLineCount()
+    })`)
+    ok('[F2] 打完立刻切走，另一個分頁沒被寫進大檔的內容', !midState.dirty && midState.lines === MID_LINES, JSON.stringify(midState))
+    await cdp.eval(`${tabOf('huge.json')}.querySelector('.ws-tab-open').click()`)
+    ok('[F2] 切回來大檔仍是未存、打的字還在', await waitInPage(cdp, `(() => {
+      const m = window.monaco.editor.getEditors()[0].getModel()
+      return m.getLineCount() === ${HUGE_LINES} && m.getLineContent(150000).startsWith('x'.repeat(40) + 'y'.repeat(5))
+        && !!document.querySelector('#wsTabStrip .ws-tab.is-active .ws-tab-dirty')
+    })()`, 10000))
+    await cdp.eval(`window.__t0 = performance.now(); document.getElementById('wsEditorSaveBtn').click()`)
+    const savedOk = await waitInPage(cdp, `!document.querySelector('#wsTabStrip .ws-tab.is-active .ws-tab-dirty')`, 20000)
+    const saveMs = await cdp.eval('Math.round(performance.now() - window.__t0)')
+    const onDisk = fs.readFileSync(path.join(PROJECT, 'huge.json'), 'utf8')
+    ok('[F2] 12MB 檔存得回去（45 個字真的寫進磁碟）', savedOk && onDisk.length === jsonLines(HUGE_LINES).length + 45, `${saveMs}ms`)
+    await cdp.eval(`(async () => {
+      for (const btn of document.querySelectorAll('#wsTabStrip .ws-tab .ws-tab-close')) {
+        btn.click()
+        await new Promise((r) => setTimeout(r, 400))
+      }
+    })()`)
+    ok('[F2] 兩個分頁都關掉了', await waitInPage(cdp, `document.querySelectorAll('#wsTabStrip .ws-tab').length === 0`, 5000))
+
+    // ===== [G] 大媒體走 vi-media:// 串流 =====
+    note(`[G] 檔案大小：${Object.entries(mediaSizes).map(([k, v]) => `${k} ${(v / 1048576).toFixed(1)}MB`).join('、')}`)
+    const openRow = (rel) => cdp.eval(`window.__t0 = performance.now(); document.querySelector('#wsTree .ws-tree-row[data-rel="${rel}"]').click()`)
+    const elapsed = () => cdp.eval('Math.round(performance.now() - window.__t0)')
+    // 關不掉要當場紅（舊版關影音分頁會丟例外，之後點什麼都沒反應）
+    const closeActive = async (label) => {
+      await cdp.eval(`document.querySelector('#wsTabStrip .ws-tab.is-active .ws-tab-close').click()`)
+      ok(`[G] ${label} 分頁關得掉`, await waitInPage(cdp, `document.querySelectorAll('#wsTabStrip .ws-tab').length === 0`, 5000))
+    }
+    const heapBeforeMedia = await heapMb(cdp)
+
+    await openRow('noise.png')
+    const imgOk = await waitInPage(cdp, `(() => { const i = document.querySelector('#wsEditorPreview img.ws-editor-img'); return i && i.complete && i.naturalWidth === ${IMG_SIDE} })()`, 30000)
+    ok(`[G] ${(mediaSizes['noise.png'] / 1048576).toFixed(0)}MB 圖片畫得出來`, imgOk, `${await elapsed()}ms`)
+    const imgSrc = await cdp.eval(`document.querySelector('#wsEditorPreview img.ws-editor-img')?.src || ''`)
+    ok('[G] 圖片走 vi-media:// 不是 data: URI', imgSrc.startsWith('vi-media://'), imgSrc.slice(0, 40))
+    const heapWithImg = await heapMb(cdp)
+    ok('[G] 開著大圖片 JS 堆積沒有多一份檔案大小', heapWithImg - heapBeforeMedia < 10, `${heapBeforeMedia} → ${heapWithImg} MB`)
+
+    // 協定本身：Range、錯 token、越界、非媒體檔
+    const proto = await cdp.eval(`(async () => {
+      const src = ${JSON.stringify(imgSrc)}
+      const blocked = async (url) => { try { return !(await fetch(url)).ok } catch { return true } }
+      const full = await fetch(src)
+      const part = await fetch(src, { headers: { Range: 'bytes=0-9' } })
+      const partLen = (await part.arrayBuffer()).byteLength
+      await full.body.cancel()
+      const u = new URL(src)
+      return {
+        fullStatus: full.status, fullLen: Number(full.headers.get('content-length')),
+        partStatus: part.status, partLen, partRange: part.headers.get('content-range'),
+        wrongToken: await blocked(src.replace(u.host, '0'.repeat(32))),
+        traversal: await blocked(u.origin + '/w_big/..%2F..%2Fconfig.json'),
+        notMedia: await blocked(u.origin + '/w_big/huge.json'),
+        wrongProject: await blocked(u.origin + '/w_nope/noise.png')
+      }
+    })()`)
+    ok('[G] 整份 200、長度對', proto.fullStatus === 200 && proto.fullLen === mediaSizes['noise.png'], JSON.stringify(proto))
+    ok('[G] Range 回 206 與 10 個位元組', proto.partStatus === 206 && proto.partLen === 10 && proto.partRange === `bytes 0-9/${mediaSizes['noise.png']}`)
+    ok('[G] 錯的 token／越界路徑／非媒體檔／不存在的專案都拿不到', proto.wrongToken && proto.traversal && proto.notMedia && proto.wrongProject)
+    await closeActive('圖片')
+
+    await openRow('big.mp4')
+    const videoReady = await waitInPage(cdp, `(() => { const v = document.querySelector('#wsEditorPreview video'); return v && v.readyState >= 1 && v.duration > ${VIDEO_SECONDS - 1} })()`, 30000)
+    ok(`[G] ${(mediaSizes['big.mp4'] / 1048576).toFixed(0)}MB 影片載得起來`, videoReady, `${await elapsed()}ms`)
+    const seek = await cdp.eval(`(async () => {
+      const v = document.querySelector('#wsEditorPreview video')
+      const t = performance.now()
+      const done = new Promise((r) => { v.addEventListener('seeked', () => r(true), { once: true }); setTimeout(() => r(false), 15000) })
+      v.currentTime = ${VIDEO_SECONDS - 5}
+      const ok = await done
+      return { ok, ms: Math.round(performance.now() - t), at: Math.round(v.currentTime), buffered: v.buffered.length }
+    })()`)
+    ok('[G] 影片拖到後段不用整份下載（Range 生效）', seek.ok && seek.at === VIDEO_SECONDS - 5, JSON.stringify(seek))
+    await closeActive('影片')
+
+    const previewState = () => cdp.eval(`(() => {
+      const box = document.getElementById('wsEditorPreview')
+      const m = box?.querySelector('audio, video')
+      return JSON.stringify({ tabs: [...document.querySelectorAll('#wsTabStrip .ws-tab')].map((t) => t.textContent.trim() + (t.classList.contains('is-active') ? '*' : '')),
+        boxHidden: box?.hidden, html: (box?.innerHTML || '').slice(0, 160), unsupported: !document.getElementById('wsEditorUnsupported').hidden,
+        media: m ? { src: m.src.slice(0, 30), readyState: m.readyState, duration: m.duration, error: m.error?.code, net: m.networkState } : null })
+    })()`)
+    await openRow('long.wav')
+    const audioOk = await waitInPage(cdp, `(() => { const a = document.querySelector('#wsEditorPreview audio'); return a && a.duration > ${AUDIO_SECONDS - 1} })()`, 30000)
+    ok(`[G] ${(mediaSizes['long.wav'] / 1048576).toFixed(0)}MB 音訊載得起來`, audioOk, `${await elapsed()}ms ${audioOk ? '' : await previewState()}`)
+    await closeActive('音訊')
+
+    await openRow('big.pdf')
+    const pdfOk = await waitInPage(cdp, `(() => {
+      const c = document.querySelector('#wsEditorPreview .ws-pdf-canvas')
+      return c && c.width > 0 && /第 1 \\/ ${PDF_PAGES} 頁/.test(document.querySelector('.ws-pdf-page')?.textContent || '')
+    })()`, 60000)
+    ok(`[G] ${(mediaSizes['big.pdf'] / 1048576).toFixed(1)}MB／${PDF_PAGES} 頁 PDF 畫得出第一頁`, pdfOk, `${await elapsed()}ms ${pdfOk ? '' : await previewState()}`)
+    if (!pdfOk) throw new Error('PDF 沒畫出來，後面不用測了')
+    await cdp.eval(`window.__t0 = performance.now(); [...document.querySelectorAll('.ws-pdf-bar button')].find((b) => b.textContent === '下一頁').click()`)
+    ok('[G] PDF 翻頁', await waitInPage(cdp, `/第 2 \\/ /.test(document.querySelector('.ws-pdf-page')?.textContent || '')`, 15000), `${await elapsed()}ms`)
+    await closeActive('PDF')
   } finally {
     if (cdp) cdp.close()
     try { execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' }) } catch { /* 已結束 */ }

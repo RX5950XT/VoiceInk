@@ -95,6 +95,13 @@ AGY 設定、終端機、聊天、語音輸入紀錄**刻意不進** `STORE_ALLO
 
 ## 最近變更
 
+### 2026-09-15 — 工作區大檔預覽與編輯
+
+- 純文字讀／寫上限 2MB／4MB → 都是 50MB：幾十萬行 JSON 用 Monaco 開、改、存。大檔打字停手 300ms 才同步內容（`ws-monaco.js` 的 `flushChange`），12MB 檔每字 ~1ms。
+- 圖片／PDF／影音不再整份 base64 過 IPC：新增 `workspace/media.js` 的 `vi-media://` 自訂協定串流（Range、隨機 token、`resolveIn`），沒有大小上限；pdf.js 改吃網址分段讀。
+- 修掉既有 bug：關影音預覽分頁會丟例外（行首 `(` 被接到上一行），之後工作區卡死。
+- 實測 `probe-workspace-bigfile.js`：26MB 圖片、74MB 影片拖曳、30MB 音訊、400 頁 PDF、協定擋錯 token／越界／非媒體檔。
+
 ### 2026-09-15 — 根治專案外殘留
 
 - **App 不再鎖住 `app.asar`**：`src/main/raw-fs.js`（Electron 下＝`original-fs`）給檔案總管、工作區、終端機連結偵測用；以前列一次打包輸出，那個 asar 就被鎖到關 App。

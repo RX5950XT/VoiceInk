@@ -118,17 +118,34 @@ async function fileRoundTrip() {
       const bigJson = `[\n${Array.from({ length: 120000 }, (_, i) => `  {"id": ${i}, "name": "item-${i}"}`).join(',\n')}\n]\n`
       fs.writeFileSync(path.join(tmp, 'big.json'), bigJson)
       const big = await files.readFile(tmp, 'big.json')
-      ok('超過 4MB 的文字檔照樣回內容', big.tooLarge === false && big.content === bigJson && bigJson.length > files.MAX_WRITE_CHARS)
-      ok('超過存檔上限的標成唯讀', big.readonly === true)
-      ok('一般文字檔不是唯讀', !read.readonly)
-      const bigBin = Buffer.alloc(files.MAX_READ_BYTES + 1, 0)
-      fs.writeFileSync(path.join(tmp, 'big.png'), bigBin)
-      ok('大圖片仍然擋掉', (await files.readFile(tmp, 'big.png')).tooLarge === true)
+      ok('超過 4MB 的文字檔照樣回內容', big.tooLarge === false && big.content === bigJson && bigJson.length > 4 * 1024 * 1024)
+      await files.writeFile(tmp, 'big.json', `${bigJson} `, big.mtimeMs)
+      ok('超過 4MB 的文字檔存得回去', fs.readFileSync(path.join(tmp, 'big.json'), 'utf8') === `${bigJson} `)
+      fs.writeFileSync(path.join(tmp, 'big.png'), Buffer.alloc(8 * 1024 * 1024 + 1, 0))
+      const bigPng = await files.readFile(tmp, 'big.png')
+      ok('大圖片不擋、也不讀內容', bigPng.tooLarge === false && bigPng.media === 'image' && bigPng.content === '')
+      fs.writeFileSync(path.join(tmp, 'huge.txt'), Buffer.alloc(files.MAX_TEXT_BYTES + 1, 97))
+      ok('超過 50MB 的文字檔仍然擋掉', (await files.readFile(tmp, 'huge.txt')).tooLarge === true)
 
-      // 圖片走 `image` 那條，不可以被 NUL byte 判成「二進位檔」（那樣點開等於什麼都沒有）
+      // 圖片走 `media` 那條，不可以被 NUL byte 判成「二進位檔」（那樣點開等於什麼都沒有）
       const png = await files.readFile(tmp, 'pic.png')
-      ok('圖片回 data: URI', png.image === `data:image/png;base64,${PNG_1PX.toString('base64')}`)
+      ok('圖片只回種類（畫面走 vi-media:// 串流）', png.media === 'image' && png.content === '' && !('image' in png))
       ok('圖片不被判成二進位', png.binary === false)
+      ok('PDF／影音／SVG 認得出來', files.mediaKind('a.PDF') === 'pdf' && files.mediaKind('a.mp4') === 'video'
+        && files.mediaKind('a.flac') === 'audio' && files.mediaKind('a.svg') === 'image' && files.mediaKind('a.json') === '')
+      fs.writeFileSync(path.join(tmp, 'icon.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>')
+      const svg = await files.readFile(tmp, 'icon.svg')
+      ok('SVG 同時回原始碼', svg.media === 'image' && svg.content.startsWith('<svg'))
+
+      const media = require('../src/main/workspace/media')
+      ok('Range：一般區段', JSON.stringify(media.parseRange('bytes=10-19', 100)) === '{"start":10,"end":19}')
+      ok('Range：沒給結尾到檔尾', JSON.stringify(media.parseRange('bytes=90-', 100)) === '{"start":90,"end":99}')
+      ok('Range：尾端 N 個位元組', JSON.stringify(media.parseRange('bytes=-5', 100)) === '{"start":95,"end":99}')
+      ok('Range：結尾超過檔案大小要夾住', JSON.stringify(media.parseRange('bytes=50-999', 100)) === '{"start":50,"end":99}')
+      ok('Range：起點超過檔尾回 invalid', media.parseRange('bytes=100-', 100) === 'invalid')
+      ok('Range：沒帶或看不懂＝整份', media.parseRange(null, 100) === null && media.parseRange('bytes=1-2,5-6', 100) === null)
+      const url = new URL(media.urlFor('w_1', 'a b/圖#1.png'))
+      ok('媒體網址把路徑逐段編碼', url.protocol === 'vi-media:' && url.pathname === `/w_1/a%20b/${encodeURIComponent('圖#1.png')}` && !url.hash)
       ok('.svg 也算圖片', files.imageMime('x/y.SVG') === 'image/svg+xml')
       ok('.txt 不是圖片', files.imageMime('x/y.txt') === '')
 

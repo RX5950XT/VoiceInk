@@ -10,6 +10,7 @@
 const { shell } = require('electron')
 const store = require('./store')
 const files = require('./files')
+const media = require('./media')
 const git = require('./git')
 const worktree = require('./worktree')
 const agents = require('./agents')
@@ -70,7 +71,9 @@ async function listDir(projectId, relPath) {
 }
 
 async function readFile(projectId, relPath) {
-  return files.readFile(await rootOf(projectId), relPath)
+  const file = await files.readFile(await rootOf(projectId), relPath)
+  // 圖片／PDF／影音不讀內容，給一個串流網址（`image`／`pdf`／`audio`／`video` 其中一個欄位）
+  return file.media ? { ...file, [file.media]: media.urlFor(projectId, file.rel) } : file
 }
 
 async function writeFile(projectId, relPath, content, expectedMtimeMs) {
@@ -222,6 +225,8 @@ async function agentSessionDetail(projectId, agent, sessionId) {
 }
 
 module.exports = {
+  // 不進 IPC：給 main.js 註冊 `vi-media://` 時換專案根目錄用
+  rootOf,
   listProjects,
   addProject,
   addDropped,
