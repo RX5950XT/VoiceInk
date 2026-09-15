@@ -114,6 +114,17 @@ async function fileRoundTrip() {
       const bin = await files.readFile(tmp, 'bin.dat')
       ok('二進位檔不回內容', bin.binary === true && bin.content === '')
 
+      // 幾萬行的 JSON 要開得起來（像 VS Code），超過存檔上限的只能唯讀
+      const bigJson = `[\n${Array.from({ length: 120000 }, (_, i) => `  {"id": ${i}, "name": "item-${i}"}`).join(',\n')}\n]\n`
+      fs.writeFileSync(path.join(tmp, 'big.json'), bigJson)
+      const big = await files.readFile(tmp, 'big.json')
+      ok('超過 4MB 的文字檔照樣回內容', big.tooLarge === false && big.content === bigJson && bigJson.length > files.MAX_WRITE_CHARS)
+      ok('超過存檔上限的標成唯讀', big.readonly === true)
+      ok('一般文字檔不是唯讀', !read.readonly)
+      const bigBin = Buffer.alloc(files.MAX_READ_BYTES + 1, 0)
+      fs.writeFileSync(path.join(tmp, 'big.png'), bigBin)
+      ok('大圖片仍然擋掉', (await files.readFile(tmp, 'big.png')).tooLarge === true)
+
       // 圖片走 `image` 那條，不可以被 NUL byte 判成「二進位檔」（那樣點開等於什麼都沒有）
       const png = await files.readFile(tmp, 'pic.png')
       ok('圖片回 data: URI', png.image === `data:image/png;base64,${PNG_1PX.toString('base64')}`)

@@ -17,8 +17,13 @@ const path = require('path')
 
 /** 單層目錄最多列幾筆（`node_modules` 那種一層幾千個的不要把 UI 弄死） */
 const MAX_ENTRIES = 2000
-/** 讀檔上限：超過就不給編輯（textarea 塞 10MB 會把畫面卡死） */
+/** 圖片／PDF／影音的讀檔上限（整份轉 base64 過 IPC） */
 const MAX_READ_BYTES = 2 * 1024 * 1024
+/**
+ * 純文字的讀檔上限。畫面是 Monaco（虛擬捲動，20MB 以上自己關掉高亮，跟 VS Code 同一套），
+ * 幾萬行的 JSON 開得動；超過 `MAX_WRITE_CHARS` 的存不回去，所以只給唯讀。
+ */
+const MAX_TEXT_BYTES = 50 * 1024 * 1024
 /** 寫檔上限 */
 const MAX_WRITE_CHARS = 4 * 1024 * 1024
 
@@ -228,11 +233,12 @@ async function readFile(root, relPath) {
   }
   if (!stat.isFile()) throw fail('NOT_A_FILE', '這不是一個檔案')
   const rel = toRel(root, full)
-  if (stat.size > MAX_READ_BYTES) {
+  const ext = path.extname(full).slice(1).toLowerCase()
+  const media = ext === 'pdf' || audioMime(full) || videoMime(full) || imageMime(full)
+  if (stat.size > (media ? MAX_READ_BYTES : MAX_TEXT_BYTES)) {
     return { rel, content: '', binary: false, tooLarge: true, size: stat.size }
   }
   const buf = await fsp.readFile(full)
-  const ext = path.extname(full).slice(1).toLowerCase()
   if (ext === 'pdf') {
     return { rel, content: '', binary: false, tooLarge: false, size: stat.size, ext, pdf: buf.toString('base64'), mtimeMs: stat.mtimeMs }
   }
@@ -254,7 +260,9 @@ async function readFile(root, relPath) {
     return { rel, content, binary: false, tooLarge: false, size: stat.size, ext, image, isSvg: ext === 'svg', mtimeMs: stat.mtimeMs }
   }
   if (buf.includes(0)) return { rel, content: '', binary: true, tooLarge: false, size: stat.size, ext, mtimeMs: stat.mtimeMs }
-  return { rel, content: buf.toString('utf8'), binary: false, tooLarge: false, size: stat.size, ext, mtimeMs: stat.mtimeMs }
+  const content = buf.toString('utf8')
+  const readonly = content.length > MAX_WRITE_CHARS
+  return { rel, content, binary: false, tooLarge: false, readonly, size: stat.size, ext, mtimeMs: stat.mtimeMs }
 }
 
 /** 暫存檔的流水號：同一個檔案同時被存兩次時，兩份暫存檔不可以撞在一起 */

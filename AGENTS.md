@@ -162,6 +162,7 @@ tag 要與 `package.json` 的 version 一致。
 - 終端機的 `projectId` 是**可選**欄位（缺值＝未分類，卡 `^[A-Za-z0-9_-]{1,64}$`）；對話的專案歸屬已拿掉，改用聊天側欄自己的資料夾（`folderId`）。`workspaces.json` 的路徑不存在只標 `missing`。
 - 搜尋只收字串不收 regex，四個上限（命中 200／掃 8000 檔／單檔 1MB／15 秒）少一個都會凍住 UI；快速開檔與搜尋共用同一份 `walk`，模糊比對沒命中要回 `null` 不是 `-1`。
 - **圖片先看副檔名回 `data:` URI**，不可走「二進位檔」那條（PNG 含 NUL 會被判成不能編輯）。Electron 43 **沒有內建 PDF 檢視器**，只能用 pdf.js 畫 canvas，且 `workerSrc` 不能給空字串。
+- **讀檔上限分兩條**：圖片／PDF／影音（base64 過 IPC）2MB；純文字 50MB（Monaco 虛擬捲動，幾十萬行 JSON 開得動），但**超過 `MAX_WRITE_CHARS`（4MB）的回 `readonly`**（存不回去、草稿也放不下）。回歸 `test-workspace.js` ＋ `probe-workspace-bigfile.js` 的 [F]。
 - **Monaco 只能走 AMD 的 `min/vs`**（ESM 那份有 98 個 `import './x.css'`）；`build.files` 只放行 `monaco-editor/min/**`；codicon 是 `data:` 字型、Worker 是 blob（CSP 那兩條少一條就是「看起來壞掉但不報錯」，**沒有 Worker 時 diff 算不出來**）。那份 `<textarea>` 還在（存檔／草稿／尋找取代退路讀它），但 Monaco 在時**只用防抖同步**——
   每敲一個字整份倒過去，2MB 的檔就是每個字搬 2MB；跳行要等 model 掛上（`pendingGoto`）。
 - **大檔案的成本都在「每次都重做」，不是「做得慢」**：`showTab` 不可以用 `getValue()` 比對（那是把整份再複製一次，

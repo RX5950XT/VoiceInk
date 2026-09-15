@@ -1021,6 +1021,22 @@ const extOf = (relPath) => {
 const PREVIEWABLE_EXTS = ['md', 'markdown', 'html', 'htm', 'svg']
 
 /**
+ * 編輯器上方那行「為什麼不能改」。空字串＝可以編輯。
+ * @param {any} file main 的 `readFile` 回傳
+ * @param {boolean} isSvg
+ */
+function readonlyNote(file, isSvg) {
+  return file.pdf ? 'PDF 預覽，不能在這裡編輯。'
+    : file.audio ? '音訊預覽，不能在這裡編輯。'
+    : file.video ? '影片預覽，不能在這裡編輯。'
+    : file.image && !isSvg ? '圖片預覽，不能在這裡編輯。'
+    : file.binary ? '這是二進位檔案，不能在這裡編輯。'
+    : file.tooLarge ? '這個檔案太大，不在這裡開啟。'
+    : file.readonly ? '檔案超過 4MB，只能預覽，不能在這裡存檔。'
+    : ''
+}
+
+/**
  * 格式化檔案大小
  * @param {number} bytes
  * @returns {string}
@@ -1101,13 +1117,7 @@ export async function openEditorTab(proj, relPath, line = 0) {
     fileSize: file.size || 0,
     fileExt: extOf(relPath),
     mtimeMs: file.mtimeMs || Date.now(),
-    readonly: file.pdf ? 'PDF 預覽，不能在這裡編輯。'
-      : file.audio ? '音訊預覽，不能在這裡編輯。'
-      : file.video ? '影片預覽，不能在這裡編輯。'
-      : file.image && !isSvg ? '圖片預覽，不能在這裡編輯。'
-      : file.binary ? '這是二進位檔案，不能在這裡編輯。'
-        : file.tooLarge ? '這個檔案超過 2MB，不在這裡開啟。'
-          : ''
+    readonly: readonlyNote(file, isSvg)
   }
   tabs.push(tab)
   await activate(id)
@@ -2539,13 +2549,7 @@ async function restoreProjectTabs(proj, generation) {
             fileSize: file.size || 0,
             fileExt: extOf(item.relPath),
             mtimeMs: hasDraft ? (item.mtimeMs || 0) : (file.mtimeMs || Date.now()),
-            readonly: file.pdf ? 'PDF 預覽，不能在這裡編輯。'
-              : file.audio ? '音訊預覽，不能在這裡編輯。'
-              : file.video ? '影片預覽，不能在這裡編輯。'
-              : file.image && !isSvg ? '圖片預覽，不能在這裡編輯。'
-              : file.binary ? '這是二進位檔案，不能在這裡編輯。'
-              : file.tooLarge ? '這個檔案超過 2MB，不在這裡開啟。'
-              : ''
+            readonly: readonlyNote(file, isSvg)
           })
         } catch {
           if (generation !== projectSwitch) return

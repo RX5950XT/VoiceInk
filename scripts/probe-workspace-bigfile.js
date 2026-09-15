@@ -7,6 +7,7 @@
  *   [C] 兩個分頁都關掉、強制 GC 之後，堆積有沒有掉回接近開檔前
  *   [D] 關掉 HTML 預覽分頁之後，那個 `<iframe>`（會一直跑腳本）有沒有被收掉
  *   [E] 關掉影片預覽分頁之後，`<video>`（會一直緩衝）有沒有被收掉
+ *   [F] 12MB／30 萬行 JSON 用編輯器唯讀打開；3MB 的仍可編輯
  *
  * 全程用自己的暫存 user-data-dir，收尾只殺自己 spawn 的那個 pid。
  *
@@ -27,12 +28,18 @@ fs.writeFileSync(path.join(USER_DATA_DIR, 'config.json'), JSON.stringify({ sysmo
 const PROJECT = path.join(USER_DATA_DIR, 'proj')
 fs.mkdirSync(PROJECT)
 
-/** 約 1.4MB、四萬行——工作區的讀檔上限是 2MB，這是「還開得起來的最大檔」那一類 */
+/** 約 1.4MB、四萬行——可編輯、會拿來做 diff 的那一類大檔 */
 const BIG_LINES = 40000
 const bigOriginal = Array.from({ length: BIG_LINES }, (_, i) => `const line${i} = ${i} // 一行程式碼佔位`).join('\n')
 const bigModified = bigOriginal.replace(/const line100 = 100/, 'const line100 = 999')
 fs.writeFileSync(path.join(PROJECT, 'big.js'), bigOriginal)
 fs.writeFileSync(path.join(PROJECT, 'page.html'), '<h1>預覽</h1><script>setInterval(() => {}, 50)</script>')
+/** [F] 約 12MB（超過 4MB 存檔上限＝唯讀）與約 3MB（超過舊的 2MB 上限、仍可編輯） */
+const HUGE_LINES = 300000
+const MID_LINES = 75000
+const jsonLines = (n) => `[\n${Array.from({ length: n - 2 }, (_, i) => `  {"id": ${i}, "name": "item-${i}"}`).join(',\n')}\n]`
+fs.writeFileSync(path.join(PROJECT, 'huge.json'), jsonLines(HUGE_LINES))
+fs.writeFileSync(path.join(PROJECT, 'mid.json'), jsonLines(MID_LINES))
 
 const git = (...args) => execFileSync('git', args, { cwd: PROJECT, stdio: 'ignore', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } })
 git('init', '-q')
@@ -297,6 +304,29 @@ async function main() {
     await sleep(500)
     const leftovers = await cdp.eval(`document.querySelectorAll('#wsEditorPreview iframe, #wsEditorPreview video, #wsEditorPreview audio').length`)
     ok('[D] 關掉預覽分頁後 iframe 被收掉（不會繼續跑腳本）', framed && leftovers === 0, `還留著 ${leftovers} 個`)
+
+    // ===== [F] 超過舊的 2MB 上限：幾十萬行的 JSON 要像 VS Code 一樣開得起來 =====
+    for (const spec of [
+      { rel: 'huge.json', lines: HUGE_LINES, readonly: true },
+      { rel: 'mid.json', lines: MID_LINES, readonly: false }
+    ]) {
+      await cdp.eval(`window.__t0 = performance.now(); document.querySelector('#wsTree .ws-tree-row[data-rel="${spec.rel}"]').click()`)
+      const shown = await waitInPage(cdp, `!!window.monaco && window.monaco.editor.getModels().some((m) => m.getLineCount() >= ${spec.lines})`, 60000)
+      const ms = await cdp.eval('Math.round(performance.now() - window.__t0)')
+      const state = await cdp.eval(`({
+        unsupported: !document.getElementById('wsEditorUnsupported').hidden,
+        monaco: !document.getElementById('wsMonacoHost').hidden,
+        note: document.getElementById('wsEditorNote')?.hidden ? '' : document.getElementById('wsEditorNote')?.textContent,
+        saveHidden: document.getElementById('wsEditorSaveBtn').hidden
+      })`)
+      ok(`[F] ${spec.rel}（${spec.lines} 行）用編輯器打開，不是「無法預覽」`, shown && !state.unsupported && state.monaco, `${ms}ms`)
+      ok(`[F] ${spec.rel} ${spec.readonly ? '唯讀、藏掉儲存' : '可以編輯存檔'}`,
+        spec.readonly ? (state.saveHidden && /4MB/.test(state.note)) : (!state.saveHidden && !state.note), JSON.stringify(state))
+      await cdp.eval(`(async () => {
+        document.querySelector('#wsTabStrip .ws-tab .ws-tab-close').click()
+        await new Promise((r) => setTimeout(r, 500))
+      })()`)
+    }
   } finally {
     if (cdp) cdp.close()
     try { execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' }) } catch { /* 已結束 */ }
