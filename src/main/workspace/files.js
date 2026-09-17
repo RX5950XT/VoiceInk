@@ -17,16 +17,15 @@ const path = require('path')
 
 /** 單層目錄最多列幾筆（`node_modules` 那種一層幾千個的不要把 UI 弄死） */
 const MAX_ENTRIES = 2000
-/** 讀檔上限：超過就不給編輯（textarea 塞 10MB 會把畫面卡死） */
-const MAX_READ_BYTES = 2 * 1024 * 1024
-/** 寫檔上限 */
-const MAX_WRITE_CHARS = 4 * 1024 * 1024
-
 /**
- * 看得懂的圖片副檔名 → MIME。點開圖片時直接回一個 `data:` URI，
- * 讓 UI 顯示得出來（否則 NUL byte 偵測會把它判成「二進位檔」，等於點開了什麼都沒有）。
- * **不另外開一個 IPC**：走既有的 `readFile`，大小照樣受 `MAX_READ_BYTES` 管。
+ * 純文字的讀檔上限。畫面是 Monaco（虛擬捲動，20MB 以上自己關掉高亮，跟 VS Code 同一套），
+ * 幾十萬行的 JSON 開得動。圖片／PDF／影音不受這條管（走 `media.js` 串流）。
  */
+const MAX_TEXT_BYTES = 50 * 1024 * 1024
+/** 寫檔上限：跟讀檔同一條線，開得起來的就存得回去 */
+const MAX_WRITE_CHARS = MAX_TEXT_BYTES
+
+/** 看得懂的圖片副檔名 → MIME（預覽走 `vi-media://`，見 `media.js`） */
 const IMAGE_MIME = {
   png: 'image/png',
   jpg: 'image/jpeg',
@@ -77,6 +76,25 @@ function audioMime(full) {
 function videoMime(full) {
   const ext = path.extname(full).slice(1).toLowerCase()
   return VIDEO_MIME[ext] || ''
+}
+
+/**
+ * 預覽走 `vi-media://` 的那幾種（見 `media.js`）。
+ * @param {string} full
+ * @returns {'pdf' | 'audio' | 'video' | 'image' | ''}
+ */
+function mediaKind(full) {
+  if (path.extname(full).slice(1).toLowerCase() === 'pdf') return 'pdf'
+  return audioMime(full) ? 'audio' : videoMime(full) ? 'video' : imageMime(full) ? 'image' : ''
+}
+
+/**
+ * @param {string} full
+ * @returns {string} MIME；不是媒體回空字串
+ */
+function mediaMime(full) {
+  const kind = mediaKind(full)
+  return kind === 'pdf' ? 'application/pdf' : kind ? (audioMime(full) || videoMime(full) || imageMime(full)) : ''
 }
 
 /** 列目錄時直接跳過的名字（點進去只有雜訊，而且動輒上萬筆） */
@@ -211,12 +229,13 @@ async function listDir(root, relPath) {
  * 讀一個檔案。二進位檔（含 NUL byte）與過大的檔案都不回內容——
  * 回一個旗標讓 UI 講清楚，比丟一堆亂碼進 textarea 好。
  *
- * 圖片與 PDF 是例外：它們一定含 NUL byte，被判成「二進位檔」的話點開等於什麼都沒有，
- * 所以**先看副檔名**，回 base64 讓 UI 自己畫（大小照樣受 `MAX_READ_BYTES` 管）。
+ * 圖片／PDF／影音是例外：它們一定含 NUL byte，被判成「二進位檔」的話點開等於什麼都沒有，
+ * 所以**先看副檔名**，只回 `media` 種類、不讀內容——畫面由 `index.js` 補上的
+ * `vi-media://` 網址串流（見 `media.js`），所以沒有大小上限。
  *
  * @param {string} root
  * @param {unknown} relPath
- * @returns {Promise<{ rel: string, content: string, binary: boolean, tooLarge: boolean, size: number, image?: string, pdf?: string }>}
+ * @returns {Promise<{ rel: string, content: string, binary: boolean, tooLarge: boolean, size: number, media?: string }>}
  */
 async function readFile(root, relPath) {
   const full = resolveIn(root, relPath)
@@ -228,33 +247,16 @@ async function readFile(root, relPath) {
   }
   if (!stat.isFile()) throw fail('NOT_A_FILE', '這不是一個檔案')
   const rel = toRel(root, full)
-  if (stat.size > MAX_READ_BYTES) {
-    return { rel, content: '', binary: false, tooLarge: true, size: stat.size }
-  }
-  const buf = await fsp.readFile(full)
   const ext = path.extname(full).slice(1).toLowerCase()
-  if (ext === 'pdf') {
-    return { rel, content: '', binary: false, tooLarge: false, size: stat.size, ext, pdf: buf.toString('base64'), mtimeMs: stat.mtimeMs }
-  }
-  const aMime = audioMime(full)
-  if (aMime) {
-    const audio = `data:${aMime};base64,${buf.toString('base64')}`
-    return { rel, content: '', binary: false, tooLarge: false, size: stat.size, ext, audio, mtimeMs: stat.mtimeMs }
-  }
-  const vMime = videoMime(full)
-  if (vMime) {
-    const video = `data:${vMime};base64,${buf.toString('base64')}`
-    return { rel, content: '', binary: false, tooLarge: false, size: stat.size, ext, video, mtimeMs: stat.mtimeMs }
-  }
-  const mime = imageMime(full)
-  if (mime) {
-    const image = `data:${mime};base64,${buf.toString('base64')}`
-    // SVG 也是純文字，同時回傳 content，讓使用者可以切換「預覽」或「編輯原始碼」
-    const content = ext === 'svg' && !buf.includes(0) ? buf.toString('utf8') : ''
-    return { rel, content, binary: false, tooLarge: false, size: stat.size, ext, image, isSvg: ext === 'svg', mtimeMs: stat.mtimeMs }
-  }
-  if (buf.includes(0)) return { rel, content: '', binary: true, tooLarge: false, size: stat.size, ext, mtimeMs: stat.mtimeMs }
-  return { rel, content: buf.toString('utf8'), binary: false, tooLarge: false, size: stat.size, ext, mtimeMs: stat.mtimeMs }
+  const base = { rel, content: '', binary: false, tooLarge: false, size: stat.size, ext, mtimeMs: stat.mtimeMs }
+  const media = mediaKind(full)
+  // SVG 也是純文字：同時回 content，讓使用者可以切換「預覽」或「編輯原始碼」
+  if (media && (ext !== 'svg' || stat.size > MAX_TEXT_BYTES)) return { ...base, media }
+  if (stat.size > MAX_TEXT_BYTES) return { ...base, tooLarge: true }
+  const buf = await fsp.readFile(full)
+  if (media) return { ...base, media, content: buf.includes(0) ? '' : buf.toString('utf8') }
+  if (buf.includes(0)) return { ...base, binary: true }
+  return { ...base, content: buf.toString('utf8') }
 }
 
 /** 暫存檔的流水號：同一個檔案同時被存兩次時，兩份暫存檔不可以撞在一起 */
@@ -494,8 +496,10 @@ async function getFileMtime(root, relPath) {
 module.exports = {
   IMAGE_MIME,
   imageMime,
+  mediaKind,
+  mediaMime,
   MAX_ENTRIES,
-  MAX_READ_BYTES,
+  MAX_TEXT_BYTES,
   MAX_WRITE_CHARS,
   SKIP_DIRS,
   resolveIn,

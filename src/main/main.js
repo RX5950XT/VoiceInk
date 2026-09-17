@@ -1,6 +1,6 @@
 const {
   app, BrowserWindow, ipcMain, session, desktopCapturer, screen, shell, dialog,
-  Menu, Tray, nativeImage
+  Menu, Tray, nativeImage, protocol
 } = require('electron')
 const path = require('path')
 const fs = require('fs')
@@ -43,6 +43,10 @@ const { registerTerminalIpc } = require('./terminal/ipc')
 // 只用來驗 store 裡的桌布檔名（不碰 node-pty，載進來不影響啟動時間）
 const termBackground = require('./terminal/background')
 const { registerWorkspaceIpc } = require('./workspace/ipc')
+// 工作區的圖片／PDF／影音串流（只載 files.js，不碰工作區其餘模組）
+const workspaceMedia = require('./workspace/media')
+// 自訂協定的權限只能在 app ready 之前宣告
+protocol.registerSchemesAsPrivileged([workspaceMedia.PRIVILEGES])
 const { registerSysmonIpc } = require('./sysmon/ipc')
 const { registerHfModelsIpc } = require('./hfmodels/ipc')
 const { registerCcSwitchIpc } = require('./ccswitch/ipc')
@@ -2059,6 +2063,7 @@ app.whenReady().then(() => {
   // 沒搶到鎖的那份只負責把訊號送出去就結束，不可以建窗、更不可以 autoStart 反代（撞埠）
   if (!hasInstanceLock) return
   bootLog('whenReady')
+  workspaceMedia.register(protocol, (projectId) => loadWorkspace().rootOf(projectId))
   session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
     desktopCapturer.getSources({ types: ['screen'] })
       .then((sources) => {
