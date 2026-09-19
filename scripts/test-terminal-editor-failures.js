@@ -13,7 +13,7 @@ async function main() {
   const children = []
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
   function launch(target) {
-    const child = spawn(`${bridge.shimCommand()} "${target}"`, { shell: true, windowsHide: true, stdio: 'ignore' })
+    const child = spawn(`"${path.join(bridge.shimDir(), 'voiceink-edit.cmd')}" "${target}"`, { shell: true, windowsHide: true, stdio: 'ignore' })
     children.push(child)
     return child
   }

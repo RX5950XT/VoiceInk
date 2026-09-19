@@ -200,7 +200,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     pickBackground: (previous) => ipcRenderer.invoke('terminal:pickBackground', previous),
     clearBackground: (name) => ipcRenderer.invoke('terminal:clearBackground', name),
     resolveLinks: (id, texts) => ipcRenderer.invoke('terminal:resolveLinks', id, texts),
-    revealLink: (id, text) => ipcRenderer.invoke('terminal:revealLink', id, text),
+    revealLink: (id, text, line) => ipcRenderer.invoke('terminal:revealLink', id, text, line),
     /** 終端機裡即將開出來的視窗（Ctrl+G 的記事本）抬到最前面 */
     raiseChildWindow: () => ipcRenderer.invoke('terminal:raiseChildWindow'),
     // Ctrl+G 開的編輯分頁：送出＝寫回那個暫存檔並放走卡住的 CLI；取消只放走
@@ -517,6 +517,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     loadModel: (id) => ipcRenderer.invoke('hfmodels:loadModel', id),
     unloadModel: (id) => ipcRenderer.invoke('hfmodels:unloadModel', id),
     refreshModels: () => ipcRenderer.invoke('hfmodels:refreshModels'),
+    /** 儀表板：GPU／用量／本機端點／log（沒有 api key） */
+    dashboard: () => ipcRenderer.invoke('hfmodels:dashboard'),
     /** @param {(payload: { type: string, [k: string]: any }) => void} callback 下載進度等事件 */
     onEvent: (callback) => {
       const handler = (_event, payload) => callback(payload)

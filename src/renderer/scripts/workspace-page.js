@@ -1343,21 +1343,23 @@ function onTreeKeydown(event) {
  * @param {string} projectId
  * @param {string} rel
  */
-async function markOpenFile(projectId, rel) {
-  openRel = rel
+async function markOpenFile(projectId, rel, asDir = false) {
+  if (!asDir) openRel = rel
   const project = currentProject()
   if (!project || project.id !== projectId || !el.tree) return
   for (const row of treeRows()) {
     row.classList.toggle('is-open', row.dataset.rel === rel && row.dataset.dir !== '1')
   }
   if (!rel) return
-  let hit = treeRows().find((row) => row.dataset.rel === rel && row.dataset.dir !== '1')
+  const isDir = (row) => asDir ? row.dataset.dir === '1' : row.dataset.dir !== '1'
+  let hit = treeRows().find((row) => row.dataset.rel === rel && isDir(row))
   if (!hit) {
     // 藏在還沒展開的資料夾裡：把它的每一層祖先打開再重畫一次
-    const parts = rel.split('/')
+    const parts = rel.split('/').filter(Boolean)
     let acc = ''
     let grew = false
-    for (let i = 0; i < parts.length - 1; i += 1) {
+    const last = asDir ? parts.length : parts.length - 1
+    for (let i = 0; i < last; i += 1) {
       acc = acc ? `${acc}/${parts[i]}` : parts[i]
       if (!expanded.has(acc)) {
         expanded.add(acc)
@@ -1366,10 +1368,10 @@ async function markOpenFile(projectId, rel) {
     }
     if (!grew) return
     await renderTree(project, projectSeq)
-    hit = treeRows().find((row) => row.dataset.rel === rel && row.dataset.dir !== '1')
+    hit = treeRows().find((row) => row.dataset.rel === rel && isDir(row))
   }
   if (!hit) return
-  hit.classList.add('is-open')
+  if (!asDir) hit.classList.add('is-open')
   setTreeCursor(hit)
   hit.scrollIntoView({ block: 'nearest' })
 }
@@ -2729,7 +2731,7 @@ export function initWorkspacePage() {
   // ws-tabs 切到某個編輯器分頁時會發這個事件（用事件而不是 import，避免兩個模組互相 import）
   document.addEventListener('ws:active-file', (event) => {
     const detail = /** @type {CustomEvent<{ projectId: string, rel: string }>} */ (event).detail
-    void markOpenFile(detail.projectId, detail.rel)
+    void markOpenFile(detail.projectId, detail.rel, Boolean(detail.dir))
   })
   document.addEventListener('keydown', onGlobalKeydown)
   // 資料夾被別人改了（AI 跑完、git 換分支、另一個編輯器存檔）→ 自己更新

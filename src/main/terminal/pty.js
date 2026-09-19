@@ -10,6 +10,7 @@
  * 不拖慢啟動）。`@lydell/node-pty` 是 N-API prebuilt，Electron 43 直接可用、不需 rebuild。
  */
 
+const path = require('node:path')
 const store = require('./store')
 const status = require('./status')
 
@@ -202,7 +203,7 @@ function shellCommand(shellKey) {
  * @param {number} rows
  * @returns {LiveSession}
  */
-function spawnSession(meta, cols, rows, editor) {
+function spawnSession(meta, cols, rows, editor, editorDir) {
   const { exe, args, integrated } = shellCommand(meta.shell)
 
   // 管理員：ConPTY 開不出提權的 shell，交給提權的 host 程序去開（admin.js）
@@ -213,7 +214,7 @@ function spawnSession(meta, cols, rows, editor) {
       cols,
       rows,
       cwd: meta.cwd,
-      env: shellEnvironment(editor)
+      env: shellEnvironment(editor, editorDir)
     })
 
   /** @type {LiveSession} */
@@ -325,13 +326,13 @@ async function openSession(id, cols, rows, editor) {
  * `editor` 是 App 那邊算好的「Ctrl+G 要跑什麼」（見 `editor-bridge.js`）；只有這一次
  * 真的要 spawn 新 shell 時用得到，接回既有階段時忽略。
  */
-function openSessionWithMeta(meta, cols, rows, editor) {
+function openSessionWithMeta(meta, cols, rows, editor, editorDir) {
   const key = meta.id
   const c = clampDim(cols, MAX_COLS, 80)
   const r = clampDim(rows, MAX_ROWS, 24)
   let session = live.get(key) || finished.get(key)
   if (!session) {
-    session = spawnSession(meta, c, r, editor)
+    session = spawnSession(meta, c, r, editor, editorDir)
     publishStatus(key)
   } else if (session.cols !== c || session.rows !== r) {
     resizeSession(key, c, r)
@@ -361,14 +362,34 @@ function openSessionWithMeta(meta, cols, rows, editor) {
  * main 決定的**（見 `service.js` 的 `bridgeTakesOver`）——使用者設了 vim 那類真的編輯器
  * 時，main 根本不會把命令送過來，這裡拿到的就是空字串。
  *
+ * `editorDir` 接到 PATH 最前面：AGY 把 `$EDITOR` 用空白切開再 spawn，所以值必須是
+ * 短檔名 `voiceink-edit.cmd`，真正的資料夾靠 PATH 找。
+ *
  * @param {string} [editor]
+ * @param {string} [editorDir]
  */
-function shellEnvironment(editor) {
+function shellEnvironment(editor, editorDir) {
   const env = { ...process.env, TERM: 'xterm-256color' }
   delete env.ELECTRON_RUN_AS_NODE
   delete env.ELECTRON_NO_ASAR
-  if (editor) { env.EDITOR = editor; env.VISUAL = editor }
+  if (editor) {
+    env.EDITOR = editor
+    env.VISUAL = editor
+    const folder = safeEditorDir(editorDir)
+    if (folder) env.PATH = `${folder}${path.delimiter}${env.PATH || ''}`
+  }
   return env
+}
+
+/**
+ * 只放行絕對路徑、名叫 `editor-bridge` 的資料夾，且不能含 PATH 分隔符。
+ * @param {unknown} value
+ */
+function safeEditorDir(value) {
+  const folder = typeof value === 'string' ? value : ''
+  if (!folder || !path.isAbsolute(folder)) return ''
+  if (folder.includes(path.delimiter) || folder.includes(';')) return ''
+  return path.basename(folder) === 'editor-bridge' ? folder : ''
 }
 
 function sessionStates() {

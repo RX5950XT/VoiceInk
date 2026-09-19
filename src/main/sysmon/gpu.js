@@ -37,10 +37,18 @@ function createGpuFeed(deps = {}) {
   let lastAt = 0
   let intervalSec = 2
   let restartTimer = null
+  let staleTimer = null
+  const staleMs = Number(deps.staleMs) > 0 ? Number(deps.staleMs) : STALE_MS
+
+  function clearStale() {
+    clearTimeout(staleTimer)
+    staleTimer = null
+  }
 
   function stopChild() {
     clearTimeout(restartTimer)
     restartTimer = null
+    clearStale()
     const dying = child
     child = null
     if (!dying) return
@@ -65,6 +73,17 @@ function createGpuFeed(deps = {}) {
     }
     child = proc
 
+    // 看門狗從「開起來的那一刻」就算：nvidia-smi 卡在啟動、一行都沒吐的情況一樣要重開
+    const armStale = () => {
+      clearStale()
+      staleTimer = setTimeout(() => {
+        if (!running || child !== proc) return
+        stopChild()
+        launch()
+      }, staleMs)
+    }
+    armStale()
+
     proc.stdout?.setEncoding('utf8')
     proc.stdout?.on('data', (chunk) => {
       if (child !== proc) return
@@ -79,6 +98,7 @@ function createGpuFeed(deps = {}) {
         available = true
         lastAt = Date.now()
         cards.set(card.index, card)
+        armStale()
       }
       if (buf.length > 64 * 1024) buf = ''
     })
@@ -87,11 +107,13 @@ function createGpuFeed(deps = {}) {
       if (child !== proc) return
       available = false
       child = null
+      clearStale()
     })
     proc.on('close', () => {
       if (child !== proc) return
       child = null
       available = false
+      clearStale() // 程序都沒了，看門狗留著只是空轉
       // nvidia-smi 在驅動重載時會自己退出；服務還開著就再試一次
       if (running) restartTimer = setTimeout(() => {
         restartTimer = null

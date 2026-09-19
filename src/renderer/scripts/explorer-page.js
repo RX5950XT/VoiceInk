@@ -4,7 +4,7 @@
  * DOM 一律 createElement + textContent（零 innerHTML）。路徑是外部輸入。
  */
 
-import { electronAPI, showToast } from './app.js'
+import { electronAPI, showToast, switchPage } from './app.js'
 import { askConfirm, askInput } from './app-dialog.js'
 import { showMenu } from './ws-menu.js'
 import { createListReorder } from './list-reorder.js'
@@ -1431,8 +1431,49 @@ async function ensureUffs(opts = {}) {
   }
 }
 
+/** 終端機點路徑過來時，先記著，等這一頁啟動完再導過去（避免 bootstrap 寫回上次路徑） */
+let pendingOpen = null
+
+/**
+ * 終端機畫面上的路徑：資料夾就進這一層，檔案進上一層並選起來。
+ * @param {string} full
+ * @param {'file' | 'dir'} [kind]
+ */
+export async function openExplorerPath(full, kind = 'dir') {
+  const raw = String(full || '')
+  if (!raw) return
+  const isFile = kind === 'file'
+  const target = isFile ? parentOf(raw) : raw
+  pendingOpen = { target, select: isFile ? raw : '' }
+  switchPage('explorer')
+}
+
+/** @param {string} full */
+function parentOf(full) {
+  const s = full.replace(/[\\/]+$/, '')
+  const i = Math.max(s.lastIndexOf('\\'), s.lastIndexOf('/'))
+  if (i <= 0) return s
+  const parent = s.slice(0, i)
+  return /^[A-Za-z]:$/.test(parent) ? `${parent}\\` : parent
+}
+
+async function consumePendingOpen() {
+  const job = pendingOpen
+  pendingOpen = null
+  if (!job?.target) return
+  await navigate(job.target)
+  if (!job.select) return
+  selected = new Set([job.select])
+  anchor = job.select
+  paintList()
+  const row = [...(document.querySelectorAll('#exList .ex-row') || [])]
+    .find((el) => el.dataset.path === job.select)
+  row?.scrollIntoView({ block: 'nearest' })
+}
+
 export async function refreshExplorerPage() {
   bindOnce()
+  const job = pendingOpen
   try {
     const boot = await call(electronAPI.explorer.bootstrap(), '打不開檔案總管')
     view = boot.view === 'grid' ? 'grid' : 'list'
@@ -1443,10 +1484,11 @@ export async function refreshExplorerPage() {
     setView(view)
     paintSidebar(places, disks)
     if (!tabs.length) await newTab(boot.lastPath || THIS_PC)
-    else await loadDir(cwd, { silent: true, keepSelection: true })
+    else if (!job) await loadDir(cwd, { silent: true, keepSelection: true })
   } catch {
     // toast 已顯示
   }
+  if (job) await consumePendingOpen()
   void ensureUffs()
 }
 

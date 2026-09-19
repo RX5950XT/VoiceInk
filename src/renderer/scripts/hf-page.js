@@ -11,6 +11,7 @@
 
 import { electronAPI, showToast } from './app.js'
 import { renderMarkdown } from './markdown.js'
+import { startDash, stopDash, copyEndpoint } from './hf-dash.js'
 
 /** 搜尋輸入防抖：每打一個字就打一次 HF 太粗魯 */
 const SEARCH_DEBOUNCE_MS = 400
@@ -401,6 +402,26 @@ function renderModelCard(model) {
   head.appendChild(status)
   card.appendChild(head)
 
+  if (model.plan) {
+    const facts = el('dl', 'hf-facts')
+    const rows = [
+      ['Context', model.plan.ctxSize ? `${model.plan.ctxSize}` : ''],
+      ['KV', model.plan.cacheTypeK ? `${model.plan.cacheTypeK}/${model.plan.cacheTypeV}` : ''],
+      ['MTP', model.plan.hasMtp ? (model.plan.specType || 'draft-mtp') : '關'],
+      ['視覺', model.plan.vision ? (model.mmproj || '開') : '無'],
+      ['思考', model.plan.reasoning ? '開' : (model.thinkingCapable ? '關' : '')],
+      ['GPU', model.plan.device || 'CPU']
+    ]
+    for (const [label, value] of rows) {
+      if (!value) continue
+      const row = el('div')
+      row.appendChild(el('dt', '', label))
+      row.appendChild(el('dd', '', value))
+      facts.appendChild(row)
+    }
+    if (facts.childNodes.length) card.appendChild(facts)
+  }
+
   if (model.plan?.warnings?.length) {
     card.appendChild(el('p', 'hf-warn', model.plan.warnings.join('　')))
   }
@@ -537,6 +558,19 @@ function openParams(id) {
   setNum('hfFieldMoe', requested.nCpuMoe, model.plan?.nCpuMoe)
   const spec = /** @type {HTMLSelectElement} */ ($('hfFieldSpec'))
   if (spec) spec.value = requested.specType ?? (model.plan?.specType || '')
+  const visionWrap = $('hfFieldVisionWrap')
+  const vision = /** @type {HTMLInputElement} */ ($('hfFieldVision'))
+  if (visionWrap && vision) {
+    visionWrap.hidden = !model.multimodal
+    vision.checked = requested.vision === false ? false : !!model.plan?.vision
+  }
+  const reasonWrap = $('hfFieldReasonWrap')
+  const reason = /** @type {HTMLInputElement} */ ($('hfFieldReason'))
+  if (reasonWrap && reason) {
+    reasonWrap.hidden = !model.thinkingCapable
+    reason.checked = requested.reasoning === true || !!model.plan?.reasoning
+  }
+  fillCtxChips(model)
   const raw = /** @type {HTMLTextAreaElement} */ ($('hfFieldRaw'))
   if (raw) raw.value = model.meta?.rawArgs || ''
   const tuneStatus = $('hfTuneStatus')
@@ -556,9 +590,26 @@ function setNum(id, value, auto) {
   input.placeholder = auto === undefined || auto === null ? '自動' : `自動：${auto}`
 }
 
-/**
- * @param {string} id @param {unknown} value @param {unknown} auto
- */
+/** @param {object} model */
+function fillCtxChips(model) {
+  const box = $('hfCtxChips')
+  if (!box) return
+  const train = Number(model.contextTrain) || 0
+  const steps = [4096, 8192, 16384, 32768, 65536, 131072]
+  const values = steps.filter((n) => !train || n <= train)
+  if (train && !values.includes(train)) values.push(train)
+  box.hidden = !values.length
+  box.replaceChildren(...values.map((n) => {
+    const btn = el('button', 'btn btn-secondary btn-sm', n >= 1024 ? `${n / 1024}K` : String(n))
+    btn.type = 'button'
+    btn.addEventListener('click', () => {
+      const input = /** @type {HTMLInputElement} */ ($('hfFieldCtx'))
+      if (input) input.value = String(n)
+    })
+    return btn
+  }))
+}
+
 function fillKvSelect(id, value, auto) {
   const select = /** @type {HTMLSelectElement} */ ($(id))
   if (!select) return
@@ -607,6 +658,14 @@ function readParamsForm() {
   const spec = /** @type {HTMLSelectElement} */ ($('hfFieldSpec'))
   // 投機解碼「關閉」是有意義的選擇（不是「沒填」），所以一律送
   if (spec) requested.specType = spec.value
+  const vision = /** @type {HTMLInputElement} */ ($('hfFieldVision'))
+  if (vision && $('hfFieldVisionWrap') && !$('hfFieldVisionWrap').hidden) {
+    requested.vision = vision.checked
+  }
+  const reason = /** @type {HTMLInputElement} */ ($('hfFieldReason'))
+  if (reason && $('hfFieldReasonWrap') && !$('hfFieldReasonWrap').hidden) {
+    requested.reasoning = reason.checked
+  }
   return {
     requested,
     rawArgs: /** @type {HTMLTextAreaElement} */ ($('hfFieldRaw'))?.value || ''
@@ -885,7 +944,7 @@ function bindSubtabs() {
         panel.classList.toggle('active', /** @type {HTMLElement} */ (panel).dataset.subtab === key)
       }
       if (key === 'library') refreshLibrary()
-      if (key === 'runtime') refreshHardware()
+      if (key === 'runtime') { refreshHardware(); startDash() }
     })
   }
 }
@@ -923,6 +982,7 @@ export function start() {
     $('hfParamsSaveBtn')?.addEventListener('click', saveParams)
     $('hfParamsCancelBtn')?.addEventListener('click', closeParams)
     $('hfParamsResetBtn')?.addEventListener('click', resetParams)
+    $('hfCopyEndpointBtn')?.addEventListener('click', copyEndpoint)
     $('hfAutoInstallBtn')?.addEventListener('click', autoInstallRuntime)
     $('hfAutoTuneBtn')?.addEventListener('click', runAutoTuneFromDialog)
     $('hfFitBtn')?.addEventListener('click', runFit)
@@ -940,6 +1000,7 @@ export function start() {
   }
   refreshRuntimeChip()
   refreshLibrary()
+  startDash()
 }
 
 /**
@@ -947,6 +1008,7 @@ export function start() {
  */
 export function stop() {
   clearTimeout(searchTimer)
+  stopDash()
 }
 
 /** 視窗要關了才真的收（`app.js` 沒有這個時機時就不呼叫） */

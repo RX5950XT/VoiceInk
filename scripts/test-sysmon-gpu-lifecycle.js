@@ -59,4 +59,21 @@ check('改取樣間隔會重啟，重複相同間隔不重啟', () => {
   feed.start(1)
   assert.equal(children.length, count + 1)
 })
+check('nvidia-smi 一行都沒吐出來也算卡住', () => {
+  feed.start(2)
+  const count = children.length
+  assert.ok(timers.size >= 1, '開起來就要有看門狗')
+  for (const fn of [...timers.values()]) fn()
+  assert.ok(children.length > count, `卡住後重開（${children.length}）`)
+})
+check('讀數卡住會重開 nvidia-smi', () => {
+  feed.start(2)
+  const child = children.at(-1)
+  child.stdout.emit('data', row)
+  assert.equal(feed.read().available, true)
+  assert.ok(timers.size >= 1, '有卡住看門狗')
+  const count = children.length
+  for (const fn of [...timers.values()]) fn()
+  assert.ok(children.length > count, `卡住後重開（${children.length}）`)
+})
 process.exitCode = failed ? 1 : 0

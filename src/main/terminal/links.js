@@ -5,7 +5,7 @@
  *
  * renderer 只認得「畫面上這串字長得像路徑」，能不能開得起來只有主行程知道。
  * 這裡負責兩件事：hover 時回報哪些候選真的存在（不存在就不畫底線），
- * 點下去時用檔案總管開起來。
+ * 點下去時回給 renderer 用 App 自己開（專案內編輯器／檔案頁）。
  *
  * 相對路徑的基準是**這個工作階段現在的 cwd**：宿主從 PTY 輸出裡撈 OSC 7
  * （`shell` 每次換目錄自己報的），由 `service.js` 呼叫 `noteCwd` 存進來。
@@ -59,6 +59,37 @@ function resolveCandidate(cwd, raw) {
 }
 
 /**
+ * 這個絕對路徑落在哪個專案裡。有目前專案而且對得上就用它，不然用根目錄最深的。
+ * @param {string} full
+ * @param {Array<{ id: string, path: string }>} projects
+ * @param {string} [preferredId]
+ * @returns {{ projectId: string, relPath: string } | null}
+ */
+function locateInProjects(full, projects, preferredId = '') {
+  if (!full || !Array.isArray(projects)) return null
+  const target = path.resolve(full)
+  const keyOf = (value) => (process.platform === 'win32' ? value.toLowerCase() : value)
+  const want = keyOf(target)
+  const hits = []
+  for (const proj of projects) {
+    const root = typeof proj?.path === 'string' ? path.resolve(proj.path) : ''
+    if (!root || !proj.id) continue
+    const rootKey = keyOf(root)
+    if (want !== rootKey && !want.startsWith(rootKey + path.sep)) continue
+    hits.push({
+      projectId: proj.id,
+      relPath: want === rootKey ? '' : path.relative(root, target).split(path.sep).join('/'),
+      root
+    })
+  }
+  if (!hits.length) return null
+  const preferred = hits.find((hit) => hit.projectId === preferredId)
+  if (preferred) return { projectId: preferred.projectId, relPath: preferred.relPath }
+  hits.sort((a, b) => b.root.length - a.root.length)
+  return { projectId: hits[0].projectId, relPath: hits[0].relPath }
+}
+
+/**
  * 前景 shell 目前報到哪個目錄（OSC 7）。**這是終端機裡跑的程式自己講的**，
  * 所以只當成解析相對路徑的基準，能不能開仍然由 `resolveCandidate` 的 `statSync` 說了算。
  * @type {Map<string, string>}
@@ -105,12 +136,13 @@ async function resolveLinks(id, texts) {
 }
 
 /**
- * 點下去：資料夾直接開，檔案在檔案總管裡選起來。
+ * 點下去：告訴 renderer 用 App 開（專案內編輯器／檔案樹，其餘走檔案頁）。
  * @param {unknown} id
  * @param {unknown} text
- * @returns {Promise<boolean>}
+ * @param {unknown} [line]
+ * @returns {Promise<object>}
  */
-async function revealLink(id, text) {
+async function revealLink(id, text, line) {
   const hit = resolveCandidate(await baseCwd(id), text)
   if (!hit) {
     const error = new Error('NO_PATH')
@@ -118,11 +150,29 @@ async function revealLink(id, text) {
     error.userMessage = '找不到這個路徑'
     throw error
   }
-  // electron 用到才 require：純路徑解析要能在 node 直跑的回歸測試裡驗
-  const { shell } = require('electron')
-  if (hit.kind === 'dir') await shell.openPath(hit.full)
-  else shell.showItemInFolder(hit.full)
-  return true
+  const goto = Number(line) > 0 ? Math.floor(Number(line)) : 0
+  let preferred = ''
+  try {
+    const meta = await store.get(String(id || ''))
+    preferred = typeof meta?.projectId === 'string' ? meta.projectId : ''
+  } catch { /* 沒有工作階段 metadata 就只靠路徑對專案 */ }
+  let projects = []
+  try {
+    projects = await require('../workspace/store').list()
+  } catch { projects = [] }
+  const located = locateInProjects(hit.full, projects, preferred)
+  if (located) {
+    return {
+      action: hit.kind === 'dir' ? 'reveal' : 'edit',
+      projectId: located.projectId,
+      relPath: located.relPath,
+      line: hit.kind === 'file' ? goto : 0,
+      kind: hit.kind
+    }
+  }
+  return { action: 'explorer', kind: hit.kind, path: hit.full }
 }
 
-module.exports = { resolveCandidate, resolveLinks, revealLink, noteCwd, _liveCwd: liveCwd }
+module.exports = {
+  resolveCandidate, resolveLinks, revealLink, noteCwd, locateInProjects, _liveCwd: liveCwd
+}

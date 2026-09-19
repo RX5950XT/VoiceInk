@@ -35,7 +35,7 @@ src/main/
   chat-store.js / chat-images.js / chat-models.js   會話＋側欄資料夾持久化（編輯／刪除／分叉訊息、匯出 Markdown）、圖片附件、/models 掃描
   ipc-invoke.js       十組模組 IPC 的共用外殼 makeInvoke()：主視窗守衛 ＋ { ok, data|error } ＋ userMessage 白名單
   terminal/           ConPTY：pty.js、status.js（OSC 133 ＋ 靜默雙軌，純函式）、store.js（固定表）、
-                      ipc.js、links.js（畫面上的網址／路徑，主行程驗存在再開）、
+                      ipc.js、links.js（畫面上的網址／路徑，主行程驗存在後回給 renderer 用 App 開）、
                       admin.js／admin-host.js（管理員終端機的提權 host）、
                       host.js／host-runtime.js／host-client.js／service.js（**PTY 住在 App 外的獨立宿主**）、
                       editor-bridge.js（Ctrl+G 的 $EDITOR 橋接：CLI 開的編輯器就是 App 自己的分頁）
@@ -103,6 +103,19 @@ AGY 設定、終端機、聊天、語音輸入紀錄**刻意不進** `STORE_ALLO
 翻譯與 TTS 頁不在這組（維持全域 key）。
 
 ## 最近變更
+
+### 2026-09-19 — 系統監控常駐穩定、HF 儀表板與架構自適應
+
+- **感測器不再 5 次就停**：sidecar 斷線或卡住沒回報就指數退避一直重拉（`ensureSensors`）；讀數穩定 60 秒才把間隔歸零。nvidia-smi 卡住同樣重開。
+- **HF 依 GGUF 架構自適應**：顯存夠就把上下文沿著 4K～256K 梯子往上長；有 mmproj 預設開視覺（可關）；Qwen3／DeepSeek 可開思考；in-checkpoint MTP 預設 `draft-mtp`。
+- **執行環境分頁加簡易儀表板**（對標 DualGPUs 面板／LM Studio）：GPU VRAM、tok/s、排隊、本機 OpenAI／Anthropic 端點（**不送金鑰**）、llama-server log。模型卡列出 ctx／KV／視覺／MTP。
+
+### 2026-09-19 — 終端機連結、Ctrl+G、破圖
+
+- **折行**：xterm `isWrapped` 之外，CLI 自己印的換行若前一列以 `/` `\` 結尾、或剛好填滿一列，也接成同一條邏輯行再掃。`file://`、`www.`、`localhost:埠` 也認得；`file.js:12` 的行號留給開檔。
+- **點下去用 App 開**：網址走內建瀏覽器分頁；路徑在專案裡就開編輯器／檔案樹，否則進檔案頁。不再 `shell.showItemInFolder`。
+- **AGY Ctrl+G**：`EDITOR`／`VISUAL` 改短檔名 `voiceink-edit.cmd`，`editor-bridge` 資料夾接到 PATH 最前面。AGY／Gemini CLI 用 `split(' ')` 再 `spawn({ shell: true })`，完整路徑一加引號就切壞。
+- **破圖**：WebGL context 掉了重掛（最多 3 次）；欄列數真的變了才清 glyph atlas 並 refresh。
 
 ### 2026-09-15 — 工作區大檔預覽與編輯
 

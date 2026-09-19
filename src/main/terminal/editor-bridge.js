@@ -7,7 +7,9 @@
  * 編輯器程序結束**才把檔案讀回輸入框。所以我們要塞給它的不是「開一個視窗」，而是一支
  * 會乖乖卡住的命令：
  *
- *   1. `EDITOR` 指到 `<userData>/editor-bridge/voiceink-edit.cmd`（純 batch，沒有相依）
+ *   1. `EDITOR`／`VISUAL` 設成短檔名 `voiceink-edit.cmd`，並把
+ *      `<userData>/editor-bridge` 接到 PATH 最前面（AGY 用 `split(' ')` 再 spawn，
+ *      完整路徑一加引號就會被切壞）
  *   2. 那支 batch 把**檔案本身**複製成 `<id>.in`，然後每秒看一次 `<id>.done` 出現了沒
  *   3. main 這邊看到 `.in` 就叫 renderer 開一個編輯器分頁
  *   4. 使用者按「儲存」→ main 寫出 `<id>.out`（分頁還開著，可以再改再存）
@@ -95,12 +97,9 @@ function configure(userData) {
 }
 
 /**
- * 確保 batch 在磁碟上且是最新版，回傳可以直接塞進 `EDITOR` 的字串（自帶引號：
- * CLI 是把它跟檔名接成一行給 cmd 跑的，路徑裡有空白就會斷成兩段）。
- *
- * @returns {string} 失敗時回空字串（Ctrl+G 就退回原本的記事本，不是壞掉）
+ * 確保 batch 在磁碟上且是最新版。回傳完整路徑；失敗回空字串。
  */
-function shimCommand() {
+function ensureShim() {
   if (!dir) return ''
   try {
     fs.mkdirSync(path.join(dir, 'requests'), { recursive: true })
@@ -108,10 +107,27 @@ function shimCommand() {
     let current = ''
     try { current = fs.readFileSync(file, 'utf8') } catch { current = '' }
     if (current !== SHIM) fs.writeFileSync(file, SHIM, 'utf8')
-    return `"${file}"`
+    return file
   } catch {
     return ''
   }
+}
+
+/**
+ * 塞進 `EDITOR`／`VISUAL` 的值。必須是**不含空白、不含引號的短檔名**：
+ * AGY／Gemini CLI 用 `command.split(' ')` 再 `spawn(..., { shell: true })`，
+ * 完整路徑一加引號或一有空白就會被切壞（Windows 上還會 EINVAL）。
+ * 真的去哪找這支檔，靠 `shellEnvironment` 把 `shimDir()` 接到 PATH 最前面。
+ *
+ * @returns {string} 失敗時回空字串（Ctrl+G 就退回原本的記事本，不是壞掉）
+ */
+function shimCommand() {
+  return ensureShim() ? 'voiceink-edit.cmd' : ''
+}
+
+/** @returns {string} 失敗時回空字串 */
+function shimDir() {
+  return ensureShim() ? dir : ''
 }
 
 /**
@@ -228,4 +244,4 @@ function release(key) {
   try { fs.writeFileSync(doneFile(key), '1', 'utf8') } catch { /* batch 會等到逾時，不再多做 */ }
 }
 
-module.exports = { configure, shimCommand, isRealEditor, start, stop, save, cancel }
+module.exports = { configure, shimCommand, shimDir, isRealEditor, start, stop, save, cancel }

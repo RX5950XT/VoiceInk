@@ -191,7 +191,8 @@ try {
       device: { id: 'Vulkan0', totalMiB: 16_000, freeMiB: 15_000 }
     })
     ok('顯存夠：整顆上 GPU', big.fullOffload === true && big.gpuLayers === 36)
-    ok('顯存夠：上下文用預設而不是訓練上限', big.ctxSize === plan.DEFAULT_CTX, String(big.ctxSize))
+    ok('顯存夠：上下文跟著剩餘顯存往上長，但不開到訓練上限',
+      big.ctxSize > plan.DEFAULT_CTX && big.ctxSize < 262_144, String(big.ctxSize))
     ok('顯存夠：沒有警告', big.warnings.length === 0, JSON.stringify(big.warnings))
     ok('device 有帶', big.device === 'Vulkan0')
 
@@ -332,6 +333,93 @@ try {
     ok('使用者關掉投機解碼就真的不送', !plan.toPresetArgs(off)['spec-type'])
     ok('使用者指定的 KV 檔位照用', off.cacheTypeK === 'q8_0' && off.flashAttn === true)
     ok('使用者指定的執行緒照用', off.threads === 4)
+  }
+
+  console.log('\n[D4] 依架構自適應（上下文／視覺／思考／MTP）')
+  {
+    const dense = {
+      arch: 'qwen3',
+      contextTrain: 262_144, blockCount: 36, embeddingLength: 2560,
+      headCount: 32, headCountKv: 8, keyLength: 128, valueLength: 128,
+      thinkingCapable: true
+    }
+    const roomy = { id: 'CUDA0', totalMiB: 16_000, freeMiB: 15_000 }
+    const grown = plan.planRun({
+      modelBytes: 2 * 1024 * 1024 * 1024,
+      info: dense,
+      device: roomy,
+      cpu: { cores: 16 }
+    })
+    ok('顯存夠：上下文跟著剩餘顯存往上長', grown.ctxSize > plan.DEFAULT_CTX, String(grown.ctxSize))
+    ok('顯存夠：不超過訓練上限', grown.ctxSize <= 262_144, String(grown.ctxSize))
+    ok('Qwen3 預設不開思考（較慢）', grown.reasoning === false)
+    ok('開思考才寫 reasoning=on',
+      plan.toPresetArgs({ ...grown, reasoning: true }).reasoning === 'on')
+    // llama-server 的 --reasoning 預設是 auto：不明寫 off，會思考的模型照樣思考
+    ok('關思考要明寫 reasoning=off', plan.toPresetArgs(grown).reasoning === 'off')
+    ok('不會思考的模型不寫 reasoning',
+      plan.toPresetArgs({ ...grown, thinkingCapable: false }).reasoning === undefined)
+
+    const short = plan.planRun({
+      modelBytes: 2 * 1024 * 1024 * 1024,
+      info: { ...dense, contextTrain: 4096, thinkingCapable: false },
+      device: roomy,
+      cpu: { cores: 16 }
+    })
+    ok('訓練長度較短就不超過', short.ctxSize <= 4096, String(short.ctxSize))
+
+    const vision = plan.planRun({
+      modelBytes: 2 * 1024 * 1024 * 1024,
+      info: { ...dense, multimodal: true },
+      device: roomy,
+      cpu: { cores: 16 }
+    })
+    ok('有 mmproj 預設開視覺', vision.vision === true)
+    ok('視覺開著時帶 mmproj-device',
+      plan.toPresetArgs(vision, { mmprojDevice: 'CUDA0' })['mmproj-device'] === 'CUDA0')
+    const noVision = plan.planRun({
+      modelBytes: 2 * 1024 * 1024 * 1024,
+      info: { ...dense, multimodal: true },
+      device: roomy,
+      cpu: { cores: 16 },
+      requested: { vision: false }
+    })
+    ok('關掉視覺就寫 no-mmproj', plan.toPresetArgs(noVision)['no-mmproj'] === '1')
+
+    const mtp = plan.planRun({
+      modelBytes: 2 * 1024 * 1024 * 1024,
+      info: { ...dense, hasMtp: true },
+      device: roomy,
+      cpu: { cores: 16 }
+    })
+    ok('in-checkpoint MTP 預設 draft-mtp', mtp.specType === 'draft-mtp' && mtp.hasMtp === true)
+    ok('preset 帶 spec-type', plan.toPresetArgs(mtp)['spec-type'] === 'draft-mtp')
+  }
+
+  console.log('\n[D5] llama-server /metrics 解析')
+  {
+    const runtime = require(path.join(ROOT, 'src/main/hfmodels/runtime.js'))
+    // 這一段是**真的 llama-server 回的**（`/metrics?model=…`，2026-09 實測）：
+    // 時間的欄位叫 `tokens_predicted_seconds_total`，自己編一個名字會全綠卻算不出速度
+    const parsed = runtime.parseMetrics([
+      '# HELP llamacpp:prompt_tokens_total Number of prompt tokens processed.',
+      '# TYPE llamacpp:prompt_tokens_total counter',
+      'llamacpp:prompt_tokens_total 120',
+      'llamacpp:prompt_seconds_total 1.5',
+      'llamacpp:tokens_predicted_total 80',
+      'llamacpp:tokens_predicted_seconds_total 2.5',
+      'llamacpp:n_decode_total 9',
+      'llamacpp:requests_processing 1',
+      'llamacpp:requests_deferred 3'
+    ].join('\n'))
+    ok('解析 prompt tokens', parsed.promptTokens === 120)
+    ok('解析生成 tokens', parsed.predictedTokens === 80)
+    ok('解析排隊', parsed.requestsProcessing === 1 && parsed.requestsDeferred === 3)
+    ok('生成速度', parsed.predictedTps === 32, String(parsed.predictedTps))
+    ok('prompt 速度', parsed.promptTps === 80, String(parsed.promptTps))
+    ok('沒有 kv_cache_usage_ratio 就回 null', parsed.kvUsage === null)
+    ok('router 一定要帶 --metrics（預設是關的）',
+      fs.readFileSync(path.join(ROOT, 'src/main/hfmodels/runtime.js'), 'utf8').includes("'--metrics'"))
   }
 
   // 本機真的有 GGUF 就順手讀一顆（合成的檔頭證明不了真實檔案的佈局）

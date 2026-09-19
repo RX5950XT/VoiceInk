@@ -11213,6 +11213,119 @@ h6.md-h { font-size: 14px; }
   gap: 8px;
 }
 
+.hf-gpu-meters {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.hf-gpu {
+  padding: 8px 0;
+}
+
+.hf-gpu-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.hf-meter {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  margin: 6px 0;
+  overflow: hidden;
+}
+
+.hf-meter i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--text-secondary);
+}
+
+.hf-meter i[data-hot="true"] {
+  background: var(--accent-primary);
+}
+
+.hf-log summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.hf-log pre {
+  margin: 8px 0 0;
+  max-height: 240px;
+  overflow: auto;
+  padding: 8px 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.hf-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 16px;
+  margin: 8px 0 0;
+}
+
+.hf-facts > div {
+  display: grid;
+  grid-template-columns: 4.5rem minmax(0, 1fr);
+  column-gap: 8px;
+  align-items: baseline;
+}
+
+.hf-facts dt {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.hf-facts dd {
+  margin: 0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.hf-ctx-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.hf-ctx-chips[hidden] {
+  display: none;
+}
+
+.hf-ctx-chips .btn {
+  min-height: 28px;
+  padding: 2px 8px;
+}
+
+.hf-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.hf-check input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
 .hf-setting-row {
   display: flex;
   align-items: center;
@@ -11290,6 +11403,10 @@ h6.md-h { font-size: 14px; }
   flex-direction: column;
   gap: 4px;
   min-width: 0;
+}
+
+.hf-field[hidden] {
+  display: none;
 }
 
 .hf-field > span {
