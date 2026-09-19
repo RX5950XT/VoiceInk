@@ -349,6 +349,10 @@ tag 要與 `package.json` 的 version 一致。
 - **`await` 一個 rAF 一定要配逾時**（視窗被遮住時 rAF 3 秒零回呼）。
 - **右 Alt 只能用低階鍵盤 hook 認**；原生 sidecar 三個坑：委派要用欄位抓著、`GetMessage` 迴圈不能省、靠 stdin EOF 結束。Esc 不吞。退路模式要補送 F24（一次按放只補一次）。keydown 會重送，狀態機要 `pressed` 旗標。
 - 麥克風在啟用時就一直開著（track `ended` 要自己重建）；單次上限 20 分鐘，**長錄音一定要切段**（用 `slice` 不用 `subarray`）。
+- **整理後的換行要留著**：整理器要排版（條列每項一行、換主題空一行分段），輸出直接貼進輸入框，
+  全部擠成一行就只是逐字稿。本地逐段整理接回去時用**空行**接（`parts.join('\n\n')`），
+  **不可以用 `joinSegments`**——那支是給 ASR 逐段辨識用的（直接黏起來），會把排好的版整平。
+  錯字規則要明講「用上下文判斷」並附錯字範例，寫成「只有非常確定才改」時小模型會把錯字原樣抄出來。
 - **整理失敗一定要退回原文照樣插入**；**字典要套兩次**（送進模型前、模型回來後），學詞夾在中間；自動學詞要保守（兩次才啟用、不學反向對與接力對、反向對要 `demote`、手動加的不扣）；prompt 只帶這段用得到的字典。
 - `applyDictionary` 是**單趟掃描**不是每條各跑一次（否則 A→B→C 接力）；拉丁詞要卡詞界並忽略大小寫。
 - 整理分兩種模式（門檻 180 字），模式要在**切段之前**用整段長度決定；本地整理一定要先切段（context 只有 2048）；長度離譜就當沒整理過；**「輸出語言」是選字習慣不是翻譯指令**。
@@ -462,7 +466,7 @@ tag 要與 `package.json` 的 version 一致。
 | 系統監控 | `test-sysmon.js` ＋ `e2e-sysmon.js` ＋ `e2e-sysmon-cdp.js` ＋ `probe-sysmon-stress.js`（實機量有沒有壓到）＋ `e2e-sysmon-sensors.js`（**跳 UAC**）|
 | 風扇／效能調整 | `test-sysmon-fans.js` ＋ `e2e-sysmon-fans-cdp.js`（不接管真風扇）＋ `probe-sysmon-fans.js`／`probe-sensors-task.js`（**跳 UAC**）；`test-sysmon-oc.js` ＋ `e2e-sysmon-oc-cdp.js`（不按套用）|
 | 使用時長 | `test-screentime.js` ＋ `e2e-screentime-cdp.js`（**不關使用者的 Tai**）|
-| 語音輸入 | `test-dictation.js` ＋ `e2e-dictation.js`（insert 是 stub）＋ `e2e-dictation-cdp.js`；熱鍵 `probe-dictation-hook.js`／`probe-uiohook.js`／`probe-dictation-latency.js`／`probe-dictation-live.js`（**會搶焦點**）|
+| 語音輸入 | `test-dictation.js` ＋ `e2e-dictation.js`（insert 是 stub）＋ `e2e-dictation-cdp.js`；動整理 prompt 前後跑 `probe-dictation-cleanup.js`（**打使用者設定裡那顆雲端整理模型**：錯字有沒有修、條列有沒有換行、長篇有沒有分段；userData 指到暫存，不碰真字典）；熱鍵 `probe-dictation-hook.js`／`probe-uiohook.js`／`probe-dictation-latency.js`／`probe-dictation-live.js`（**會搶焦點**）|
 | ASR／即時字幕 | `e2e-llama-asr.js`／`e2e-asr-threads.js`／`e2e-stt-cdp.js`／`probe-cloud-asr.js`（真金鑰打真上游）；`test-vad.js` ＋ `e2e-live-pipeline.js` ＋ `e2e-live-cdp.js` |
 | 翻譯 | `probe-prompt-path.js`（prompt 逐 token）＋ `verify-chat-wrapper-fix.js` ＋ `probe-packed-local-llm.js`（動 `build.files` 前後）＋ `probe-translate-lang.js` |
 | 彈窗 | `e2e-app-dialog-cdp.js`（自己開 vite ＋ electron，**會叫到最前面**：驗確認／輸入／告知三種都是 `app-dialog` 且套到玻璃樣式、Esc 與取消回得對、節點會收掉）|
