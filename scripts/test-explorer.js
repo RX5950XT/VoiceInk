@@ -192,6 +192,14 @@ console.log('\n[E] UFFS pattern 消毒')
 
 console.log('\n[F] 本機位置與磁碟')
 {
+  const parsed = drives.parseDriveInfo(JSON.stringify([
+    { DeviceID: 'C:', VolumeName: '中文磁碟', Size: 100, FreeSpace: 40, DriveType: 3 },
+    { DeviceID: 'bad' },
+    { DeviceID: 'X:', Size: -1, FreeSpace: 20, DriveType: 4 }
+  ]))
+  ok('磁碟資訊只接受有效磁碟代號', parsed.length === 2)
+  ok('磁碟名稱與剩餘容量保留', parsed[0].label === '中文磁碟' && parsed[0].free === 40)
+  ok('容量不接受負數或超過總量', parsed[1].total === 0 && parsed[1].free === 0)
   const places = drives.listPlaces()
   ok('至少有家目錄', places.some((p) => p.id === 'home' && fs.existsSync(p.path)), JSON.stringify(places.map((p) => p.id)))
   const disks = drives.listDrives()

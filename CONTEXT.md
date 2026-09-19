@@ -15,6 +15,15 @@ AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定�
 
 ## 架構
 
+### 檔案總管分頁與首頁（2026-09-19）
+
+- `explorer-page.js` 管理各分頁的路徑與上一頁／下一頁；切換 App 頁面仍保留。分頁只保留於本次開啟，重啟沿用既有 `lastPath`。
+- `explorer-tabs.js` 畫分頁列；支援新增／關閉、Ctrl+T／Ctrl+W／Ctrl+Tab、方向鍵切頁、資料夾中鍵另開與右鍵「在新分頁開啟」。
+- `explorer-home.js` 畫 `thispc` 虛擬首頁，顯示常用資料夾、磁碟容量與網路磁碟；沒有 `lastPath` 時預設首頁。不能把首頁當資料夾新增／貼上。
+- `explorer:driveInfo` 非同步讀取 CIM 磁碟資訊（8 秒上限，同時查詢共用一份）；晚到回覆不得改到另一分頁。測試：`test-explorer-page-state.js`、`test-explorer.js`、`e2e-explorer-cdp.js`。
+- `.lnk` 經 `resolvePath` 解析（最多 16 層，拒循環）；`openPath` 遇到資料夾回傳導航目的地，renderer 留在目前分頁。一般檔案捷徑仍執行原捷徑，保留參數。
+- `explorer-icons.js` 只載入可見檔案圖示（同時最多 4 筆、快取 256 筆）；`explorer:fileIcon` 由 `app.getFileIcon` 讀取，資料夾使用資料夾圖示、捷徑附箭頭。滑鼠側鍵 3／4 走目前分頁歷史，攔截瀏覽器預設跳頁。
+
 ```
 src/main/
   main.js             frameless 主窗、IPC 註冊、store allowlist 與一次性遷移、單一實例鎖與系統匣

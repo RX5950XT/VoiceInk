@@ -13,6 +13,7 @@ const places = require('./places')
 const VIEW_MODES = new Set(['list', 'grid'])
 const SORT_KEYS = new Set(['name', 'date', 'size'])
 const RECYCLE_CWD = 'recyclebin'
+const THIS_PC = 'thispc'
 
 /** @type {import('electron-store') | null} */
 let store = null
@@ -48,7 +49,8 @@ async function getStore() {
  */
 function sanitizePath(raw) {
   if (typeof raw !== 'string' || !raw) return ''
-  if (raw.replace(/[\\/]+$/, '').toLowerCase() === RECYCLE_CWD) return RECYCLE_CWD
+  const compact = raw.replace(/[\\/]+$/, '').toLowerCase()
+  if (compact === RECYCLE_CWD || compact === THIS_PC) return compact
   try {
     return paths.resolveAbs(raw)
   } catch {

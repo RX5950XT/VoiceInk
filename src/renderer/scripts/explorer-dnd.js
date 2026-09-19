@@ -85,6 +85,7 @@ export function showExplorerMenu(at, spec) {
   }
   if (items.length) {
     menu.push({ label: '開啟', onSelect: act.open })
+    if (items.length === 1 && items[0].dir && act.openTab) menu.push({ label: '在新分頁開啟', onSelect: act.openTab })
     if (act.reveal) menu.push({ label: '顯示位置', onSelect: act.reveal })
     if (act.pin) menu.push({ label: '釘到側欄', onSelect: act.pin })
     menu.push({ sep: true })

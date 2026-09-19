@@ -7,6 +7,7 @@
 const paths = require('./paths')
 
 const RECYCLE_CWD = 'recyclebin'
+const THIS_PC = 'thispc'
 const ID_OK = /^[A-Za-z0-9_-]{1,64}$/
 const MAX_PLACES = 40
 
@@ -40,8 +41,8 @@ function sanitizePlaces(raw) {
     let placePath = ''
     if (typeof item.path === 'string' && item.path) {
       const compact = item.path.replace(/[\\/]+$/, '').toLowerCase()
-      if (compact === RECYCLE_CWD) {
-        placePath = RECYCLE_CWD
+      if (compact === RECYCLE_CWD || compact === THIS_PC) {
+        placePath = compact
       } else {
         try {
           placePath = paths.resolveAbs(item.path)
@@ -104,6 +105,7 @@ function shareLabel(unc) {
 
 module.exports = {
   RECYCLE_CWD,
+  THIS_PC,
   MAX_PLACES,
   sanitizeLetter,
   sanitizePlaces,

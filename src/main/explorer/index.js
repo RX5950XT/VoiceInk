@@ -7,8 +7,7 @@
  * 關 App 不停它的 daemon。
  */
 
-const { shell, dialog, BrowserWindow } = require('electron')
-const os = require('os')
+const { app, shell, dialog, BrowserWindow } = require('electron')
 const fs = require('../raw-fs')
 const path = require('path')
 const { spawnSync } = require('child_process')
@@ -37,6 +36,7 @@ function configure(opts) {
 
 function defaultPlaces() {
   const items = drives.listPlaces()
+  items.unshift({ id: 'thispc', label: '本機', path: drives.THIS_PC })
   items.push({ id: 'recycle', label: '資源回收筒', path: recycle.RECYCLE_CWD })
   return items
 }
@@ -50,15 +50,9 @@ async function bootstrap() {
   const state = await store.readState()
   const listed = await listPlaces()
   const disks = drives.listDrives()
-  let cwd = state.lastPath
-  if (!cwd) {
-    try {
-      cwd = os.homedir()
-    } catch {
-      cwd = disks[0] ? disks[0].path : 'C:\\'
-    }
-  }
-  if (!recycle.isRecyclePath(cwd)) {
+  // 沒存過就落在「本機」首頁（＝Windows 檔案總管的預設畫面）。
+  let cwd = state.lastPath || drives.THIS_PC
+  if (!recycle.isRecyclePath(cwd) && !drives.isThisPc(cwd)) {
     try {
       paths.resolveExisting(cwd)
     } catch {
@@ -74,9 +68,12 @@ function saveState(patch) {
   return store.writeState(next)
 }
 const listDrives = () => drives.listDrives()
-const listDir = (dirPath, opts) => (
-  recycle.isRecyclePath(dirPath) ? files.listRecycle(opts) : files.listDir(dirPath, opts)
-)
+const driveInfo = () => drives.driveInfo()
+const listDir = (dirPath, opts) => {
+  // 「本機」是虛擬位置，沒有檔案清單（renderer 自己畫首頁）。
+  if (drives.isThisPc(dirPath)) return { path: drives.THIS_PC, entries: [], truncated: false }
+  return recycle.isRecyclePath(dirPath) ? files.listRecycle(opts) : files.listDir(dirPath, opts)
+}
 const preview = (filePath) => files.preview(filePath)
 const inspect = (filePath) => files.inspect(filePath)
 
@@ -181,13 +178,29 @@ async function pickFolder() {
   return { path: paths.resolveAbs(result.filePaths[0]) }
 }
 
-function resolvePath(raw) {
+function resolvePath(raw, seen = new Set()) {
   const text = typeof raw === 'string' ? raw.trim() : ''
   if (!text) throw paths.fail('BAD_PATH', '路徑不合法')
+  if (text === '本機' || drives.isThisPc(text)) {
+    return { path: drives.THIS_PC, dir: true, parent: drives.THIS_PC }
+  }
   if (text === '資源回收筒' || text.toLowerCase() === 'recyclebin') {
     return { path: recycle.RECYCLE_CWD, dir: true, parent: recycle.RECYCLE_CWD }
   }
   const full = paths.resolveAbs(text)
+  if (path.extname(full).toLowerCase() === '.lnk') {
+    const key = full.toLowerCase()
+    if (seen.has(key) || seen.size >= 16) throw paths.fail('BAD_PATH', '捷徑循環，無法開啟')
+    seen.add(key)
+    let target
+    try {
+      target = shell.readShortcutLink(full).target
+    } catch {
+      throw paths.fail('NOT_FOUND', '讀不到這個捷徑')
+    }
+    if (!target) throw paths.fail('NOT_FOUND', '找不到捷徑目的地')
+    return resolvePath(target, seen)
+  }
   let st
   try {
     st = fs.lstatSync(full)
@@ -267,9 +280,24 @@ async function uffsEnsure(raw) {
  */
 async function openPath(target) {
   const full = paths.resolveExisting(target)
+  const resolved = resolvePath(full)
+  if (resolved.dir) return resolved
   const err = await shell.openPath(full)
   if (err) throw paths.fail('OPEN_FAILED', '打不開')
   return true
+}
+
+async function fileIcon(target) {
+  const full = paths.resolveExisting(target)
+  const resolved = resolvePath(full)
+  if (resolved.dir) return { folder: true }
+  try {
+    const icon = await app.getFileIcon(resolved.path, { size: 'normal' })
+    if (icon.isEmpty()) throw new Error('empty icon')
+    return { url: icon.toDataURL() }
+  } catch {
+    throw paths.fail('ICON_FAILED', '讀不到檔案圖示')
+  }
 }
 
 /**
@@ -369,6 +397,7 @@ module.exports = {
   resolvePath,
   createShortcut,
   listDrives,
+  driveInfo,
   listDir,
   preview,
   inspect,
@@ -381,6 +410,7 @@ module.exports = {
   copyEntry,
   moveEntry,
   openPath,
+  fileIcon,
   reveal,
   setClipboard,
   paste,

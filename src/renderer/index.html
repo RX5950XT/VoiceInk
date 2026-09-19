@@ -626,6 +626,11 @@
           <!-- 整機檔案總管：瀏覽本機資料夾 + UFFS 檔名搜尋 -->
           <section id="page-explorer" class="page">
             <div class="ex-shell">
+              <div class="ex-tabs">
+                <div class="ex-tab-strip" id="exTabStrip" role="tablist" aria-label="檔案分頁"></div>
+                <button type="button" id="exTabAddBtn" class="btn-icon ex-tab-add"
+                        title="新增分頁（Ctrl+T）" aria-label="新增分頁">＋</button>
+              </div>
               <header class="ex-toolbar">
                 <div class="ex-nav-btns" role="group" aria-label="瀏覽">
                   <button type="button" id="exBackBtn" class="btn-icon" title="上一頁" aria-label="上一頁" disabled>←</button>
@@ -661,13 +666,14 @@
                   <p class="ex-side-label">磁碟</p>
                   <div id="exDrives" class="ex-side-list" role="list"></div>
                 </aside>
-                <div class="ex-main">
+                <div class="ex-main" id="exContent" role="tabpanel" aria-label="目前檔案分頁">
                   <div id="exListHead" class="ex-list-head" hidden>
                     <button type="button" class="ex-sort" data-sort="name">名稱</button>
                     <button type="button" class="ex-sort" data-sort="size">大小</button>
                     <button type="button" class="ex-sort" data-sort="date">修改</button>
                   </div>
                   <div id="exList" class="ex-list" role="listbox" aria-label="檔案清單" tabindex="0"></div>
+                  <div id="exHome" class="ex-home" aria-label="本機" hidden></div>
                   <p id="exEmpty" class="ex-empty" hidden>這個資料夾是空的</p>
                 </div>
                 <aside class="ex-detail" id="exDetail" aria-live="polite">

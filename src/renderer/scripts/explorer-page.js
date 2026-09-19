@@ -9,6 +9,9 @@ import { askConfirm, askInput } from './app-dialog.js'
 import { showMenu } from './ws-menu.js'
 import { createListReorder } from './list-reorder.js'
 import { paintDetail as paintDetailPane } from './explorer-detail.js'
+import { paintHomePane } from './explorer-home.js'
+import { paintTabStrip } from './explorer-tabs.js'
+import { paintFileIcons } from './explorer-icons.js'
 import {
   RECYCLE_CWD,
   pathKey,
@@ -22,6 +25,8 @@ import {
 } from './explorer-dnd.js'
 
 const SEARCH_DEBOUNCE_MS = 180
+/** 虛擬位置：Windows 那樣的「本機」首頁（跟 recyclebin 同一種，不是真路徑）。 */
+const THIS_PC = 'thispc'
 const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'svg'])
 
 let started = false
@@ -61,6 +66,13 @@ let ensuring = false
 let places = []
 /** @type {Array<{ letter: string, path: string, total: number, free: number }>} */
 let disks = []
+/** @type {Array<{ letter: string, path: string, label: string, fs: string, total: number, free: number, type: number }>} */
+let diskInfo = []
+/** 分頁：一頁一條路徑與自己的上／下一頁歷史。切 nav 分頁回來要留著。 */
+/** @type {Array<{ id: string, cwd: string, history: string[], histIndex: number }>} */
+let tabs = []
+let activeId = ''
+let tabSeq = 0
 
 const $ = (id) => document.getElementById(id)
 
@@ -113,6 +125,7 @@ function listed() {
 function bindOnce() {
   if (started) return
   started = true
+  $('exTabAddBtn')?.addEventListener('click', () => void newTab())
   $('exBackBtn')?.addEventListener('click', () => goHistory(-1))
   $('exForwardBtn')?.addEventListener('click', () => goHistory(1))
   $('exUpBtn')?.addEventListener('click', goUp)
@@ -154,6 +167,7 @@ function bindOnce() {
     onCommit: () => void commitPlaceOrder()
   })
   document.addEventListener('keydown', onPageKey)
+  for (const type of ['mousedown', 'mouseup', 'auxclick']) document.addEventListener(type, onSideButton, true)
   unsubChanged = electronAPI.explorer.onChanged((payload) => {
     if (!payload || payload.path !== cwd || inSearch()) return
     void loadDir(cwd, { silent: true, keepSelection: true })
@@ -172,6 +186,7 @@ function bindOnce() {
 
 function crumbsOf(full) {
   if (!full) return []
+  if (pathKey(full) === THIS_PC) return [{ label: '本機', path: THIS_PC }]
   if (pathKey(full) === RECYCLE_CWD) return [{ label: '資源回收筒', path: RECYCLE_CWD }]
   const norm = full.replace(/\//g, '\\')
   if (norm.startsWith('\\\\')) {
@@ -206,7 +221,7 @@ function beginEditPath() {
   editingPath = true
   crumbs.hidden = true
   input.hidden = false
-  input.value = pathKey(cwd) === RECYCLE_CWD ? '資源回收筒' : cwd
+  input.value = inHome() ? '本機' : inRecycle() ? '資源回收筒' : cwd
   input.focus()
   input.select()
 }
@@ -356,14 +371,14 @@ function paintSideList(host, items) {
     })
     btn.addEventListener('click', (e) => {
       if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) return
-      void navigate(item.path)
+      void (e.ctrlKey ? newTab(item.path) : navigate(item.path))
     })
     btn.addEventListener('contextmenu', (e) => {
       e.preventDefault()
       e.stopPropagation()
       openPlaceMenu(e, item)
     })
-    bindDropTarget(btn, () => item.path, (event, dest) => void handleDrop(event, dest))
+    if (pathKey(item.path) !== THIS_PC) bindDropTarget(btn, () => item.path, (event, dest) => void handleDrop(event, dest))
     host.appendChild(btn)
   }
 }
@@ -372,6 +387,22 @@ function paintList() {
   const host = $('exList')
   const empty = $('exEmpty')
   if (!host) return
+  const home = inHome() && !inSearch()
+  paintSortHead()
+  $('exDetail')?.classList.toggle('is-home', home)
+  const homeHost = $('exHome')
+  if (homeHost) homeHost.hidden = !home
+  host.hidden = home
+  if (home) {
+    host.replaceChildren()
+    paintFileIcons(host, (target) => electronAPI.explorer.fileIcon(target))
+    paintHome()
+    if (empty) empty.hidden = true
+    paintStatus()
+    paintCmdBar()
+    void paintDetail()
+    return
+  }
   host.replaceChildren()
   host.classList.toggle('is-grid', view === 'grid')
   const rows = listed()
@@ -382,6 +413,7 @@ function paintList() {
   for (const entry of rows) {
     host.appendChild(rowEl(entry))
   }
+  paintFileIcons(host, (target) => electronAPI.explorer.fileIcon(target))
   paintStatus()
   paintCmdBar()
   paintDetail()
@@ -420,6 +452,12 @@ function rowEl(entry) {
   const icon = document.createElement('span')
   icon.className = 'ex-row-icon'
   icon.textContent = iconFor(entry)
+  icon.setAttribute('aria-hidden', 'true')
+  icon.classList.toggle('is-shortcut', entry.ext === 'lnk')
+  if (!inRecycle() && !entry.dir) {
+    icon.dataset.path = entry.path
+    icon.dataset.iconKey = `${entry.path}:${entry.mtimeMs}`
+  }
   const label = document.createElement('span')
   label.textContent = inSearch() ? entry.path : entry.name
   name.append(icon, label)
@@ -432,6 +470,12 @@ function rowEl(entry) {
   row.append(name, size, mtime)
   row.draggable = !inSearch() && !inRecycle()
   row.addEventListener('click', (e) => onRowClick(entry, e))
+  row.addEventListener('auxclick', (e) => {
+    if (e.button === 1 && entry.dir && !inRecycle()) {
+      e.preventDefault()
+      void newTab(entry.path)
+    }
+  })
   row.addEventListener('dblclick', () => void openEntry(entry))
   row.addEventListener('contextmenu', (e) => {
     e.preventDefault()
@@ -478,6 +522,11 @@ function paintStatus() {
   if (!el) return
   const rows = listed()
   const extra = truncated ? '（已截斷）' : ''
+  if (inHome() && !inSearch()) {
+    const list = diskInfo.length ? diskInfo : disks
+    el.textContent = `${list.length} 個磁碟`
+    return
+  }
   if (inSearch()) {
     el.textContent = searching ? '搜尋中…' : `${rows.length} 筆結果${extra}`
     return
@@ -527,7 +576,7 @@ function paintCmdBar() {
   addCmd(bar, '複製路徑', () => copyPaths(items), { disabled: !has })
   addCmd(bar, '複製', () => void clipboard(items, 'copy'), { disabled: !has })
   addCmd(bar, '剪下', () => void clipboard(items, 'cut'), { disabled: !has })
-  addCmd(bar, '貼上', () => void pasteHere())
+  addCmd(bar, '貼上', () => void pasteHere(), { disabled: inHome() })
   addCmd(bar, '重新命名', () => void renameItem(items[0]), { disabled: !one })
   addCmd(bar, '刪除', () => void deleteItems(items), { disabled: !has, danger: true })
 }
@@ -542,13 +591,159 @@ function addCmd(bar, label, fn, opts = {}) {
   bar.appendChild(btn)
 }
 
-async function loadDir(dirPath, opts = {}) {
+function inHome() {
+  return pathKey(cwd) === THIS_PC
+}
+
+function currentTab() {
+  return tabs.find((t) => t.id === activeId) || null
+}
+
+/** 把目前這頁的位置與歷史寫回它自己那一格。 */
+function syncTab() {
+  const tab = currentTab()
+  if (!tab) return
+  tab.cwd = cwd
+  tab.history = history
+  tab.histIndex = histIndex
+}
+
+function tabTitle(target) {
+  const key = pathKey(target)
+  if (key === THIS_PC) return '本機'
+  if (key === RECYCLE_CWD) return '資源回收筒'
+  const norm = String(target || '').replace(/\\+$/, '')
+  if (/^[A-Za-z]:$/.test(norm)) return norm
+  return norm.split('\\').filter(Boolean).pop() || norm || '本機'
+}
+
+function paintTabs() {
+  const host = $('exTabStrip')
+  if (!host) return
+  paintTabStrip({
+    host,
+    tabs,
+    activeId,
+    titleOf: tabTitle,
+    onSelect: (id) => void switchTab(id),
+    onClose: (id) => void closeTab(id)
+  })
+}
+
+/**
+ * @param {string} [target]
+ */
+async function newTab(target) {
+  syncTab()
+  const tab = { id: `t${++tabSeq}`, cwd: target || THIS_PC, history: [target || THIS_PC], histIndex: 0 }
+  tabs.push(tab)
+  activeId = tab.id
+  history = tab.history
+  histIndex = 0
+  cwd = tab.cwd
+  entries = []
+  selected = new Set()
+  endEditPath()
+  clearSearchInput()
+  paintTabs()
+  paintList()
+  await loadDir(tab.cwd)
+}
+
+async function switchTab(id) {
+  if (id === activeId) return
+  const tab = tabs.find((t) => t.id === id)
+  if (!tab) return
+  syncTab()
+  activeId = id
+  history = tab.history
+  histIndex = tab.histIndex
+  cwd = tab.cwd
+  entries = []
+  selected = new Set()
+  endEditPath()
+  clearSearchInput()
+  paintTabs()
+  paintList()
+  await loadDir(tab.cwd, { silent: true })
+}
+
+async function closeTab(id) {
+  const i = tabs.findIndex((t) => t.id === id)
+  if (i < 0 || tabs.length <= 1) return
+  const wasActive = id === activeId
+  tabs.splice(i, 1)
+  if (!wasActive) {
+    paintTabs()
+    return
+  }
+  activeId = ''
+  await switchTab(tabs[Math.min(i, tabs.length - 1)].id)
+}
+
+/** 「本機」首頁：沒有檔案清單，改畫磁碟卡片。 */
+async function loadHome(opts = {}) {
   const seq = ++navSeq
-  const data = await call(
-    electronAPI.explorer.listDir(dirPath, { sort: sortBy, desc: sortDesc }),
-    '讀不到這個資料夾'
-  )
+  cwd = THIS_PC
+  entries = []
+  truncated = false
+  selected = new Set()
+  anchor = ''
+  watching = false
+  void electronAPI.explorer.unwatch()
+  paintCrumbs()
+  paintNav()
+  paintSidebar(places, disks)
+  paintSortHead()
+  paintList()
+  paintRecycleChrome()
+  syncTab()
+  paintTabs()
+  if (!opts.silent) void electronAPI.explorer.saveState({ lastPath: THIS_PC, sort: sortBy, sortDesc })
+  void electronAPI.explorer.driveInfo().then((fresh) => {
+    if (seq !== navSeq) return
+    if (fresh && fresh.ok) {
+      diskInfo = fresh.data || []
+      paintList()
+    }
+  }).catch(() => {
+    if (seq === navSeq) showToast('讀不到磁碟容量', 'error')
+  })
+  return true
+}
+
+function paintHome() {
+  const host = $('exHome')
+  if (!host) return
+  const fallback = disks.map((d) => ({ ...d, label: '', fs: '', type: 3 }))
+  paintHomePane({
+    host,
+    folders: places.filter((p) => {
+      const key = pathKey(p.path)
+      return key !== THIS_PC && key !== RECYCLE_CWD
+    }),
+    disks: diskInfo.length ? diskInfo : fallback,
+    formatSize,
+    onOpen: (target, newPage) => void (newPage ? newTab(target) : navigate(target)),
+    bindDrop: (el, target) => bindDropTarget(el, () => target, (event, dest) => void handleDrop(event, dest))
+  })
+}
+
+async function loadDir(dirPath, opts = {}) {
+  if (pathKey(dirPath) === THIS_PC) return loadHome(opts)
+  const seq = ++navSeq
+  let result
+  try {
+    result = await electronAPI.explorer.listDir(dirPath, { sort: sortBy, desc: sortDesc })
+  } catch {
+    result = null
+  }
   if (seq !== navSeq) return false
+  if (!result?.ok) {
+    showToast(result?.error?.message || '讀不到這個資料夾', 'error')
+    return false
+  }
+  const data = result.data
   cwd = data.path
   entries = data.entries || []
   truncated = Boolean(data.truncated)
@@ -566,37 +761,44 @@ async function loadDir(dirPath, opts = {}) {
   paintSortHead()
   paintList()
   paintRecycleChrome()
-  const watch = await electronAPI.explorer.watch(cwd)
-  watching = Boolean(watch && watch.ok && watch.data && watch.data.watching)
-  if (seq !== navSeq) return false
+  syncTab()
+  paintTabs()
+  void electronAPI.explorer.watch(cwd).then((watch) => {
+    if (seq === navSeq) watching = Boolean(watch?.ok && watch.data?.watching)
+  }).catch(() => {
+    if (seq === navSeq) watching = false
+  })
   if (!opts.silent) void electronAPI.explorer.saveState({ lastPath: cwd, sort: sortBy, sortDesc })
   return true
 }
 
 async function navigate(dirPath, opts = {}) {
+  const tabId = activeId
   clearSearchInput()
-  if (!await loadDir(dirPath)) return
+  if (!await loadDir(dirPath) || tabId !== activeId) return
   if (opts.skipHistory) return
   history = history.slice(0, histIndex + 1)
   history.push(cwd)
   histIndex = history.length - 1
+  syncTab()
   paintNav()
 }
 
 async function goHistory(delta) {
   const next = histIndex + delta
   if (next < 0 || next >= history.length) return
-  histIndex = next
   clearSearchInput()
-  await loadDir(history[histIndex], { silent: true })
+  const tabId = activeId
+  if (!await loadDir(history[next], { silent: true }) || tabId !== activeId) return
+  histIndex = next
+  syncTab()
   paintNav()
 }
 
 async function goUp() {
-  if (!cwd) return
+  if (!cwd || inHome()) return
   if (inRecycle()) {
-    const home = places[0] && places[0].path
-    if (home) await navigate(home)
+    await navigate(THIS_PC)
     return
   }
   if (cwd.startsWith('\\\\')) {
@@ -607,14 +809,18 @@ async function goUp() {
   }
   const parent = cwd.replace(/\\+$/, '').replace(/\\[^\\]+$/, '')
   const up = /^[A-Za-z]:$/.test(parent) ? `${parent}\\` : parent
-  if (!up || up === cwd) return
+  // 磁碟根目錄再往上就是「本機」。
+  if (!up || up === cwd) {
+    await navigate(THIS_PC)
+    return
+  }
   await navigate(up)
 }
 
 function paintSortHead() {
   const head = $('exListHead')
   if (!head) return
-  head.hidden = view === 'grid'
+  head.hidden = view === 'grid' || (inHome() && !inSearch())
   const active = inSearch() ? searchSort : sortBy
   for (const btn of head.querySelectorAll('.ex-sort')) {
     const key = btn.getAttribute('data-sort')
@@ -629,8 +835,10 @@ function paintRecycleChrome() {
   const folderBtn = $('exNewFolderBtn')
   const fileBtn = $('exNewFileBtn')
   const emptyBtn = $('exEmptyBinBtn')
-  if (folderBtn) folderBtn.hidden = rec
-  if (fileBtn) fileBtn.hidden = rec
+  if (folderBtn) folderBtn.hidden = rec || inHome()
+  if (fileBtn) fileBtn.hidden = rec || inHome()
+  const up = $('exUpBtn')
+  if (up) up.disabled = inHome()
   if (emptyBtn) emptyBtn.hidden = !rec
 }
 
@@ -754,7 +962,9 @@ async function openEntry(entry) {
     return
   }
   try {
-    await call(electronAPI.explorer.openPath(entry.path), '打不開')
+    const seq = navSeq
+    const data = await call(electronAPI.explorer.openPath(entry.path), '打不開')
+    if (data?.dir && seq === navSeq) await navigate(data.path)
   } catch {
     // toast 已顯示
   }
@@ -803,7 +1013,7 @@ async function refreshAfterMutate() {
 }
 
 async function pasteHere() {
-  if (!cwd) return
+  if (!cwd || inHome()) return
   try {
     await call(electronAPI.explorer.paste(cwd), '貼上失敗')
     await refreshAfterMutate()
@@ -813,11 +1023,12 @@ async function pasteHere() {
 }
 
 async function newFolder() {
-  if (inRecycle()) return
+  if (inRecycle() || inHome()) return
+  const target = cwd
   const name = await askInput('新增資料夾', { placeholder: '資料夾名稱' })
   if (!name) return
   try {
-    await call(electronAPI.explorer.createEntry(cwd, name, true), '建不了資料夾')
+    await call(electronAPI.explorer.createEntry(target, name, true), '建不了資料夾')
     await refreshAfterMutate()
   } catch {
     // toast 已顯示
@@ -825,11 +1036,12 @@ async function newFolder() {
 }
 
 async function newFile() {
-  if (inRecycle()) return
+  if (inRecycle() || inHome()) return
+  const target = cwd
   const name = await askInput('新增檔案', { placeholder: '檔案名稱' })
   if (!name) return
   try {
-    await call(electronAPI.explorer.createEntry(cwd, name, false), '建不了檔案')
+    await call(electronAPI.explorer.createEntry(target, name, false), '建不了檔案')
     await refreshAfterMutate()
   } catch {
     // toast 已顯示
@@ -905,6 +1117,7 @@ function openContextMenu(e, items) {
       purge: () => void deleteItems(items, { permanent: true }),
       empty: () => void emptyBin(),
       open: () => void openEntry(items[0]),
+      openTab: () => void newTab(items[0].path),
       reveal: () => void revealItems(items),
       pin: () => void pinEntries(items),
       pinHere: () => void pinPath(cwd, ''),
@@ -952,7 +1165,7 @@ async function pinEntries(items) {
 }
 
 async function pinPath(dirPath, label) {
-  if (!dirPath || pathKey(dirPath) === RECYCLE_CWD) return
+  if (!dirPath || [RECYCLE_CWD, THIS_PC].includes(pathKey(dirPath))) return
   try {
     places = await call(electronAPI.explorer.addPlace({ path: dirPath, label }), '釘不上側欄')
     paintSidebar(places, disks)
@@ -979,6 +1192,7 @@ async function commitPlaceOrder() {
 function openPlaceMenu(e, item) {
   const menu = [
     { label: '開啟', onSelect: () => void navigate(item.path) },
+    { label: '在新分頁開啟', onSelect: () => void newTab(item.path) },
     { label: '重新命名', onSelect: () => void renamePlace(item) },
     { label: '從側欄移除', onSelect: () => void dropPlace(item.id) }
   ]
@@ -1076,7 +1290,7 @@ function onListDrop(e) {
 async function handleDrop(e, toDir) {
   e.preventDefault()
   const paths = readDragPaths(e)
-  if (!paths.length || !toDir) return
+  if (!paths.length || !toDir || pathKey(toDir) === THIS_PC) return
   if (paths.some((p) => pathKey(p) === pathKey(toDir))) return
   const mode = dropMode(e, paths[0], toDir)
   try {
@@ -1099,8 +1313,27 @@ async function handleDrop(e, toDir) {
   }
 }
 
+function onSideButton(e) {
+  if (!$('page-explorer')?.classList.contains('active') || (e.button !== 3 && e.button !== 4)) return
+  e.preventDefault()
+  e.stopPropagation()
+  if (e.type === 'mouseup' && !document.querySelector('.ws-menu, dialog[open]')) void goHistory(e.button === 3 ? -1 : 1)
+}
+
 function onPageKey(e) {
   if (!$('page-explorer')?.classList.contains('active')) return
+  if (document.querySelector('.ws-menu, dialog[open]')) return
+  const key = e.key.toLowerCase()
+  if (e.ctrlKey && ['t', 'w', 'tab'].includes(key)) {
+    e.preventDefault()
+    if (key === 't') void newTab()
+    else if (key === 'w') void closeTab(activeId)
+    else {
+      const i = tabs.findIndex((t) => t.id === activeId)
+      void switchTab(tabs[(i + (e.shiftKey ? -1 : 1) + tabs.length) % tabs.length]?.id)
+    }
+    return
+  }
   const tag = /** @type {HTMLElement} */ (e.target).tagName
   if ((e.ctrlKey && (e.key === 'l' || e.key === 'L')) || (e.altKey && (e.key === 'd' || e.key === 'D'))) {
     if (e.target && /** @type {HTMLElement} */ (e.target).id === 'exSearch') return
@@ -1209,9 +1442,8 @@ export async function refreshExplorerPage() {
     disks = boot.drives || []
     setView(view)
     paintSidebar(places, disks)
-    history = []
-    histIndex = -1
-    await navigate(boot.lastPath)
+    if (!tabs.length) await newTab(boot.lastPath || THIS_PC)
+    else await loadDir(cwd, { silent: true, keepSelection: true })
   } catch {
     // toast 已顯示
   }

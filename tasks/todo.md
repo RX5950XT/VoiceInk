@@ -171,3 +171,31 @@ Review／實際驗證：
 - [x] 刪除專案外殘留：`D:\vi-build-*` 打包輸出、`%TEMP%` 約 260 個測試暫存；剩被其他程式鎖住的 3 個
 - [x] `e2e-chat-cdp.js` 收尾改成 taskkill 自己的程序樹＋刪暫存 userData（之前每跑一次留一個 `voiceink-cdp-*`）
 - [x] 與聊天那輪合在一起重驗：18 支單元測試全 exit 0、`e2e-ccswitch-gateway.js` 40/0、`e2e-chat.js` 195/0；打包版 `e2e-chat-cdp.js` 62/0、`probe-terminal-ime.js` 13/0、`e2e-terminal-cdp.js` 48/0，`%TEMP%` 無新增；打包輸出驗完已刪
+# 2026-09-19 — 接續檔案總管分頁與本機首頁
+
+- [x] 從原始對話與工作樹確認需求、既有改動及中斷點
+- [x] 完成分頁新增／切換／關閉、獨立歷史與首頁樣式
+- [x] 驗證晚到回覆、首頁操作邊界及原有檔案操作
+- [x] 打包並以隔離 userData 背景驗收，記錄結果
+
+Review／實際驗證：
+- `node scripts/test-explorer-page-state.js`：修正前首頁晚到造成歷史 `["B","B"]`（預期 `["B"]`）；修正後通過，另涵蓋切頁晚到、關閉分頁、首頁禁止貼上與上一頁失敗保留位置。
+- `node scripts/test-explorer.js`：186 passed, 0 failed；`test-explorer-copy-race.js`：2/0；`test-explorer-clipboard.js`：3/0；`test-explorer-places.js`：PASS。
+- `npm run electron:pack -- --config.npmRebuild=false`：exit 0，212 支 src 檔案與 asar 一致，更新此工作樹的 `dist/win-unpacked`。沿用根工作樹 node_modules（junction），未新增依賴。
+- `node scripts/e2e-explorer-cdp.js`：exit 0，35 項 PASS。實測分頁增刪、獨立歷史、切 App 頁面保留、首頁中鍵另開、Ctrl+T/W、真實磁碟容量、首次預設首頁；深／淺／800px 截圖無水平溢出；分頁操作無未處理 renderer 例外。
+- 14 支修改／新增 JS 通過 `node --check`，`git diff --check` 通過；截圖在 `dist/explorer-tabs-qa/`。
+- 邊界：分頁不跨 App 重啟還原；本輪未提交、合併或發行。此隔離工作樹未建置 sensors／hook sidecar，未驗證硬體功能與 NAS 寫入；使用者安裝版與根工作樹未改動。
+# 2026-09-19 — 捷徑、檔案圖示、滑鼠側鍵
+
+- [x] 資料夾捷徑在目前檔案分頁開啟，失效／循環捷徑顯示錯誤
+- [x] 清單與格狀檢視顯示 Windows 圖示，限制同時讀取數量
+- [x] 滑鼠側鍵依目前分頁的歷史前進／返回
+- [x] 回歸先紅後綠，打包與隔離背景驗收
+
+Review（2026-09-20）：
+- `node scripts/test-explorer-shortcuts.js`：修正前失敗（捷徑沒有回傳資料夾目的地）；修正後 PASS，含多層／循環／失效捷徑、路徑列、資料夾圖示與保留檔案捷徑啟動方式。
+- `node scripts/test-explorer.js`：186 passed, 0 failed；`node scripts/test-explorer-page-state.js`：PASS。
+- `npm run electron:pack -- --config.npmRebuild=false`：exit 0，213 支來源檔與 asar 一致；此工作樹 `dist/win-unpacked` 已更新。
+- `node scripts/e2e-explorer-cdp.js`：舊包先在真實 .lnk 解析失敗；新包 44 項 PASS。真實 Windows .lnk 在目前分頁開啟，檔案圖示在 list/grid 均載入，CDP `Input.dispatchMouseEvent` back/forward/back 保留 App 網址，分頁與深淺／窄版回歸全過。
+- 截圖改用既有 workspace 探針的 `capturePage({ stayHidden, stayAwake })` 方式，解決隱藏視窗 CDP 截圖等待；圖片在 `dist/explorer-tabs-qa/icons-list.png`／`icons-grid.png`。
+- 邊界：未操作實體滑鼠；程式／一般檔案捷徑仍沿用原捷徑開啟，以保留啟動參數。未提交、合併或發行，未改使用者安裝版與主工作樹。

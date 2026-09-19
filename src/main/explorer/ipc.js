@@ -27,6 +27,7 @@ function registerExplorerIpc({ ipcMain, service, isMainSender }) {
     invoke(event, () => service.createShortcut(target, toDir))
   ))
   ipcMain.handle('explorer:listDrives', (event) => invoke(event, () => service.listDrives()))
+  ipcMain.handle('explorer:driveInfo', (event) => invoke(event, () => service.driveInfo()))
   ipcMain.handle('explorer:listDir', (event, dirPath, opts) => (
     invoke(event, () => service.listDir(dirPath, opts))
   ))
@@ -51,6 +52,7 @@ function registerExplorerIpc({ ipcMain, service, isMainSender }) {
     invoke(event, () => service.moveEntry(fromPath, toDir))
   ))
   ipcMain.handle('explorer:openPath', (event, target) => invoke(event, () => service.openPath(target)))
+  ipcMain.handle('explorer:fileIcon', (event, target) => invoke(event, () => service.fileIcon(target)))
   ipcMain.handle('explorer:reveal', (event, target) => invoke(event, () => service.reveal(target)))
   ipcMain.handle('explorer:setClipboard', (event, items, mode) => (
     invoke(event, () => service.setClipboard(items, mode))
