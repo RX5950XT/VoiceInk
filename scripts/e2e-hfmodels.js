@@ -157,6 +157,13 @@ async function main() {
     const afterLoad = await hfmodels.listLocal()
     ok('列表看得出「載著」', afterLoad.find((m) => m.id === MODEL_ID)?.loaded === true)
 
+    // 儀表板的速度是真的量得到，不是畫面上的「—」：router 預設關著 `/metrics`，
+    // 而且那支端點要指名模型，兩件事缺一個這裡就會是 0
+    const dash = await hfmodels.dashboard()
+    ok('儀表板量得到生成速度', Number(dash?.metrics?.predictedTps) > 0,
+      `predictedTps=${dash?.metrics?.predictedTps} promptTps=${dash?.metrics?.promptTps}`)
+    ok('儀表板不外流金鑰', !JSON.stringify(dash).includes('apiKey'))
+
     ok('unload 成功', await hfmodels.unloadModel(MODEL_ID) === true)
 
     console.log('\n[F] 收尾')

@@ -47,7 +47,8 @@ function dispatch(message) {
     const meta = store.sanitizeAll([message.meta])[0]
     if (!meta) throw new Error('BAD_REQUEST')
     const editor = typeof message.editor === 'string' ? message.editor : ''
-    return terminal.openSessionWithMeta(meta, message.cols, message.rows, editor)
+    const editorDir = typeof message.editorDir === 'string' ? message.editorDir : ''
+    return terminal.openSessionWithMeta(meta, message.cols, message.rows, editor, editorDir)
   }
   if (message.op === 'write') {
     if (typeof message.data !== 'string' || message.data.length > terminal.MAX_WRITE_CHARS) throw new Error('BAD_REQUEST')

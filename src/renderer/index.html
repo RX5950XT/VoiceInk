@@ -765,6 +765,22 @@
                 </section>
 
                 <section class="hf-panel">
+                  <div class="hf-library-actions">
+                    <h2>本機 API</h2>
+                    <button type="button" id="hfCopyEndpointBtn" class="btn btn-secondary btn-sm">複製 OpenAI 端點</button>
+                  </div>
+                  <p class="setting-hint" id="hfServerHint">啟動執行環境後，聊天與其他程式可打這個端點。</p>
+                  <dl class="hf-specs" id="hfServerSpecs"></dl>
+                  <div id="hfGpuMeters" class="hf-gpu-meters"></div>
+                  <h2>用量</h2>
+                  <dl class="hf-specs" id="hfUsageSpecs"></dl>
+                  <details class="hf-log">
+                    <summary>llama-server log</summary>
+                    <pre id="hfServerLog">還沒有 log。</pre>
+                  </details>
+                </section>
+
+                <section class="hf-panel">
                   <h2>推論引擎</h2>
                   <p class="setting-hint">Vulkan 通用；NVIDIA 用 CUDA 更快。</p>
                   <div class="hf-library-actions">
@@ -2445,6 +2461,7 @@
             <label class="hf-field">
               <span>上下文長度</span>
               <input type="number" id="hfFieldCtx" class="input" min="512" step="512" placeholder="自動">
+              <span class="hf-ctx-chips" id="hfCtxChips" hidden></span>
             </label>
             <label class="hf-field">
               <span>GPU 層數</span>
@@ -2466,6 +2483,14 @@
               <span>專家放 CPU 的層數</span>
               <input type="number" id="hfFieldMoe" class="input" min="0" step="1" placeholder="自動">
             </label>
+            <div class="hf-field" id="hfFieldVisionWrap" hidden>
+              <span>視覺（mmproj）</span>
+              <label class="hf-check"><input type="checkbox" id="hfFieldVision"> 載入投影層，可看圖</label>
+            </div>
+            <div class="hf-field" id="hfFieldReasonWrap" hidden>
+              <span>思考模式</span>
+              <label class="hf-check"><input type="checkbox" id="hfFieldReason"> 先推理再回答，較慢</label>
+            </div>
             <label class="hf-field hf-field-wide">
               <span>投機解碼</span>
               <select id="hfFieldSpec" class="select">

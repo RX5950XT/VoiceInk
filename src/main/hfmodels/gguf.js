@@ -286,7 +286,8 @@ function num(value) {
  *   headCount: number | null, headCountKv: number | null,
  *   keyLength: number | null, valueLength: number | null,
  *   expertCount: number, expertUsedCount: number, expertFfnLength: number, ffnLength: number,
- *   isMoe: boolean, isProjector: boolean, parameterCount: number | null,
+ *   isMoe: boolean, hasMtp: boolean, thinkingCapable: boolean, isProjector: boolean,
+ *   parameterCount: number | null,
  *   vocabSize: number | null, hasChatTemplate: boolean | null,
  *   splitNo: number | null, splitCount: number | null,
  *   version: number, tensorCount: number, fileBytes: number, truncated: boolean
@@ -324,6 +325,9 @@ function mapInfo(header, fileBytes) {
     expertFfnLength: num(kv[`${arch}.expert_feed_forward_length`]) || 0,
     ffnLength: num(kv[`${arch}.feed_forward_length`]) || 0,
     isMoe: expertCount > 1,
+    // in-checkpoint MTP（Qwen3.8 那類）：有 nextn／n_future_tokens 才開 draft-mtp
+    hasMtp: (num(kv[`${arch}.nextn`]) || num(kv[`${arch}.n_future_tokens`]) || 0) > 0,
+    thinkingCapable: /^(qwen3|deepseek|glm4|gpt-oss)/i.test(arch),
     // mmproj-*.gguf 自己也是 GGUF，但沒有 block_count。掃資料夾時要靠它分開，
     // 否則清單上會多一顆「一載入就失敗」的模型
     isProjector: arch === 'clip' || arch === 'mtmd',

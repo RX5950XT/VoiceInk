@@ -129,7 +129,9 @@ async function start(options) {
       '--port', String(port),
       '--api-key', apiKey,
       '--models-dir', options.modelsDir,
-      '--no-webui'
+      '--no-webui',
+      // 儀表板的速度／排隊都來自這裡；預設是關的，router 會把這面旗子傳給它開的子程序
+      '--metrics'
     ]
     if (options.presetPath) args.push('--models-preset', options.presetPath)
 
@@ -222,6 +224,64 @@ function diagnostics() {
   return stderrTail.slice()
 }
 
+/**
+ * llama-server 的 Prometheus `/metrics` 文本。純函式，給儀表板用。
+ * @param {string} text
+ * @returns {{
+ *   promptTokens: number, predictedTokens: number,
+ *   promptSeconds: number, predictedSeconds: number,
+ *   requestsProcessing: number, requestsDeferred: number,
+ *   kvUsage: number | null, promptTps: number, predictedTps: number
+ * }}
+ */
+function parseMetrics(text) {
+  /** @type {Record<string, number>} */
+  const raw = {}
+  for (const line of String(text || '').split('\n')) {
+    if (!line || line.startsWith('#')) continue
+    const match = line.match(/^(?:llamacpp:)?([a-z0-9_]+)\s+([0-9.eE+-]+)\s*$/)
+    if (match) raw[match[1]] = Number(match[2])
+  }
+  const promptTokens = raw.prompt_tokens_total || 0
+  const predictedTokens = raw.tokens_predicted_total || raw.predicted_tokens_total || 0
+  const promptSeconds = raw.prompt_seconds_total || 0
+  // 實測名字是 `llamacpp:tokens_predicted_seconds_total`（舊名留著當退路）
+  const predictedSeconds = raw.tokens_predicted_seconds_total || raw.predicted_seconds_total || 0
+  return {
+    promptTokens,
+    predictedTokens,
+    promptSeconds,
+    predictedSeconds,
+    requestsProcessing: raw.requests_processing || 0,
+    requestsDeferred: raw.requests_deferred || 0,
+    kvUsage: Number.isFinite(raw.kv_cache_usage_ratio) ? raw.kv_cache_usage_ratio : null,
+    promptTps: promptSeconds > 0 ? promptTokens / promptSeconds : 0,
+    predictedTps: predictedSeconds > 0 ? predictedTokens / predictedSeconds : 0
+  }
+}
+
+/**
+ * router 模式的 `/metrics` 是**照模型分的**：不帶 model 直接 400。
+ * ponytail: 只問一顆（載著的第一顆），要分模型比較再改成逐顆問。
+ * @param {string} modelId
+ * @returns {Promise<ReturnType<typeof parseMetrics> | null>}
+ */
+async function metrics(modelId) {
+  if (!server || !modelId) return null
+  try {
+    const url = `http://${HOST}:${server.port}/metrics?model=${encodeURIComponent(modelId)}`
+    const response = await fetch(url, {
+      headers: { authorization: `Bearer ${server.apiKey}` },
+      signal: AbortSignal.timeout(3000)
+    })
+    if (!response.ok) return null
+    return parseMetrics(await response.text())
+  } catch {
+    return null
+  }
+}
+
 module.exports = {
-  start, stop, status, endpoint, listModels, loadModel, unloadModel, diagnostics, call, HOST
+  start, stop, status, endpoint, listModels, loadModel, unloadModel,
+  diagnostics, call, metrics, parseMetrics, HOST
 }

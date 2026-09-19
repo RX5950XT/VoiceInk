@@ -59,6 +59,7 @@ let catalog = { shells: [], presets: [], maxSessions: 20 }
 /**
  * @typedef {{
  *   term: Terminal, fit: FitAddon, search: SearchAddon, pane: HTMLElement, disposeIme: () => void,
+ *   webgl: import('@xterm/addon-webgl').WebglAddon | null,
  *   seq: number, ready: boolean, writing: boolean, queue: Array<{ seq: number, data: string }>
  * }} Pane
  */
@@ -234,6 +235,7 @@ function paintAppearance() {
   for (const entry of panes.values()) {
     entry.term.options.allowTransparency = options.allowTransparency
     entry.term.options.theme = options.theme
+    try { entry.webgl?.clearTextureAtlas() } catch { /* DOM renderer 沒有 atlas */ }
   }
   return options
 }
@@ -311,13 +313,28 @@ function initTerminalDrop(pane, term, id) {
  *
  * @param {Terminal} term
  */
+const webglTries = new WeakMap()
+
 function attachRenderer(term) {
+  if ((webglTries.get(term) || 0) > 3) return null
   try {
     const webgl = new WebglAddon()
-    webgl.onContextLoss(() => webgl.dispose())
+    webgl.onContextLoss(() => {
+      webgl.dispose()
+      webglTries.set(term, (webglTries.get(term) || 0) + 1)
+      const pane = [...panes.values()].find((entry) => entry.term === term)
+      if (pane) pane.webgl = null
+      requestAnimationFrame(() => {
+        if (![...panes.values()].some((entry) => entry.term === term)) return
+        const next = attachRenderer(term)
+        if (pane) pane.webgl = next
+      })
+    })
     term.loadAddon(webgl)
+    return webgl
   } catch {
     // 沒有 GPU（遠端桌面、`--disable-gpu`）：留著 DOM renderer，功能不受影響
+    return null
   }
 }
 
@@ -355,7 +372,7 @@ function createPane(id) {
   term.loadAddon(unicode11)
   term.unicode.activeVersion = '11'
   term.open(pane)
-  attachRenderer(term)
+  const webgl = attachRenderer(term)
   registerTermLinks(term, id)
   initTerminalDrop(pane, term, id)
   term.onData((data) => {
@@ -439,7 +456,7 @@ function createPane(id) {
   })
 
   /** @type {Pane} */
-  const entry = { term, fit, search, pane, disposeIme, seq: 0, ready: false, writing: false, queue: [] }
+  const entry = { term, fit, search, pane, disposeIme, webgl, seq: 0, ready: false, writing: false, queue: [] }
   panes.set(id, entry)
   // 登記好了才畫得出來（`order`、並排狀態都要有這一格在 `panes` 裡才算得出來）
   paintPanes()
@@ -627,6 +644,8 @@ function fitAndSync(id, entry) {
   // 拖側欄寬度時 ResizeObserver 一秒送幾十次，欄列數其實大多沒變：
   // 每一次都往 main 送 resize 等於連累 ConPTY 一起重排。
   if (`${entry.term.cols}x${entry.term.rows}` === before) return
+  try { entry.webgl?.clearTextureAtlas() } catch { /* DOM renderer 沒有 atlas */ }
+  try { entry.term.refresh(0, entry.term.rows - 1) } catch { /* 還沒 open */ }
   void electronAPI.terminal.resize(id, entry.term.cols, entry.term.rows)
 }
 

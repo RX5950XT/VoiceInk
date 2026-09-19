@@ -74,7 +74,8 @@ async function openSession(id, cols, rows) {
   // Ctrl+G 的編輯器橋接：每次開 shell 都帶最新的那條命令過去（見 editor-bridge.js）。
   // 接不接手在這裡決定，宿主拿到空字串就完全不動 EDITOR／VISUAL。
   const editor = bridgeTakesOver() ? editorBridge.shimCommand() : ''
-  const snapshot = await getClient().request('open', { sessionId: meta.id, meta, cols, rows, editor }, true)
+  const editorDir = editor ? editorBridge.shimDir() : ''
+  const snapshot = await getClient().request('open', { sessionId: meta.id, meta, cols, rows, editor, editorDir }, true)
   if (snapshot?.cwd) links.noteCwd(meta.id, snapshot.cwd)
   return snapshot
 }

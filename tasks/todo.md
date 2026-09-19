@@ -1,4 +1,38 @@
+# 2026-09-20 — 合併前審查（上一輪未提交的 34 檔）
+
+- [x] 逐模組審查未提交變更（終端機／HF／系統監控／檔案總管／文件）
+- [x] 修：**關思考沒真的關**——`--reasoning` 預設 auto，不寫 `off` 等於沒關（先紅再綠）
+- [x] 修：**儀表板 tok/s 永遠是「—」**——router 沒帶 `--metrics`、`/metrics` 要帶 `?model=`、
+      欄位名實測是 `tokens_predicted_seconds_total`（三個都缺一不可；`e2e-hfmodels.js` 真的量到 7.4 tok/s）
+- [x] 修：**nvidia-smi 卡在啟動不會重開**——看門狗改成 spawn 就武裝，子程序結束時收掉（先紅再綠）
+- [x] 修：切回「執行環境」子分頁會再開一條儀表板輪詢鏈（`startDash` 重入）
+- [x] 查證後排除：preset 的 `no-mmproj = 1` 安全（router 自己轉成 `--no-mmproj-auto`，不會多送一個 `1`）
+- [x] 文件：CLAUDE／AGENTS 補三條實測地雷（reasoning 預設、/metrics 三件事、GPU 看門狗）
+
+Review：17 支 node 測試全綠（terminal 102／links 116／hfmodels 169／sysmon 183／explorer 186／
+workspace 251／workspace-ui 127／error-hygiene 85 等）；`probe-terminal-links.js` 6/0、
+`probe-terminal-editor.js` 10/0、`e2e-hfmodels.js` 26/0（真的起 router、真的發請求、真的量到速度）。
+**未做**：`npm run electron:pack` 與打包版 CDP（審查在 worktree 裡跑，打包預覽要在主工作目錄更新）。
+
+# 2026-09-19 — 系統監控常駐穩定 ＋ HF 模型對標 LM Studio
+
+- [x] 感測器：斷線／卡住無限重拉（指數退避），不再 5 次就停；測試先紅
+- [x] nvidia-smi 卡住也重開
+- [x] HF 依 GGUF 架構自適應：上下文梯度、視覺、思考、in-checkpoint MTP
+- [x] HF 儀表板：GPU VRAM、tok/s、排隊、本機端點、llama log（不送金鑰）
+- [x] 模型卡顯示 ctx／KV／視覺／MTP；參數彈窗可設上下文／視覺／思考
+- [x] CONTEXT／AGENTS／CLAUDE 對齊；相關測試全綠
+
+# 2026-09-19 — 改善終端機體驗
+
+- [x] 連結掃描：硬換行／折行接起來；`file://`、`www.`、`localhost:埠`；路徑留下行號
+- [x] 點網址開內建瀏覽器分頁；點路徑用 App 開（專案內編輯器／樹，其餘走檔案頁）
+- [x] AGY Ctrl+G：EDITOR 改短檔名＋PATH，通過 `split(' ')` + `shell: true` 的 spawn
+- [x] 降低破圖：WebGL context 掉了重掛、fit 後清 glyph atlas
+- [x] 測試先紅再綠：`test-terminal-links.js`、`probe-terminal-editor.js`；再跑 `test-terminal.js`
+
 # 2026-09-15 — 根治專案外殘留
+
 
 - [x] App：碰使用者任意路徑的模組改用 `raw-fs`（Electron 下＝`original-fs`）；`test-asar-lock.js` 修前 6/8 紅、修後 8/8
 - [x] 追出第四個源頭：從 asar `copyFileSync` 會留 `%TEMP%\<uuid>.tmp.*`（累積 609 個）→ 終端機宿主／ffmpeg／GPU 套件改讀再寫；實測 copyFileSync 多 1 個、讀再寫 0 個

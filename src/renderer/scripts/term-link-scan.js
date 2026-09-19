@@ -10,7 +10,12 @@ export const MAX_WRAP_ROWS = 50
 
 // 全形／CJK 標點與表意文字：網址裡幾乎不會出現，黏在前後就是無關的字。
 const CJK = '\u3000-\u303F\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF\uFF00-\uFFEF'
-const URL_RE = new RegExp(`\\bhttps?:\\/\\/[^\\s"'<>{}\\\\^|\`${CJK}]+`, 'g')
+const URL_BODY = `[^\\s"'<>{}\\\\^|\`${CJK}]+`
+const URL_RE = new RegExp(`\\bhttps?:\\/\\/${URL_BODY}`, 'gi')
+const FILE_RE = new RegExp(`\\bfile:\\/\\/${URL_BODY}`, 'gi')
+const WWW_RE = new RegExp(`\\bwww\\.${URL_BODY}`, 'gi')
+const LOCAL_RE = /\b(?:localhost|127\.0\.0\.1):\d{2,5}(?:\/[^\s"'<>{}\\^|`]*)?/gi
+const CONT_HEAD = /^[A-Za-z0-9._~%+\-@]/
 // 空白、引號、萬用字元，再加上會黏在路徑前後的括號／等號／逗號、
 // 全形標點與盒線（樹狀輸出 `├──src/foo`）。中文檔名本身要留著，不放進這組。
 const PATH_STOP = `\\s"'<>|*?\`()\\[\\]{}=,;\\u3000-\\u303F\\u2500-\\u257F\\uFF00-\\uFFEF`
@@ -18,7 +23,7 @@ const PATH_RE = new RegExp(`[^${PATH_STOP}]*[\\\\/][^${PATH_STOP}]*`, 'g')
 const TRIM_HEAD = /^[('"[{<（【「『《]+/
 const TRIM_TAIL = /[.,;:!?)\]}'"><）】」』》]+$/
 /** `foo.js:12:5` 這種行號後綴不是路徑的一部分 */
-const LINE_COL = /(?::\d+){1,2}$/
+const LINE_COL = /:(\d+)(?::\d+)?$/
 
 /**
  * @param {string} ch
@@ -82,26 +87,59 @@ function trimPath(raw, index) {
 }
 
 /**
+ * `file:///C:/foo` → `C:/foo`。失敗回空字串。
+ * @param {string} url
+ */
+function fileToPath(url) {
+  let rest = url.replace(/^file:\/\//i, '')
+  rest = rest.replace(/^localhost/i, '')
+  if (rest.startsWith('/') && /^\/[A-Za-z]:/.test(rest)) rest = rest.slice(1)
+  try { rest = decodeURIComponent(rest) } catch { /* 解不開就用原樣 */ }
+  return rest
+}
+
+/**
+ * @param {Array<{ start: number, end: number }>} out
+ * @param {{ start: number, end: number }} token
+ */
+function overlaps(out, token) {
+  return out.some((hit) => token.start < hit.end && hit.start < token.end)
+}
+
+/**
  * 掃一條邏輯行，回傳網址與路徑候選（位移相對這條邏輯行的字元位置）。
- * `url` 有值＝網址，空字串＝路徑候選。
+ * `url` 有值＝網址，空字串＝路徑候選。`line` 是 `file.js:12` 那種行號。
  * @param {string} line
- * @returns {Array<{ start: number, end: number, text: string, url: string }>}
+ * @returns {Array<{ start: number, end: number, text: string, url: string, line: number }>}
  */
 export function scanLine(line) {
-  /** @type {Array<{ start: number, end: number, text: string, url: string }>} */
+  /** @type {Array<{ start: number, end: number, text: string, url: string, line: number }>} */
   const out = []
   for (const match of line.matchAll(URL_RE)) {
     const token = trimPunct(match[0], match.index)
-    if (token) out.push({ ...token, url: token.text })
+    if (token) out.push({ ...token, url: token.text, line: 0 })
+  }
+  for (const match of line.matchAll(FILE_RE)) {
+    const token = trimPunct(match[0], match.index)
+    if (!token || overlaps(out, token)) continue
+    const text = fileToPath(token.text)
+    if (text) out.push({ ...token, text, url: '', line: 0 })
+  }
+  for (const match of line.matchAll(WWW_RE)) {
+    const token = trimPunct(match[0], match.index)
+    if (token && !overlaps(out, token)) out.push({ ...token, url: `https://${token.text}`, line: 0 })
+  }
+  for (const match of line.matchAll(LOCAL_RE)) {
+    const token = trimPunct(match[0], match.index)
+    if (token && !overlaps(out, token)) out.push({ ...token, url: `http://${token.text}`, line: 0 })
   }
   for (const match of line.matchAll(PATH_RE)) {
     const token = trimPath(match[0], match.index)
-    if (!token) continue
-    // 網址裡的斜線不要再被當成路徑（`https://a/b` 會整段命中 PATH_RE）
-    if (out.some((hit) => token.start < hit.end && hit.start < token.end)) continue
-    const text = token.text.replace(LINE_COL, '')
+    if (!token || overlaps(out, token)) continue
+    const col = token.text.match(LINE_COL)
+    const text = col ? token.text.slice(0, col.index) : token.text
     if (!text || !/[\\/]/.test(text) || /^[\\/]+$/.test(text)) continue
-    out.push({ ...token, text, url: '' })
+    out.push({ ...token, text, url: '', line: col ? Number(col[1]) : 0 })
   }
   return out
 }
@@ -156,6 +194,30 @@ function appendRow(line, y, trim, map) {
 }
 
 /**
+ * CLI 自己印了換行（沒設 isWrapped）時，斜線結尾或剛好滿列的網址／路徑要接下一列。
+ * @param {string} prev
+ * @param {string} next
+ * @param {number} cols
+ */
+function hardWrapCont(prev, next, cols) {
+  const a = prev.replace(/\s+$/, '')
+  const b = next.replace(/^\s+/, '')
+  if (!a || !b) return false
+  if (/^[A-Za-z]:[\\/]/.test(b) || /^https?:\/\//i.test(b) || /^file:/i.test(b)) return false
+  if (!/[\\/]|https?:\/\//i.test(a)) return false
+  if (/[\\/]$/.test(a) && CONT_HEAD.test(b)) return true
+  return Boolean(cols && a.length >= cols && /^[A-Za-z0-9._~/?#&=%+\-\\]/.test(b))
+}
+
+/**
+ * @param {{ translateToString: (trim: boolean) => string }} line
+ * @param {boolean} trim
+ */
+function rowText(line, trim) {
+  return line.translateToString(trim)
+}
+
+/**
  * 把某一列所屬的整條邏輯行（含折行）接起來，並記住每個字元落在哪一格。
  * 有 `getCell` 就逐格對（寬字元佔兩欄）；測試用的假 buffer 沒有就退回 1 字 = 1 欄。
  * @param {{ getLine: (i: number) => ({ isWrapped: boolean, length?: number, getCell?: (x: number) => ({ getChars?: () => string, getWidth?: () => number, chars?: string, width?: number } | undefined), translateToString: (trim: boolean) => string } | undefined) }} buf
@@ -169,11 +231,29 @@ export function logicalLine(buf, lineNumber) {
   while (start > 0 && index - start < MAX_WRAP_ROWS && buf.getLine(start)?.isWrapped) start -= 1
   let end = index
   while (end - start < MAX_WRAP_ROWS && buf.getLine(end + 1)?.isWrapped) end += 1
+  const cols = buf.getLine(start)?.length || 0
+  while (start > 0 && end - (start - 1) <= MAX_WRAP_ROWS) {
+    const prev = buf.getLine(start - 1)
+    const cur = buf.getLine(start)
+    if (!prev || !cur || prev.isWrapped) break
+    if (!hardWrapCont(rowText(prev, false), rowText(cur, true), cols)) break
+    start -= 1
+  }
+  while (end - start < MAX_WRAP_ROWS) {
+    const cur = buf.getLine(end)
+    const next = buf.getLine(end + 1)
+    if (!cur || !next || next.isWrapped) break
+    if (!hardWrapCont(rowText(cur, false), rowText(next, true), cols)) break
+    end += 1
+  }
 
   let text = ''
   /** @type {Array<{ x: number, y: number, width: number }>} */
   const map = []
-  for (let i = start; i <= end; i += 1) text += appendRow(buf.getLine(i), i + 1, i === end, map)
+  for (let i = start; i <= end; i += 1) {
+    const xtermCont = i < end && buf.getLine(i + 1)?.isWrapped
+    text += appendRow(buf.getLine(i), i + 1, !xtermCont, map)
+  }
 
   const startY = start + 1
   /** @param {number} offset */

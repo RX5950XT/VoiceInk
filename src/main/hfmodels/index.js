@@ -261,7 +261,7 @@ async function writePresets() {
     if (!row.info) continue
     const meta = row.model.meta || {}
     const requested = { ...(meta.requested || {}) }
-    if (!requested.draftModel && requested.specType === undefined) {
+    if (!requested.draftModel && requested.specType === undefined && !row.info.hasMtp) {
       const draft = pickDraftModel(row.info, rows.filter((r) => r.id !== row.id))
       if (draft) {
         requested.draftModel = draft
@@ -575,7 +575,10 @@ async function listLocal() {
       contextTrain: info?.contextTrain || 0,
       parameterCount: info?.parameterCount || 0,
       activeParams: info ? gguf.activeParams(info) : null,
+      mmproj: model.mmproj || '',
       isMoe: !!info?.isMoe,
+      hasMtp: !!info?.hasMtp,
+      thinkingCapable: !!info?.thinkingCapable,
       expertCount: info?.expertCount || 0,
       expertUsedCount: info?.expertUsedCount || 0,
       hasChatTemplate: info?.hasChatTemplate ?? null,
@@ -618,6 +621,7 @@ async function updateModelSettings(id, patch) {
 /** 使用者可以覆寫的欄位（其餘一律忽略——這是 IPC 的信任邊界） */
 const REQUESTED_NUMBERS = Object.freeze(['ctxSize', 'gpuLayers', 'threads', 'nCpuMoe'])
 const REQUESTED_STRINGS = Object.freeze(['cacheTypeK', 'cacheTypeV', 'specType', 'tensorSplit'])
+const REQUESTED_BOOLS = Object.freeze(['vision', 'reasoning'])
 /** `-ctk`／`-ctv` 只認 llama.cpp 說明列出的那幾種 */
 const KV_TYPES = new Set(Object.keys(gguf.KV_ELEM_BYTES))
 /** `--spec-type` 的合法值（`''` = 關掉） */
@@ -647,6 +651,10 @@ function sanitizeRequested(raw) {
     if (key === 'specType' && !SPEC_TYPES.has(value)) continue
     if (key === 'tensorSplit' && !/^[\d.,]{0,64}$/.test(value)) continue
     out[key] = value
+  }
+  for (const key of REQUESTED_BOOLS) {
+    const value = /** @type {any} */ (raw)[key]
+    if (value === true || value === false) out[key] = value
   }
   return out
 }
@@ -783,6 +791,33 @@ function cancelTune() {
 /**
  * 關 App 時要收掉（router 一走，它底下跑模型的子程序也會一起走）
  */
+/**
+ * 儀表板一次要的東西：GPU、用量、端點、log。**不送金鑰**。
+ * @returns {Promise<object>}
+ */
+async function dashboard() {
+  const status = runtime.status()
+  const [devices, nvidia] = await Promise.all([listDevices(), hardware.nvidiaDriver()])
+  const models = status.running ? await runtime.listModels().catch(() => []) : []
+  // 指標要指名模型（router 的 /metrics 不帶 model 會 400），拿載著的第一顆
+  const loaded = models.find((row) => row.status?.value === 'loaded')
+  const stats = loaded ? await runtime.metrics(String(loaded.id || '')) : null
+  return {
+    running: status.running,
+    port: status.port,
+    openaiBaseUrl: status.running ? `http://${runtime.HOST}:${status.port}/v1` : '',
+    anthropicBaseUrl: status.running ? `http://${runtime.HOST}:${status.port}` : '',
+    devices,
+    nvidia,
+    metrics: stats,
+    models: models.map((row) => ({
+      id: String(row.id || ''),
+      status: row.status?.value || 'unloaded'
+    })),
+    logTail: status.running ? runtime.diagnostics() : []
+  }
+}
+
 function shutdown() {
   for (const state of installs.values()) {
     try { state.controller.abort() } catch { /* 已經結束了 */ }
@@ -826,6 +861,7 @@ module.exports = {
   ensureRuntime,
   stopRuntime: runtime.stop,
   runtimeStatus: runtime.status,
+  dashboard,
   endpoint: runtime.endpoint,
   loadModel: runtime.loadModel,
   unloadModel: runtime.unloadModel,

@@ -24,6 +24,10 @@ const FALLBACK_CTX = 4096
 const DEFAULT_CTX = 8192
 /** 縮到這裡還塞不下就不再縮，改動別的旋鈕 */
 const MIN_CTX = 2048
+/** 自動上下文沿著這條梯子長：顯存夠就往上、不夠就停，不一次開到訓練上限 */
+const CTX_STEPS = Object.freeze([
+  2048, 4096, 8192, 16384, 32768, 65536, 98304, 131072, 204800, 262144
+])
 /** 顯存只用這個比例（其餘留給桌面合成器與其他程式） */
 const VRAM_SAFETY = 0.9
 /** 固定額外開銷（計算緩衝、CUDA/Vulkan context 等） */
@@ -161,7 +165,8 @@ const FEASIBILITY_LABEL = Object.freeze({
  *   requested?: {
  *     ctxSize?: number | null, gpuLayers?: number | null, cacheTypeK?: string | null,
  *     cacheTypeV?: string | null, threads?: number | null, nCpuMoe?: number | null,
- *     specType?: string | null, draftModel?: string | null, tensorSplit?: string | null
+ *     specType?: string | null, draftModel?: string | null, tensorSplit?: string | null,
+ *     vision?: boolean | null, reasoning?: boolean | null
  *   }
  * }} input
  */
@@ -223,6 +228,15 @@ function planRun(input) {
     }
     if (ctxSize < Math.min(ctxCeiling, DEFAULT_CTX)) {
       reasons.push(`上下文收到 ${ctxSize}（再大就放不進顯示卡）`)
+    }
+    // 顯存還有剩就沿著梯子往上長（LM Studio／DualGPUs 儀表板那套：能開多大開多大）
+    for (const step of CTX_STEPS) {
+      if (step <= ctxSize || step > ctxCeiling) continue
+      if (modelMiB + kvCacheMiB(info, step, tier.k, tier.v) + OVERHEAD_MIB > totalBudgetMiB) break
+      ctxSize = step
+    }
+    if (ctxSize > Math.min(ctxCeiling, DEFAULT_CTX)) {
+      reasons.push(`上下文開到 ${ctxSize}（這張卡還放得下）`)
     }
   }
 
@@ -291,11 +305,12 @@ function finalize(state) {
     ? clamp(Math.floor(Number(requested.threads)), 1, 64)
     : planThreads(cpu.cores)
 
-  // 免草稿模型的投機解碼：不必多載一顆模型就能加速，所以預設就開。
-  // 有配對到草稿模型時由呼叫端改成 `draft-simple` ＋ `model-draft`。
+  // 投機解碼：in-checkpoint MTP 優先，其次免草稿 ngram；草稿模型由呼叫端改成 draft-simple。
   const specType = requested.specType === null || requested.specType === undefined
-    ? 'ngram-mod'
+    ? (info.hasMtp ? 'draft-mtp' : 'ngram-mod')
     : String(requested.specType || '')
+  const vision = requested.vision === false ? false : !!info.multimodal
+  const reasoning = requested.reasoning === true
 
   const plan = {
     ctxSize: state.ctxSize,
@@ -309,6 +324,10 @@ function finalize(state) {
     kvTier: tier.label,
     threads,
     specType,
+    hasMtp: !!info.hasMtp,
+    vision,
+    reasoning,
+    thinkingCapable: !!info.thinkingCapable,
     draftModel: requested.draftModel ? String(requested.draftModel) : '',
     cacheReuse: CACHE_REUSE,
     multimodal: !!info.multimodal,
@@ -396,7 +415,10 @@ function toPresetArgs(plan, extra = {}) {
   if (plan.specType) args['spec-type'] = plan.specType
   if (plan.draftModel) args['model-draft'] = plan.draftModel
   if (plan.cacheReuse > 0) args['cache-reuse'] = String(plan.cacheReuse)
-  if (extra.mmprojDevice) args['mmproj-device'] = extra.mmprojDevice
+  // llama-server 的 `--reasoning` 預設是 auto，不明寫 off 就等於沒關掉
+  if (plan.thinkingCapable) args.reasoning = plan.reasoning ? 'on' : 'off'
+  if (plan.vision === false) args['no-mmproj'] = '1'
+  else if (extra.mmprojDevice) args['mmproj-device'] = extra.mmprojDevice
 
   // 使用者的原始參數放最後：同名就蓋掉我們的決定（「比 LM Studio 自由」的意思就是這個）
   if (extra.rawArgs) Object.assign(args, parseRawArgs(extra.rawArgs).args)
@@ -416,6 +438,7 @@ module.exports = {
   FEASIBILITY_LABEL,
   DEFAULT_CTX,
   MIN_CTX,
+  CTX_STEPS,
   VRAM_SAFETY,
   OVERHEAD_MIB,
   CACHE_REUSE

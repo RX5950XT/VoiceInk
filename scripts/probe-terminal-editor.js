@@ -48,10 +48,11 @@ async function main() {
 
   bridge.configure(userData)
   const command = bridge.shimCommand()
-  assert.ok(command.startsWith('"') && command.endsWith('.cmd"'), `EDITOR 要是帶引號的 .cmd 路徑：${command}`)
-  const shim = command.slice(1, -1)
+  assert.equal(command, 'voiceink-edit.cmd', `EDITOR 必須是不含空白的短檔名：${command}`)
+  const folder = bridge.shimDir()
+  const shim = path.join(folder, command)
   assert.ok(fs.existsSync(shim), 'batch 要真的落在磁碟上')
-  ok('EDITOR 指到一支存在的 .cmd（路徑自己帶引號）')
+  ok('EDITOR 是短檔名 voiceink-edit.cmd，完整路徑靠 PATH')
 
   /** @type {object[]} */
   const events = []
@@ -59,7 +60,7 @@ async function main() {
 
   // ── CLI 那一端：跟 Claude Code 一模一樣的叫法 ──
   let exited = null
-  const child = spawn(`${command} "${target}"`, { shell: true, stdio: 'ignore', windowsHide: true })
+  const child = spawn(`"${shim}" "${target}"`, { shell: true, stdio: 'ignore', windowsHide: true })
   child.on('exit', (code) => { exited = code })
 
   const request = await until(() => events.find((e) => e.channel === 'terminal:editRequest')?.payload)
@@ -99,7 +100,7 @@ async function main() {
   // ── 什麼都沒存就關掉 ──
   events.length = 0
   let exited2 = null
-  const child2 = spawn(`${command} "${target}"`, { shell: true, stdio: 'ignore', windowsHide: true })
+  const child2 = spawn(`"${shim}" "${target}"`, { shell: true, stdio: 'ignore', windowsHide: true })
   child2.on('exit', () => { exited2 = true })
   const request2 = await until(() => events.find((e) => e.channel === 'terminal:editRequest')?.payload)
   assert.ok(request2, '第二次也要收得到請求')
@@ -133,10 +134,11 @@ async function main() {
   const before = { EDITOR: process.env.EDITOR, VISUAL: process.env.VISUAL }
   Object.assign(process.env, env)
   try {
-    const shell = require('../src/main/terminal/pty').shellEnvironment(command)
+    const shell = require('../src/main/terminal/pty').shellEnvironment(command, folder)
     // 兩個都要蓋：Claude Code 與 Codex 都先看 VISUAL，只蓋 EDITOR 會被它壓過去
     assert.equal(shell.EDITOR, command, 'EDITOR 要被橋接蓋掉')
     assert.equal(shell.VISUAL, command, 'VISUAL 也要被蓋掉')
+    assert.ok(shell.PATH.startsWith(`${folder}${path.delimiter}`), 'PATH 最前面要是 editor-bridge 資料夾')
   } finally {
     for (const key of ['EDITOR', 'VISUAL']) {
       if (before[key] === undefined) delete process.env[key]
@@ -144,6 +146,19 @@ async function main() {
     }
   }
   ok('[F] EDITOR／VISUAL 是 notepad 時橋接照樣接手，真的編輯器則放行')
+
+  // ── AGY／Gemini CLI：`command.split(' ')` 再 spawn(..., { shell: true }) ──
+  events.length = 0
+  let exited3 = null
+  const env3 = { ...process.env, PATH: `${folder}${path.delimiter}${process.env.PATH || ''}` }
+  const [agyExe, ...agyRest] = command.split(' ')
+  const child3 = spawn(agyExe, [...agyRest, target], { shell: true, stdio: 'ignore', windowsHide: true, env: env3 })
+  child3.on('exit', (code) => { exited3 = code })
+  const request3 = await until(() => events.find((e) => e.channel === 'terminal:editRequest')?.payload)
+  assert.ok(request3, 'AGY 那種 spawn 也要收得到請求')
+  assert.equal(bridge.cancel(request3.id), true)
+  assert.ok(await until(() => exited3 !== null), 'AGY 那種 spawn 也要放得走')
+  ok('[H] AGY 用 split(EDITOR) + spawn(shell:true) 一樣走得通')
 
   bridge.stop()
   try { removeTree(userData) } catch { /* 暫存目錄清不掉就算了 */ }

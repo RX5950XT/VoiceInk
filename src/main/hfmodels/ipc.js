@@ -92,6 +92,8 @@ function registerHfModelsIpc({ ipcMain, service, isMainSender }) {
     invoke(event, () => service.unloadModel(str(id)))
   ))
   ipcMain.handle('hfmodels:refreshModels', (event) => invoke(event, () => service.refreshModels()))
+  // 儀表板：GPU／用量／端點／log；金鑰不出 main
+  ipcMain.handle('hfmodels:dashboard', (event) => invoke(event, () => service.dashboard()))
 }
 
 module.exports = { registerHfModelsIpc }

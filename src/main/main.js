@@ -1911,7 +1911,8 @@ registerHfModelsIpc({
     applyPresets: (...args) => loadHfModels().applyPresets(...args),
     loadModel: (...args) => loadHfModels().loadModel(...args),
     unloadModel: (...args) => loadHfModels().unloadModel(...args),
-    refreshModels: () => refreshHfLocalModels().then(() => loadHfModels().refreshModels())
+    refreshModels: () => refreshHfLocalModels().then(() => loadHfModels().refreshModels()),
+    dashboard: (...args) => loadHfModels().dashboard(...args)
   },
   isMainSender: assertMainWindowSender
 })

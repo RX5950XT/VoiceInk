@@ -45,12 +45,12 @@ function registerTerminalIpc({ ipcMain, service, isMainSender, dialog, getWindow
     invoke(event, () => service.killSession(id))
   ))
 
-  // 畫面上的連結：hover 先問哪些路徑真的存在，點下去才用檔案總管開
+  // 畫面上的連結：hover 先問哪些路徑真的存在，點下去回給 renderer 用 App 開
   ipcMain.handle('terminal:resolveLinks', (event, id, texts) => (
     invoke(event, () => service.resolveLinks(id, texts))
   ))
-  ipcMain.handle('terminal:revealLink', (event, id, text) => (
-    invoke(event, () => service.revealLink(id, text))
+  ipcMain.handle('terminal:revealLink', (event, id, text, line) => (
+    invoke(event, () => service.revealLink(id, text, line))
   ))
 
   // Ctrl+G 的編輯器橋接：id 是 main 發的，內容才是 renderer 給的（要編哪個檔不收）

@@ -1,9 +1,9 @@
-import { electronAPI, showToast } from './app.js'
-import { openBrowserTab } from './ws-tabs.js'
+import { electronAPI, showToast, switchPage, setChatPaneMode } from './app.js'
+import { openBrowserTab, openEditorTab, setActiveProject, currentProjectId } from './ws-tabs.js'
 import { scanLine, logicalLine } from './term-link-scan.js'
 
 /**
- * 終端機畫面上的連結：網址點了開內建瀏覽器分頁，路徑點了開檔案總管。
+ * 終端機畫面上的連結：網址點了開內建瀏覽器分頁，路徑點了用 App 開。
  *
  * 走 xterm 自己的 `registerLinkProvider`（不裝 addon-web-links：路徑那半本來就得自己寫，
  * 網址那半一條 regex 就夠）。滑到哪一列才掃哪一列，掃出來的路徑候選先問主行程
@@ -39,6 +39,52 @@ function verifyPaths(id, texts) {
 }
 
 /**
+ * @param {string} projectId
+ */
+async function projectOf(projectId) {
+  if (currentProjectId() === projectId) return { id: projectId, name: '' }
+  const listed = await electronAPI.workspace.listProjects()
+  const proj = (listed?.ok ? listed.data : []).find((item) => item.id === projectId)
+  if (proj) await setActiveProject(proj)
+  return proj || { id: projectId, name: '' }
+}
+
+/**
+ * @param {object} data
+ */
+async function openTarget(data) {
+  if (!data?.action) return
+  if (data.action === 'edit' || data.action === 'reveal') {
+    switchPage('chat')
+    setChatPaneMode('workspace')
+    const proj = await projectOf(data.projectId)
+    if (data.action === 'edit') await openEditorTab(proj, data.relPath, data.line || 0)
+    else {
+      document.dispatchEvent(new CustomEvent('ws:active-file', {
+        detail: { projectId: data.projectId, rel: data.relPath, dir: true }
+      }))
+    }
+    return
+  }
+  if (data.action === 'explorer' && data.path) {
+    const mod = await import('./explorer-page.js')
+    await mod.openExplorerPath(data.path, data.kind)
+  }
+}
+
+/**
+ * @param {string} id
+ * @param {{ text: string, url: string, line?: number }} hit
+ */
+function activateHit(id, hit) {
+  if (hit.url) { void openBrowserTab(hit.url); return }
+  void electronAPI.terminal.revealLink(id, hit.text, hit.line).then((result) => {
+    if (!result?.ok) showToast(result?.error?.message || '找不到這個路徑', 'error')
+    else void openTarget(result.data)
+  })
+}
+
+/**
  * 把終端機的連結掛上去。回傳的 disposable 由 `term.dispose()` 一起收。
  * @param {import('@xterm/xterm').Terminal} term
  * @param {string} id 工作階段 id
@@ -59,10 +105,7 @@ export function registerTermLinks(term, id) {
             text: hit.text,
             activate: (event) => {
               event.preventDefault()
-              if (hit.url) { void openBrowserTab(hit.url); return }
-              void electronAPI.terminal.revealLink(id, hit.text).then((result) => {
-                if (!result?.ok) showToast(result?.error?.message || '找不到這個路徑', 'error')
-              })
+              activateHit(id, hit)
             }
           }))
         callback(links.length ? links : undefined)

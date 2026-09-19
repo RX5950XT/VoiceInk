@@ -32,11 +32,14 @@ const STALE_MS = 20_000
 const MAX_LINE_BYTES = 512 * 1024
 /** 等 sidecar 回報「風扇已交還」的上限；逾時就直接斷（它自己還有看門狗） */
 const RESET_TIMEOUT_MS = 2_000
-/** sidecar 中途死掉後隔多久自己重拉（走排程工作那條，不會彈 UAC） */
+/** sidecar 中途死掉後第一次重拉要等多久（之後指數退避） */
 const RECONNECT_DELAY_MS = 3_000
-/** 連續重拉上限；撐過 STABLE_MS 就當作這次是好的，計數歸零 */
-const MAX_RECONNECTS = 5
+/** 退避上限：機器忙時也不要每秒重生一次 */
+const RECONNECT_MAX_MS = 60_000
+/** 讀數穩定這麼久才把退避計數歸零（短暫抖動不會把間隔打回 3 秒） */
 const STABLE_MS = 60_000
+/** 讀數卡住時多久檢查一次；真的超過 STALE_MS 就當斷線重拉 */
+const HEALTH_MS = 5_000
 
 /** @returns {string} sidecar 執行檔位置；打包後在 resources/sensors/ */
 function resolveSensorExe(deps = {}) {
@@ -70,6 +73,8 @@ function createSensorBridge(deps = {}) {
   let connectTimer = null
   /** @type {NodeJS.Timeout | null} */
   let reconnectTimer = null
+  /** @type {NodeJS.Timeout | null} */
+  let healthTimer = null
   let buf = ''
   /** @type {any[]} */
   let groups = []
@@ -94,12 +99,47 @@ function createSensorBridge(deps = {}) {
   let pendingResolve = null
   let lifecycle = 0
 
+  const staleMs = Number(deps.staleMs) > 0 ? Number(deps.staleMs) : STALE_MS
+  const healthMs = Number(deps.healthMs) > 0 ? Number(deps.healthMs) : HEALTH_MS
+  const reconnectDelayMs = Number(deps.reconnectDelayMs) > 0 ? Number(deps.reconnectDelayMs) : RECONNECT_DELAY_MS
+  const reconnectMaxMs = Number(deps.reconnectMaxMs) > 0 ? Number(deps.reconnectMaxMs) : RECONNECT_MAX_MS
+  const stableMs = Number(deps.stableMs) > 0 ? Number(deps.stableMs) : STABLE_MS
+
   function cleanup() {
     if (connectTimer) { clearTimeout(connectTimer); connectTimer = null }
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+    if (healthTimer) { clearTimeout(healthTimer); healthTimer = null }
     if (socket) { try { socket.destroy() } catch { /* 已經斷了 */ } socket = null }
     if (server) { try { server.close() } catch { /* 已經關了 */ } server = null }
     buf = ''
+  }
+
+  function armHealth() {
+    if (healthTimer) { clearTimeout(healthTimer); healthTimer = null }
+    healthTimer = setTimeout(() => {
+      healthTimer = null
+      if (state !== 'on' || !lastAt) return
+      if (Date.now() - lastAt < staleMs) {
+        armHealth()
+        return
+      }
+      // socket 還掛著但 sidecar 已不再送讀數：當成斷線，走同一條重拉
+      message = '感測器沒有回報，正在重新連線…'
+      try { socket?.destroy() } catch { /* close 會接著重拉 */ }
+    }, healthMs)
+  }
+
+  function scheduleReconnect(reason) {
+    if (!onLost || reconnectTimer) return
+    if (state === 'declined' || state === 'missing') return
+    const delay = Math.min(reconnectMaxMs, reconnectDelayMs * (2 ** Math.min(retries, 5)))
+    retries += 1
+    message = reason || '感測器元件已結束，正在重新連線…'
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null
+      if (state === 'on' || state === 'starting') return
+      onLost()
+    }, delay)
   }
 
   function handleLine(line) {
@@ -139,6 +179,8 @@ function createSensorBridge(deps = {}) {
       oc = payload.o && typeof payload.o === 'object' ? payload.o : null
       lastAt = Date.now()
       state = 'on'
+      if (connectedAt && Date.now() - connectedAt > stableMs) retries = 0
+      armHealth()
       // 缺 PawnIO 的說明要留著：它講的是「還有一半拿不到、以及怎麼補」
       if (!needsPawnIo) message = ''
     }
@@ -149,7 +191,7 @@ function createSensorBridge(deps = {}) {
       return {
         state,
         message,
-        available: state === 'on' && (Date.now() - lastAt) < STALE_MS,
+        available: state === 'on' && (Date.now() - lastAt) < staleMs,
         installed: Boolean(exePathFn()),
         needsPawnIo,
         pawnIoUrl: needsPawnIo ? PAWNIO_URL : ''
@@ -157,7 +199,7 @@ function createSensorBridge(deps = {}) {
     },
 
     read() {
-      if (state !== 'on' || (Date.now() - lastAt) >= STALE_MS) {
+      if (state !== 'on' || (Date.now() - lastAt) >= staleMs) {
         return { available: false, groups: [], controls: [], oc: null }
       }
       return { available: true, groups, controls, oc }
@@ -209,6 +251,9 @@ function createSensorBridge(deps = {}) {
           pendingResolve = null
           pendingEnable = null
           resolve({ state, message })
+          if (nextState === 'timeout' || nextState === 'blocked') {
+            scheduleReconnect(nextMessage)
+          }
         }
 
         server = net.createServer((conn) => {
@@ -241,17 +286,9 @@ function createSensorBridge(deps = {}) {
               settle('blocked', '感測器尚未就緒，請重試。')
             } else if (state === 'on') {
               state = 'off'
-              if (Date.now() - connectedAt > STABLE_MS) retries = 0
-              if (onLost && retries < MAX_RECONNECTS) {
-                retries += 1
-                message = '感測器元件已結束，正在重新連線…'
-                reconnectTimer = setTimeout(() => {
-                  reconnectTimer = null
-                  if (runId === lifecycle && state === 'off') onLost()
-                }, RECONNECT_DELAY_MS)
-              } else {
-                message = '感測器元件已結束。'
-              }
+              if (healthTimer) { clearTimeout(healthTimer); healthTimer = null }
+              if (Date.now() - connectedAt > stableMs) retries = 0
+              scheduleReconnect('感測器元件已結束，正在重新連線…')
             }
           })
           conn.on('error', () => { /* 斷線由 close 處理 */ })
@@ -385,4 +422,7 @@ function createSensorBridge(deps = {}) {
   }
 }
 
-module.exports = { createSensorBridge, resolveSensorExe, PAWNIO_URL }
+module.exports = {
+  createSensorBridge, resolveSensorExe, PAWNIO_URL,
+  STALE_MS, RECONNECT_DELAY_MS, RECONNECT_MAX_MS, STABLE_MS
+}

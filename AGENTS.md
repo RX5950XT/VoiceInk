@@ -259,9 +259,11 @@ tag 要與 `package.json` 的 version 一致。
   而且 **`EDITOR=notepad` 不算「使用者挑過編輯器」**——那正是 CLI 沒設時的預設值
   （`start /wait notepad`），實測使用者環境變數裡躺著這一條，Ctrl+G 就永遠彈記事本，
   照著程式碼查會以為橋接壞了。接手時 `EDITOR`／`VISUAL` **兩個都要蓋**（只蓋 EDITOR 會被
-  VISUAL 壓過去）。設了 vim 那類真編輯器才放行，這時 `raiseChildWindow` 才需要出手抬窗。
-  回歸 `probe-terminal-editor.js` 的 [F]。
-- **終端機連結**：`provideLinks` 收到的是**整份緩衝區的 1-based 列號**（不是畫面上第幾列），回去的 range 也是同一套；折行的一列要先往回接成整條邏輯行再掃。range 的 x 是 **cell 欄位**不是字元位移——CJK／emoji 一格佔兩欄，用 `offset % cols` 會把底線畫到前後無關的字上；有 `getCell` 就逐格對。掃描不要把前後黏著的中文、括號、等號吃進候選。路徑候選一律先問 main 存不存在再畫底線（不驗＝畫面上每個含斜線的字都變假連結），相對路徑以**即時 cwd（OSC 7，沒有就退回開檔目錄）** 為基準。
+  VISUAL 壓過去），值必須是短檔名 `voiceink-edit.cmd`（AGY 用 `split(' ')` 再 spawn，
+  完整路徑一加引號就切壞），並把 `editor-bridge` 資料夾接到 PATH 最前面。
+  設了 vim 那類真編輯器才放行，這時 `raiseChildWindow` 才需要出手抬窗。
+  回歸 `probe-terminal-editor.js` 的 [F][H]。
+- **終端機連結**：`provideLinks` 收到的是**整份緩衝區的 1-based 列號**（不是畫面上第幾列），回去的 range 也是同一套；折行的一列要先往回接成整條邏輯行再掃，CLI 自己印的換行（沒 `isWrapped`）若前一列以斜線結尾或剛好滿列也要接。range 的 x 是 **cell 欄位**不是字元位移——CJK／emoji 一格佔兩欄，用 `offset % cols` 會把底線畫到前後無關的字上；有 `getCell` 就逐格對。掃描不要把前後黏著的中文、括號、等號吃進候選。路徑候選一律先問 main 存不存在再畫底線（不驗＝畫面上每個含斜線的字都變假連結），相對路徑以**即時 cwd（OSC 7，沒有就退回開檔目錄）** 為基準。點網址開內建瀏覽器；點路徑用 App 開（專案內編輯器／檔案樹，否則檔案頁），不要 `shell.showItemInFolder`。
 - **Shift+Enter 送的是 `\x1b\r` 不是 CSI u**：`\x1b[13;2u` 要終端機與 CLI 先協商 kitty keyboard
   protocol，xterm.js 不宣告支援、CLI 也就不會啟用，那串序列會被當成一般字元——使用者看到的是
   輸入框裡直接冒出 `[13;2u`。`ESC`＋`CR` 是 Claude Code `/terminal-setup` 綁的同一個東西。
@@ -300,8 +302,8 @@ tag 要與 `package.json` 的 version 一致。
   `<span class="xterm-cursor-blink">`，閃爍是 CSS `animation: 1s step-end infinite`——串流時
   那一列每一幀都被重建，動畫就每一幀從 0%（實心）重來，游標永遠跑不完一個週期，看起來是
   在亂閃（實測 2.4 秒 29 幀＝重建 30 次；WebGL 是 0 次）。`onContextLoss` **一定要接並
-  `dispose()`**（驅動更新／GPU 重置會掉 context，不收就是整片空白）；拿不到 GPU 時要能安靜
-  退回 DOM renderer。**候選字視窗的抖動不在輸入法對位**：同一段時間 88 次游標移動只換來
+  `dispose()` 再重掛（最多 3 次）**（驅動更新／GPU 重置會掉 context，不收就是整片空白）；拿不到 GPU 時要能安靜
+  退回 DOM renderer。欄列數真的變了才 `clearTextureAtlas`。**候選字視窗的抖動不在輸入法對位**：同一段時間 88 次游標移動只換來
   1 次 textarea 位置變動——別再去改 `syncImeCaret`。回歸 `probe-terminal-flicker.js`
   （**會叫到最前面**，而且是刻意的：沒焦點的終端機根本不畫游標，量到的會是假的 0）。
 - **Unicode 11 要 `loadAddon` 之後再 `term.unicode.activeVersion = '11'`**，只 load 不切不生效。
@@ -324,6 +326,9 @@ tag 要與 `package.json` 的 version 一致。
 ### HF模型與本地 LLM
 
 - 推論一律走 llama-server 的 **router 模式**（`--models-dir`），不要自己寫多模型管理器；模型 id ＝檔名去 `.gguf`／資料夾名；`--models-preset` 的 INI 只在啟動時讀（改完要重啟）。
+- **關思考要明寫 `reasoning = off`**：llama-server 的 `--reasoning` 預設是 **auto**，不送就等於沒關（模型卡寫「關」，實際照樣思考）。`thinkingCapable` 的模型一律寫 `on`／`off` 其中之一。
+- **儀表板的速度／排隊來自 `/metrics`，那支端點預設是關的**：router 要帶 `--metrics`（它會把這面旗子傳給自己開的子程序），而且 router 模式的 `/metrics` **照模型分**——不帶 `?model=<id>` 直接 400。時間欄位實測叫 `tokens_predicted_seconds_total`（不是 `predicted_seconds_total`；自己編一個名字會全綠卻永遠算出 0 tok/s）。回歸 `test-hfmodels.js` 的 [D5] ＋ `e2e-hfmodels.js`（真的量到 tok/s）。
+- 布林旗標寫進 preset INI 用 `key = 1` 就好（實測 router 會轉成 `--no-mmproj-auto`，不會多送一個 `1`）。
 - **記憶體配置以官方 `llama-fit-params` 為準**，它只調整使用者沒設的參數（主動寫死 `gpu-layers` 等於把那套關掉）。
 - **KV cache 要用 GGUF 的 `attention.key_length`／`value_length`**，拿 `embedding_length ÷ head_count` 推會低估 1.6～2 倍 → OOM。
 - V 的 KV 量化需要 `flash-attn = on`（K 不用）；f16 那檔**刻意不送** flash-attn。MoE 塞不下時搬專家（`n-cpu-moe`）不砍層。
@@ -392,10 +397,11 @@ tag 要與 `package.json` 的 version 一致。
 
 - **一定要用 `Win32_PerfRawData_*`**（GPU 引擎 `Get-Counter` 5335ms vs raw 67ms）；raw 是累計值，一定要配 `Timestamp_Sys100NS` 算差值。`Win32_VideoController.AdapterRAM` 是 uint32（8GB 以上一律爆掉，真值在登錄檔）。
 - **GPU engine 的配對 key 必須含 LUID＋引擎索引**（少一個會配錯實例，出現 7995% 假使用率）；uint64 累計計數器會繞回（`COUNTER_WRAP` 以上不做差值）。**不顯示 `Idle`（pid 0）**。
+- **nvidia-smi 的看門狗要從 spawn 那一刻就武裝**：只在「收到第一行讀數」之後才設的話，卡在啟動（一行都沒吐）就永遠等不到重開；子程序 `close`／`error` 時要把它收掉，不然重啟計時與看門狗會疊在一起。回歸 `test-sysmon-gpu-lifecycle.js`。
 - **NVMe 的 S.M.A.R.T. 不必提權**，但開實體磁碟時 `dwDesiredAccess` **一定要給 0**；`Data Units Read/Written` 的單位是 1000 × 512 bytes；`0 K` 是「感測器不存在」。
 - `probe.ps1` 要有 UTF-8 BOM ＋ `AutoFlush`；**probe 裡不可以相信 `$env:*`**（被 spawn 的子程序沒有）；static 框裡不准查 `Win32_Tpm`（未提權卡 5.2 秒）；網路卡走 `Win32_NetworkAdapter` 不用 `Get-NetAdapter`。
 - **資料列一律往後加欄位、解析端逐格取值**（不要插在中間）；SMBIOS 佔位字串統一在 `metrics.clean()` 清掉；groups 的 rows 值不能給空字串（整列會塌成 0 高）。
-- 感測器 sidecar：只有它提權（不是整個 App）、版本鎖 `0.9.7-pre728`、斷線要自己重拉（上限 5 次，經 `ensureSensors`）；**自動啟用只能放在進系統監控頁時**（開機那條只走排程工作）；PawnIO 由 App 代裝但要驗 Authenticode（不釘 SHA-256），靜默安裝參數是 `-install -silent`；殭屍 sidecar 要用 `Invoke-CimMethod ... Terminate` 才殺得掉。
+- 感測器 sidecar：只有它提權（不是整個 App）、版本鎖 `0.9.7-pre728`、斷線／卡住**一直重拉**（指數退避，經 `ensureSensors`；讀數穩定 60s 才把間隔歸零）；**自動啟用只能放在進系統監控頁時**（開機那條只走排程工作）；PawnIO 由 App 代裝但要驗 Authenticode（不釘 SHA-256），靜默安裝參數是 `-install -silent`；殭屍 sidecar 要用 `Invoke-CimMethod ... Terminate` 才殺得掉。
 - **probe.ps1 與 nvidia-smi 開機就常駐**：離開系統監控頁與縮到系統匣都不要 `stop()`（每次重開會付冷啟動＋第一輪 CPU% 全 0）；壓力測試才要離頁收掉。進頁 `start()` 要把 lastFeed 立刻再送一次。
 - **風扇的手動 PWM 是留在晶片裡的**，新程序 `SetDefault()` 救不回來（只有重開機）：所以下限 `minPwm` ≥20、sidecar 5 秒看門狗、`before-quit` 要 await 得到、`dirty` 存 store。
 - **雙向管道一定要 `PipeOptions.Asynchronous`**（同步讀會把同步寫整個擋住，症狀是只收到第一框且完全不報錯）。

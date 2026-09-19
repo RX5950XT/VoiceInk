@@ -38,6 +38,7 @@ function fakeBuffer(rows, cols) {
       if (!row) return undefined
       return {
         isWrapped: !!row.isWrapped,
+        length: cols,
         translateToString: (trim) => (trim ? row.text.replace(/\s+$/, '') : row.text.padEnd(cols, ' '))
       }
     }
@@ -71,6 +72,18 @@ async function main() {
     ok('網址不含前後中文', hits[0]?.url === 'https://example.com/a/b', JSON.stringify(hits))
     ok('網址位移不含前後中文', line.slice(hits[0].start, hits[0].end) === 'https://example.com/a/b')
   }
+  {
+    const hits = scan.scanLine('open file:///C:/Users/foo/a.txt now')
+    ok('file:// 當成路徑不是網址', hits[0]?.url === '' && hits[0]?.text === 'C:/Users/foo/a.txt', JSON.stringify(hits))
+  }
+  {
+    const hits = scan.scanLine('docs www.example.com/a/b ok')
+    ok('www. 補成 https', hits[0]?.url === 'https://www.example.com/a/b', JSON.stringify(hits))
+  }
+  {
+    const hits = scan.scanLine('Local: localhost:5173/app ready')
+    ok('localhost:埠當成網址', hits[0]?.url === 'http://localhost:5173/app', JSON.stringify(hits))
+  }
 
   // ===== 掃描：路徑 =====
   console.log('\n[掃描：路徑]')
@@ -83,6 +96,7 @@ async function main() {
     const hits = scan.scanLine('  at src/renderer/app.js:120:8')
     ok('行號欄號不算路徑的一部分', hits[0]?.text === 'src/renderer/app.js', JSON.stringify(hits))
     ok('底線仍蓋住行號那段', hits[0]?.end === '  at src/renderer/app.js:120:8'.length)
+    ok('行號留給開檔', hits[0]?.line === 120, JSON.stringify(hits[0]))
   }
   {
     const hits = scan.scanLine('D:\\Workspace\\VoiceInk\\package.json')
@@ -139,6 +153,37 @@ async function main() {
     ok('終點落在第 3 列', info.at(hit.end - 1).y === 3)
   }
   {
+    // CLI 自己印了換行（沒設 isWrapped），路徑在斜線處被切成兩段
+    const rows = [
+      { text: 'see src/main/terminal/' },
+      { text: 'links.js here' }
+    ]
+    const info = scan.logicalLine(fakeBuffer(rows, 40), 1)
+    const hit = scan.scanLine(info.text).find((entry) => entry.text.includes('links.js'))
+    ok('硬換行的路徑接得起來', hit?.text === 'src/main/terminal/links.js', JSON.stringify({ text: info?.text, hit }))
+  }
+  {
+    const rows = [
+      { text: 'go http://localhost:5173/a/' },
+      { text: 'very/long/path end' }
+    ]
+    const info = scan.logicalLine(fakeBuffer(rows, 40), 1)
+    const hit = scan.scanLine(info.text).find((entry) => entry.url)
+    ok('硬換行的網址接得起來', hit?.url === 'http://localhost:5173/a/very/long/path', JSON.stringify(hit))
+  }
+  {
+    // 剛好填滿一列再從下一列繼續，CLI 送了換行所以 isWrapped 是 false
+    const cols = 24
+    const rows = [
+      { text: 'http://example.com/abcde' },
+      { text: 'f/file.js' }
+    ]
+    ok('第一列剛好填滿 cols', rows[0].text.length === cols)
+    const info = scan.logicalLine(fakeBuffer(rows, cols), 1)
+    const hit = scan.scanLine(info.text).find((entry) => entry.url)
+    ok('滿列硬換行的網址接得起來', hit?.url === 'http://example.com/abcdef/file.js', JSON.stringify({ text: info?.text, hit }))
+  }
+  {
     // 「看」佔兩欄，「 src/a.js」從第 3 欄開始。若用字元位移 % cols，底線會畫到「看」上面。
     const rows = [{ text: '看 src/a.js' }]
     const line = {
@@ -184,6 +229,17 @@ async function main() {
     ok('含控制字元回 null', links.resolveCandidate(base, `sub dir${String.fromCharCode(0)}/note.txt`) === null)
     ok('超長字串回 null', links.resolveCandidate(base, 'a'.repeat(600)) === null)
     ok('非字串回 null', links.resolveCandidate(base, { full: file }) === null)
+
+    const projects = [
+      { id: 'w_parent', path: base },
+      { id: 'w_child', path: dir }
+    ]
+    const located = links.locateInProjects(file, projects, 'w_parent')
+    ok('目前專案能對上就用目前的', located?.projectId === 'w_parent' && located?.relPath === 'sub dir/note.txt'.replace(/\//g, path.sep).split(path.sep).join('/'), JSON.stringify(located))
+    const nested = links.locateInProjects(file, projects, '')
+    ok('沒有目前專案時用最深的那層', nested?.projectId === 'w_child' && nested?.relPath === 'note.txt', JSON.stringify(nested))
+    ok('專案外的絕對路徑對不到', links.locateInProjects(path.join(os.homedir(), 'nope.txt'), projects, '') === null)
+    ok('資料夾本身對得到專案根', links.locateInProjects(base, projects, '')?.relPath === '')
   } finally {
     removeTree(base)
   }
