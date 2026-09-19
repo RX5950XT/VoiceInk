@@ -213,6 +213,14 @@ section('E. prompt')
   check('有整理規則', plain.includes('贅詞') && plain.includes('條列'))
   check('有 ASR 錯字修正規則（且守住不重寫的底線）',
     plain.includes('錯別字') && plain.includes('意思不能變'))
+  // 寫得太保守時小模型會把錯字原樣抄出來，所以規則要明講「用上下文判斷」並給錯字範例
+  check('錯字規則要求用上下文判斷', plain.includes('上下文'))
+  check('錯字規則有同音字範例', plain.includes('釘選') && plain.includes('應該'))
+  // 使用者要的是貼進輸入框就排好的文字，不是一整行逐字稿
+  check('有排版與換行規則', plain.includes('每項一行') && plain.includes('空一行分段'))
+  check('單句不要硬斷也要講', plain.includes('維持一行'))
+  const lineExample = plain.split('範例：')[1] || ''
+  check('範例裡的條列是真的換行', lineExample.includes('\n- 修登入的 bug\n'), JSON.stringify(lineExample.slice(0, 200)))
 
   const withDict = text.buildSystemPrompt({
     lang: 'en',

@@ -333,6 +333,10 @@ function paintSidebar(nextPlaces, nextDisks) {
     reorder: false,
     custom: false
   })))
+  // 「本機」首頁的資料夾那一區畫的就是側欄釘選的位置：釘上／移除／改名／排序之後
+  // 只重畫側欄的話，站在首頁時看到的是舊的那一份（要切走再切回來才會更新）。
+  // 收在這裡而不是每個呼叫點各補一次：places 變動的六個地方都走這支。
+  if (inHome() && !inSearch()) paintHome()
 }
 
 function paintSideList(host, items) {

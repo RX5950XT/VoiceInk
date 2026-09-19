@@ -246,7 +246,11 @@ async function cleanupLocalChunked(content, system, modelKey) {
     const cleaned = text.cleanupOutput(out, chunk)
     parts.push(text.looksReasonable(cleaned, chunk) ? cleaned : chunk)
   }
-  return text.joinSegments(parts)
+  // 段與段之間留空行：`joinSegments` 是給 ASR 逐段辨識用的（直接黏起來），
+  // 拿來接整理後的段落會把排好的版整成一行。切點本來就找句末標點（見 splitForCleanup），
+  // 這裡的每一段都是完整句子。
+  // ponytail: 硬切（整段找不到句末標點）時會多一個假的分段，換成標記切點才治本。
+  return parts.filter(Boolean).join('\n\n')
 }
 
 /**

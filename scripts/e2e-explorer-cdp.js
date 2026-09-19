@@ -362,6 +362,30 @@ async function main() {
     await cdp.eval(`document.querySelector('[data-id="${homeId}"] .ex-tab-open').click()`)
     await waitFor(() => cdp.eval(`document.getElementById('exHome').offsetHeight > 0`), 10_000, '切首頁')
     assert(await cdp.eval(`document.getElementById('exBackBtn').disabled`), '新分頁沒有混入原分頁歷史')
+
+    // 首頁的「資料夾」那一區畫的就是側欄釘選的位置：站在首頁時移除一個，畫面要當場少一張卡
+    // （以前只重畫側欄，首頁停在舊的那一份，要切走再切回來才會更新）
+    // 先等 2 秒讓 loadHome 那一發 driveInfo 落地——它回來會重畫整個首頁，
+    // 沒等就會把「剛好被別人重畫到」當成綠燈（實測會，這條斷言就白寫了）。
+    await sleep(2000)
+    const place = await cdp.eval(`(() => {
+      const el = [...document.querySelectorAll('#exPlaces .ex-side-item')]
+        .find((n) => n.dataset.path && n.dataset.path !== 'thispc' && n.dataset.path !== 'recyclebin')
+      return el ? { id: el.dataset.id, path: el.dataset.path } : null
+    })()`)
+    assert(place && place.id, '側欄有釘選的位置可以測', JSON.stringify(place))
+    const cardExists = `[...document.querySelectorAll('#exHome .ex-home-card')].some((n) => n.dataset.path === ${JSON.stringify(place.path)})`
+    assert(await cdp.eval(cardExists), '首頁畫得出側欄釘選的資料夾')
+    await cdp.eval(`(() => {
+      const el = document.querySelector('#exPlaces [data-id="${place.id}"]')
+      el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 60, clientY: 200 }))
+      const item = [...document.querySelectorAll('.ws-menu-item')].find((n) => n.textContent.includes('從側欄移除'))
+      item.click()
+    })()`)
+    // 等側欄真的少一個＝移除跑完了；首頁那張卡就要在同一次重畫裡消失，不再多給時間
+    await waitFor(() => cdp.eval(`!document.querySelector('#exPlaces [data-id="${place.id}"]')`), 10_000, '側欄移除釘選')
+    assert(!(await cdp.eval(cardExists)), '移除釘選後首頁當場跟著更新')
+
     await cdp.eval(`document.querySelector('[data-id="${firstId}"] .ex-tab-open').click()`)
     await waitFor(() => cdp.eval(`document.querySelector('.ex-tab.is-active').dataset.path.endsWith('sub') && !document.getElementById('exBackBtn').disabled`), 10_000, '歷史保留')
     await cdp.eval(`document.getElementById('exBackBtn').click()`)
