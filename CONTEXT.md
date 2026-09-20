@@ -27,6 +27,31 @@ AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定�
   （拿不到 focused window）或 renderer 插不進去，才退回原本的剪貼簿 ＋ 模擬 Ctrl+V。
 - 測試：`e2e-terminal-cdp.js`（打包版量 PTY 真的收到什麼）、`e2e-dictation.js` 的 [K0]。
 
+### 檔案總管：跟 Windows 看齊的那幾件事（2026-09-20）
+
+- **排序不再被 2000 筆截斷毀掉**：`listDir` 改成先排序再截斷（`MAX_STAT = 10000`、64 並發；
+  超過上限才退回「先砍再排」並標 `truncated`）。以前在大資料夾按大小排，拿到的是
+  「readdir 前 2000 筆裡最大的」。
+- **系統項目預設藏起來**：`statEntry` 多一個 `hidden`（啟發式：寫死的 Windows 系統名單，
+  **不照 Unix 的點開頭慣例**），`listDir` 接 `showHidden`；空白處右鍵可切換，存進 `explorer.json`，
+  列出來的隱藏項目畫淡一點。
+- **鍵盤走得動**：方向鍵／Home／End 移動選取，Shift 連選；方格檢視四個方向都走（欄數照版面量）。
+- **空白處拖出框選**，框選期間不重畫清單（見 CLAUDE.md 地雷）。
+- **狀態列講得出「已選取 N 個」**，全是檔案時報總大小（選到資料夾不報，要遞迴才算得出來）。
+- **拖著檔案停在資料夾上 0.7 秒會自己進去**（`bindDropTarget` 的 `onHover`），才丟得到深層路徑。
+- **Ctrl+Z 復原**搬移／複製／改名／貼上；復原「複製」是丟資源回收筒不是永久刪。
+- 測試：`test-explorer.js` 的 [H2][H3][S4][S5][S6] ＋ `e2e-explorer-cdp.js` 的 [C5]～[C10]。
+
+### 工作區：檔案樹收得下外面拖進來的檔案（2026-09-20）
+
+- `workspace:importDropped(projectId, relDir, absPaths)`：目的地仍只收
+  `{ projectId, relPath }` 並走 `files.resolveIn`，來源是使用者任意路徑所以用 `raw-fs` 讀；
+  **一律複製不搬移**（跨磁碟搬移會毀掉來源），撞名 `name (2).ext`，資料夾遞迴，
+  符號連結當連結複製不跟著走。上限先量再複製、超過整批拒絕（50 個頂層項目／8000 檔／
+  單檔 200MB／總量 1GB）。
+- 檔案樹的 `dragover` 也要放行外部檔案（只看內部 `dragging` 的話 `drop` 根本不會發生）。
+- 測試：`test-workspace.js` 的 [S2]。
+
 ### 檔案總管：檔案拖得出去、空白處取消選取（2026-09-20）
 
 - 清單上拖檔案**交給 Windows 自己的拖放**（`explorer:startDrag` → `webContents.startDrag`），

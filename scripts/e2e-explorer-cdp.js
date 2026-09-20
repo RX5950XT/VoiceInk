@@ -538,6 +538,59 @@ async function main() {
       await waitFor(() => cdp.eval(`!!document.querySelector('#exList [data-id="hello.txt"]')`), 10_000, '回到種子資料夾')
     }
 
+    console.log('\n[C10] 系統項目預設藏起來，開關打得開')
+    {
+      fs.writeFileSync(path.join(SEED_DIR, 'desktop.ini'), '[.ShellClassInfo]')
+      fs.writeFileSync(path.join(SEED_DIR, '.gitignore'), 'node_modules')
+      const shown = await waitFor(() => cdp.eval(`(() => {
+        const ids = [...document.querySelectorAll('#exList .ex-row')].map((r) => r.dataset.id)
+        return ids.includes('.gitignore') ? ids : null
+      })()`), 15_000, '清單更新').catch(() => null)
+      assert(!!shown, '種的檔案有進畫面', JSON.stringify(shown))
+      assert(!shown.includes('desktop.ini'), 'desktop.ini 預設藏起來', JSON.stringify(shown))
+      assert(shown.includes('.gitignore'),
+        '.gitignore 不可以被藏（Windows 上點開頭沒有隱藏的意思）', JSON.stringify(shown))
+
+      await cdp.eval(`(() => {
+        const host = document.getElementById('exList')
+        const r = host.getBoundingClientRect()
+        host.dispatchEvent(new MouseEvent('contextmenu', {
+          bubbles: true, cancelable: true, clientX: Math.round(r.left + 30), clientY: Math.round(r.bottom - 10)
+        }))
+      })()`)
+      const menu10 = await waitFor(async () => {
+        const got = await cdp.eval(`(() => {
+          const el = document.querySelector('.ws-menu')
+          const labels = el ? [...el.querySelectorAll('.ws-menu-item')].map((n) => n.textContent) : []
+          return { open: !!(el && el.offsetHeight > 0), labels }
+        })()`)
+        return got.open ? got : null
+      }, 15_000, '空白處右鍵選單').catch(() => ({ open: false, labels: [] }))
+      assert(menu10.labels.includes('顯示隱藏項目'), '空白處右鍵有「顯示隱藏項目」', JSON.stringify(menu10.labels))
+      await cdp.eval(`(() => {
+        [...document.querySelectorAll('.ws-menu .ws-menu-item')].find((n) => n.textContent === '顯示隱藏項目')?.click()
+      })()`)
+      const withHidden = await waitFor(() => cdp.eval(`(() => {
+        const rows = [...document.querySelectorAll('#exList .ex-row')]
+        const ini = rows.find((r) => r.dataset.id === 'desktop.ini')
+        if (!ini) return null
+        return { dim: ini.classList.contains('is-dim'), opacity: getComputedStyle(ini.querySelector('.ex-row-name')).opacity }
+      })()`), 15_000, '打開之後看得到系統項目').catch(() => null)
+      assert(!!withHidden, '切換之後 desktop.ini 出現', JSON.stringify(withHidden))
+      assert(withHidden.dim && Number(withHidden.opacity) < 1, '隱藏項目畫得比較淡', JSON.stringify(withHidden))
+
+      await cdp.eval(`window.electronAPI.explorer.saveState({ showHidden: false })`)
+      const saved = await cdp.eval(`window.electronAPI.explorer.bootstrap()`)
+      assert(saved.ok && saved.data.showHidden === false, '開關存得進 explorer.json',
+        JSON.stringify(saved.data && saved.data.showHidden))
+      await cdp.eval(`(() => {
+        [...document.querySelectorAll('.ws-menu .ws-menu-item')].forEach((n) => n.remove())
+        document.querySelector('.ws-menu')?.remove()
+      })()`)
+      await cdp.eval(`window.electronAPI.explorer.removeEntry(${JSON.stringify(path.join(SEED_DIR, 'desktop.ini'))}, { permanent: true })`)
+      await cdp.eval(`window.electronAPI.explorer.removeEntry(${JSON.stringify(path.join(SEED_DIR, '.gitignore'))}, { permanent: true })`)
+    }
+
     const clicked = await cdp.eval(`(() => {
       document.getElementById('exSearch')?.blur()
       const row = document.querySelector('#exList [data-id="sub"]')

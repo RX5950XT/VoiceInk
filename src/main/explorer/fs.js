@@ -18,6 +18,7 @@ const MAX_READ_BYTES = 2 * 1024 * 1024
 const MAX_TEXT_BYTES = 8 * 1024
 const SORT_KEYS = new Set(['name', 'date', 'size'])
 const HIDDEN_NAMES = new Set([
+  '.git',
   '$recycle.bin',
   'system volume information',
   'desktop.ini',
@@ -74,14 +75,17 @@ function imageMime(full) {
 }
 
 /**
- * Windows 檔案總管預設會藏的名字（啟發式；Node 讀不到 FILE_ATTRIBUTE_HIDDEN）。
+ * Windows 檔案總管預設會藏的名字（啟發式；Node 在 Windows 讀不到 FILE_ATTRIBUTE_HIDDEN）。
+ *
+ * **不可以照 Unix 慣例把「點開頭」一律當隱藏**：`.gitignore`／`.env`／`.vscode`／`.eslintrc`
+ * 在 Windows 上根本沒有 hidden 屬性，檔案總管照顯示——這個 App 的使用者天天要看這些檔，
+ * 藏掉等於把專案資料夾挖空。版本控制那個資料夾是例外（建立時自己設了 hidden），列在名單裡。
  * @param {unknown} name
  * @returns {boolean}
  */
 function isHiddenName(name) {
   const s = String(name || '')
   if (!s) return false
-  if (s.startsWith('.')) return true
   const lower = s.toLowerCase()
   if (HIDDEN_NAMES.has(lower)) return true
   return lower.startsWith('ntuser.dat')

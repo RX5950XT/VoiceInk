@@ -155,6 +155,11 @@ tag 要與 `package.json` 的 version 一致。
 ### 專案工作區
 
 - **三份清單要對起來**：`ipc.js` 用到的每個 `service.X` 都要在 `main.js` 的逐一列舉白名單裡、每支 `workspace:*` 都要在 preload 接得到；`index.js` 的 `module.exports` 列一個沒定義的名字＝**載入期 ReferenceError**，症狀是每支 IPC 都回通用錯誤，而 `node --check` 與單元測試全綠。回歸 `test-workspace.js` 的 [Q][Q2]。（AGY／sysmon／usage 同一條）
+- **檔案樹的外部拖入（`workspace:importDropped`）一律複製不搬移**：來源是使用者任意路徑
+  （用 `raw-fs` 讀），目的地仍只收 `{ projectId, relPath }` 走 `resolveIn`；跨磁碟搬移會毀掉
+  來源，撞名產 `name (2).ext`。上限要**先量再複製、超過整批拒絕**（50 個頂層項目／8000 檔／
+  單檔 200MB／總量 1GB），邊複製邊檢查會留下一半。`dragover` 也要放行外部檔案
+  ——只看內部 `dragging` 的話 Chromium 連 `drop` 都不會發。
 - **AI 記錄的家目錄不只 `~/.claude`／`~/.codex`**：要掃 `CLAUDE_CONFIG_DIR`／`CODEX_HOME` 與其他工作台的 runtime home（實測本機 Codex 記錄全在 Orca 那邊），照 `agent + id` 去重。`codeusage` 的 `jsonlSources()` 相反——**維持只掃預設家目錄**（游標鍵是檔名）。
 -「讀過」跟「改過」要分開回；工具名不認得時算「讀過」，**不可以憑空說人家改過**。
 - **存檔一定要帶開檔當下的 mtime**（`STALE` → 提示條給比較／重新載入／覆寫／保留編輯，草稿一個字都不能動）；同一檔案的寫入要排隊（Windows 上兩個 rename 指向同一目的地會 EPERM）；草稿上限（4MB，main 與 renderer 同一個數字）比存檔上限（50MB）小，超過的草稿**整個欄位不送**並提示先存檔（送空字串會把分頁還原成空白的未存狀態）。
@@ -202,6 +207,29 @@ tag 要與 `package.json` 的 version 一致。
 - **`uffs.exe` 不打進 asar**；只跑 `<userData>/uffs/`，不認 PATH／`%LOCALAPPDATA%\uffs`。zip checksum 缺或對不上就失敗。關 App **不停** UFFS daemon。刪／改名／搬移擋磁碟根目錄、`%SystemRoot%` 本身、使用者家目錄本身（`assertMutable`）；家目錄根層可以新增／貼上／還原子項（`assertCreatable` 只擋磁碟根與 Windows 目錄）。`resolveExisting` 回使用者路徑，刪 junction 不跟目標。清空回收筒不吃 list 的 2000 上限。預設刪除丟進系統資源回收筒（寫 `$I`／`$R`，Electron 裡走 `shell.trashItem`）；`{ permanent: true }` 才 `rm`。複製／搬移撞名產出 `name (2).ext`，不覆寫。CDP 暫存 userData 與沙箱的 `uffsAuto` 關掉，且忽略 `uffsEnsure({ force })`，避免自動化卡在 UAC。
 - 三份清單：`explorer/index.js` exports、`main.js` 的 `registerExplorerIpc` service、`preload.js` 的 `electronAPI.explorer`。回歸 `test-explorer.js` 的 [Q][Q2]。
 - **右鍵「加入工作區專案」不另開 IPC**：沿用工作區的 `workspace:addDropped`（preload 的 `addFolders` 只把字串路徑送過去），main 端仍走 `store.create` 的全套驗證——路徑要存在、必須是資料夾、撞路徑回原本那筆。虛擬位置（本機首頁、資源回收筒）在 renderer 就擋掉。回歸 `test-explorer.js` 的 [S2] ＋ `e2e-explorer-cdp.js` 的 [C2]。
+- **列目錄要「先排序再截斷」，不是先截斷再排序**：`listDir` 舊版是
+  `dirents.slice(0, MAX_ENTRIES)` 之後才 `sortEntries`，所以在 node_modules／Downloads
+  那種大資料夾裡按大小或時間排，拿到的是「readdir 前 2000 筆裡最大的」，而不是真正最大的
+  ——畫面看不出異狀，只在狀態列寫一句「（已截斷）」。排序需要每筆的 size／mtime，所以
+  **會對整個資料夾 stat**（`MAX_STAT = 10000`、64 並發；實測 10000 筆約 0.8s，20000 會超過
+  1.5s，所以超過上限就退回舊行為並標 `truncated`）。也不要為「按名稱排」省掉 stat：
+  symlink 的 `dirent.isDirectory()` 跟 stat 後的 `dir` 不一致，排出來的順序會跟另外兩種模式對不上。
+- **「點開頭」在 Windows 不是隱藏的意思**：`isHiddenName` 只認寫死的系統名單
+  （`$RECYCLE.BIN`／`System Volume Information`／`desktop.ini`／`NTUSER.DAT*`…）加上版本控制
+  那個資料夾（它建立時自己設了 hidden 屬性）。**不可以順手加回 `name.startsWith('.')`**：
+  `.gitignore`／`.env`／`.vscode`／`.eslintrc` 在 Windows 上沒有 hidden 屬性、檔案總管照顯示，
+  而這個 App 的使用者天天要看它們，藏掉等於把專案資料夾挖空。回歸 `test-explorer.js` 的 [S6]。
+  判定是啟發式的：Node 在 Windows 讀不到 `FILE_ATTRIBUTE_HIDDEN`，使用者自己設成隱藏的
+  普通檔案認不出來——要做到真的屬性只能走殼層 sidecar。
+- **框選期間不可以 `paintList()`**：框本身是 `#exList` 的子元素，重畫會把它一起清掉；
+  而且每動一像素重建整份 DOM 太貴。框選中只就地 `classList.toggle('is-selected')`，
+  放開才重畫一次。`.ex-list` 要有 `position: relative`，不然框的座標會飄到整頁去。
+- **方向鍵的游標（`cursor`）跟 Shift 連選的錨點（`anchor`）是兩個變數**：混用的話
+  Shift+↓ 會每走一步就把錨點帶著跑，連選永遠只有兩列。方格檢視一列幾格要照實際版面量
+  （`offsetTop` 相同的算同一列），寫死欄數在視窗一縮就錯。
+- **Ctrl+Z 復原「複製」要丟資源回收筒，不是永久刪**：復原本身也要能反悔。復原只記
+  「怎麼倒回去」不記快照（檔案太大，快照不起），搬移是逐筆搬回**原本各自的父目錄**
+  （一次拖多筆可能來自不同資料夾）。刪除不進這個堆疊——本來就能去資源回收筒撈。
 - **拖到別的程式只有 `webContents.startDrag` 做得到，而且跟 HTML5 的 DnD 不能並存**：
   `dataTransfer` 裡放什麼，出了視窗都不算數（瀏覽器的上傳框要的是 OS 的 CF_HDROP）。
   dragstart 要 `preventDefault()` 把場子讓給 main 的 `explorer:startDrag`，兩邊一起來
