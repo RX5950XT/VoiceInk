@@ -98,6 +98,17 @@ async function moveEntry(projectId, fromRel, toRelDir) {
   return files.moveEntry(await rootOf(projectId), fromRel, toRelDir)
 }
 
+/**
+ * 從專案外複製檔案／資料夾進某個專案資料夾。來源是使用者電腦上的絕對路徑，
+ * 目的地仍只收 `{ projectId, relPath }`，走 `files.resolveIn`。
+ * @param {string} projectId
+ * @param {unknown} relDir
+ * @param {unknown} sourcePaths
+ */
+async function importDropped(projectId, relDir, sourcePaths) {
+  return files.importDropped(await rootOf(projectId), relDir, sourcePaths)
+}
+
 async function removeEntry(projectId, relPath) {
   return files.removeEntry(await rootOf(projectId), relPath)
 }
@@ -262,6 +273,7 @@ module.exports = {
   createEntry,
   renameEntry,
   moveEntry,
+  importDropped,
   removeEntry,
   searchFiles,
   listFiles,

@@ -14,6 +14,7 @@
 const fs = require('../raw-fs')
 const fsp = require('../raw-fs').promises
 const path = require('path')
+const { removeTreeSync } = require('../safe-rm')
 
 /** 單層目錄最多列幾筆（`node_modules` 那種一層幾千個的不要把 UI 弄死） */
 const MAX_ENTRIES = 2000
@@ -24,6 +25,14 @@ const MAX_ENTRIES = 2000
 const MAX_TEXT_BYTES = 50 * 1024 * 1024
 /** 寫檔上限：跟讀檔同一條線，開得起來的就存得回去 */
 const MAX_WRITE_CHARS = MAX_TEXT_BYTES
+/** 一次拖進來最多幾個頂層項目（檔案或資料夾各算一個） */
+const MAX_IMPORT_ITEMS = 50
+/** 遞迴展開後最多幾個檔案（跟搜尋的 8000 同一量級，避免整顆磁碟拖進來） */
+const MAX_IMPORT_FILES = 8000
+/** 單檔上限：比編輯器的 50MB 大，影片／壓縮檔加得進去，但不會去複製幾十 GB 的 ISO */
+const MAX_IMPORT_FILE_BYTES = 200 * 1024 * 1024
+/** 單次匯入總量上限 */
+const MAX_IMPORT_TOTAL_BYTES = 1024 * 1024 * 1024
 
 /** 看得懂的圖片副檔名 → MIME（預覽走 `vi-media://`，見 `media.js`） */
 const IMAGE_MIME = {
@@ -493,6 +502,155 @@ async function getFileMtime(root, relPath) {
   }
 }
 
+/**
+ * 同名時變成 `name (2).ext`，不覆寫。回的是檔名不是完整路徑。
+ * @param {string} dir
+ * @param {string} basename
+ * @returns {string}
+ */
+function uniqueDestName(dir, basename) {
+  const ext = path.extname(basename)
+  const stem = ext ? basename.slice(0, -ext.length) : basename
+  let n = 2
+  let name = basename
+  while (fs.existsSync(path.join(dir, name))) {
+    name = `${stem} (${n})${ext}`
+    n += 1
+    if (n > 9999) throw fail('EXISTS', '那裡已經有同名的東西了')
+  }
+  return name
+}
+
+/**
+ * 來源是使用者電腦上的任意路徑，只放行磁碟機絕對路徑與 UNC，不跟連結走。
+ * @param {unknown} raw
+ * @returns {string}
+ */
+function resolveSource(raw) {
+  const s = typeof raw === 'string' ? raw.trim() : ''
+  if (!s || s.includes('\0') || s.length > 32767) throw fail('BAD_PATH', '路徑不合法')
+  if (/^\\\\[.?]\\/.test(s)) throw fail('BAD_PATH', '路徑不合法')
+  if (!/^[A-Za-z]:[\\/]/.test(s) && !s.startsWith('\\\\')) throw fail('BAD_PATH', '路徑不合法')
+  let full
+  try {
+    full = path.resolve(s)
+  } catch {
+    throw fail('BAD_PATH', '路徑不合法')
+  }
+  if (!fs.existsSync(full)) throw fail('NOT_FOUND', '找不到這個檔案')
+  return full
+}
+
+/**
+ * @param {string} from
+ * @param {string} dir
+ * @returns {boolean}
+ */
+function isIntoSelf(from, dir) {
+  const a = path.resolve(from).toLowerCase()
+  const b = path.resolve(dir).toLowerCase()
+  return Boolean(a) && (b === a || b.startsWith(a + path.sep))
+}
+
+/**
+ * 預先量檔數與總量；超過上限整批拒絕，一個都不複製。
+ * @param {string} full
+ * @param {{ files: number, bytes: number }} acc
+ */
+function measureEntry(full, acc) {
+  let st
+  try {
+    st = fs.lstatSync(full)
+  } catch {
+    throw fail('NOT_FOUND', '找不到這個檔案')
+  }
+  if (st.isSymbolicLink() || st.isFile()) {
+    if (st.isFile() && st.size > MAX_IMPORT_FILE_BYTES) {
+      throw fail('TOO_LARGE', '檔案太大，加不進去')
+    }
+    acc.files += 1
+    acc.bytes += st.isFile() ? st.size : 0
+    if (acc.files > MAX_IMPORT_FILES) throw fail('TOO_MANY', '檔案太多，加不進去')
+    if (acc.bytes > MAX_IMPORT_TOTAL_BYTES) throw fail('TOO_LARGE', '檔案太大，加不進去')
+    return
+  }
+  if (!st.isDirectory()) return
+  let names
+  try {
+    names = fs.readdirSync(full)
+  } catch {
+    throw fail('READ_FAILED', '讀不到這個資料夾')
+  }
+  for (const name of names) measureEntry(path.join(full, name), acc)
+}
+
+/**
+ * @param {string} from
+ * @param {string} destDir
+ * @param {string} root
+ * @returns {Promise<string>} 專案內相對路徑
+ */
+async function copyOne(from, destDir, root) {
+  const name = uniqueDestName(destDir, path.basename(from))
+  const next = resolveIn(root, path.join(toRel(root, destDir), name))
+  try {
+    await fsp.cp(from, next, {
+      recursive: true,
+      force: false,
+      errorOnExist: true,
+      verbatimSymlinks: true
+    })
+  } catch {
+    if (fs.existsSync(next)) {
+      try {
+        removeTreeSync(next)
+      } catch {
+        // 清不掉就留著，不要蓋掉真正的錯誤
+      }
+    }
+    throw fail('COPY_FAILED', '複製失敗')
+  }
+  return toRel(root, next)
+}
+
+/**
+ * 從專案外複製檔案／資料夾進來（檔案樹接受外部拖放）。
+ * **複製不是搬移**；撞名變成 `name (2).ext`。目的地走 `resolveIn`。
+ *
+ * @param {string} root
+ * @param {unknown} relDir 目的地資料夾的相對路徑（空字串＝專案根目錄）
+ * @param {unknown} sourcePaths 來源絕對路徑陣列
+ * @returns {Promise<{ imported: number, rels: string[] }>}
+ */
+async function importDropped(root, relDir, sourcePaths) {
+  const dir = resolveIn(root, relDir || '')
+  let stat
+  try {
+    stat = await fsp.stat(dir)
+  } catch {
+    throw fail('BAD_PATH', '目的地不存在')
+  }
+  if (!stat.isDirectory()) throw fail('BAD_PATH', '只能放進資料夾裡')
+  if (!Array.isArray(sourcePaths)) throw fail('BAD_PATH', '沒有可加入的檔案')
+  const sources = []
+  for (const raw of sourcePaths) {
+    if (typeof raw !== 'string' || !raw.trim()) continue
+    sources.push(resolveSource(raw))
+  }
+  if (!sources.length) throw fail('BAD_PATH', '沒有可加入的檔案')
+  if (sources.length > MAX_IMPORT_ITEMS) {
+    throw fail('TOO_MANY', `一次最多加入 ${MAX_IMPORT_ITEMS} 個項目`)
+  }
+  const acc = { files: 0, bytes: 0 }
+  for (const from of sources) {
+    if (isIntoSelf(from, dir)) throw fail('BAD_PATH', '不能把資料夾複製進它自己底下')
+    measureEntry(from, acc)
+  }
+  const rels = []
+  for (const from of sources) rels.push(await copyOne(from, dir, root))
+  return { imported: rels.length, rels }
+}
+
 module.exports = {
   IMAGE_MIME,
   imageMime,
@@ -501,6 +659,10 @@ module.exports = {
   MAX_ENTRIES,
   MAX_TEXT_BYTES,
   MAX_WRITE_CHARS,
+  MAX_IMPORT_ITEMS,
+  MAX_IMPORT_FILES,
+  MAX_IMPORT_FILE_BYTES,
+  MAX_IMPORT_TOTAL_BYTES,
   SKIP_DIRS,
   resolveIn,
   resolveExisting,
@@ -512,6 +674,7 @@ module.exports = {
   createEntry,
   renameEntry,
   moveEntry,
+  importDropped,
   removeEntry,
   getFileMtime
 }

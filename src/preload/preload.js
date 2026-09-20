@@ -282,6 +282,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
     moveEntry: (id, fromRel, toRelDir) => (
       ipcRenderer.invoke('workspace:moveEntry', id, fromRel, toRelDir)
     ),
+    /**
+     * 從外面拖檔案／資料夾進專案。paths 是 `getPathForFile` 轉好的絕對路徑，
+     * 目的地仍是專案內相對資料夾（空字串＝根目錄）。
+     * @param {string} id
+     * @param {string} relDir
+     * @param {string[]} paths
+     */
+    importDropped: (id, relDir, paths) => (
+      ipcRenderer.invoke(
+        'workspace:importDropped',
+        id,
+        relDir,
+        (Array.isArray(paths) ? paths : []).filter((p) => typeof p === 'string' && p.trim())
+      )
+    ),
     renameEntry: (id, relPath, name) => (
       ipcRenderer.invoke('workspace:renameEntry', id, relPath, name)
     ),

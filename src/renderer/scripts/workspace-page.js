@@ -1230,10 +1230,11 @@ function canDropInto(toDir) {
  */
 function onTreeDragOver(event, entry, row) {
   const toDir = dropDirOf(entry)
-  if (!canDropInto(toDir)) return
+  const external = Array.from(event.dataTransfer?.types ?? []).includes('Files') && !dragging.length
+  if (!external && !canDropInto(toDir)) return
   event.preventDefault()
   event.stopPropagation()
-  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+  if (event.dataTransfer) event.dataTransfer.dropEffect = external ? 'copy' : 'move'
   clearDropMarks()
   // 放在檔案上時，把框線畫在**那個檔案的資料夾**那一列，不然看起來像要放進檔案裡
   const mark = entry.dir ? row : treeRows().find((one) => one.dataset.rel === toDir)
@@ -1251,6 +1252,37 @@ async function onTreeDrop(event, project, entry) {
   event.stopPropagation()
   clearDropMarks()
   const toDir = dropDirOf(entry)
+  const dropped = Array.from(event.dataTransfer?.files ?? [])
+  if (dropped.length && !dragging.length) {
+    const paths = []
+    for (const file of dropped) {
+      try {
+        const abs = electronAPI.getPathForFile(file)
+        if (abs) paths.push(abs)
+      } catch {
+        // 單一檔案轉不出路徑就跳過
+      }
+    }
+    if (!paths.length) {
+      showToast('讀不到拖進來的檔案', 'error')
+      return
+    }
+    const seq = projectSeq
+    try {
+      const result = await call(
+        electronAPI.workspace.importDropped(project.id, toDir, paths),
+        '加不進去'
+      )
+      if (!isCurrentProject(project, seq)) return
+      if (toDir) expanded.add(toDir)
+      await renderTree(project, seq)
+      const n = Number(result?.imported) || 0
+      if (n) showToast(n === 1 ? '已加入 1 個項目' : `已加入 ${n} 個項目`)
+    } catch {
+      // call() 已經 toast
+    }
+    return
+  }
   const list = dragging
   const canDrop = list.length > 0 && canDropInto(toDir)
   dragging = []
@@ -2854,9 +2886,10 @@ export function initWorkspacePage() {
   el.tree?.addEventListener('keydown', onTreeKeydown)
   // 樹的空白處＝專案根目錄（拖到最外層要有地方放）
   el.tree?.addEventListener('dragover', (event) => {
-    if (!canDropInto('')) return
+    const external = Array.from(event.dataTransfer?.types ?? []).includes('Files') && !dragging.length
+    if (!external && !canDropInto('')) return
     event.preventDefault()
-    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+    if (event.dataTransfer) event.dataTransfer.dropEffect = external ? 'copy' : 'move'
     clearDropMarks()
     el.tree?.classList.add('is-drop')
   })
