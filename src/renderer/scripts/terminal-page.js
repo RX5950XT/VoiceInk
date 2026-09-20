@@ -338,6 +338,30 @@ function attachRenderer(term) {
   }
 }
 
+/**
+ * 把剪貼簿的文字貼進這一格。
+ *
+ * **剪貼簿一定要跟 main 拿**：renderer 的 `navigator.clipboard.readText()` 要視窗有
+ * 焦點，沒有焦點就直接 reject（背景視窗、剛從別的程式切回來、語音輸入模擬的 Ctrl+V），
+ * 症狀是「Ctrl+V 完全沒反應」而且一聲不吭。main 的 `clipboard.readText()` 沒這個限制。
+ *
+ * @param {Terminal} term
+ * @param {{ fallbackKey?: boolean }} [opts] 讀不到文字時要不要把 `^V` 轉給 CLI
+ *   （Claude Code 靠那顆鍵自己去讀剪貼簿裡的截圖）。右鍵貼上不需要。
+ */
+async function pasteFromClipboard(term, opts = {}) {
+  const fallbackKey = opts.fallbackKey !== false
+  let text = ''
+  try {
+    const result = await electronAPI.terminal.clipboardText()
+    text = result?.ok ? String(result.data || '') : ''
+  } catch {
+    text = ''
+  }
+  if (text) term.paste(text)
+  else if (fallbackKey) term.input('\x16', true)
+}
+
 function createPane(id) {
   const pane = document.createElement('div')
   pane.className = 'term-pane'
@@ -400,12 +424,7 @@ function createPane(id) {
       // 「停在剪貼簿裡」，在別的 App 都好好的，只有這個終端機貼不進去。
       // 讀不到文字（剪貼簿裡是圖片）才把 `^V` 原樣轉給 CLI，Claude Code 的貼上截圖才不會被吞掉。
       if (event.key === 'v' || event.key === 'V') {
-        if (event.type === 'keydown') {
-          navigator.clipboard.readText().then(
-            (text) => { if (text) term.paste(text); else term.input('\x16', true) },
-            () => term.input('\x16', true)
-          )
-        }
+        if (event.type === 'keydown') void pasteFromClipboard(term)
         return false
       }
       // 字級：`=` 與 `+` 是同一顆，兩個 key 都要收
@@ -455,7 +474,7 @@ function createPane(id) {
   }
   pane.addEventListener('contextmenu', (event) => {
     event.preventDefault()
-    navigator.clipboard.readText().then((text) => { if (text) term.paste(text) }, () => {})
+    void pasteFromClipboard(term, { fallbackKey: false })
   })
 
   // 分割顯示時點哪一格，哪一格就是作用中的那個（打字、resize、未讀點都跟著它走）。

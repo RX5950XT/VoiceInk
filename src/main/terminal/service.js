@@ -142,6 +142,9 @@ module.exports = {
   revealLink: links.revealLink,
   // Ctrl+G：橋接接手時根本不會有新視窗冒出來，不用再叫一支 PowerShell 去等
   raiseChildWindow: () => (bridgeTakesOver() ? false : foreground.raiseChildWindow()),
+  // 貼上要讀的剪貼簿文字。renderer 的 `navigator.clipboard.readText()` 要視窗有焦點，
+  // 沒焦點就 reject（症狀是「Ctrl+V 沒反應」）；main 這邊讀不受焦點影響。
+  clipboardText: () => require('electron').clipboard.readText(),
   // 終端機桌布：檔案在 main 手上，renderer 只拿得到 data: URI（見 background.js）
   backgroundImage: background.dataUri,
   adoptBackground: background.adopt,

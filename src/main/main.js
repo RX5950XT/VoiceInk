@@ -1751,6 +1751,8 @@ registerTerminalIpc({
     // Ctrl+G 的編輯器橋接（漏一支＝那個分頁按送出只會回通用錯誤，CLI 一直卡著）
     editorSave: (...args) => loadTerminal().editorSave(...args),
     editorCancel: (...args) => loadTerminal().editorCancel(...args),
+    // 貼上讀的是 main 的剪貼簿（renderer 那支沒焦點會 reject）
+    clipboardText: (...args) => loadTerminal().clipboardText(...args),
     // 終端機桌布（三支都要列，漏一支那顆按鈕就只會回通用錯誤）
     backgroundImage: (...args) => loadTerminal().backgroundImage(...args),
     adoptBackground: (...args) => loadTerminal().adoptBackground(...args),

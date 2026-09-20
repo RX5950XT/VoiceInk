@@ -343,6 +343,29 @@ async function main() {
         })()`)
         ok('剪貼簿沒有文字時把 ^V 原樣轉給 CLI（貼上截圖不會被吞掉）',
           rawCtrlV.includes('\x16'), JSON.stringify(rawCtrlV))
+
+        // 語音輸入在自己的視窗裡走的是這條（main 的 `insertIntoOwnWindow` 用
+        // executeJavaScript 叫 `__viInsertText`）：完全不經過剪貼簿，
+        // 使用者原本複製的東西不會被擠到 Win+V 歷史後面去。
+        const spoken = `VI-SPEAK-${Date.now()}`
+        await mainCdp.eval(`${clip}.writeText('KEEP-ME')`)
+        const direct = await cdp.eval(`(async () => {
+          const term = window.__testTerminal
+          const sent = []
+          const capture = term.onData((d) => sent.push(d))
+          term.textarea.focus()
+          const done = await window.__viInsertText(${JSON.stringify(spoken)})
+          for (let i = 0; i < 30 && !sent.join('').includes(${JSON.stringify(spoken)}); i += 1) {
+            await new Promise((r) => setTimeout(r, 100))
+          }
+          capture.dispose()
+          return { done, sent: sent.join('') }
+        })()`)
+        ok('語音輸入直接把文字插進有焦點的終端機（不經剪貼簿）',
+          direct.done === true && direct.sent.includes(spoken), JSON.stringify(direct))
+        ok('直送那條路沒有動到剪貼簿',
+          await mainCdp.eval(`${clip}.readText()`) === 'KEEP-ME',
+          await mainCdp.eval(`${clip}.readText()`))
         // 貼進 PTY 的那一行留著會被當成指令，按 Ctrl+C 清掉
         await cdp.eval(`window.electronAPI.terminal.write(${JSON.stringify(createdId)}, '\\x03')`)
       } catch (error) {

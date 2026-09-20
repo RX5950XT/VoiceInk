@@ -194,6 +194,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     resize: (id, cols, rows) => ipcRenderer.invoke('terminal:resize', id, cols, rows),
     kill: (id) => ipcRenderer.invoke('terminal:kill', id),
     pickDirectory: () => ipcRenderer.invoke('terminal:pickDirectory'),
+    /** 貼上要讀的剪貼簿文字。**不要改用 `navigator.clipboard.readText()`**：
+     *  那支要視窗有焦點，沒焦點直接 reject，Ctrl+V 就變成沒反應。 */
+    clipboardText: () => ipcRenderer.invoke('terminal:clipboardText'),
     /** 終端機桌布：讀回 data: URI（檔案在 main 手上，renderer 只認得檔名） */
     background: (name) => ipcRenderer.invoke('terminal:background', name),
     /** 換桌布：走系統對話框選圖，回新檔名；舊的那張由 main 刪掉 */

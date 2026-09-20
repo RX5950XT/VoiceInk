@@ -67,6 +67,13 @@ function registerTerminalIpc({ ipcMain, service, isMainSender, dialog, getWindow
     invoke(event, () => service.raiseChildWindow())
   ))
 
+  // 貼上要讀的剪貼簿文字。**不可以在 renderer 用 `navigator.clipboard.readText()`**：
+  // 那支要視窗有焦點，沒有焦點（剛從別的程式切回來、語音輸入模擬的 Ctrl+V、背景視窗）
+  // 就直接 reject，使用者看到的是「Ctrl+V 沒反應」。main 這支不受焦點影響。
+  ipcMain.handle('terminal:clipboardText', (event) => (
+    invoke(event, () => service.clipboardText())
+  ))
+
   // 終端機桌布：renderer 只拿得到 data: URI，換圖一律走系統對話框（路徑不從 renderer 收）
   ipcMain.handle('terminal:background', (event, name) => (
     invoke(event, () => service.backgroundImage(name))
