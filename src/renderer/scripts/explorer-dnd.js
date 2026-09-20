@@ -4,27 +4,47 @@
 
 import { showMenu } from './ws-menu.js'
 
-export const DRAG_MIME = 'application/x-voiceink-explorer'
 export const RECYCLE_CWD = 'recyclebin'
 
 export function pathKey(value) {
   return String(value || '').replace(/\\+$/, '').toLowerCase()
 }
 
-export function readDragPaths(event) {
-  try {
-    const raw = event.dataTransfer.getData(DRAG_MIME)
-    const data = raw ? JSON.parse(raw) : null
-    return data && Array.isArray(data.paths) ? data.paths : []
-  } catch {
-    return []
+/**
+ * 拖進來的是哪些檔案。**一律從 `dataTransfer.files` 讀**：自家的拖曳交給 main 的
+ * `startDrag`（＝OS 的原生拖放，那樣才拖得出視窗），拖回自己視窗時跟「從桌面拖進來」
+ * 是同一種事件，沒有自訂 MIME 可讀。
+ *
+ * @param {DragEvent} event
+ * @param {(file: File) => string} toPath renderer 那邊的 `getPathForFile`
+ * @returns {string[]}
+ */
+export function readDragPaths(event, toPath) {
+  const files = event.dataTransfer && event.dataTransfer.files
+  if (!files || !files.length || typeof toPath !== 'function') return []
+  const out = []
+  for (const file of files) {
+    let full = ''
+    try {
+      full = toPath(file)
+    } catch {
+      full = ''
+    }
+    if (typeof full === 'string' && full) out.push(full)
   }
+  return out
 }
 
-export function writeDragPaths(event, paths, label) {
-  event.dataTransfer.effectAllowed = 'copyMove'
-  event.dataTransfer.setData(DRAG_MIME, JSON.stringify({ paths }))
-  event.dataTransfer.setData('text/plain', label || 'files')
+/**
+ * 設拖放游標。來源沒宣告允許這個動作時要退回 copy——設成不被允許的值，
+ * Chromium 會把它當成 none，`drop` 就整個不發生。
+ * @param {DragEvent} event
+ * @param {'copy'|'move'} want
+ */
+export function setDropEffect(event, want) {
+  const allowed = String(event.dataTransfer.effectAllowed || 'all').toLowerCase()
+  const free = allowed === 'all' || allowed === 'uninitialized'
+  event.dataTransfer.dropEffect = free || allowed.includes(want) ? want : 'copy'
 }
 
 export function dropMode(event, fromPath, toDir) {
@@ -37,7 +57,7 @@ export function dropMode(event, fromPath, toDir) {
 }
 
 export function hasExplorerDrag(event) {
-  return [...event.dataTransfer.types].includes(DRAG_MIME)
+  return [...event.dataTransfer.types].includes('Files')
 }
 
 export function bindDropTarget(el, destFn, onDrop) {
@@ -45,9 +65,7 @@ export function bindDropTarget(el, destFn, onDrop) {
     if (!hasExplorerDrag(event)) return
     event.preventDefault()
     const dest = destFn()
-    event.dataTransfer.dropEffect = pathKey(dest) === RECYCLE_CWD
-      ? 'move'
-      : (event.ctrlKey ? 'copy' : 'move')
+    setDropEffect(event, pathKey(dest) === RECYCLE_CWD || !event.ctrlKey ? 'move' : 'copy')
     el.classList.add('is-drop')
   })
   el.addEventListener('dragleave', () => el.classList.remove('is-drop'))

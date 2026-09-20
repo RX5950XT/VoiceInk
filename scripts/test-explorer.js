@@ -620,6 +620,66 @@ console.log('\n[S2] 右鍵能把資料夾加進工作區專案')
   ok('addFolders 走既有的 workspace:addDropped', /addFolders[\s\S]{0,200}'workspace:addDropped'/.test(preloadSrc2))
 }
 
+console.log('\n[S3] 檔案拖得出去，也認得拖進來的真檔案')
+{
+  const vm = require('vm')
+  const dndSrc = fs.readFileSync(path.join(ROOT, 'src/renderer/scripts/explorer-dnd.js'), 'utf8')
+    .replace(/^import[\s\S]*?from '[^']+'\r?\n/gm, '')
+    .replace(/^export /gm, '')
+  const context = { console, showMenu: () => {} }
+  vm.createContext(context)
+  vm.runInContext(dndSrc, context)
+
+  const evt = (types, files, effectAllowed) => ({
+    dataTransfer: { types, files, effectAllowed, dropEffect: '' }
+  })
+  const file = (full) => ({ name: full.split('\\').pop(), full })
+  const toPath = (f) => f.full
+
+  const two = evt(['Files'], [file('D:\\a.txt'), file('D:\\dir')], 'all')
+  ok(
+    '拖進來的真檔案讀得到絕對路徑',
+    context.readDragPaths(two, toPath).join('|') === 'D:\\a.txt|D:\\dir',
+    context.readDragPaths(two, toPath).join('|')
+  )
+  ok('取不到路徑就當沒有（從網頁拖圖）', context.readDragPaths(evt(['Files'], [file('')], 'all'), toPath).length === 0)
+  ok('沒有 files 就是空的', context.readDragPaths(evt(['text/plain'], [], 'all'), toPath).length === 0)
+  ok('沒給轉換函式不亂猜', context.readDragPaths(two, null).length === 0)
+
+  ok('types 有 Files 就收', context.hasExplorerDrag(evt(['Files'], [], 'all')) === true)
+  ok('純文字拖曳不收', context.hasExplorerDrag(evt(['text/plain'], [], 'all')) === false)
+
+  const setEffect = (allowed, want) => {
+    const e = evt(['Files'], [], allowed)
+    context.setDropEffect(e, want)
+    return e.dataTransfer.dropEffect
+  }
+  ok('來源允許 move 就 move', setEffect('copyMove', 'move') === 'move', setEffect('copyMove', 'move'))
+  ok('來源只允許 copy 時退回 copy', setEffect('copy', 'move') === 'copy', setEffect('copy', 'move'))
+  ok('來源沒宣告就照自己想的', setEffect('all', 'move') === 'move', setEffect('all', 'move'))
+
+  const pageSrc3 = fs.readFileSync(path.join(ROOT, 'src/renderer/scripts/explorer-page.js'), 'utf8')
+  ok(
+    'dragstart 讓位給 OS 的拖放',
+    /function onDragStart[\s\S]{0,400}e\.preventDefault\(\)[\s\S]{0,200}explorer\.startDrag\(/.test(pageSrc3)
+  )
+  ok('drop 用 getPathForFile 還原路徑', /readDragPaths\(e, electronAPI\.getPathForFile\)/.test(pageSrc3))
+  ok(
+    '清單空白處按一下就取消選取',
+    /function onListClick[\s\S]{0,200}selected = new Set\(\)/.test(pageSrc3)
+      && /addEventListener\('click', onListClick\)/.test(pageSrc3)
+  )
+  ok('選到列上不清掉', /function onListClick\(e\) \{\s*if \(e\.target\.closest\('\.ex-row'\)/.test(pageSrc3))
+
+  const preloadSrc3 = fs.readFileSync(path.join(ROOT, 'src/preload/preload.js'), 'utf8')
+  ok('preload 有 startDrag', /startDrag: \(list\) => ipcRenderer\.invoke\('explorer:startDrag', list\)/.test(preloadSrc3))
+  const indexSrc3 = fs.readFileSync(path.join(ROOT, 'src/main/explorer/index.js'), 'utf8')
+  ok('main 的 startDrag 仍過路徑守衛', /function startDrag[\s\S]{0,600}paths\.resolveExisting\(/.test(indexSrc3))
+  ok('startDrag 要拿到發起的 webContents', /service\.startDrag\(list, event\.sender\)/.test(
+    fs.readFileSync(path.join(ROOT, 'src/main/explorer/ipc.js'), 'utf8')
+  ))
+}
+
 console.log('\n[Q] index.js 的 exports 都有定義')
 {
   const indexSource = fs.readFileSync(path.join(ROOT, 'src/main/explorer/index.js'), 'utf8')

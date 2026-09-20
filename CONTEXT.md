@@ -27,6 +27,17 @@ AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定�
   （拿不到 focused window）或 renderer 插不進去，才退回原本的剪貼簿 ＋ 模擬 Ctrl+V。
 - 測試：`e2e-terminal-cdp.js`（打包版量 PTY 真的收到什麼）、`e2e-dictation.js` 的 [K0]。
 
+### 檔案總管：檔案拖得出去、空白處取消選取（2026-09-20）
+
+- 清單上拖檔案**交給 Windows 自己的拖放**（`explorer:startDrag` → `webContents.startDrag`），
+  所以拖得進瀏覽器的上傳框、桌面、別的程式。dragstart 要 `preventDefault()` 把場子讓出來，
+  HTML5 的 DnD 跟原生拖放不能並存。
+- 代價是自家視窗內的拖放也變成 OS 拖放：drop 端沒有自訂 MIME 可讀，`readDragPaths` 改從
+  `dataTransfer.files` ＋ `getPathForFile` 取絕對路徑（順手支援「從別的程式拖檔案進來」）。
+- 清單空白處按一下就取消選取（以前只有右鍵會清，Ctrl 多選之後點旁邊清不掉）。
+- 測試：`e2e-explorer-drag.js`（假 sender，不真的啟動拖放）、`test-explorer.js` 的 [S3]、
+  `e2e-explorer-cdp.js` 的 [C3][C4]。
+
 ### 檔案總管：右鍵把資料夾加進工作區專案（2026-09-20）
 
 - 資料夾右鍵「加入工作區專案」、資料夾內空白處右鍵「把這個資料夾加入專案」→ 加進專案清單、

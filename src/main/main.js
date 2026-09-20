@@ -1854,6 +1854,7 @@ registerExplorerIpc({
     moveEntry: (...args) => loadExplorer().moveEntry(...args),
     openPath: (...args) => loadExplorer().openPath(...args),
     fileIcon: (...args) => loadExplorer().fileIcon(...args),
+    startDrag: (...args) => loadExplorer().startDrag(...args),
     shellMenu: (...args) => loadExplorer().shellMenu(...args),
     shellInvoke: (...args) => loadExplorer().shellInvoke(...args),
     shellRelease: (...args) => loadExplorer().shellRelease(...args),

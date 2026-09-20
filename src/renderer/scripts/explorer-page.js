@@ -16,7 +16,7 @@ import {
   RECYCLE_CWD,
   pathKey,
   readDragPaths,
-  writeDragPaths,
+  setDropEffect,
   dropMode,
   hasExplorerDrag,
   bindDropTarget,
@@ -136,6 +136,7 @@ function bindOnce() {
   $('exViewListBtn')?.addEventListener('click', () => setView('list'))
   $('exViewGridBtn')?.addEventListener('click', () => setView('grid'))
   $('exListHead')?.addEventListener('click', onSortClick)
+  $('exList')?.addEventListener('click', onListClick)
   $('exList')?.addEventListener('contextmenu', onListContext)
   $('exList')?.addEventListener('dragover', onListDragOver)
   $('exList')?.addEventListener('drop', onListDrop)
@@ -1319,6 +1320,13 @@ async function addNasPlace() {
   }
 }
 
+function onListClick(e) {
+  if (e.target.closest('.ex-row') || !selected.size) return
+  selected = new Set()
+  anchor = ''
+  paintList()
+}
+
 function onListContext(e) {
   if (e.target.closest('.ex-row')) return
   e.preventDefault()
@@ -1329,14 +1337,19 @@ function onListContext(e) {
 
 function onDragStart(e, entry) {
   if (!selected.has(entryId(entry))) selectOnly(entryId(entry))
-  const items = selectedEntries()
-  writeDragPaths(e, items.map((i) => i.path), items[0] ? items[0].name : 'files')
+  const items = selectedEntries().map((i) => i.path).filter(Boolean)
+  if (!items.length) return
+  // 交給 Windows 自己的拖放，才拖得進別的程式（瀏覽器上傳框、桌面）。
+  // 原生拖放一啟動，HTML5 那條就得讓位：兩邊一起來 Windows 只認先啟動的那個。
+  e.preventDefault()
+  void electronAPI.explorer.startDrag(items)
 }
 
 function onListDragOver(e) {
   if (e.target.closest('.ex-row')) return
   if (!hasExplorerDrag(e)) return
   e.preventDefault()
+  setDropEffect(e, e.ctrlKey ? 'copy' : 'move')
 }
 
 function onListDrop(e) {
@@ -1346,7 +1359,7 @@ function onListDrop(e) {
 
 async function handleDrop(e, toDir) {
   e.preventDefault()
-  const paths = readDragPaths(e)
+  const paths = readDragPaths(e, electronAPI.getPathForFile)
   if (!paths.length || !toDir || pathKey(toDir) === THIS_PC) return
   if (paths.some((p) => pathKey(p) === pathKey(toDir))) return
   const mode = dropMode(e, paths[0], toDir)
