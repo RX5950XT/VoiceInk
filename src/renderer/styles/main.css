@@ -12141,6 +12141,13 @@ h6.md-h { font-size: 14px; }
   user-select: none;
 }
 
+/* 隱藏／系統項目：列出來了，但看得出來本來是藏著的 */
+.ex-row.is-dim .ex-row-name,
+.ex-row.is-dim .ex-row-size,
+.ex-row.is-dim .ex-row-mtime {
+  opacity: 0.55;
+}
+
 .ex-row:hover {
   background: var(--surface-hover);
 }

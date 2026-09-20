@@ -212,6 +212,9 @@ export function showExplorerMenu(at, spec) {
     menu.push({ label: '新增檔案', onSelect: act.newFile })
     if (act.pinHere) menu.push({ label: '釘到側欄', onSelect: act.pinHere })
     if (act.openProjectHere) menu.push({ label: '把這個資料夾加入專案', onSelect: act.openProjectHere })
+    if (act.toggleHidden) {
+      menu.push({ label: spec.showHidden ? '不顯示隱藏項目' : '顯示隱藏項目', onSelect: act.toggleHidden })
+    }
   }
   if (act.refresh) {
     menu.push({ sep: true })

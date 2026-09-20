@@ -84,7 +84,7 @@ function sanitizeAuto(raw) {
 }
 
 /**
- * @returns {Promise<{ lastPath: string, view: 'list'|'grid', sort: string, sortDesc: boolean, uffsAuto: boolean, places: object[] }>}
+ * @returns {Promise<{ lastPath: string, view: 'list'|'grid', sort: string, sortDesc: boolean, showHidden: boolean, uffsAuto: boolean, places: object[] }>}
  */
 function readState() {
   return withStore(async () => {
@@ -94,6 +94,7 @@ function readState() {
       view: sanitizeView(s.get('view', 'list')),
       sort: sanitizeSortKey(s.get('sort', 'name')),
       sortDesc: s.get('sortDesc', false) === true,
+      showHidden: s.get('showHidden', false) === true,
       uffsAuto: sanitizeAuto(s.get('uffsAuto', true)),
       places: places.sanitizePlaces(s.get('places', []))
     }
@@ -101,8 +102,8 @@ function readState() {
 }
 
 /**
- * @param {{ lastPath?: unknown, view?: unknown, sort?: unknown, sortDesc?: unknown, uffsAuto?: unknown, places?: unknown }} patch
- * @returns {Promise<{ lastPath: string, view: 'list'|'grid', sort: string, sortDesc: boolean, uffsAuto: boolean, places: object[] }>}
+ * @param {{ lastPath?: unknown, view?: unknown, sort?: unknown, sortDesc?: unknown, showHidden?: unknown, uffsAuto?: unknown, places?: unknown }} patch
+ * @returns {Promise<{ lastPath: string, view: 'list'|'grid', sort: string, sortDesc: boolean, showHidden: boolean, uffsAuto: boolean, places: object[] }>}
  */
 function writeState(patch) {
   return withStore(async () => {
@@ -120,6 +121,9 @@ function writeState(patch) {
       sortDesc: patch.sortDesc !== undefined
         ? patch.sortDesc === true
         : s.get('sortDesc', false) === true,
+      showHidden: patch.showHidden !== undefined
+        ? patch.showHidden === true
+        : s.get('showHidden', false) === true,
       uffsAuto: patch.uffsAuto !== undefined
         ? sanitizeAuto(patch.uffsAuto)
         : sanitizeAuto(s.get('uffsAuto', true)),
@@ -131,6 +135,7 @@ function writeState(patch) {
     s.set('view', next.view)
     s.set('sort', next.sort)
     s.set('sortDesc', next.sortDesc)
+    s.set('showHidden', next.showHidden)
     s.set('uffsAuto', next.uffsAuto)
     s.set('places', next.places)
     return next

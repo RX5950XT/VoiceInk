@@ -34,6 +34,8 @@ let cwd = ''
 let view = 'list'
 let sortBy = 'name'
 let sortDesc = false
+/** 要不要把隱藏／系統項目也列出來（跟檔案總管的「顯示隱藏的項目」同一件事）*/
+let showHidden = false
 /** @type {string[]} */
 let history = []
 let histIndex = -1
@@ -458,6 +460,7 @@ function rowEl(entry) {
   row.setAttribute('role', 'option')
   row.tabIndex = -1
   if (selected.has(entryId(entry))) row.classList.add('is-selected')
+  if (entry.hidden) row.classList.add('is-dim')
   const name = document.createElement('div')
   name.className = 'ex-row-name'
   const icon = document.createElement('span')
@@ -758,7 +761,7 @@ async function loadDir(dirPath, opts = {}) {
   const seq = ++navSeq
   let result
   try {
-    result = await electronAPI.explorer.listDir(dirPath, { sort: sortBy, desc: sortDesc })
+    result = await electronAPI.explorer.listDir(dirPath, { sort: sortBy, desc: sortDesc, showHidden })
   } catch {
     result = null
   }
@@ -1175,6 +1178,7 @@ function openContextMenu(e, items) {
     showExplorerMenu(at, {
       recycle,
       items,
+      showHidden,
       shell: shellItems,
       invokeShell: (cmd) => {
         if (!token) return Promise.resolve()
@@ -1204,6 +1208,7 @@ function openContextMenu(e, items) {
         remove: () => void deleteItems(items),
         newFolder: () => void newFolder(),
         newFile: () => void newFile(),
+        toggleHidden: () => void toggleHidden(),
         refresh: () => void refreshAfterMutate()
       }
     })
@@ -1471,6 +1476,13 @@ function onListClick(e) {
   anchor = ''
   cursor = ''
   paintList()
+}
+
+async function toggleHidden() {
+  showHidden = !showHidden
+  void electronAPI.explorer.saveState({ showHidden })
+  await refreshAfterMutate()
+  showToast(showHidden ? '已顯示隱藏項目' : '已隱藏系統項目')
 }
 
 function onListContext(e) {
@@ -1758,6 +1770,7 @@ export async function refreshExplorerPage() {
     view = boot.view === 'grid' ? 'grid' : 'list'
     sortBy = boot.sort === 'date' || boot.sort === 'size' ? boot.sort : 'name'
     sortDesc = boot.sortDesc === true
+    showHidden = boot.showHidden === true
     places = boot.places || []
     disks = boot.drives || []
     setView(view)
