@@ -433,15 +433,23 @@ async function main() {
       const press = async (type, x, y) => cdp.send('Input.dispatchMouseEvent', {
         type, x, y, button: 'left', buttons: type === 'mouseReleased' ? 0 : 1, clickCount: 1
       })
+      const onRow6 = await cdp.eval(`(() => {
+        const el = document.elementFromPoint(${geo.startX}, ${geo.startY})
+        return !!(el && el.closest('.ex-row'))
+      })()`)
+      assert(!onRow6, '框選的起點是空白不是某一列', JSON.stringify(geo))
       await press('mousePressed', geo.startX, geo.startY)
+      // mousedown 的 handler 要先掛上 document 的 mousemove 才收得到後面那幾下，
+      // 合成事件送太快會整串落空（實測第二次跑就抓不到框）
+      await sleep(80)
       await press('mouseMoved', geo.endX, Math.round((geo.startY + geo.endY) / 2))
       await press('mouseMoved', geo.endX, geo.endY)
-      const marquee = await cdp.eval(`(() => {
+      const marquee = await waitFor(() => cdp.eval(`(() => {
         const el = document.querySelector('#exList .ex-marquee')
         if (!el) return null
         const s = getComputedStyle(el)
         return { w: el.offsetWidth, h: el.offsetHeight, bg: s.backgroundColor, border: s.borderTopWidth }
-      })()`)
+      })()`), 5_000, '框畫出來').catch(() => null)
       assert(marquee && marquee.w > 0 && marquee.h > 0, '拖出來的框畫得出來', JSON.stringify(marquee))
       assert(marquee && marquee.bg !== 'rgba(0, 0, 0, 0)', '框有底色（不是透明的）', JSON.stringify(marquee))
       const live = await cdp.eval(`document.querySelectorAll('#exList .ex-row.is-selected').length`)
