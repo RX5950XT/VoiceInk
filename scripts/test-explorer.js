@@ -572,6 +572,54 @@ console.log('\n[S] 路徑列可輸入、詳情鈕在上、右鍵補強、側欄�
   ok('回收筒不預覽原路徑', /inRecycle/.test(detailSrc) && /inspect|preview|IMAGE_EXT/.test(detailSrc))
 }
 
+console.log('\n[S2] 右鍵能把資料夾加進工作區專案')
+{
+  const vm = require('vm')
+  const dndSrc = fs.readFileSync(path.join(ROOT, 'src/renderer/scripts/explorer-dnd.js'), 'utf8')
+    .replace(/^import[\s\S]*?from '[^']+'\r?\n/gm, '')
+    .replace(/^export /gm, '')
+  /** @type {any[]} */
+  let shown = []
+  const context = { console, showMenu: (at, menu) => { shown = menu } }
+  vm.createContext(context)
+  vm.runInContext(dndSrc, context)
+  const labels = () => shown.map((row) => row.label)
+  const pick = (label) => shown.find((row) => row.label === label)
+
+  const hits = []
+  const actions = {
+    open: () => {}, openTab: () => {}, paste: () => {}, cut: () => {}, copy: () => {},
+    rename: () => {}, remove: () => {}, newFolder: () => {}, newFile: () => {},
+    pin: () => {}, pinHere: () => {},
+    openProject: () => hits.push('openProject'),
+    openProjectHere: () => hits.push('openProjectHere')
+  }
+  context.showExplorerMenu({ x: 0, y: 0 }, { recycle: false, items: [{ name: 'repo', path: 'D:\\repo', dir: true }], actions })
+  ok('單選資料夾看得到「加入工作區專案」', labels().includes('加入工作區專案'), labels().join('｜'))
+  pick('加入工作區專案')?.onSelect()
+
+  context.showExplorerMenu({ x: 0, y: 0 }, { recycle: false, items: [{ name: 'a.txt', path: 'D:\\a.txt', dir: false }], actions })
+  ok('選到檔案時不出現那一項', !labels().includes('加入工作區專案'))
+
+  context.showExplorerMenu({ x: 0, y: 0 }, { recycle: false, items: [], actions })
+  ok('空白處看得到「把這個資料夾加入專案」', labels().includes('把這個資料夾加入專案'), labels().join('｜'))
+  pick('把這個資料夾加入專案')?.onSelect()
+
+  context.showExplorerMenu({ x: 0, y: 0 }, { recycle: true, items: [{ name: 'x', path: 'D:\\x', dir: true }], actions: { ...actions, restore: () => {}, purge: () => {}, empty: () => {} } })
+  ok('資源回收筒裡不出現', !labels().includes('加入工作區專案'), labels().join('｜'))
+
+  ok('兩個入口都真的叫到動作', hits.join(',') === 'openProject,openProjectHere', hits.join(','))
+
+  const pageSrc2 = fs.readFileSync(path.join(ROOT, 'src/renderer/scripts/explorer-page.js'), 'utf8')
+  ok('動作接到 workspace 模組', /openFolderAsProject/.test(pageSrc2) && /setSidebarMode\('projects'\)/.test(pageSrc2))
+  ok('虛擬位置擋在外面', /openInWorkspace[\s\S]{0,200}RECYCLE_CWD, THIS_PC/.test(pageSrc2))
+  const wsSrc = fs.readFileSync(path.join(ROOT, 'src/renderer/scripts/workspace-page.js'), 'utf8')
+  ok('workspace-page 有 openFolderAsProject', /export async function openFolderAsProject/.test(wsSrc))
+  const preloadSrc2 = fs.readFileSync(path.join(ROOT, 'src/preload/preload.js'), 'utf8')
+  ok('preload 的 addFolders 只送字串路徑', /addFolders: \(paths\)[\s\S]{0,320}typeof p === 'string'/.test(preloadSrc2))
+  ok('addFolders 走既有的 workspace:addDropped', /addFolders[\s\S]{0,200}'workspace:addDropped'/.test(preloadSrc2))
+}
+
 console.log('\n[Q] index.js 的 exports 都有定義')
 {
   const indexSource = fs.readFileSync(path.join(ROOT, 'src/main/explorer/index.js'), 'utf8')

@@ -244,6 +244,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
           .filter(Boolean)
       )
     ),
+    /**
+     * 從檔案頁的右鍵選單把資料夾加進專案。路徑是 explorer 剛列出來的真實路徑，
+     * main 端仍逐一走 store.create 的驗證（要存在、要是資料夾、重複就回既有那筆）。
+     * @param {string[]} paths
+     */
+    addFolders: (paths) => (
+      ipcRenderer.invoke(
+        'workspace:addDropped',
+        (Array.isArray(paths) ? paths : []).filter((p) => typeof p === 'string' && p.trim()).slice(0, 20)
+      )
+    ),
     renameProject: (id, name) => ipcRenderer.invoke('workspace:renameProject', id, name),
     removeProject: (id) => ipcRenderer.invoke('workspace:removeProject', id),
     /** @param {string[]} ids 側欄拖曳後的完整順序 */

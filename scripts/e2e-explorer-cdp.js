@@ -250,6 +250,56 @@ async function main() {
       '選單有開啟／複製／刪除', JSON.stringify(menu.labels))
     await cdp.eval(`(() => { document.querySelector('.ws-menu')?.remove() })()`)
 
+    console.log('\n[C2] 右鍵資料夾 → 加入工作區專案')
+    {
+      await cdp.eval(`(() => {
+        const row = document.querySelector('#exList [data-id="sub"]')
+        row?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 140, clientY: 200 }))
+      })()`)
+      let folderMenu = { open: false, labels: [] }
+      try {
+        folderMenu = await waitFor(async () => {
+          const got = await cdp.eval(`(() => {
+            const el = document.querySelector('.ws-menu')
+            const labels = el ? [...el.querySelectorAll('.ws-menu-item')].map((n) => n.textContent) : []
+            return { open: !!(el && el.offsetHeight > 0), labels }
+          })()`)
+          return got.open ? got : null
+        }, 15_000, '資料夾右鍵選單')
+      } catch {
+        // 讓 assert 帶著實際內容報 FAIL
+      }
+      assert(folderMenu.labels.includes('加入工作區專案'), '資料夾右鍵有「加入工作區專案」', JSON.stringify(folderMenu.labels))
+      const hit = await cdp.eval(`(() => {
+        const el = [...document.querySelectorAll('.ws-menu .ws-menu-item')].find((n) => n.textContent === '加入工作區專案')
+        if (!el) return false
+        el.click()
+        return true
+      })()`)
+      assert(hit, '點得到那一項')
+      const landed = await waitFor(() => cdp.eval(`(() => {
+        const chat = document.getElementById('page-chat')
+        if (!chat || !chat.classList.contains('active')) return null
+        const panel = document.getElementById('projPanel')
+        if (!panel || panel.hidden) return null
+        const names = [...document.querySelectorAll('#projList .proj-list-item')].map((n) => n.textContent)
+        if (!names.length) return null
+        return { names, active: !!document.querySelector('#projList .proj-list-item.active') }
+      })()`), 20_000, '切到聊天頁的專案側欄')
+      assert(landed.names.some((n) => /sub/.test(n)), '專案清單出現那個資料夾', JSON.stringify(landed.names))
+      const stored = await cdp.eval(`window.electronAPI.workspace.listProjects()`)
+      const subPath = path.join(SEED_DIR, 'sub').toLowerCase()
+      const added = (stored.data || []).find((p) => String(p.path).toLowerCase() === subPath)
+      assert(!!added, '存起來的路徑就是那個資料夾', JSON.stringify((stored.data || []).map((p) => p.path)))
+      // 同一個資料夾再加一次不該變成兩筆
+      await cdp.eval(`window.electronAPI.workspace.addFolders([${JSON.stringify(path.join(SEED_DIR, 'sub'))}])`)
+      const again = await cdp.eval(`window.electronAPI.workspace.listProjects()`)
+      assert((again.data || []).length === (stored.data || []).length, '重複加入不會長出第二筆', String((again.data || []).length))
+      await cdp.eval(`window.electronAPI.workspace.removeProject(${JSON.stringify(added.id)})`)
+      await cdp.eval(`document.querySelector('[data-page="explorer"]').click()`)
+      await waitFor(() => cdp.eval(`document.getElementById('page-explorer')?.classList.contains('active') === true`), 10_000, '切回檔案頁')
+    }
+
     const clicked = await cdp.eval(`(() => {
       document.getElementById('exSearch')?.blur()
       const row = document.querySelector('#exList [data-id="sub"]')
