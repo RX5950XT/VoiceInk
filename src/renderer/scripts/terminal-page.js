@@ -394,6 +394,20 @@ function createPane(id) {
         if (event.type === 'keydown') showFind(true)
         return false
       }
+      // Ctrl+V 貼上（Ctrl+Shift+V 一起收）。**xterm 自己不碰剪貼簿**：不接這一條的話
+      // Ctrl+V 只會被當成普通按鍵（`^V`）送進 PTY，Claude Code 那類 CLI 不認，畫面上
+      // 什麼都不會發生——語音輸入模擬的 Ctrl+V 走的也是這條路，所以整理好的文字會
+      // 「停在剪貼簿裡」，在別的 App 都好好的，只有這個終端機貼不進去。
+      // 讀不到文字（剪貼簿裡是圖片）才把 `^V` 原樣轉給 CLI，Claude Code 的貼上截圖才不會被吞掉。
+      if (event.key === 'v' || event.key === 'V') {
+        if (event.type === 'keydown') {
+          navigator.clipboard.readText().then(
+            (text) => { if (text) term.paste(text); else term.input('\x16', true) },
+            () => term.input('\x16', true)
+          )
+        }
+        return false
+      }
       // 字級：`=` 與 `+` 是同一顆，兩個 key 都要收
       if (['=', '+', '-', '_', '0'].includes(event.key)) {
         if (event.type === 'keydown') {

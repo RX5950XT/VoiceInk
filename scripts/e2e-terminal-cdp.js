@@ -16,6 +16,9 @@ const os = require('os')
 const fs = require('fs')
 
 const PORT = 9247
+/** main 程序的 inspector：剪貼簿只能從那邊寫（renderer 的 navigator.clipboard 在沒有
+ *  焦點的隱藏視窗上會被 Chromium 擋掉：Document is not focused） */
+const MAIN_PORT = 9248
 // Windows 偶爾會有別的東西鎖住 dist/win-unpacked（打包失敗、防毒掃描中），
 // 這時可以打包到別的資料夾再用 VOICEINK_EXE 指過去，測試不必等鎖放掉
 const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
@@ -135,6 +138,7 @@ async function main() {
 
   const child = spawn(EXE, [
     `--remote-debugging-port=${PORT}`,
+    `--inspect=127.0.0.1:${MAIN_PORT}`,
     `--user-data-dir=${USER_DATA_DIR}`,
     '--hidden',
     '--disable-backgrounding-occluded-windows'
@@ -228,7 +232,14 @@ async function main() {
 
     const created = await cdp.eval(`(async () => {
       document.getElementById('termNewCreateBtn').click()
-      await new Promise((r) => setTimeout(r, 2500))
+      // 固定睡 2.5 秒不夠：暫存 userData 的第一個終端機要先把宿主的執行環境
+      // （Electron ＋ node-pty，248MB）複製進 <userData>/terminal-host/，
+      // 那段時間 PTY 還沒起來，量到的是 state=stopped／panes=0。等到畫面上真的
+      // 有一格再往下走。
+      for (let i = 0; i < 120 && !document.querySelector('.term-pane'); i += 1) {
+        await new Promise((r) => setTimeout(r, 500))
+      }
+      await new Promise((r) => setTimeout(r, 1500))
       const list = await window.electronAPI.terminal.list()
       const item = list.data[list.data.length - 1]
       return {
@@ -266,6 +277,89 @@ async function main() {
       JSON.stringify(keyboard.shifted) === JSON.stringify(['\x1b\r']), JSON.stringify(keyboard))
     ok('Enter 維持送出，字級加大 4 至 17',
       JSON.stringify(keyboard.enter) === JSON.stringify(['\r']) && keyboard.font === 17, JSON.stringify(keyboard))
+
+    // ===== Ctrl+V 貼上 =====
+    // **xterm 自己不碰剪貼簿**：沒人接這顆鍵的話 Ctrl+V 只會變成 `^V`（\x16）送進 PTY，
+    // Claude Code 那類 CLI 不認，畫面上什麼都不會發生。語音輸入走的正是「寫剪貼簿 ＋
+    // 模擬 Ctrl+V」，所以那條路壞掉的症狀是「整理好的文字停在剪貼簿裡貼不進終端機」，
+    // 而在別的 App 都好好的。
+    {
+      let mainCdp = null
+      let savedClipboard = null
+      try {
+        const mainTarget = await (async () => {
+          const deadline = Date.now() + 15000
+          while (Date.now() < deadline) {
+            try {
+              const list = await getJson(`http://127.0.0.1:${MAIN_PORT}/json/list`)
+              if (list[0]?.webSocketDebuggerUrl) return list[0]
+            } catch { /* 還沒起來 */ }
+            await new Promise((r) => setTimeout(r, 400))
+          }
+          throw new Error('連不上 main 程序 inspector')
+        })()
+        mainCdp = new Cdp(mainTarget.webSocketDebuggerUrl)
+        await mainCdp.connect()
+        const clip = `process.mainModule.require('electron').clipboard`
+        // 這支跑在使用者自己的機器上：測完要把剪貼簿原樣放回去
+        savedClipboard = await mainCdp.eval(`${clip}.readText()`)
+
+        const needle = `VI-PASTE-${Date.now()}`
+        await mainCdp.eval(`${clip}.writeText(${JSON.stringify(needle)})`)
+        const pastedText = await cdp.eval(`(async () => {
+          const term = window.__testTerminal
+          const sent = []
+          const capture = term.onData((d) => sent.push(d))
+          const opts = { key: 'v', code: 'KeyV', keyCode: 86, which: 86, ctrlKey: true, bubbles: true, cancelable: true }
+          term.textarea.focus()
+          term.textarea.dispatchEvent(new KeyboardEvent('keydown', opts))
+          term.textarea.dispatchEvent(new KeyboardEvent('keyup', opts))
+          // 剪貼簿是 async 讀的，等它一輪
+          for (let i = 0; i < 30 && !sent.join('').includes(${JSON.stringify(needle)}); i += 1) {
+            await new Promise((r) => setTimeout(r, 100))
+          }
+          capture.dispose()
+          return sent.join('')
+        })()`)
+        ok('Ctrl+V 把剪貼簿的文字送進 PTY（語音輸入貼得進來）',
+          pastedText.includes(needle) && !pastedText.includes('\x16'), JSON.stringify(pastedText.slice(0, 120)))
+
+        // 剪貼簿裡沒有文字（截圖）時要原樣轉 ^V 給 CLI，
+        // 否則 Claude Code 的「貼上截圖」會被我們吞掉。
+        await mainCdp.eval(`${clip}.clear()`)
+        const rawCtrlV = await cdp.eval(`(async () => {
+          const term = window.__testTerminal
+          const sent = []
+          const capture = term.onData((d) => sent.push(d))
+          const opts = { key: 'v', code: 'KeyV', keyCode: 86, which: 86, ctrlKey: true, bubbles: true, cancelable: true }
+          term.textarea.focus()
+          term.textarea.dispatchEvent(new KeyboardEvent('keydown', opts))
+          term.textarea.dispatchEvent(new KeyboardEvent('keyup', opts))
+          for (let i = 0; i < 30 && !sent.join('').includes('\\x16'); i += 1) {
+            await new Promise((r) => setTimeout(r, 100))
+          }
+          capture.dispose()
+          return sent.join('')
+        })()`)
+        ok('剪貼簿沒有文字時把 ^V 原樣轉給 CLI（貼上截圖不會被吞掉）',
+          rawCtrlV.includes('\x16'), JSON.stringify(rawCtrlV))
+        // 貼進 PTY 的那一行留著會被當成指令，按 Ctrl+C 清掉
+        await cdp.eval(`window.electronAPI.terminal.write(${JSON.stringify(createdId)}, '\\x03')`)
+      } catch (error) {
+        ok('Ctrl+V 貼上', false, error.message)
+      } finally {
+        if (mainCdp) {
+          if (typeof savedClipboard === 'string') {
+            try {
+              await mainCdp.eval(savedClipboard
+                ? `process.mainModule.require('electron').clipboard.writeText(${JSON.stringify(savedClipboard)})`
+                : `process.mainModule.require('electron').clipboard.clear()`)
+            } catch { /* App 可能已經關了 */ }
+          }
+          mainCdp.close()
+        }
+      }
+    }
 
     // 回歸：背景頁的 DOM 不會繪製 xterm；確認 prompt 已到 main buffer，且 renderer
     // 沒走會被背景 timer 節流的非同步 write。舊版在這裡會至少呼叫一次 write。
