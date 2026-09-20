@@ -96,6 +96,10 @@ console.log('\n[C] 宿主行協定（假 spawn，不碰真 COM）')
     ok: true,
     data: { thumb: { w: 96, h: 96, bgra: 'AAAA' } }
   })
+  responses.set('attrs', {
+    ok: true,
+    data: { items: [{ name: 'secret.txt', hidden: true, system: false }, { name: 'plain.txt', hidden: false, system: false }] }
+  })
   const exe = path.join(ROOT, 'resources', 'shell', 'VoiceInkShell.exe')
   startShell({ spawnFn: fakeSpawn, exePath: exe || 'VoiceInkShell.exe' }).then(async (shell) => {
     ok('假 sidecar 起得來', shell.ok === true, shell.error)
@@ -104,6 +108,8 @@ console.log('\n[C] 宿主行協定（假 spawn，不碰真 COM）')
     ok('7-Zip 子選單在', menu.data.items[0].children[0].label === '解壓縮')
     const thumb = await shell.send({ op: 'thumb', path: 'C:\\a.png', size: 96 })
     ok('縮圖協定帶尺寸', thumb.ok && thumb.data.thumb.w === 96)
+    const attrs = await shell.send({ op: 'attrs', dir: 'C:\\tmp' })
+    ok('屬性協定帶 hidden', attrs.ok && attrs.data.items[0].hidden === true && attrs.data.items[1].hidden === false)
     shell.stop()
     finishRest()
   }).catch((error) => {
@@ -120,6 +126,7 @@ function finishRest() {
     const interop = fs.readFileSync(path.join(ROOT, 'native/explorer-shell/Interop.cs'), 'utf8')
     const thumbs = fs.readFileSync(path.join(ROOT, 'native/explorer-shell/Thumbnails.cs'), 'utf8')
     const program = fs.readFileSync(path.join(ROOT, 'native/explorer-shell/Program.cs'), 'utf8')
+    const attrsCs = fs.readFileSync(path.join(ROOT, 'native/explorer-shell/Attributes.cs'), 'utf8')
     const icons = fs.readFileSync(path.join(ROOT, 'src/renderer/scripts/explorer-icons.js'), 'utf8')
     ok('圖示走 SHGFI_ADDOVERLAYS', overlays.includes('SHGFI_ADDOVERLAYS'))
     ok('不自己挖 overlay 圖庫', overlays.includes('不要想自己把那張小圖單獨挖出來'))
@@ -131,6 +138,10 @@ function finishRest() {
     ok('縮圖不用 THUMBNAILONLY', thumbs.includes('SIIGBF_RESIZETOFIT | Native.SIIGBF_BIGGERSIZEOK') && !/GetImage\([^)]*THUMBNAILONLY/.test(thumbs))
     ok('HBITMAP 用完 DeleteObject', thumbs.includes('DeleteObject(hbmp)'))
     ok('sidecar 有 thumb op', program.includes('case "thumb"'))
+    ok('sidecar 有 attrs op', program.includes('case "attrs"'))
+    ok('屬性一次問整層', attrsCs.includes('EnumerateFileSystemInfos'))
+    ok('屬性上限 2000', attrsCs.includes('MaxEntries = 2000'))
+    ok('讀不到的項目跳過', attrsCs.includes('沒權限或瞬間消失'))
     ok('圖示與縮圖快取 key 分開', icons.includes("? 't' : 'i'"))
     ok('只在方格檢視要縮圖', icons.includes('is-grid') && icons.includes('pdf') && icons.includes('docx'))
   }
