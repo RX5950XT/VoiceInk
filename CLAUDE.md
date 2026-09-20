@@ -240,6 +240,14 @@ tag 要與 `package.json` 的 version 一致。
   `icon` 是空的會**直接丟例外**（拿不到圖示要有保底圖）；`startDrag` 底下是 OS 的 DoDragDrop，
   **會一路阻塞到使用者放手——CDP 測試絕對不可以呼叫它**（要驗交出去的內容就注入假的 sender）。
   回歸 `e2e-explorer-drag.js` ＋ `test-explorer.js` 的 [S3] ＋ `e2e-explorer-cdp.js` 的 [C3][C4]。
+- **縮圖跟圖示是兩支 API**：`SHGetFileInfo`（`iconOf`）回的是**類型圖示**，一資料夾照片會長得
+  一模一樣；縮圖要 `IShellItemImageFactory::GetImage`（`thumbOf`）。旗標用
+  `RESIZETOFIT | BIGGERSIZEOK`，**不要 `THUMBNAILONLY`**（沒縮圖的檔會直接失敗而不是退回圖示）。
+  尺寸要夾上下限：一張 96px 的 BGRA 就 36KB、256px 是 256KB，列一百個檔 IPC 會肥掉。
+  `HBITMAP` 用完一定要 `DeleteObject`（這支會被連叫上百次）。測試**一定要斷言「縮圖跟類型圖示
+  不是同一張 base64」**，否則「其實還是回圖示」也會全綠。回歸 `probe-explorer-shell.js` 的 [D]。
+  另外 `resources/shell/` 不進版控：**改完 sidecar 要記得 `npm run build:shell` 再打包**，
+  否則 App 拿到的還是舊的 exe，症狀是「程式碼都對、就是沒有縮圖」而且一聲不吭。
 - **右鍵的 7-Zip／WinRAR／「傳送到」不能從登錄檔靜態列舉**（只有 CLSID）：要 `IContextMenu` sidecar（`native/explorer-shell`，`npm run build:shell`）。pidl 陣列一定要 `LPArray`（預設 SAFEARRAY ＝ GetUIObjectOf AV）；路徑只吃反斜線。子選單要 `CMF_SYNCCASCADEMENU` ＋ `WM_INITMENUPOPUP`，而且 **IContextMenu3 不做事時要退回 IContextMenu2**（「傳送到」只實作 v2，7-Zip 實作 v3）。Google Drive 綠勾走 `SHGFI_ICON | SHGFI_ADDOVERLAYS` 拿已經疊好的圖，**不要** `IImageList::GetOverlayImage`（每個槽位都回同一張）。沒建 sidecar 就少那些項、資料夾維持 emoji。回歸 `test-explorer-shell.js` ＋ `probe-explorer-shell.js`。
 
 ### 終端機
