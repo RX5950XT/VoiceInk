@@ -300,6 +300,76 @@ async function main() {
       await waitFor(() => cdp.eval(`document.getElementById('page-explorer')?.classList.contains('active') === true`), 10_000, '切回檔案頁')
     }
 
+    console.log('\n[C3] 多選之後點空白取消選取')
+    {
+      const picked = await cdp.eval(`(() => {
+        const list = document.getElementById('exList')
+        for (const id of ['hello.txt', 'sub']) {
+          const row = list.querySelector('[data-id="' + id + '"]')
+          row?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true }))
+        }
+        return list.querySelectorAll('.ex-row.is-selected').length
+      })()`)
+      assert(picked === 2, 'Ctrl+左鍵選得到兩筆', String(picked))
+
+      // 真的用滑鼠點清單下方的空白（不是 dispatchEvent，那繞過命中測試）
+      const spot = await cdp.eval(`(() => {
+        const r = document.getElementById('exList').getBoundingClientRect()
+        return { x: Math.round(r.left + r.width / 2), y: Math.round(r.bottom - 12) }
+      })()`)
+      const onRow = await cdp.eval(`(() => {
+        const el = document.elementFromPoint(${spot.x}, ${spot.y})
+        return !!(el && el.closest('.ex-row'))
+      })()`)
+      assert(!onRow, '點的位置真的是空白，不是某一列', JSON.stringify(spot))
+      for (const type of ['mousePressed', 'mouseReleased']) {
+        await cdp.send('Input.dispatchMouseEvent', {
+          type, x: spot.x, y: spot.y, button: 'left', buttons: type === 'mousePressed' ? 1 : 0, clickCount: 1
+        })
+      }
+      const after = await waitFor(() => cdp.eval(`(() => {
+        const n = document.querySelectorAll('#exList .ex-row.is-selected').length
+        return n === 0 ? { n } : null
+      })()`), 5_000, '選取被清掉').catch(() => null)
+      assert(after && after.n === 0, '點空白就取消選取',
+        JSON.stringify(await cdp.eval(`[...document.querySelectorAll('#exList .ex-row.is-selected')].map((r) => r.dataset.id)`)))
+    }
+
+    console.log('\n[C4] 拖放走 OS 的檔案（拖得出去，也拖得進來）')
+    {
+      const api = await cdp.eval(`typeof window.electronAPI.explorer.startDrag`)
+      // 只確認接得到；真的呼叫會啟動 OS 的拖放，整支測試會卡在那裡等使用者放手
+      assert(api === 'function', 'preload 接得到 startDrag', api)
+
+      const dropSrc = path.join(USER_DATA_DIR, 'drop-me.txt')
+      fs.writeFileSync(dropSrc, 'dropped')
+      const target = await cdp.eval(`(() => {
+        const row = document.querySelector('#exList [data-id="sub"]')
+        if (!row) return null
+        const r = row.getBoundingClientRect()
+        return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }
+      })()`)
+      assert(!!target, '找得到要拖進去的資料夾')
+      const data = {
+        items: [],
+        files: [dropSrc],
+        dragOperationsMask: 17 // copy | move
+      }
+      for (const type of ['dragEnter', 'dragOver', 'drop']) {
+        await cdp.send('Input.dispatchDragEvent', {
+          type, x: target.x, y: target.y, data, modifiers: 2 // Ctrl ＝ 複製，來源檔留著
+        })
+      }
+      const landed = await waitFor(async () => {
+        const got = await cdp.eval(`window.electronAPI.explorer.listDir(${JSON.stringify(path.join(SEED_DIR, 'sub'))})`)
+        const names = ((got.data || {}).entries || []).map((e) => e.name)
+        return names.includes('drop-me.txt') ? names : null
+      }, 15_000, '檔案落進 sub').catch(() => null)
+      assert(!!landed, '從外面拖進來的檔案真的進了那個資料夾', JSON.stringify(landed))
+      assert(fs.existsSync(dropSrc), '按著 Ctrl 拖＝複製，來源還在')
+      await cdp.eval(`window.electronAPI.explorer.removeEntry(${JSON.stringify(path.join(SEED_DIR, 'sub', 'drop-me.txt'))}, { permanent: true })`)
+    }
+
     const clicked = await cdp.eval(`(() => {
       document.getElementById('exSearch')?.blur()
       const row = document.querySelector('#exList [data-id="sub"]')

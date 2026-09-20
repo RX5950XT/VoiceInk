@@ -202,6 +202,16 @@ tag 要與 `package.json` 的 version 一致。
 - **`uffs.exe` 不打進 asar**；只跑 `<userData>/uffs/`，不認 PATH／`%LOCALAPPDATA%\uffs`。zip checksum 缺或對不上就失敗。關 App **不停** UFFS daemon。刪／改名／搬移擋磁碟根目錄、`%SystemRoot%` 本身、使用者家目錄本身（`assertMutable`）；家目錄根層可以新增／貼上／還原子項（`assertCreatable` 只擋磁碟根與 Windows 目錄）。`resolveExisting` 回使用者路徑，刪 junction 不跟目標。清空回收筒不吃 list 的 2000 上限。預設刪除丟進系統資源回收筒（寫 `$I`／`$R`，Electron 裡走 `shell.trashItem`）；`{ permanent: true }` 才 `rm`。複製／搬移撞名產出 `name (2).ext`，不覆寫。CDP 暫存 userData 與沙箱的 `uffsAuto` 關掉，且忽略 `uffsEnsure({ force })`，避免自動化卡在 UAC。
 - 三份清單：`explorer/index.js` exports、`main.js` 的 `registerExplorerIpc` service、`preload.js` 的 `electronAPI.explorer`。回歸 `test-explorer.js` 的 [Q][Q2]。
 - **右鍵「加入工作區專案」不另開 IPC**：沿用工作區的 `workspace:addDropped`（preload 的 `addFolders` 只把字串路徑送過去），main 端仍走 `store.create` 的全套驗證——路徑要存在、必須是資料夾、撞路徑回原本那筆。虛擬位置（本機首頁、資源回收筒）在 renderer 就擋掉。回歸 `test-explorer.js` 的 [S2] ＋ `e2e-explorer-cdp.js` 的 [C2]。
+- **拖到別的程式只有 `webContents.startDrag` 做得到，而且跟 HTML5 的 DnD 不能並存**：
+  `dataTransfer` 裡放什麼，出了視窗都不算數（瀏覽器的上傳框要的是 OS 的 CF_HDROP）。
+  dragstart 要 `preventDefault()` 把場子讓給 main 的 `explorer:startDrag`，兩邊一起來
+  Windows 只認先啟動的那個。代價是**自家視窗內的拖放也變成 OS 拖放**——drop 端再也讀不到
+  自訂 MIME，一律 `dataTransfer.files` ＋ `getPathForFile`（Electron 32+ 沒有 `File.path`）。
+  另外三件事各自會讓它安靜失效：`dragover` 把 `dropEffect` 設成來源沒允許的值，Chromium 當成
+  none，**`drop` 整個不發生**（一律走 `setDropEffect`，不允許就退回 copy）；`startDrag` 的
+  `icon` 是空的會**直接丟例外**（拿不到圖示要有保底圖）；`startDrag` 底下是 OS 的 DoDragDrop，
+  **會一路阻塞到使用者放手——CDP 測試絕對不可以呼叫它**（要驗交出去的內容就注入假的 sender）。
+  回歸 `e2e-explorer-drag.js` ＋ `test-explorer.js` 的 [S3] ＋ `e2e-explorer-cdp.js` 的 [C3][C4]。
 - **右鍵的 7-Zip／WinRAR／「傳送到」不能從登錄檔靜態列舉**（只有 CLSID）：要 `IContextMenu` sidecar（`native/explorer-shell`，`npm run build:shell`）。pidl 陣列一定要 `LPArray`（預設 SAFEARRAY ＝ GetUIObjectOf AV）；路徑只吃反斜線。子選單要 `CMF_SYNCCASCADEMENU` ＋ `WM_INITMENUPOPUP`，而且 **IContextMenu3 不做事時要退回 IContextMenu2**（「傳送到」只實作 v2，7-Zip 實作 v3）。Google Drive 綠勾走 `SHGFI_ICON | SHGFI_ADDOVERLAYS` 拿已經疊好的圖，**不要** `IImageList::GetOverlayImage`（每個槽位都回同一張）。沒建 sidecar 就少那些項、資料夾維持 emoji。回歸 `test-explorer-shell.js` ＋ `probe-explorer-shell.js`。
 
 ### 終端機
@@ -486,7 +496,7 @@ tag 要與 `package.json` 的 version 一致。
 | 範圍 | 指令 |
 |---|---|
 | 開發沙箱 | `probe-dev-sandbox.js`（**實測**沙箱讀得到你的模型與供應商，而你正在用的那份一個位元組都沒動；動 `dev-sandbox.js` 前後都要跑）|
-| 檔案總管 | `test-explorer.js`（路徑守衛＋自種暫存目錄）＋ `e2e-explorer-cdp.js`（暫存 user-data-dir，**不點第一列**）＋ `probe-explorer-uffs.js`（機器上真有 `uffs` 才打真搜尋）＋ `test-explorer-shell.js`（殼層選單去重／sidecar 協定）＋ `probe-explorer-shell.js`（真 IContextMenu：7-Zip／WinRAR／傳送到、Drive 綠勾） |
+| 檔案總管 | `test-explorer.js`（路徑守衛＋自種暫存目錄）＋ `e2e-explorer-cdp.js`（暫存 user-data-dir，**不點第一列**）＋ `probe-explorer-uffs.js`（機器上真有 `uffs` 才打真搜尋）＋ `e2e-explorer-drag.js`（拖出去交給 OS 的內容，假 sender）＋ `test-explorer-shell.js`（殼層選單去重／sidecar 協定）＋ `probe-explorer-shell.js`（真 IContextMenu：7-Zip／WinRAR／傳送到、Drive 綠勾） |
 | 專案工作區 | `test-workspace.js`／`-nav`／`-ui`／`-state`／`-perf` ＋ `e2e-workspace-cdp.js`（暫存 user-data-dir ＋自種專案）；動 Monaco 前後跑 `probe-workspace-monaco.js`，動 PDF 前跑 `probe-workspace-pdf.js`；動編輯器／diff／預覽／專案切換前後跑 `probe-workspace-perf.js`（**打包版**開 1.4MB／4 萬行的檔，數 `createModel` 有沒有重做、量輸入法游標位置、驗專案隔離）；動大檔開關與記憶體前後跑 `probe-workspace-bigfile.js`（**打包版**量 1.4MB／4 萬行的開檔毫秒數、並排變更毫秒數，以及關掉之後堆積回不回得去、預覽的 iframe 有沒有被收掉） |
 | 終端機 | `test-terminal.js` ＋ `test-terminal-ui.js`（輸出合併、輸入法對位）＋ `probe-terminal-flicker.js`（**會叫到最前面**：DOM vs WebGL 量游標重建與 textarea 抖動）＋ `probe-terminal-upgrade.js`（**打包版**驗 WebGL／Unicode 11／字級／搜尋／分割／OSC 標題與 cwd）＋ `probe-terminal-ime.js`（**打包版**真的走一次 Chromium 輸入法組字）＋ `e2e-terminal.js`（真 ConPTY）＋ `e2e-terminal-cdp.js` ＋ `test-terminal-host.js`（獨立宿主）＋ `test-terminal-links.js` ＋ `probe-terminal-links.js`（真 xterm 座標，`npx electron`） ＋ `probe-terminal-editor.js`（Ctrl+G 的 $EDITOR 橋接：真的把那支 batch 跑起來，量它會不會卡住、送出與取消放不放得走） ＋ `probe-terminal-host-version.js`（唯讀：問這台機器上真的跑著的宿主是哪一份執行環境、還活著幾個 shell——「更新了卻沒生效」先跑這支）；動宿主或 `build.files`／`asarUnpack` 前後跑 `probe-terminal-restart.js`（**打包版**真的關 App、覆寫安裝檔再開回來）；管理員 `probe-terminal-admin.js`（免 UAC）／`probe-terminal-admin-elevate.js`（**跳一次 UAC**）；動 `foreground.js` 前後跑 `probe-terminal-foreground.js`（**會開／關記事本**，重現「記事本已經開著」再開第二次）；動配色或桌布前後跑 `probe-terminal-background.js`（**打包版**量桌布那一層畫不畫得出來、字有沒有被 opacity 一起壓掉、拿掉圖之後底色回不回得到不透明）|
 | 聊天／Markdown | `e2e-chat.js`（mock SSE）＋ `e2e-chat-cdp.js` ＋ `test-markdown.js` |

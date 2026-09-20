@@ -7,7 +7,7 @@
  * 關 App 不停它的 daemon。
  */
 
-const { app, shell, dialog, BrowserWindow } = require('electron')
+const { app, shell, dialog, BrowserWindow, nativeImage } = require('electron')
 const fs = require('../raw-fs')
 const path = require('path')
 const { spawnSync } = require('child_process')
@@ -307,6 +307,54 @@ async function fileIcon(target) {
   }
 }
 
+/** 拿不到檔案圖示時的保底圖（1x1 透明 PNG）：`startDrag` 的 icon 是空的就直接丟例外。 */
+const FALLBACK_DRAG_ICON =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4' +
+  '2mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+
+async function dragIcon(target) {
+  try {
+    const info = await fileIcon(target)
+    if (info && info.url) {
+      const image = nativeImage.createFromDataURL(info.url)
+      if (!image.isEmpty()) return image
+    }
+  } catch {
+    // 殼層圖示是裝飾，拿不到就往下走
+  }
+  try {
+    const image = await app.getFileIcon(target, { size: 'normal' })
+    if (!image.isEmpty()) return image
+  } catch {
+    // 同上
+  }
+  return nativeImage.createFromDataURL(FALLBACK_DRAG_ICON)
+}
+
+/**
+ * 把選取的項目交給 Windows 的原生拖放，讓它們拖得進別的程式
+ * （瀏覽器的上傳框、桌面、Office）。renderer 只能在 dragstart 當下呼叫：
+ * `startDrag` 底下是 OS 的 DoDragDrop，會一路阻塞到使用者放手。
+ *
+ * @param {string[]} list renderer 剛列出來的絕對路徑
+ * @param {{ startDrag: Function, isDestroyed?: () => boolean }} sender 發起拖曳的 webContents
+ * @returns {Promise<boolean>} 有沒有真的交給 OS
+ */
+async function startDrag(list, sender) {
+  const files = []
+  for (const item of (Array.isArray(list) ? list : []).slice(0, 100)) {
+    try {
+      files.push(paths.resolveExisting(item))
+    } catch {
+      // 清單畫出來之後被刪掉的，跳過就好
+    }
+  }
+  if (!files.length || !sender || sender.isDestroyed?.()) return false
+  const icon = await dragIcon(files[0])
+  sender.startDrag(files.length === 1 ? { file: files[0], icon } : { files, icon })
+  return true
+}
+
 function shellMenu(spec) {
   return shellExt.menu(spec)
 }
@@ -436,6 +484,7 @@ module.exports = {
   moveEntry,
   openPath,
   fileIcon,
+  startDrag,
   shellMenu,
   shellInvoke,
   shellRelease,

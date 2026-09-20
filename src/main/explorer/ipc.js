@@ -53,6 +53,10 @@ function registerExplorerIpc({ ipcMain, service, isMainSender }) {
   ))
   ipcMain.handle('explorer:openPath', (event, target) => invoke(event, () => service.openPath(target)))
   ipcMain.handle('explorer:fileIcon', (event, target) => invoke(event, () => service.fileIcon(target)))
+  // sender 要自己傳：拖放是「哪個 webContents 發起的」才算數
+  ipcMain.handle('explorer:startDrag', (event, list) => (
+    invoke(event, () => service.startDrag(list, event.sender))
+  ))
   ipcMain.handle('explorer:shellMenu', (event, spec) => invoke(event, () => service.shellMenu(spec)))
   ipcMain.handle('explorer:shellInvoke', (event, token, cmd, dir) => (
     invoke(event, () => service.shellInvoke(token, cmd, dir))
