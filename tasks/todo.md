@@ -233,3 +233,10 @@ Review（2026-09-20）：
 - `node scripts/e2e-explorer-cdp.js`：舊包先在真實 .lnk 解析失敗；新包 44 項 PASS。真實 Windows .lnk 在目前分頁開啟，檔案圖示在 list/grid 均載入，CDP `Input.dispatchMouseEvent` back/forward/back 保留 App 網址，分頁與深淺／窄版回歸全過。
 - 截圖改用既有 workspace 探針的 `capturePage({ stayHidden, stayAwake })` 方式，解決隱藏視窗 CDP 截圖等待；圖片在 `dist/explorer-tabs-qa/icons-list.png`／`icons-grid.png`。
 - 邊界：未操作實體滑鼠；程式／一般檔案捷徑仍沿用原捷徑開啟，以保留啟動參數。未提交、合併或發行，未改使用者安裝版與主工作樹。
+
+# 2026-09-20 — 三工作樹驗收與整合
+
+- [ ] 審查 explorer-shell、ws-browser-git-exec、usage-sysmon，驗證各自修改
+- [ ] 整合變更並解決衝突，打包與隔離背景驗收
+- [ ] 提交、合併至 master、推送並核對遠端
+- [ ] 清理已完成分支與工作樹，保留仍在使用的資料
