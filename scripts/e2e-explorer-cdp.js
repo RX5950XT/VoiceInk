@@ -223,14 +223,28 @@ async function main() {
     assert(chrome.recyclePath === 'recyclebin', '回收筒是虛擬位置', JSON.stringify(chrome))
     assert(chrome.newFile && chrome.sortHead && chrome.emptyBin, '新增檔案／排序列／清空鈕都在', JSON.stringify(chrome))
 
-    const menu = await cdp.eval(`(() => {
+    // 選單要等殼層 sidecar 回報項目才畫得出來（`openContextMenu` 是 async），
+    // 所以 dispatch 完不能當場量——第一次還要付 sidecar 的冷啟動。
+    const dispatched = await cdp.eval(`(() => {
       const row = document.querySelector('#exList [data-id="hello.txt"]')
-      if (!row) return { open: false, labels: [] }
+      if (!row) return false
       row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 140, clientY: 180 }))
-      const el = document.querySelector('.ws-menu')
-      const labels = el ? [...el.querySelectorAll('.ws-menu-item')].map((n) => n.textContent) : []
-      return { open: !!(el && el.offsetHeight > 0), labels }
+      return true
     })()`)
+    assert(dispatched, '找得到要按右鍵的那一列')
+    let menu = { open: false, labels: [] }
+    try {
+      menu = await waitFor(async () => {
+        const got = await cdp.eval(`(() => {
+          const el = document.querySelector('.ws-menu')
+          const labels = el ? [...el.querySelectorAll('.ws-menu-item')].map((n) => n.textContent) : []
+          return { open: !!(el && el.offsetHeight > 0), labels }
+        })()`)
+        return got.open ? got : null
+      }, 15000, '右鍵選單')
+    } catch {
+      // 讓底下的 assert 帶著實際內容報 FAIL
+    }
     assert(menu.open, '右鍵選單開得出來', JSON.stringify(menu))
     assert(menu.labels.includes('開啟') && menu.labels.includes('複製') && menu.labels.includes('刪除'),
       '選單有開啟／複製／刪除', JSON.stringify(menu.labels))
@@ -307,7 +321,15 @@ async function main() {
     await waitFor(() => cdp.eval(`!![...document.querySelectorAll('#exList .ex-row')].find(r => r.dataset.name === ${JSON.stringify(linkName)})`), 10_000, '捷徑出現在清單')
     const resolved = await cdp.eval(`window.electronAPI.explorer.resolvePath(${JSON.stringify(shortcut.data.path)})`)
     assert(resolved.ok && resolved.data.dir && resolved.data.path === path.join(SEED_DIR, 'sub'), '真實捷徑解析為資料夾')
-    await waitFor(() => cdp.eval(`[...document.querySelectorAll('#exList .ex-row')].find(r => r.dataset.name === ${JSON.stringify(linkName)})?.querySelector('.ex-row-icon.is-shortcut')?.textContent === '📁'`), 10_000, '捷徑顯示資料夾與箭頭')
+    // 有殼層 sidecar 時拿的是 Windows 自己那張圖（捷徑箭頭／Drive 綠勾都疊在上面），
+    // 沒建 sidecar 才退回 emoji——兩種都算對，都沒有才是真的壞了。
+    await waitFor(() => cdp.eval(`(() => {
+      const row = [...document.querySelectorAll('#exList .ex-row')].find(r => r.dataset.name === ${JSON.stringify(linkName)})
+      const el = row?.querySelector('.ex-row-icon.is-shortcut')
+      if (!el) return false
+      const img = el.querySelector('img')
+      return Boolean(img && img.naturalWidth > 0) || el.textContent === '📁'
+    })()`), 10_000, '捷徑顯示資料夾與箭頭')
     await waitFor(() => cdp.eval(`document.querySelector('#exList [data-id="hello.txt"] .ex-row-icon img')?.naturalWidth > 0`), 10_000, 'Windows 檔案圖示')
     assert(await cdp.eval(`document.querySelector('#exList [data-id="hello.txt"] .ex-row-icon img').src.startsWith('data:image/png;base64,')`), '文字檔使用 Windows 圖示')
     const iconShots = path.join(__dirname, '..', 'dist', 'explorer-tabs-qa')

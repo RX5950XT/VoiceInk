@@ -246,7 +246,7 @@ async function main() {
         storage: [
           text('storage'),
           ...[...document.querySelectorAll('#sysmonBlocks [data-block^="disk-"]')].map((el) => el.textContent || '')
-        ].join('\n'),
+        ].join('\\n'),
         diskCards: document.querySelectorAll('#sysmonBlocks [data-block^="disk-"]').length,
         memory: text('memory'),
         cpu: text('cpu'),
