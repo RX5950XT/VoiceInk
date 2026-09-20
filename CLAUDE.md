@@ -201,6 +201,7 @@ tag 要與 `package.json` 的 version 一致。
 - **整機搜尋不准自己 walk C:\\**：檔名搜尋只代跑本機 `uffs`（NTFS MFT）。pattern 拒 `>` regex 與以 `-` 開頭的參數。進檔案頁自動下載並跳一次 UAC 裝 Access Broker、拉起 daemon；開機不跳 UAC。使用者按否就寫 `uffsAuto: false`，只留「啟用快速搜尋」。
 - **`uffs.exe` 不打進 asar**；只跑 `<userData>/uffs/`，不認 PATH／`%LOCALAPPDATA%\uffs`。zip checksum 缺或對不上就失敗。關 App **不停** UFFS daemon。刪／改名／搬移擋磁碟根目錄、`%SystemRoot%` 本身、使用者家目錄本身（`assertMutable`）；家目錄根層可以新增／貼上／還原子項（`assertCreatable` 只擋磁碟根與 Windows 目錄）。`resolveExisting` 回使用者路徑，刪 junction 不跟目標。清空回收筒不吃 list 的 2000 上限。預設刪除丟進系統資源回收筒（寫 `$I`／`$R`，Electron 裡走 `shell.trashItem`）；`{ permanent: true }` 才 `rm`。複製／搬移撞名產出 `name (2).ext`，不覆寫。CDP 暫存 userData 與沙箱的 `uffsAuto` 關掉，且忽略 `uffsEnsure({ force })`，避免自動化卡在 UAC。
 - 三份清單：`explorer/index.js` exports、`main.js` 的 `registerExplorerIpc` service、`preload.js` 的 `electronAPI.explorer`。回歸 `test-explorer.js` 的 [Q][Q2]。
+- **右鍵「加入工作區專案」不另開 IPC**：沿用工作區的 `workspace:addDropped`（preload 的 `addFolders` 只把字串路徑送過去），main 端仍走 `store.create` 的全套驗證——路徑要存在、必須是資料夾、撞路徑回原本那筆。虛擬位置（本機首頁、資源回收筒）在 renderer 就擋掉。回歸 `test-explorer.js` 的 [S2] ＋ `e2e-explorer-cdp.js` 的 [C2]。
 - **右鍵的 7-Zip／WinRAR／「傳送到」不能從登錄檔靜態列舉**（只有 CLSID）：要 `IContextMenu` sidecar（`native/explorer-shell`，`npm run build:shell`）。pidl 陣列一定要 `LPArray`（預設 SAFEARRAY ＝ GetUIObjectOf AV）；路徑只吃反斜線。子選單要 `CMF_SYNCCASCADEMENU` ＋ `WM_INITMENUPOPUP`，而且 **IContextMenu3 不做事時要退回 IContextMenu2**（「傳送到」只實作 v2，7-Zip 實作 v3）。Google Drive 綠勾走 `SHGFI_ICON | SHGFI_ADDOVERLAYS` 拿已經疊好的圖，**不要** `IImageList::GetOverlayImage`（每個槽位都回同一張）。沒建 sidecar 就少那些項、資料夾維持 emoji。回歸 `test-explorer-shell.js` ＋ `probe-explorer-shell.js`。
 
 ### 終端機
@@ -280,6 +281,14 @@ tag 要與 `package.json` 的 version 一致。
   設了 vim 那類真編輯器才放行，這時 `raiseChildWindow` 才需要出手抬窗。
   回歸 `probe-terminal-editor.js` 的 [F][H]。
 - **終端機連結**：`provideLinks` 收到的是**整份緩衝區的 1-based 列號**（不是畫面上第幾列），回去的 range 也是同一套；折行的一列要先往回接成整條邏輯行再掃，CLI 自己印的換行（沒 `isWrapped`）若前一列以斜線結尾或剛好滿列也要接。range 的 x 是 **cell 欄位**不是字元位移——CJK／emoji 一格佔兩欄，用 `offset % cols` 會把底線畫到前後無關的字上；有 `getCell` 就逐格對。掃描不要把前後黏著的中文、括號、等號吃進候選。路徑候選一律先問 main 存不存在再畫底線（不驗＝畫面上每個含斜線的字都變假連結），相對路徑以**即時 cwd（OSC 7，沒有就退回開檔目錄）** 為基準。點網址開內建瀏覽器；點路徑用 App 開（專案內編輯器／檔案樹，否則檔案頁），不要 `shell.showItemInFolder`。
+- **xterm 自己不碰剪貼簿，Ctrl+V 要我們自己接**：不接的話那顆鍵只會變成 `^V`（`\x16`）送進
+  PTY，Claude Code 那類 CLI 不認，畫面上**什麼都不會發生**；語音輸入走的正是「寫剪貼簿 ＋
+  模擬 Ctrl+V」，所以症狀是「文字在別的 App 都貼得進去，只有這個終端機貼不進來」。接在
+  `attachCustomKeyEventHandler`，而**剪貼簿一定要跟 main 要**（`terminal:clipboardText`）
+  ——renderer 的 `navigator.clipboard.readText()` 要視窗有焦點，沒焦點（背景視窗、剛從別的
+  程式切回來、模擬按鍵）直接 reject，症狀跟沒接一模一樣而且一聲不吭（實測修好按鍵綁定後
+  打包版仍然只送出 `\x16`）。讀不到文字時要把 `^V` **原樣轉給 CLI**，Claude Code 的貼上截圖
+  才不會被吞掉；右鍵貼上走同一支 `pasteFromClipboard`。回歸 `e2e-terminal-cdp.js`。
 - **Shift+Enter 送的是 `\x1b\r` 不是 CSI u**：`\x1b[13;2u` 要終端機與 CLI 先協商 kitty keyboard
   protocol，xterm.js 不宣告支援、CLI 也就不會啟用，那串序列會被當成一般字元——使用者看到的是
   輸入框裡直接冒出 `[13;2u`。`ESC`＋`CR` 是 Claude Code `/terminal-setup` 綁的同一個東西。
@@ -363,6 +372,13 @@ tag 要與 `package.json` 的 version 一致。
 - 中文一律吐簡體 → **三支 ASR 都要套** `s2twp`（判斷函式共用）。雲端 ASR 的 **401 與 403 是兩件事**（金鑰壞 vs 模型沒開通）。
 - ASR 必須 `withAsrLock` ＋ `loadEnabled`；檔案轉錄走 main（ffmpeg 串流切段），pause 要看「已排隊未 ASR 段數」。
 - **`await` 一個 rAF 一定要配逾時**（視窗被遮住時 rAF 3 秒零回呼）。
+- **焦點在自己視窗時不准走剪貼簿**：`insert.js` 的 `insertIntoOwnWindow` 用
+  `executeJavaScript` 叫 renderer 的 `__viInsertText`（終端機 `term.paste`／一般輸入框
+  `execCommand('insertText')`，保住 undo 與 input 事件），一個位元組都不寫剪貼簿。走剪貼簿
+  會在 Windows 剪貼簿歷史（Win+V）裡插進兩筆（我們的文字一筆、還原舊值又一筆），使用者
+  原本複製的東西被擠到後面——他會說「剪貼簿順序被打亂」。拿不到 focused window（人在別的
+  程式裡）或 renderer 回 false 才退回剪貼簿 ＋ 模擬 Ctrl+V。回歸 `e2e-dictation.js` 的 [K0]，
+  那段**一律要注入假的 uiohook**，漏掉就會真的把測試字串貼進使用者正在用的程式。
 - **右 Alt 只能用低階鍵盤 hook 認**；原生 sidecar 三個坑：委派要用欄位抓著、`GetMessage` 迴圈不能省、靠 stdin EOF 結束。Esc 不吞。退路模式要補送 F24（一次按放只補一次）。keydown 會重送，狀態機要 `pressed` 旗標。
 - 麥克風在啟用時就一直開著（track `ended` 要自己重建）；單次上限 20 分鐘，**長錄音一定要切段**（用 `slice` 不用 `subarray`）。
 - **整理後的換行要留著**：整理器要排版（條列每項一行、換主題空一行分段），輸出直接貼進輸入框，

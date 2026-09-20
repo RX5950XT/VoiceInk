@@ -15,6 +15,24 @@ AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定�
 
 ## 架構
 
+### 貼上與語音輸入的插入路徑（2026-09-20）
+
+- **終端機接下 Ctrl+V／Ctrl+Shift+V**（`attachCustomKeyEventHandler` → `pasteFromClipboard`）：
+  xterm 自己不碰剪貼簿，沒接的話那顆鍵只會變成 `^V` 送進 PTY，Claude Code 那類 CLI 不認。
+  剪貼簿跟 main 要（`terminal:clipboardText`）——renderer 的 `navigator.clipboard.readText()`
+  沒焦點會 reject。讀不到文字才把 `^V` 原樣轉給 CLI（Claude Code 靠它貼截圖）。右鍵貼上同一支。
+- **語音輸入在自己的視窗裡不走剪貼簿**：`dictation/insert.js` 的 `insertIntoOwnWindow` 用
+  `executeJavaScript` 叫 renderer 的 `__viInsertText`（`dictation.js`）；終端機走
+  `pasteIntoFocusedTerminal`，一般輸入框走 `execCommand('insertText')`。人在別的程式裡
+  （拿不到 focused window）或 renderer 插不進去，才退回原本的剪貼簿 ＋ 模擬 Ctrl+V。
+- 測試：`e2e-terminal-cdp.js`（打包版量 PTY 真的收到什麼）、`e2e-dictation.js` 的 [K0]。
+
+### 檔案總管：右鍵把資料夾加進工作區專案（2026-09-20）
+
+- 資料夾右鍵「加入工作區專案」、資料夾內空白處右鍵「把這個資料夾加入專案」→ 加進專案清單、
+  切到聊天頁、側欄切到專案並選中它（`explorer-page.js` 的 `openInWorkspace` →
+  `workspace-page.js` 的 `openFolderAsProject`）。沿用既有的 `workspace:addDropped`，不另開 IPC。
+
 ### 工作區：執行檔、瀏覽器、Git 面板（2026-09-20）
 
 - 檔案樹點 `.exe`／`.lnk` 用系統開啟（`workspace:openEntry` → `shell.openPath`，路徑只收專案內）；點 `.cmd`／`.bat`／`.ps1`／`.sh` 開終端機跑。`.js`／`.py` 仍開編輯器，右鍵才有「在終端機執行」。
