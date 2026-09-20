@@ -288,9 +288,18 @@ async function openPath(target) {
   return true
 }
 
-async function fileIcon(target) {
+async function fileIcon(target, opts) {
   const full = paths.resolveExisting(target)
   const resolved = resolvePath(full)
+  const wantThumb = Boolean(opts && typeof opts === 'object' && opts.thumb === true)
+  if (wantThumb && !resolved.dir) {
+    try {
+      const url = await shellExt.thumbOf(resolved.path, opts.size)
+      if (url) return { url }
+    } catch (error) {
+      console.error('[explorer] 殼層縮圖失敗:', error?.message || error)
+    }
+  }
   try {
     const url = await shellExt.iconOf(resolved.path)
     if (url) return { url }

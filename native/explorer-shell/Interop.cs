@@ -16,6 +16,7 @@ namespace VoiceInkShell
         public static Guid IContextMenu2 = new Guid("000214F4-0000-0000-C000-000000000046");
         public static Guid IContextMenu3 = new Guid("BCFCE0A0-EC17-11D0-8D10-00A0C90F2719");
         public static Guid IImageList = new Guid("46EB5926-582E-4017-9FDF-E8998DAA0950");
+        public static Guid IShellItemImageFactory = new Guid("bcc18b79-ba16-442f-80c4-8a59c30c463b");
     }
 
     [ComImport, Guid("000214E6-0000-0000-C000-000000000046")]
@@ -106,6 +107,17 @@ namespace VoiceInkShell
         [PreserveSig] int GetOverlayImage(int overlay, out int image);
     }
 
+    /// <summary>
+    /// 檔案總管拿縮圖的入口。GetImage 的 SIZE 是值型別、vtable 第一個方法，
+    /// 漏一個後面就錯位。
+    /// </summary>
+    [ComImport, Guid("bcc18b79-ba16-442f-80c4-8a59c30c463b")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IShellItemImageFactory
+    {
+        [PreserveSig] int GetImage(SIZE size, int flags, out IntPtr phbm);
+    }
+
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
     internal struct CMINVOKECOMMANDINFOEX
     {
@@ -152,6 +164,13 @@ namespace VoiceInkShell
         public uint dwAttributes;
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string szDisplayName;
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 80)] public string szTypeName;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct SIZE
+    {
+        public int cx;
+        public int cy;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -229,6 +248,12 @@ namespace VoiceInkShell
         public const uint SHGFI_OVERLAYINDEX = 0x000000040;
         public const uint SHGFI_ADDOVERLAYS = 0x000000020;
 
+        // IShellItemImageFactory.GetImage：有縮圖給縮圖，沒有就給圖示。
+        // 不要用 SIIGBF_THUMBNAILONLY（0x8）——沒縮圖的檔會直接失敗。
+        public const int SIIGBF_RESIZETOFIT = 0x00000000;
+        public const int SIIGBF_BIGGERSIZEOK = 0x00000001;
+        public const int SIIGBF_THUMBNAILONLY = 0x00000008;
+
         [DllImport("ole32.dll")] public static extern int OleInitialize(IntPtr reserved);
 
         [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
@@ -247,6 +272,10 @@ namespace VoiceInkShell
         [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
         public static extern IntPtr SHGetFileInfoW([MarshalAs(UnmanagedType.LPWStr)] string path, uint attributes,
             ref SHFILEINFOW info, uint cbSize, uint flags);
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        public static extern int SHCreateItemFromParsingName([MarshalAs(UnmanagedType.LPWStr)] string path, IntPtr bindCtx,
+            ref Guid riid, out IntPtr ppv);
 
         [DllImport("shell32.dll")]
         public static extern int SHGetImageList(int imageList, ref Guid riid, out IImageList ppv);

@@ -681,7 +681,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     copyEntry: (fromPath, toDir) => ipcRenderer.invoke('explorer:copyEntry', fromPath, toDir),
     moveEntry: (fromPath, toDir) => ipcRenderer.invoke('explorer:moveEntry', fromPath, toDir),
     openPath: (target) => ipcRenderer.invoke('explorer:openPath', target),
-    fileIcon: (target) => ipcRenderer.invoke('explorer:fileIcon', target),
+    fileIcon: (target, opts) => ipcRenderer.invoke('explorer:fileIcon', target, opts),
     /** 把選取的檔案交給 Windows 的原生拖放（拖進瀏覽器上傳框、桌面）。
      *  只能在 dragstart 當下呼叫，promise 要等使用者放手才 resolve。
      *  @param {string[]} list */

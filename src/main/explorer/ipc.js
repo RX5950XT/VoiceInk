@@ -52,7 +52,7 @@ function registerExplorerIpc({ ipcMain, service, isMainSender }) {
     invoke(event, () => service.moveEntry(fromPath, toDir))
   ))
   ipcMain.handle('explorer:openPath', (event, target) => invoke(event, () => service.openPath(target)))
-  ipcMain.handle('explorer:fileIcon', (event, target) => invoke(event, () => service.fileIcon(target)))
+  ipcMain.handle('explorer:fileIcon', (event, target, opts) => invoke(event, () => service.fileIcon(target, opts)))
   // sender 要自己傳：拖放是「哪個 webContents 發起的」才算數
   ipcMain.handle('explorer:startDrag', (event, list) => (
     invoke(event, () => service.startDrag(list, event.sender))

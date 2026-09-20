@@ -202,6 +202,26 @@ async function iconOf(full) {
   }
 }
 
+/**
+ * 這個路徑的縮圖（照片／影片／PDF 預覽）。問不到回空字串，呼叫端再退回類型圖示。
+ * @param {string} full
+ * @param {unknown} [size]
+ * @returns {Promise<string>}
+ */
+async function thumbOf(full, size) {
+  const s = await ensure()
+  if (!s || !full) return ''
+  const px = Number(size)
+  const edge = Number.isInteger(px) && px >= 16 ? Math.min(px, 256) : 96
+  try {
+    const result = await s.send({ op: 'thumb', path: full, size: edge })
+    if (!result.ok || !result.data) return ''
+    return toPng(result.data.thumb)
+  } catch {
+    return ''
+  }
+}
+
 module.exports = {
   ensure,
   shutdown,
@@ -209,6 +229,7 @@ module.exports = {
   invoke,
   release,
   iconOf,
+  thumbOf,
   toPng,
   mapNode,
   hwndOf

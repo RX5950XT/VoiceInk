@@ -92,12 +92,18 @@ console.log('\n[C] 宿主行協定（假 spawn，不碰真 COM）')
     ok: true,
     data: { token: 7, items: [{ label: '7-Zip', cmd: 1, children: [{ label: '解壓縮', cmd: 2 }] }] }
   })
+  responses.set('thumb', {
+    ok: true,
+    data: { thumb: { w: 96, h: 96, bgra: 'AAAA' } }
+  })
   const exe = path.join(ROOT, 'resources', 'shell', 'VoiceInkShell.exe')
   startShell({ spawnFn: fakeSpawn, exePath: exe || 'VoiceInkShell.exe' }).then(async (shell) => {
     ok('假 sidecar 起得來', shell.ok === true, shell.error)
     const menu = await shell.send({ op: 'menu', paths: ['C:\\a.txt'] })
     ok('選單帶 token', menu.ok && menu.data.token === 7)
     ok('7-Zip 子選單在', menu.data.items[0].children[0].label === '解壓縮')
+    const thumb = await shell.send({ op: 'thumb', path: 'C:\\a.png', size: 96 })
+    ok('縮圖協定帶尺寸', thumb.ok && thumb.data.thumb.w === 96)
     shell.stop()
     finishRest()
   }).catch((error) => {
@@ -112,11 +118,21 @@ function finishRest() {
     const overlays = fs.readFileSync(path.join(ROOT, 'native/explorer-shell/Overlays.cs'), 'utf8')
     const menu = fs.readFileSync(path.join(ROOT, 'native/explorer-shell/ShellMenu.cs'), 'utf8')
     const interop = fs.readFileSync(path.join(ROOT, 'native/explorer-shell/Interop.cs'), 'utf8')
+    const thumbs = fs.readFileSync(path.join(ROOT, 'native/explorer-shell/Thumbnails.cs'), 'utf8')
+    const program = fs.readFileSync(path.join(ROOT, 'native/explorer-shell/Program.cs'), 'utf8')
+    const icons = fs.readFileSync(path.join(ROOT, 'src/renderer/scripts/explorer-icons.js'), 'utf8')
     ok('圖示走 SHGFI_ADDOVERLAYS', overlays.includes('SHGFI_ADDOVERLAYS'))
     ok('不自己挖 overlay 圖庫', overlays.includes('不要想自己把那張小圖單獨挖出來'))
     ok('傳送到走 SYNCCASCADEMENU', interop.includes('CMF_SYNCCASCADEMENU') && menu.includes('CMF_SYNCCASCADEMENU'))
     ok('空子選單會退回 IContextMenu2', menu.includes('HandleMenuMsg') && menu.includes('IContextMenu2'))
     ok('pidl 陣列明寫 LPArray', interop.includes('UnmanagedType.LPArray'))
+    ok('縮圖走 IShellItemImageFactory', thumbs.includes('IShellItemImageFactory') && thumbs.includes('GetImage'))
+    ok('縮圖旗標 RESIZETOFIT + BIGGERSIZEOK', thumbs.includes('SIIGBF_RESIZETOFIT') && thumbs.includes('SIIGBF_BIGGERSIZEOK'))
+    ok('縮圖不用 THUMBNAILONLY', thumbs.includes('SIIGBF_RESIZETOFIT | Native.SIIGBF_BIGGERSIZEOK') && !/GetImage\([^)]*THUMBNAILONLY/.test(thumbs))
+    ok('HBITMAP 用完 DeleteObject', thumbs.includes('DeleteObject(hbmp)'))
+    ok('sidecar 有 thumb op', program.includes('case "thumb"'))
+    ok('圖示與縮圖快取 key 分開', icons.includes("? 't' : 'i'"))
+    ok('只在方格檢視要縮圖', icons.includes('is-grid') && icons.includes('pdf') && icons.includes('docx'))
   }
 
   console.log('\n[E] ipc／main／preload 有殼層三支')
@@ -130,6 +146,7 @@ function finishRest() {
       ok(`preload 有 ${name}`, preload.includes(`'explorer:${name}'`))
     }
     ok('before-quit 收 sidecar', /explorerMod\.shutdown/.test(main))
+    ok('fileIcon 可帶縮圖選項', ipc.includes('fileIcon(target, opts)') && preload.includes('fileIcon: (target, opts)'))
   }
 
   console.log(`\n${passed} passed, ${failed} failed`)

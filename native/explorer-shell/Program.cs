@@ -51,6 +51,7 @@ namespace VoiceInkShell
                     {
                         case "overlay": return Ok(id, w => Overlay(root, w));
                         case "icon": return Ok(id, w => Icon(root, w));
+                        case "thumb": return Ok(id, w => Thumb(root, w));
                         case "menu": return Ok(id, w => Menu(root, w));
                         case "invoke": return Ok(id, w => Invoke(root, w));
                         case "release": return Ok(id, w => Release(root, w));
@@ -77,6 +78,12 @@ namespace VoiceInkShell
         private static void Icon(JsonElement root, Utf8JsonWriter w)
         {
             WriteImage(w, "icon", Overlays.IconOf(Str(root, "path")));
+        }
+
+        private static void Thumb(JsonElement root, Utf8JsonWriter w)
+        {
+            int size = Thumbnails.ClampSize(Num(root, "size", Thumbnails.DefaultSize));
+            WriteImage(w, "thumb", Thumbnails.Of(Str(root, "path"), size));
         }
 
         private static void Menu(JsonElement root, Utf8JsonWriter w)
