@@ -148,7 +148,7 @@ tag 要與 `package.json` 的 version 一致。
 -「讀過」跟「改過」要分開回；工具名不認得時算「讀過」，**不可以憑空說人家改過**。
 - **存檔一定要帶開檔當下的 mtime**（`STALE` → 提示條給比較／重新載入／覆寫／保留編輯，草稿一個字都不能動）；同一檔案的寫入要排隊（Windows 上兩個 rename 指向同一目的地會 EPERM）；草稿上限（4MB，main 與 renderer 同一個數字）比存檔上限（50MB）小，超過的草稿**整個欄位不送**並提示先存檔（送空字串會把分頁還原成空白的未存狀態）。
 - **開分頁的每一次 await 之後都要核對 `projectSwitch`，回來還要再 `findTab` 一次**；改名／搬檔後要 `retargetTabs`（分頁 id 內嵌相對路徑，不接的話存檔會把舊檔重新建出來）。
-- `git status` 用 `--porcelain=v2 -b -z`；欄位是**位置**決定的，改名（`2`）那型後面還跟著一格原檔名。衝突（`u`）要自成一組。`git log` 的欄位分隔用 `%x1f`，**不能跟 `-z` 混用**；`for-each-ref` **不吃 `%x1f`**。
+- `git status` 用 `--porcelain=v2 -b -z`；欄位是**位置**決定的，改名（`2`）那型後面還跟著一格原檔名。衝突（`u`）要自成一組。`git log` 的欄位分隔用 `%x1f`，**不能跟 `-z` 混用**；`for-each-ref` **不吃 `%x1f`**。展開看檔案用的就是 `--numstat` 那幾列（上限 `MAX_LOG_FILES`），要帶 `--no-renames` 與 `-c core.quotepath=false`（改名路徑與中文檔名才點得開）。
 - 跟分支比要比 `merge-base` 不是分支頂端；`--numstat` 一定要配 `--no-renames`。切到非 git 專案時 `renderGit` 的提早 return **要把工作樹、分支下拉、審閱清單三塊都清乾淨**。
 - **Git 面板列上的 `+新增 −刪除` 來自 `status()` 多跑的一次 `diff --numstat -z --no-renames HEAD`**：
   未追蹤的檔案沒有數字（git 不 diff 它），**全新的 repo 還沒有 HEAD，那一跑會失敗——當成沒數字，不是錯誤**。
@@ -175,6 +175,10 @@ tag 要與 `package.json` 的 version 一致。
 - **存檔後要重讀一次現在的內容**（`monaco ? currentValue() : text.value`）：等 main 寫檔的期間使用者可能又打了字，
   直接把送出去的那份塞回 `tab.content` 會把那幾個字吃掉。回歸 `test-workspace-state.js` 的「存檔守衛」。
 - 內建瀏覽器是 `<webview>`：`webviewTag` **只開在主視窗**、guest 不掛 preload、popup 在 app 層用 `web-contents-created` ＋ `setWindowOpenHandler` 收斂。網址正規化要先照原樣解析、**協定不是 http(s) 才**補 `http://`（`localhost:5173` 會被當成協定）。本機 HTML 預覽用 `srcdoc` ＋ `sandbox="allow-scripts"`，**不給 `allow-same-origin`**。
+  **每個分頁一顆 webview**（共用一顆切回來整頁重載，「上一頁」會走進別的分頁的歷史）；UA 的 `display: flex` 壓得過 `[hidden]`，要自己寫 `webview[hidden] { display: none }`。工具列只有一組，背景分頁的 `did-start-loading` 不准改正在看的那一頁。關掉分頁／換專案要 `pruneBrowserGuests`。
+- **檢視變更不新開分頁**：同一個檔案（id `e:`）就地把 `kind` 換成 `diff` 並設 `diffView`。存檔時 `kind` 仍要寫 `editor`，否則下次開專案草稿接不回來。
+- **檔案樹執行**：`.exe`／`.lnk` 走 `workspace:openEntry`（`resolveExisting`，只收專案內）；`.cmd`／`.ps1` 開終端機跑。`.js`／`.py` 點下去仍開編輯器。三份清單要有 `openEntry`。
+- **Git 動作鈕**：側欄拖到 180px 時要 `flex-wrap`，按鈕不准 `min-width: 0`（縮了字會溢出疊在一起）。
 - 分頁拖曳是 pointer 跟手＋FLIP（不是 HTML5 DnD），transform 只吃 X、讓位距離用量出來的 gap、要加 `scrollLeft` 變化量；檔案樹的拖曳**刻意**用 HTML5 DnD（兩邊取捨不同，不要統一）。切分頁的 click 掛在 `.ws-tab-open` 不是 `.ws-tab`。
 - 檔案樹展開／收合只動自己那一列後面的子樹（整棵重畫會把捲動位置跳回最上面）。
 - 新增／改名的名字要在 `checkName` 就擋（斜線、冒號、Windows 保留檔名）；刪除要擋專案根目錄；搬檔要擋「搬進自己底下」與同名覆蓋。

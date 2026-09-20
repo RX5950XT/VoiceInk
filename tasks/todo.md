@@ -233,3 +233,15 @@ Review（2026-09-20）：
 - `node scripts/e2e-explorer-cdp.js`：舊包先在真實 .lnk 解析失敗；新包 44 項 PASS。真實 Windows .lnk 在目前分頁開啟，檔案圖示在 list/grid 均載入，CDP `Input.dispatchMouseEvent` back/forward/back 保留 App 網址，分頁與深淺／窄版回歸全過。
 - 截圖改用既有 workspace 探針的 `capturePage({ stayHidden, stayAwake })` 方式，解決隱藏視窗 CDP 截圖等待；圖片在 `dist/explorer-tabs-qa/icons-list.png`／`icons-grid.png`。
 - 邊界：未操作實體滑鼠；程式／一般檔案捷徑仍沿用原捷徑開啟，以保留啟動參數。未提交、合併或發行，未改使用者安裝版與主工作樹。
+
+## 2026-09-20 工作區：執行腳本、瀏覽器、Git 面板、diff 切換
+
+- [x] 1 檔案樹可以執行檔案：`.exe`／`.lnk` 走 `shell.openPath`；`.cmd`／`.ps1` 開終端機跑；`.js`／`.py` 仍開編輯器
+- [x] 2 內建瀏覽器補上：每個分頁一顆 webview（各自歷史與捲動）、上一頁／下一頁／停止、載入中、錯誤頁、devtools、快捷鍵
+- [x] 3 Git 面板：動作鈕跟著側欄寬度換行（180px 也不疊字）；最近提交可展開看變更檔案
+- [x] 4 檢視變更不新開分頁：同一個檔案在「編輯 ⇄ 變更」之間就地切換
+- [x] 5 回歸：test-workspace.js（parseLog 帶檔案清單）、test-workspace-ui.js（版面／切換契約）
+
+Review：工作在 `.claude/worktrees/ws-browser-git-exec`（分支 `worktree-ws-browser-git-exec`），尚未合併、尚未 `electron:pack`。
+`node scripts/test-workspace.js` 260/0；`node scripts/test-workspace-ui.js` 176/0。
+`.js`／`.py` 點下去仍開編輯器（右鍵才跑）；`.cmd`／`.ps1` 點下去會開終端機，要改內容走右鍵「開啟」。

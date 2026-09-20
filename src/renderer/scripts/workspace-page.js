@@ -14,7 +14,12 @@ import {
   closeActiveTab,
   cycleTab,
   retargetTabs,
-  openReviewTab
+  openReviewTab,
+  isTerminalRunnable,
+  isDirectRunnable,
+  isLaunchScript,
+  runInTerminal,
+  openWithSystem
 } from './ws-tabs.js'
 import { showMenu } from './ws-menu.js'
 import { gitStatusShared, invalidateGitStatus } from './ws-git-status.js'
@@ -952,6 +957,16 @@ function buildTreeRow(project, entry, depth) {
       void toggleDir(project, entry.rel, row)
       return
     }
+    // `.exe` 跟 Explorer 按兩下同一件事；`.cmd`／`.ps1` 當一鍵啟動腳本跑。
+    // 原始碼（`.js`／`.py`）仍開編輯器——右鍵才有「在終端機執行」。
+    if (isLaunchScript(entry.rel)) {
+      void runInTerminal(entry.rel)
+      return
+    }
+    if (isDirectRunnable(entry.rel)) {
+      void openWithSystem(project.id, entry.rel)
+      return
+    }
     void openEditorTab(project, entry.rel)
   })
   return row
@@ -1397,7 +1412,20 @@ function openTreeMenu(project, entry, event) {
     return
   }
   const parent = entry.dir ? entry.rel : entry.rel.split('/').slice(0, -1).join('/')
+  // 執行那兩項擺最上面：對 `.exe` 與一鍵啟動腳本來說點一下就是跑，
+  // 要改腳本內容走右鍵「開啟」（否則檔案樹點下去會直接把伺服器拉起來）。
+  const run = entry.dir ? [] : [
+    ...(isLaunchScript(entry.rel)
+      ? [{ label: '開啟', onSelect: () => void openEditorTab(project, entry.rel) }]
+      : []),
+    ...(isTerminalRunnable(entry.rel)
+      ? [{ label: '在終端機執行', onSelect: () => void runInTerminal(entry.rel) }]
+      : []),
+    { label: '用預設程式開啟', onSelect: () => void openWithSystem(project.id, entry.rel) },
+    { sep: true }
+  ]
   showMenu({ x: event.clientX, y: event.clientY }, [
+    ...run,
     { label: '新增檔案…', onSelect: () => void createEntry(project, parent, false) },
     { label: '新增資料夾…', onSelect: () => void createEntry(project, parent, true) },
     { label: '改名…', onSelect: () => void renameEntry(project, entry) },
@@ -2312,13 +2340,68 @@ function gitGroup(files, side, project, host, ambiguous) {
 }
 
 /**
- * 最近提交的一列：主旨整段看得到、作者、相對時間、這筆的增刪。
- * hash 是常駐按鈕，點一下複製。
+ * 一筆提交展開之後的檔案清單。`git log --numstat` 本來就帶著這些列，
+ * 所以展開不用再打一趟 git——點一下就畫得出來。
  *
- * @param {{ short: string, subject: string, at: number, author?: string, added?: number, removed?: number }} entry
+ * @param {{ id: string, name: string }} project
+ * @param {{ files?: Array<{ path: string, added: number, removed: number, binary: boolean }>, more?: number }} entry
  * @returns {HTMLElement}
  */
-function gitLogRow(entry) {
+function gitLogFiles(project, entry) {
+  const box = document.createElement('div')
+  box.className = 'ws-git-log-files'
+  const files = Array.isArray(entry.files) ? entry.files : []
+  if (!files.length) {
+    const note = document.createElement('p')
+    note.className = 'ws-tree-note'
+    note.textContent = '這筆沒有檔案變更'
+    box.appendChild(note)
+    return box
+  }
+  for (const file of files) {
+    const row = document.createElement('button')
+    row.type = 'button'
+    row.className = 'ws-git-log-file'
+    row.title = `${file.path}\n點一下開啟這個檔案`
+    const { name: fileName, dir } = splitGitPath(file.path)
+    const name = document.createElement('span')
+    name.className = 'ws-git-name'
+    const base = document.createElement('span')
+    base.className = 'ws-git-basename'
+    base.textContent = fileName
+    name.appendChild(base)
+    if (dir) {
+      const parent = document.createElement('span')
+      parent.className = 'ws-git-dir'
+      parent.textContent = dir
+      name.appendChild(parent)
+    }
+    row.appendChild(name)
+    const counts = gitLineCounts(file)
+    if (counts) row.appendChild(counts)
+    // 開的是「現在磁碟上那一份」：這裡沒有歷史版本的檢視器，
+    // 假裝點得開舊版本反而會讓人以為自己在看那筆提交的內容
+    row.addEventListener('click', () => void openEditorTab(project, file.path))
+    box.appendChild(row)
+  }
+  if (entry.more) {
+    const note = document.createElement('p')
+    note.className = 'ws-tree-note'
+    note.textContent = `還有 ${entry.more} 個檔案沒列出來`
+    box.appendChild(note)
+  }
+  return box
+}
+
+/**
+ * 最近提交的一列：主旨整段看得到、作者、相對時間、這筆的增刪。
+ * hash 是常駐按鈕，點一下複製；主旨那一塊點下去展開這筆改了哪些檔案。
+ *
+ * @param {{ id: string, name: string }} project
+ * @param {{ short: string, subject: string, at: number, author?: string, added?: number, removed?: number, files?: Array<object>, more?: number }} entry
+ * @returns {HTMLElement}
+ */
+function gitLogRow(project, entry) {
   const row = document.createElement('div')
   row.className = 'ws-git-log-row'
   const when = entry.at ? new Date(entry.at * 1000) : null
@@ -2326,8 +2409,14 @@ function gitLogRow(entry) {
     .filter(Boolean)
     .join('\n')
 
-  const top = document.createElement('div')
+  const top = document.createElement('button')
+  top.type = 'button'
   top.className = 'ws-git-log-top'
+  top.setAttribute('aria-expanded', 'false')
+  const caret = document.createElement('span')
+  caret.className = 'ws-git-log-caret'
+  caret.textContent = '▸'
+  top.appendChild(caret)
   const subject = document.createElement('span')
   subject.className = 'ws-git-log-subject'
   subject.textContent = entry.subject || '（無訊息）'
@@ -2337,6 +2426,18 @@ function gitLogRow(entry) {
     counts.title = `這筆提交新增 ${entry.added} 行、刪除 ${entry.removed} 行`
     top.appendChild(counts)
   }
+  // 清單第一次展開才建（十筆提交 × 幾百個檔案全部先畫出來是白工）
+  let files = null
+  top.addEventListener('click', () => {
+    const open = top.getAttribute('aria-expanded') === 'true'
+    if (!open && !files) {
+      files = gitLogFiles(project, entry)
+      row.appendChild(files)
+    }
+    top.setAttribute('aria-expanded', open ? 'false' : 'true')
+    caret.textContent = open ? '▸' : '▾'
+    if (files) files.hidden = open
+  })
 
   const meta = document.createElement('div')
   meta.className = 'ws-git-log-meta'
@@ -2388,7 +2489,7 @@ async function renderGitLog() {
     el.gitLog.appendChild(note)
     return
   }
-  for (const entry of log) el.gitLog.appendChild(gitLogRow(entry))
+  for (const entry of log) el.gitLog.appendChild(gitLogRow(project, entry))
 }
 
 async function stageAll() {

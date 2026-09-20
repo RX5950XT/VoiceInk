@@ -84,6 +84,10 @@ function registerWorkspaceIpc({ ipcMain, service, isMainSender, dialog, getWindo
     invoke(event, () => service.reveal(id, relPath))
   ))
 
+  ipcMain.handle('workspace:openEntry', (event, id, relPath) => (
+    invoke(event, () => service.openEntry(id, relPath))
+  ))
+
   ipcMain.handle('workspace:openExternal', (event, url) => (
     invoke(event, () => service.openExternal(url))
   ))
