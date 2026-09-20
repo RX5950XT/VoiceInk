@@ -304,10 +304,11 @@ async function main() {
     {
       const picked = await cdp.eval(`(() => {
         const list = document.getElementById('exList')
-        for (const id of ['hello.txt', 'sub']) {
-          const row = list.querySelector('[data-id="' + id + '"]')
-          row?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true }))
-        }
+        // 先用普通的一下把前面測試留下的選取洗掉，再 Ctrl 加選第二筆
+        list.querySelector('[data-id="hello.txt"]')
+          ?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+        list.querySelector('[data-id="sub"]')
+          ?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true }))
         return list.querySelectorAll('.ex-row.is-selected').length
       })()`)
       assert(picked === 2, 'Ctrl+左鍵選得到兩筆', String(picked))
