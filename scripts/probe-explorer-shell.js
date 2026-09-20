@@ -3,11 +3,12 @@
 /**
  * 殼層 sidecar 的實測（唯讀，不叫用任何命令）。
  *
- * 問四件事：
+ * 問五件事：
  *   [A] 選檔案時 `IContextMenu` 到底吐出哪些項目（7-Zip／WinRAR／傳送到／內容在不在）
  *   [B] 空白處的背景選單有沒有東西
  *   [C] Google Drive 路徑的 overlay 槽位，以及那個槽位畫出來長什麼樣
  *   [D] 對一張真 PNG 取縮圖：有 base64、尺寸接近要求、且跟類型圖示不是同一張
+ *   [E] attrib +h 的檔 sidecar 回 hidden、listDir 預設列不到、showHidden 列得到
  *
  * 用法：npx electron scripts/probe-explorer-shell.js [要測的資料夾]
  * 預設拿專案根目錄。想驗綠勾請給 Google Drive 底下的路徑。
@@ -16,8 +17,11 @@
 const path = require('path')
 const fs = require('fs')
 const zlib = require('zlib')
+const { spawnSync } = require('child_process')
 const { startShell } = require('../src/main/explorer/shell-host')
 const { tempDir } = require('./lib/test-temp')
+const files = require('../src/main/explorer/fs')
+const explorerShell = require('../src/main/explorer/shell')
 
 const ROOT = path.join(__dirname, '..')
 const THUMB_SIZE = 96
@@ -182,6 +186,37 @@ async function main() {
       thumbImg ? `${thumbImg.w}×${thumbImg.h}` : '無圖')
     ok('縮圖不是類型圖示', Boolean(thumbImg && iconImg && thumbImg.bgra !== iconImg.bgra),
       !thumbImg ? '沒有縮圖' : !iconImg ? '沒有類型圖示' : '兩張 base64 相同')
+  }
+
+  console.log('\n=== [E] 真檔案屬性（attrib +h，不是猜名字）===')
+  {
+    const dirPath = tempDir('shell-attrs')
+    const hiddenName = 'secret.txt'
+    const plainName = 'plain.txt'
+    const hiddenPath = path.join(dirPath, hiddenName)
+    const plainPath = path.join(dirPath, plainName)
+    fs.writeFileSync(hiddenPath, 'hidden')
+    fs.writeFileSync(plainPath, 'plain')
+    const attribExe = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'attrib.exe')
+    const marked = spawnSync(attribExe, ['+h', hiddenPath], { windowsHide: true, encoding: 'utf8' })
+    ok('attrib +h 有設上去', marked.status === 0, `status=${marked.status} err=${marked.stderr || ''}`)
+    const attrs = await shell.send({ op: 'attrs', dir: dirPath })
+    const items = attrs.ok && attrs.data && Array.isArray(attrs.data.items) ? attrs.data.items : []
+    const hiddenItem = items.find((item) => item && item.name === hiddenName)
+    const plainItem = items.find((item) => item && item.name === plainName)
+    ok('sidecar 回報 hidden 檔 hidden:true', Boolean(hiddenItem && hiddenItem.hidden === true),
+      attrs.ok ? JSON.stringify(hiddenItem || items.slice(0, 4)) : String(attrs.error || 'no data'))
+    ok('sidecar 回報普通檔 hidden:false', Boolean(plainItem && plainItem.hidden === false),
+      attrs.ok ? JSON.stringify(plainItem || null) : String(attrs.error || 'no data'))
+    await explorerShell.ensure()
+    const off = await files.listDir(dirPath)
+    const on = await files.listDir(dirPath, { showHidden: true })
+    const offNames = off.entries.map((entry) => entry.name)
+    const onHidden = on.entries.find((entry) => entry.name === hiddenName)
+    ok('listDir 預設列不到 hidden 檔', !offNames.includes(hiddenName), offNames.join(','))
+    ok('listDir 預設仍列得到普通檔', offNames.includes(plainName), offNames.join(','))
+    ok('listDir showHidden 列得到 hidden 檔', Boolean(onHidden && onHidden.hidden === true),
+      on.entries.map((entry) => `${entry.name}:${entry.hidden}`).join(','))
   }
 
   shell.stop()

@@ -13,6 +13,8 @@ const recycle = require('./recycle')
 const MAX_ENTRIES = 2000
 /** 為排序去 stat 的硬上限；超過就先砍再排。本機 10000 筆約 0.8s，20000 會超過 1.5s。 */
 const MAX_STAT = 10000
+/** sidecar 屬性查詢的上限：拿不到就退回 isHiddenName，不可拖慢 listDir。 */
+const ATTRS_TIMEOUT_MS = 200
 const STAT_CONCURRENCY = 64
 const MAX_READ_BYTES = 2 * 1024 * 1024
 const MAX_TEXT_BYTES = 8 * 1024
@@ -116,11 +118,34 @@ async function mapLimit(items, limit, fn) {
 }
 
 /**
+ * @param {string} dirPath
+ * @returns {Promise<Map<string, { hidden: boolean, system: boolean }>|null>}
+ */
+async function readAttrs(dirPath) {
+  if (!process.versions.electron) return null
+  if (!dirPath || String(dirPath).startsWith('\\\\')) return null
+  try {
+    const shell = require('./shell')
+    if (typeof shell.attrsOf !== 'function') return null
+    const result = await withTimeout(shell.attrsOf(dirPath), ATTRS_TIMEOUT_MS)
+    if (!result || typeof result.get !== 'function') return null
+    const lower = new Map()
+    for (const [name, flags] of result) {
+      if (typeof name === 'string' && name) lower.set(name.toLowerCase(), flags)
+    }
+    return lower
+  } catch {
+    return null
+  }
+}
+
+/**
  * @param {fs.Dirent} dirent
  * @param {string} full
+ * @param {boolean} hidden
  * @returns {Promise<{ name: string, path: string, dir: boolean, size: number, mtimeMs: number, ext: string, hidden: boolean }>}
  */
-async function statEntry(dirent, full) {
+async function statEntry(dirent, full, hidden) {
   let dir = dirent.isDirectory()
   let link = dirent.isSymbolicLink()
   let size = 0
@@ -150,7 +175,7 @@ async function statEntry(dirent, full) {
     size,
     mtimeMs,
     ext: dir ? '' : path.extname(dirent.name).slice(1).toLowerCase(),
-    hidden: isHiddenName(dirent.name)
+    hidden: hidden === true
   }
 }
 
@@ -245,11 +270,16 @@ async function listDir(dirPath, rawOpts) {
   } catch {
     throw paths.fail('READ_FAILED', '讀不到這個資料夾')
   }
-  const visible = opts.showHidden ? dirents : dirents.filter((d) => !isHiddenName(d.name))
+  const attrMap = await readAttrs(full)
+  const flagged = dirents.map((d) => {
+    const attr = attrMap ? attrMap.get(d.name.toLowerCase()) : null
+    return { dirent: d, hidden: Boolean(attr && attr.hidden) || isHiddenName(d.name) }
+  })
+  const visible = opts.showHidden ? flagged : flagged.filter((item) => !item.hidden)
   const overStat = visible.length > MAX_STAT
   const toStat = overStat ? visible.slice(0, MAX_ENTRIES) : visible
-  const entries = await mapLimit(toStat, STAT_CONCURRENCY, (d) => (
-    statEntry(d, path.join(full, d.name))
+  const entries = await mapLimit(toStat, STAT_CONCURRENCY, (item) => (
+    statEntry(item.dirent, path.join(full, item.dirent.name), item.hidden)
   ))
   const sorted = sortEntries(entries, opts)
   return {
@@ -599,6 +629,7 @@ async function copyEntry(fromPath, toDir) {
 module.exports = {
   MAX_ENTRIES,
   MAX_STAT,
+  ATTRS_TIMEOUT_MS,
   MAX_READ_BYTES,
   IMAGE_MIME,
   SORT_KEYS,

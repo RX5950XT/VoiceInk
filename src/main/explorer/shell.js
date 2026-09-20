@@ -222,6 +222,29 @@ async function thumbOf(full, size) {
   }
 }
 
+/**
+ * 這個資料夾這一層每個名字的 hidden／system 旗標。問不到回 null。
+ * @param {unknown} dirPath
+ * @returns {Promise<Map<string, { hidden: boolean, system: boolean }>|null>}
+ */
+async function attrsOf(dirPath) {
+  const s = await ensure()
+  if (!s || !dirPath) return null
+  try {
+    const full = absPath(dirPath)
+    const result = await s.send({ op: 'attrs', dir: full })
+    if (!result.ok || !result.data || !Array.isArray(result.data.items)) return null
+    const map = new Map()
+    for (const item of result.data.items) {
+      if (!item || typeof item.name !== 'string' || !item.name) continue
+      map.set(item.name, { hidden: item.hidden === true, system: item.system === true })
+    }
+    return map
+  } catch {
+    return null
+  }
+}
+
 module.exports = {
   ensure,
   shutdown,
@@ -230,6 +253,7 @@ module.exports = {
   release,
   iconOf,
   thumbOf,
+  attrsOf,
   toPng,
   mapNode,
   hwndOf
