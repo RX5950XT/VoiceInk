@@ -159,6 +159,7 @@ namespace VoiceInkShell
             w.WriteNumber("w", image.Width);
             w.WriteNumber("h", image.Height);
             w.WriteString("bgra", Convert.ToBase64String(image.Bytes));
+            if (image.Pending) w.WriteBoolean("pending", true);
             w.WriteEndObject();
         }
 

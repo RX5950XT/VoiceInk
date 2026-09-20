@@ -3,12 +3,14 @@
 /**
  * 殼層 sidecar 的實測（唯讀，不叫用任何命令）。
  *
- * 問五件事：
+ * 問七件事：
  *   [A] 選檔案時 `IContextMenu` 到底吐出哪些項目（7-Zip／WinRAR／傳送到／內容在不在）
  *   [B] 空白處的背景選單有沒有東西
  *   [C] Google Drive 路徑的 overlay 槽位，以及那個槽位畫出來長什麼樣
  *   [D] 對一張真 PNG 取縮圖：有 base64、尺寸接近要求、且跟類型圖示不是同一張
  *   [E] attrib +h 的檔 sidecar 回 hidden、listDir 預設列不到、showHidden 列得到
+ *   [F] 對需要現生的檔（PDF／短影片）連續取兩次：第一次 pending 時重取會換圖
+ *   [F2] 殼層生不出縮圖的檔：pending 旗標從 sidecar 一路到 fileIcon，真 PNG 則不標
  *
  * 用法：npx electron scripts/probe-explorer-shell.js [要測的資料夾]
  * 預設拿專案根目錄。想驗綠勾請給 Google Drive 底下的路徑。
@@ -17,7 +19,7 @@
 const path = require('path')
 const fs = require('fs')
 const zlib = require('zlib')
-const { spawnSync } = require('child_process')
+const { spawnSync, execFileSync } = require('child_process')
 const { startShell } = require('../src/main/explorer/shell-host')
 const { tempDir } = require('./lib/test-temp')
 const files = require('../src/main/explorer/fs')
@@ -186,6 +188,104 @@ async function main() {
       thumbImg ? `${thumbImg.w}×${thumbImg.h}` : '無圖')
     ok('縮圖不是類型圖示', Boolean(thumbImg && iconImg && thumbImg.bgra !== iconImg.bgra),
       !thumbImg ? '沒有縮圖' : !iconImg ? '沒有類型圖示' : '兩張 base64 相同')
+    ok('純 PNG 不該是 pending', Boolean(thumbImg) && thumbImg.pending !== true,
+      thumbImg && thumbImg.pending ? 'PNG 被標成 pending' : '沒有縮圖')
+  }
+
+  console.log('\n=== [F] 需要現生的縮圖：第一次 pending 時重取會換圖 ===')
+  {
+    const dirPath = tempDir('shell-thumb-pdf')
+    const pdfPath = path.join(dirPath, `probe-${Date.now()}.pdf`)
+    // 有實際上色內容的單頁 PDF，逼殼層走縮圖擷取而不是只看副檔名。
+    fs.writeFileSync(pdfPath, Buffer.from(
+      '%PDF-1.4\n' +
+      '1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n' +
+      '2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n' +
+      '3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]/Contents 4 0 R>>endobj\n' +
+      '4 0 obj<</Length 52>>stream\n' +
+      '1 0 0 rg 0 0 200 200 re f\n' +
+      'endstream\nendobj\n' +
+      'xref\n0 5\n0000000000 65535 f \n0000000009 00000 n \n' +
+      '0000000058 00000 n \n0000000115 00000 n \n0000000206 00000 n \n' +
+      'trailer<</Size 5/Root 1 0 R>>\nstartxref\n307\n%%EOF\n'
+    ))
+    const candidates = [{ path: pdfPath, label: 'PDF' }]
+    try {
+      const ffmpeg = require('ffmpeg-static')
+      if (ffmpeg) {
+        const mp4Path = path.join(dirPath, `probe-${Date.now()}.mp4`)
+        execFileSync(ffmpeg, [
+          '-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=10',
+          '-t', '0.4', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', mp4Path
+        ], { stdio: 'ignore' })
+        candidates.push({ path: mp4Path, label: '短影片' })
+      }
+    } catch (error) {
+      console.log('  （沒能種短影片：', error && error.message, '）')
+    }
+
+    let hit = null
+    const notes = []
+    for (const item of candidates) {
+      const first = await shell.send({ op: 'thumb', path: item.path, size: THUMB_SIZE })
+      const a = first.ok ? first.data && first.data.thumb : null
+      if (!a) {
+        notes.push(`${item.label} 第一次沒拿到圖`)
+        continue
+      }
+      if (a.pending !== true) {
+        notes.push(`${item.label} 第一次就不是 pending`)
+        continue
+      }
+      hit = { item, first, a }
+      break
+    }
+
+    if (!hit) {
+      console.log('  SKIP 第一次就不是 pending（這台機器的殼層對 PDF／短影片當下沒有 E_PENDING：'
+        + notes.join('；') + '）')
+    } else {
+      let second = hit.first
+      let b = hit.a
+      for (let i = 0; i < 5; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 400))
+        second = await shell.send({ op: 'thumb', path: hit.item.path, size: THUMB_SIZE })
+        b = second.ok ? second.data && second.data.thumb : null
+        if (b && (b.pending !== true || b.bgra !== hit.a.bgra)) break
+      }
+      ok(`重取換到更好的圖（${hit.item.label}：第二次不是 pending，或兩次 base64 不同）`,
+        Boolean(b && (b.pending !== true || b.bgra !== hit.a.bgra)),
+        b ? `pending=${b.pending === true} same=${b.bgra === hit.a.bgra}` : String(second && second.error || 'no data'))
+    }
+  }
+
+  console.log('\n=== [F2] pending 旗標一路帶到 fileIcon（不靠 E_PENDING 重現）===')
+  {
+    // 殼層生不出縮圖的檔，退回類型圖示那條一定是「暫時的」——這條在任何機器上都成立，
+    // 不像 E_PENDING 要看當下快取狀態。用它證明旗標真的從 sidecar 流到 renderer 拿到的物件。
+    const dirPath = tempDir('shell-pend-flag')
+    const broken = path.join(dirPath, 'broken.mp4')
+    fs.writeFileSync(broken, Buffer.from('not a real video at all'))
+    const real = path.join(dirPath, 'real.png')
+    fs.writeFileSync(real, solidPng(64, 64, 20, 160, 90))
+    const shellApi = require('../src/main/explorer/shell')
+    const explorer = require('../src/main/explorer/index')
+    try {
+      const badThumb = await shellApi.thumbOf(broken, THUMB_SIZE)
+      const goodThumb = await shellApi.thumbOf(real, THUMB_SIZE)
+      ok('生不出縮圖的檔 thumbOf 標 pending，而且還是給得出一張先頂著的圖',
+        badThumb.pending === true && String(badThumb.url || '').length > 0,
+        `pending=${badThumb.pending} url=${String(badThumb.url || '').length}B`)
+      ok('真 PNG 的 thumbOf 不標 pending',
+        goodThumb.pending !== true && String(goodThumb.url || '').length > 0,
+        `pending=${goodThumb.pending}`)
+      const badIcon = await explorer.fileIcon(broken, { thumb: true, size: THUMB_SIZE })
+      const goodIcon = await explorer.fileIcon(real, { thumb: true, size: THUMB_SIZE })
+      ok('fileIcon 把 pending 原樣交給 renderer', badIcon.pending === true, JSON.stringify(Object.keys(badIcon)))
+      ok('fileIcon 對真 PNG 不帶 pending', goodIcon.pending !== true, JSON.stringify(Object.keys(goodIcon)))
+    } finally {
+      shellApi.shutdown()
+    }
   }
 
   console.log('\n=== [E] 真檔案屬性（attrib +h，不是猜名字）===')

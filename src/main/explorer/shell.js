@@ -203,22 +203,27 @@ async function iconOf(full) {
 }
 
 /**
- * 這個路徑的縮圖（照片／影片／PDF 預覽）。問不到回空字串，呼叫端再退回類型圖示。
+ * 這個路徑的縮圖（照片／影片／PDF 預覽）。問不到回空 url，呼叫端再退回類型圖示。
+ * pending ＝殼層還在現生，這張只是暫時的。
  * @param {string} full
  * @param {unknown} [size]
- * @returns {Promise<string>}
+ * @returns {Promise<{ url: string, pending?: boolean }>}
  */
 async function thumbOf(full, size) {
   const s = await ensure()
-  if (!s || !full) return ''
+  if (!s || !full) return { url: '' }
   const px = Number(size)
   const edge = Number.isInteger(px) && px >= 16 ? Math.min(px, 256) : 96
   try {
     const result = await s.send({ op: 'thumb', path: full, size: edge })
-    if (!result.ok || !result.data) return ''
-    return toPng(result.data.thumb)
+    if (!result.ok || !result.data) return { url: '' }
+    const url = toPng(result.data.thumb)
+    if (!url) return { url: '' }
+    return result.data.thumb && result.data.thumb.pending === true
+      ? { url, pending: true }
+      : { url }
   } catch {
-    return ''
+    return { url: '' }
   }
 }
 

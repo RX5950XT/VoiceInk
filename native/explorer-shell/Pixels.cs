@@ -9,6 +9,8 @@ namespace VoiceInkShell
         public int Width;
         public int Height;
         public byte[] Bytes;
+        /// <summary>殼層還在現生縮圖，這張只是暫時能顯示的圖（通常是類型圖示）。</summary>
+        public bool Pending;
     }
 
     /// <summary>
