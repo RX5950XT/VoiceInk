@@ -5,6 +5,7 @@ const terminal = require('./pty')
 const links = require('./links')
 const foreground = require('./foreground')
 const editorBridge = require('./editor-bridge')
+const clipboardImage = require('./clipboard-image')
 const background = require('./background')
 const { HostClient } = require('./host-client')
 
@@ -122,8 +123,10 @@ function writeSession(id, data) {
 module.exports = {
   setEmitter(fn) {
     emit = typeof fn === 'function' ? fn : () => {}
-    editorBridge.configure(require('electron').app.getPath('userData'))
+    const userData = require('electron').app.getPath('userData')
+    editorBridge.configure(userData)
     editorBridge.start((channel, payload) => emit(channel, payload))
+    clipboardImage.configure(userData)
   },
   // Ctrl+G 開的那個編輯分頁：renderer 只送得出 id，改哪個檔由 main 說了算。
   // 儲存只把內容留著，關掉分頁才真的送回終端機（見 editor-bridge.js）
@@ -145,6 +148,9 @@ module.exports = {
   // 貼上要讀的剪貼簿文字。renderer 的 `navigator.clipboard.readText()` 要視窗有焦點，
   // 沒焦點就 reject（症狀是「Ctrl+V 沒反應」）；main 這邊讀不受焦點影響。
   clipboardText: () => require('electron').clipboard.readText(),
+  // 剪貼簿裡的截圖：落成 PNG、回一條路徑，終端機再把路徑貼進去（見 clipboard-image.js）。
+  // 沒有圖片就回 null，呼叫端自己決定下一步。
+  clipboardImage: () => clipboardImage.save(),
   // 終端機桌布：檔案在 main 手上，renderer 只拿得到 data: URI（見 background.js）
   backgroundImage: background.dataUri,
   adoptBackground: background.adopt,

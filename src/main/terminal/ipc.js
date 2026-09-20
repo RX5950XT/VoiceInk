@@ -74,6 +74,13 @@ function registerTerminalIpc({ ipcMain, service, isMainSender, dialog, getWindow
     invoke(event, () => service.clipboardText())
   ))
 
+  // 剪貼簿裡的截圖：main 把圖存成 PNG，renderer 只拿得到那條路徑（路徑不從 renderer 收）。
+  // 終端機貼的就是這條路徑——任何 AI CLI 看到圖片路徑都讀得進去，比丟 `^V` 讓 CLI
+  // 自己去翻剪貼簿可靠得多。
+  ipcMain.handle('terminal:clipboardImage', (event) => (
+    invoke(event, () => service.clipboardImage())
+  ))
+
   // 終端機桌布：renderer 只拿得到 data: URI，換圖一律走系統對話框（路徑不從 renderer 收）
   ipcMain.handle('terminal:background', (event, name) => (
     invoke(event, () => service.backgroundImage(name))
