@@ -60,17 +60,42 @@ export function hasExplorerDrag(event) {
   return [...event.dataTransfer.types].includes('Files')
 }
 
-export function bindDropTarget(el, destFn, onDrop) {
+/** 拖著東西停在資料夾上多久會自己進去（Windows 大約 0.7 秒）。 */
+export const HOVER_ENTER_MS = 700
+
+/**
+ * @param {HTMLElement} el
+ * @param {() => string} destFn
+ * @param {(event: DragEvent, dest: string) => void} onDrop
+ * @param {(dest: string) => void} [onHover] 停留夠久就叫一次（拖到深層資料夾用）
+ */
+export function bindDropTarget(el, destFn, onDrop, onHover) {
+  let timer = 0
+  const stopTimer = () => {
+    if (!timer) return
+    clearTimeout(timer)
+    timer = 0
+  }
   el.addEventListener('dragover', (event) => {
     if (!hasExplorerDrag(event)) return
     event.preventDefault()
     const dest = destFn()
     setDropEffect(event, pathKey(dest) === RECYCLE_CWD || !event.ctrlKey ? 'move' : 'copy')
     el.classList.add('is-drop')
+    if (onHover && !timer) {
+      timer = setTimeout(() => {
+        timer = 0
+        onHover(destFn())
+      }, HOVER_ENTER_MS)
+    }
   })
-  el.addEventListener('dragleave', () => el.classList.remove('is-drop'))
+  el.addEventListener('dragleave', () => {
+    stopTimer()
+    el.classList.remove('is-drop')
+  })
   el.addEventListener('drop', (event) => {
     event.preventDefault()
+    stopTimer()
     el.classList.remove('is-drop')
     onDrop(event, destFn())
   })

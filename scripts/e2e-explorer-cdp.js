@@ -371,6 +371,173 @@ async function main() {
       await cdp.eval(`window.electronAPI.explorer.removeEntry(${JSON.stringify(path.join(SEED_DIR, 'sub', 'drop-me.txt'))}, { permanent: true })`)
     }
 
+    console.log('\n[C5] 方向鍵走得動選取')
+    {
+      const ids = () => cdp.eval(`[...document.querySelectorAll('#exList .ex-row.is-selected')].map((r) => r.dataset.id)`)
+      const key = async (code, k, mods = 0) => {
+        for (const type of ['rawKeyDown', 'keyUp']) {
+          await cdp.send('Input.dispatchKeyEvent', {
+            type, key: k, code: k, windowsVirtualKeyCode: code, nativeVirtualKeyCode: code, modifiers: mods
+          })
+        }
+      }
+      // 先把游標放在第一筆（用真的點擊，順便確認 click 有把游標一起移過去）
+      const first = await cdp.eval(`(() => {
+        const rows = [...document.querySelectorAll('#exList .ex-row')]
+        const row = rows[0]
+        row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+        return { id: row.dataset.id, count: rows.length }
+      })()`)
+      assert(first.count >= 2, '清單至少要有兩列才測得動', JSON.stringify(first))
+
+      await key(40, 'ArrowDown')
+      const down = await waitFor(async () => {
+        const got = await ids()
+        return got.length === 1 && got[0] !== first.id ? got : null
+      }, 5_000, '↓ 走到下一列').catch(() => null)
+      assert(!!down, '按 ↓ 選取移到下一列', JSON.stringify(down || await ids()))
+
+      await key(38, 'ArrowUp')
+      const back = await ids()
+      assert(back.length === 1 && back[0] === first.id, '按 ↑ 回到上一列', JSON.stringify(back))
+
+      await key(40, 'ArrowDown', 8) // Shift
+      const ranged = await ids()
+      assert(ranged.length === 2, 'Shift+↓ 連選兩列', JSON.stringify(ranged))
+
+      await key(35, 'End')
+      const last = await ids()
+      assert(last.length === 1 && last[0] !== first.id, 'End 跳到最後一列', JSON.stringify(last))
+
+      await key(36, 'Home')
+      const home = await ids()
+      assert(home.length === 1 && home[0] === first.id, 'Home 跳回第一列', JSON.stringify(home))
+    }
+
+    console.log('\n[C6] 空白處拖出框選')
+    {
+      const geo = await cdp.eval(`(() => {
+        const host = document.getElementById('exList')
+        const rows = [...host.querySelectorAll('.ex-row')]
+        const hr = host.getBoundingClientRect()
+        const last = rows[rows.length - 1].getBoundingClientRect()
+        const firstR = rows[0].getBoundingClientRect()
+        return {
+          startX: Math.round(hr.left + 20),
+          startY: Math.round(Math.min(hr.bottom - 6, last.bottom + 14)),
+          endX: Math.round(hr.left + hr.width / 2),
+          endY: Math.round(firstR.top + 4),
+          rows: rows.length
+        }
+      })()`)
+      const press = async (type, x, y) => cdp.send('Input.dispatchMouseEvent', {
+        type, x, y, button: 'left', buttons: type === 'mouseReleased' ? 0 : 1, clickCount: 1
+      })
+      await press('mousePressed', geo.startX, geo.startY)
+      await press('mouseMoved', geo.endX, Math.round((geo.startY + geo.endY) / 2))
+      await press('mouseMoved', geo.endX, geo.endY)
+      const marquee = await cdp.eval(`(() => {
+        const el = document.querySelector('#exList .ex-marquee')
+        if (!el) return null
+        const s = getComputedStyle(el)
+        return { w: el.offsetWidth, h: el.offsetHeight, bg: s.backgroundColor, border: s.borderTopWidth }
+      })()`)
+      assert(marquee && marquee.w > 0 && marquee.h > 0, '拖出來的框畫得出來', JSON.stringify(marquee))
+      assert(marquee && marquee.bg !== 'rgba(0, 0, 0, 0)', '框有底色（不是透明的）', JSON.stringify(marquee))
+      const live = await cdp.eval(`document.querySelectorAll('#exList .ex-row.is-selected').length`)
+      assert(live === geo.rows, '框到的每一列當場都反白', `${live}/${geo.rows}`)
+      await press('mouseReleased', geo.endX, geo.endY)
+      const after = await cdp.eval(`(() => ({
+        gone: !document.querySelector('#exList .ex-marquee'),
+        picked: document.querySelectorAll('#exList .ex-row.is-selected').length
+      }))()`)
+      assert(after.gone, '放開之後框收掉', JSON.stringify(after))
+      assert(after.picked === geo.rows, '放開後選取留著', JSON.stringify(after))
+    }
+
+    console.log('\n[C7] 狀態列講得出選了幾個、多大')
+    {
+      const text = await cdp.eval(`(() => {
+        const rows = [...document.querySelectorAll('#exList .ex-row')]
+        const file = rows.find((r) => r.dataset.id === 'hello.txt')
+        file?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+        return document.getElementById('exStatusText').textContent
+      })()`)
+      assert(/已選取 1 個/.test(text), '狀態列講得出選了幾個', text)
+      assert(/B|KB|MB/.test(text.split('已選取')[1] || ''), '全是檔案時report大小', text)
+      const folder = await cdp.eval(`(() => {
+        const row = document.querySelector('#exList [data-id="sub"]')
+        row?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+        return document.getElementById('exStatusText').textContent
+      })()`)
+      assert(/已選取 1 個/.test(folder) && !/KB|MB/.test(folder.split('已選取')[1] || ''),
+        '選到資料夾就不報大小（要遞迴才算得出來）', folder)
+      await cdp.eval(`document.getElementById('exList').click()`)
+    }
+
+    console.log('\n[C8] 搬錯了可以 Ctrl+Z 搬回來')
+    {
+      const src = path.join(SEED_DIR, 'undo-me.txt')
+      fs.writeFileSync(src, 'undo')
+      const shown = await waitFor(() => cdp.eval(`(() => {
+        const row = document.querySelector('#exList [data-id="undo-me.txt"]')
+        return row && row.offsetHeight > 4 ? { path: row.dataset.path } : null
+      })()`), 15_000, '新檔案出現在畫面上').catch(() => null)
+      assert(!!shown, '種的檔案列得出來（資料夾監看有在跑）', JSON.stringify(shown))
+
+      const target = await cdp.eval(`(() => {
+        const r = document.querySelector('#exList [data-id="sub"]').getBoundingClientRect()
+        return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }
+      })()`)
+      const data = { items: [], files: [src], dragOperationsMask: 17 }
+      for (const type of ['dragEnter', 'dragOver', 'drop']) {
+        // 不帶 Ctrl：同一顆磁碟＝搬移
+        await cdp.send('Input.dispatchDragEvent', { type, x: target.x, y: target.y, data, modifiers: 0 })
+      }
+      const moved = await waitFor(async () => {
+        const inSub = fs.existsSync(path.join(SEED_DIR, 'sub', 'undo-me.txt'))
+        return inSub && !fs.existsSync(src) ? true : null
+      }, 15_000, '檔案被搬進 sub').catch(() => null)
+      assert(moved === true, '拖進資料夾＝搬移（同一顆磁碟）',
+        `sub=${fs.existsSync(path.join(SEED_DIR, 'sub', 'undo-me.txt'))} src=${fs.existsSync(src)}`)
+
+      await cdp.eval(`document.getElementById('exList').focus()`)
+      for (const type of ['rawKeyDown', 'keyUp']) {
+        await cdp.send('Input.dispatchKeyEvent', {
+          type, key: 'z', code: 'KeyZ', windowsVirtualKeyCode: 90, nativeVirtualKeyCode: 90, modifiers: 2
+        })
+      }
+      const back = await waitFor(async () => (
+        fs.existsSync(src) && !fs.existsSync(path.join(SEED_DIR, 'sub', 'undo-me.txt')) ? true : null
+      ), 15_000, 'Ctrl+Z 把它搬回來').catch(() => null)
+      assert(back === true, 'Ctrl+Z 真的把檔案搬回原處',
+        `src=${fs.existsSync(src)} sub=${fs.existsSync(path.join(SEED_DIR, 'sub', 'undo-me.txt'))}`)
+      await cdp.eval(`window.electronAPI.explorer.removeEntry(${JSON.stringify(src)}, { permanent: true })`)
+    }
+
+    console.log('\n[C9] 拖著停在資料夾上會自己進去')
+    {
+      const probe = path.join(USER_DATA_DIR, 'hover-src.txt')
+      fs.writeFileSync(probe, 'x')
+      const target = await cdp.eval(`(() => {
+        const row = document.querySelector('#exList [data-id="sub"]')
+        if (!row) return null
+        const r = row.getBoundingClientRect()
+        return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }
+      })()`)
+      assert(!!target, '找得到要停留的資料夾')
+      const data = { items: [], files: [probe], dragOperationsMask: 17 }
+      await cdp.send('Input.dispatchDragEvent', { type: 'dragEnter', x: target.x, y: target.y, data })
+      await cdp.send('Input.dispatchDragEvent', { type: 'dragOver', x: target.x, y: target.y, data })
+      const entered = await waitFor(() => cdp.eval(`(() => {
+        const crumbs = [...document.querySelectorAll('#exCrumbs .ex-crumb')].map((el) => el.textContent)
+        return crumbs.includes('sub') ? crumbs : null
+      })()`), 6_000, '停留之後自己進了資料夾').catch(() => null)
+      assert(!!entered, '拖著停住 0.7 秒就進到那個資料夾（不用先放手）', JSON.stringify(entered))
+      await cdp.eval(`document.getElementById('exUpBtn').click()`)
+      await waitFor(() => cdp.eval(`!!document.querySelector('#exList [data-id="hello.txt"]')`), 10_000, '回到種子資料夾')
+    }
+
     const clicked = await cdp.eval(`(() => {
       document.getElementById('exSearch')?.blur()
       const row = document.querySelector('#exList [data-id="sub"]')

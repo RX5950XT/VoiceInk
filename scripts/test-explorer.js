@@ -680,6 +680,48 @@ console.log('\n[S3] 檔案拖得出去，也認得拖進來的真檔案')
   ))
 }
 
+console.log('\n[S4] 鍵盤走得動、空白處框得出來、狀態列講得出選取')
+{
+  const pageSrc4 = fs.readFileSync(path.join(ROOT, 'src/renderer/scripts/explorer-page.js'), 'utf8')
+  const cssSrc4 = fs.readFileSync(path.join(ROOT, 'src/renderer/styles/main.css'), 'utf8')
+  ok('方向鍵有接', /ArrowUp', 'ArrowDown'/.test(pageSrc4) && /moveSelection\(e\.key, e\.shiftKey\)/.test(pageSrc4))
+  ok('Home／End 也走同一支', /'Home', 'End'/.test(pageSrc4))
+  ok('游標跟連選錨點是兩個變數', /let cursor = ''/.test(pageSrc4) && /let anchor = ''/.test(pageSrc4))
+  ok('Shift 連選時錨點不跟著走',
+    /if \(extend\)[\s\S]{0,200}anchor = at >= 0/.test(pageSrc4), '找不到 extend 分支')
+  ok('方格檢視的欄數是量出來的不是寫死的', /function gridColumns[\s\S]{0,400}offsetTop/.test(pageSrc4))
+  ok('框選綁在 mousedown', /addEventListener\('mousedown', onListMouseDown\)/.test(pageSrc4))
+  ok('按在列上不框選（那是拖檔案）', /function onListMouseDown[\s\S]{0,200}closest\('\.ex-row'\)/.test(pageSrc4))
+  ok('框選過程不重畫清單', /只就地 toggle class|classList\.toggle\('is-selected'/.test(pageSrc4))
+  ok('放開才 paintList', /const onUp = \(\)[\s\S]{0,260}paintList\(\)/.test(pageSrc4))
+  ok('狀態列有選取數量', /已選取 \$\{picked\.length\} 個/.test(pageSrc4))
+  ok('選到資料夾不報大小', /picked\.every\(\(p\) => !p\.dir\)/.test(pageSrc4))
+  ok('框的樣式在', /\.ex-marquee \{/.test(cssSrc4))
+  ok('清單有定位基準', /\.ex-list \{[\s\S]{0,120}position: relative/.test(cssSrc4))
+  ok('框用的是存在的 CSS 變數', /--accent-primary/.test(cssSrc4.slice(cssSrc4.indexOf('.ex-marquee'), cssSrc4.indexOf('.ex-marquee') + 400)))
+}
+
+console.log('\n[S5] 拖著停住會進資料夾、搬錯了可以 Ctrl+Z')
+{
+  const pageSrc5 = fs.readFileSync(path.join(ROOT, 'src/renderer/scripts/explorer-page.js'), 'utf8')
+  const dndSrc5 = fs.readFileSync(path.join(ROOT, 'src/renderer/scripts/explorer-dnd.js'), 'utf8')
+  ok('停留進資料夾有計時器', /HOVER_ENTER_MS/.test(dndSrc5) && /setTimeout\([\s\S]{0,120}HOVER_ENTER_MS\)/.test(dndSrc5))
+  ok('離開或放手要把計時器收掉',
+    /dragleave[\s\S]{0,120}stopTimer\(\)/.test(dndSrc5) && /'drop'[\s\S]{0,160}stopTimer\(\)/.test(dndSrc5))
+  ok('只有資料夾那一列掛 hover', /if \(entry\.dir\) \{[\s\S]{0,320}navigate\(dest\)/.test(pageSrc5))
+  ok('搜尋結果與回收筒裡不自動進去', /if \(!inSearch\(\) && !inRecycle\(\)\) void navigate\(dest\)/.test(pageSrc5))
+
+  ok('Ctrl+Z 接到復原', /e\.ctrlKey && \(e\.key === 'z'[\s\S]{0,80}undoLast\(\)/.test(pageSrc5))
+  ok('復原堆疊有上限', /MAX_UNDO = \d+/.test(pageSrc5) && /while \(undoStack\.length > MAX_UNDO\)/.test(pageSrc5))
+  ok('搬移有記復原', /pushUndo\(mode === 'copy' \? '複製' : '搬移'/.test(pageSrc5))
+  ok('改名有記復原', /pushUndo\(`改名/.test(pageSrc5))
+  ok('貼上有記復原，而且分得出剪下跟複製',
+    /lastClip\.mode === 'cut' \? undoMove/.test(pageSrc5) && /lastClip = \{ mode, paths/.test(pageSrc5))
+  ok('復原「複製」是丟資源回收筒不是永久刪',
+    /function undoCopy[\s\S]{0,220}RECYCLE_CWD, 'move'/.test(pageSrc5))
+  ok('沒東西可復原時講一聲', /沒有可以復原的動作/.test(pageSrc5))
+}
+
 console.log('\n[Q] index.js 的 exports 都有定義')
 {
   const indexSource = fs.readFileSync(path.join(ROOT, 'src/main/explorer/index.js'), 'utf8')

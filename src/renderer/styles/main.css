@@ -12114,9 +12114,20 @@ h6.md-h { font-size: 14px; }
 }
 
 .ex-list {
+  position: relative; /* 框選的框是它的子元素，要有定位基準 */
   flex: 1;
   overflow-y: auto;
   padding: 6px 8px 16px;
+}
+
+/* 空白處拖出來的框選範圍 */
+.ex-marquee {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  border: 1px solid var(--accent-primary);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
 }
 
 .ex-row {
