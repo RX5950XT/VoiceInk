@@ -265,7 +265,38 @@ Review：工作在 `.claude/worktrees/ws-browser-git-exec`（分支 `worktree-ws
 
 # 2026-09-20 — 三工作樹驗收與整合
 
-- [ ] 審查 explorer-shell、ws-browser-git-exec、usage-sysmon，驗證各自修改
-- [ ] 整合變更並解決衝突，打包與隔離背景驗收
-- [ ] 提交、合併至 master、推送並核對遠端
-- [ ] 清理已完成分支與工作樹，保留仍在使用的資料
+- [x] 審查 explorer-shell、ws-browser-git-exec、usage-sysmon，驗證各自修改
+- [x] 整合變更並解決衝突，打包與隔離背景驗收
+- [x] 提交、合併至 master、推送並核對遠端
+- [x] 清理已完成分支與工作樹，保留仍在使用的資料
+
+Review（2026-09-20）：
+
+三個工作樹先前被誤刪，從 `dist/merge-qa-20260920/*.patch`（已追蹤檔）、Codex session 的
+`Get-Content` 輸出（5 支 JS ＋ `Program.cs`／`ShellMenu.cs`）與 Claude session 的 Write/Edit
+重放（其餘 4 支 `.cs`）拼回。`.cs` 那份落後最終版一步，照呼叫端補回 5 個 Win32 宣告
+（`CMF_EXPLORE`／`CMF_ITEMMENU`／`CMF_SYNCCASCADEMENU`／`MF_BYPOSITION`／`GetMenuStringW`）。
+未追蹤檔另備份在 `dist/merge-qa-20260920/explorer-shell-untracked.tgz`。
+
+三份工作出自 Grok CLI 的三個 session，需求逐項核對過都已落地：殼層右鍵（WinRAR／7-Zip／
+傳送到）與 Drive 綠勾、工作區執行檔案與瀏覽器導覽與 Git 面板換行與 diff 就地切換、
+Gemini 3.8 Flash 與 Kimi K3 單價與快取花費拆開與多硬碟分卡。
+
+合併只有 `tasks/todo.md` 衝突（兩邊各自的紀錄），程式碼零衝突。
+
+驗證（合併後的 master，打包版走 `dist/win-unpacked`）：
+- 單元／整合：test-explorer 186、test-explorer-shell 26、test-workspace 260、
+  test-workspace-ui 182、test-sysmon 188、test-code-usage 158、test-ipc-invoke 11、
+  test-error-hygiene 85、test-safe-rm 6、test-temp-hygiene 2
+- 真流量：e2e-sysmon 63（兩顆 NVMe SMART）、e2e-code-usage 16、
+  probe-explorer-shell 實測 WinRAR／7-Zip／傳送到都有子項、
+  probe-explorer-shell-icon 拿到 Drive 綠勾（槽 14、171 綠像素）
+- 打包版 CDP：e2e-cdp-smoke 22、e2e-explorer-cdp 48、e2e-workspace-cdp 179、
+  e2e-sysmon-cdp 114、e2e-usage-cdp 23
+
+`npm run electron:pack` 通過（asar 驗證 216 支 src 檔逐位元組相同）；`resources/shell/`
+要先 `npm run build:shell` 才會進預覽包，沒建的話右鍵少殼層那幾項、資料夾維持 emoji。
+
+邊界：未發行（沒有 bump 版本、沒有 tag、沒有 release）。`.claude/worktrees/` 下那兩個
+工作樹與它們的分支、以及中轉用的 `feat/merged-three` 已清掉；`VoiceInk-usage-sysmon`
+連同 `feat/usage-sysmon` 保留（那份開在專案外，內容已合併，要不要收由你決定）。
