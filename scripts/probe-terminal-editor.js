@@ -139,8 +139,9 @@ async function main() {
     assert.equal(shell.EDITOR, command, 'EDITOR 要被橋接蓋掉')
     assert.equal(shell.VISUAL, command, 'VISUAL 也要被蓋掉')
     // PATH 只能有一個鍵。Windows 的環境變數不分大小寫，而 `{ ...process.env }` 展開出來
-    // 的是系統寫的原字（實測是 `Path`）——多寫一個 `PATH` 等於子程序拿到兩份，生效的是
-    // 先進環境區塊的那個，症狀就是 CLI 說 `editor "voiceink-edit.cmd" not found in PATH`。
+    // 的是系統寫的原字（實測是 `Path`）——多寫一個 `PATH` 等於子程序拿到兩份，**生效的是
+    // 後寫進去的那個**，整條系統路徑被蓋成 `<editor-bridge>;`，終端機裡 node／python／
+    // System32 全部找不到（Claude Code 會噴 `SessionStart hook: node: command not found`）。
     const pathKeys = Object.keys(shell).filter((key) => key.toLowerCase() === 'path')
     assert.equal(pathKeys.length, 1, `PATH 只能有一個鍵，現在有 ${pathKeys.join('／')}`)
     const shellPath = shell[pathKeys[0]]

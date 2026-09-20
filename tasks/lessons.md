@@ -148,6 +148,12 @@
 - **Windows 效能計數器選錯類別，慢十倍還不會有人告訴你**（`PerfFormattedData` vs `PerfRawData`）。
 - **同一時間只能跑一支需要單一實例鎖的 App**；背景常駐時只有計時器被節流，訊息派送不會。
 - **「預覽版已關閉」不一定真的關了**（`closeToTray`）：打包前用 `Get-Process | Where Path` 確認，只殺 `dist\win-unpacked` 那幾顆。
+- **環境區塊裡出現兩個同名（只差大小寫）的變數時，生效的是後寫進去的那個**：`{ ...process.env }`
+  展開出來是 `Path`，再寫 `env.PATH = ...` 就多一份，子程序拿到的是那份新的——不是「被原本的蓋過去」
+  而是「把原本的整個蓋掉」。改環境變數一律先找出原鍵名再就地改。
+- **PATH 壞掉的症狀不會指向 PATH**：`node: command not found`、`spawn powershell.exe ENOENT`、
+  CLI 說找不到 editor，全是同一件事。先 `echo $PATH` 數一數有幾項，再去追功能。
+- **自己開的子 shell 壞掉，要從「誰 spawn 的」往上追到那支程式的原始碼**，不要只在 hook／設定檔裡打轉。
 
 ## 音訊 / ASR / 本地 LLM
 
