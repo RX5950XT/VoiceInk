@@ -1,5 +1,5 @@
 // 只讀可見列的 Windows 圖示；切目錄即丟掉等待中的舊列。
-// 方格檢視對可能有預覽的副檔名改要縮圖；清單維持類型圖示。
+// 方格檢視一律問殼層縮圖（照片／影片／文件／資料夾預覽）；清單維持類型圖示。
 // 殼層第一次常回 pending（影片／PDF 還在現生）：先畫暫時的圖，稍後再問，不把暫時的寫進快取。
 const cache = new Map()
 const visible = new WeakSet()
@@ -15,29 +15,13 @@ let activeContext = null
 const THUMB_SIZE = 96
 const RETRY_MS = 400
 const MAX_RETRY = 3
-const THUMB_EXT = new Set([
-  'png', 'jpg', 'jpeg', 'jfif', 'gif', 'webp', 'bmp', 'ico', 'tif', 'tiff',
-  'heic', 'heif', 'avif', 'svg',
-  'mp4', 'mkv', 'avi', 'mov', 'wmv', 'webm', 'm4v',
-  'pdf',
-  'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'
-])
-
-function canThumb(filePath) {
-  const name = String(filePath || '')
-  const slash = Math.max(name.lastIndexOf('\\'), name.lastIndexOf('/'))
-  const base = slash >= 0 ? name.slice(slash + 1) : name
-  const dot = base.lastIndexOf('.')
-  if (dot < 1) return false
-  return THUMB_EXT.has(base.slice(dot + 1).toLowerCase())
-}
 
 function cacheKey(el, thumb) {
   return `${thumb ? 't' : 'i'}:${el.dataset.iconKey || el.dataset.path}`
 }
 
 function wantThumb(host, el) {
-  return host.classList.contains('is-grid') && canThumb(el.dataset.path)
+  return host.classList.contains('is-grid') && Boolean(el.dataset.path)
 }
 
 function loadIcon(el, host, readIcon) {

@@ -191,7 +191,7 @@ tag 要與 `package.json` 的 version 一致。
 - **存檔後要重讀一次現在的內容**（`monaco ? currentValue() : text.value`）：等 main 寫檔的期間使用者可能又打了字，
   直接把送出去的那份塞回 `tab.content` 會把那幾個字吃掉。回歸 `test-workspace-state.js` 的「存檔守衛」。
 - 內建瀏覽器是 `<webview>`：`webviewTag` **只開在主視窗**、guest 不掛 preload、popup 在 app 層用 `web-contents-created` ＋ `setWindowOpenHandler` 收斂。網址正規化要先照原樣解析、**協定不是 http(s) 才**補 `http://`（`localhost:5173` 會被當成協定）。本機 HTML 預覽用 `srcdoc` ＋ `sandbox="allow-scripts"`，**不給 `allow-same-origin`**。
-  **每個分頁一顆 webview**（共用一顆切回來整頁重載，「上一頁」會走進別的分頁的歷史）；UA 的 `display: flex` 壓得過 `[hidden]`，要自己寫 `webview[hidden] { display: none }`。工具列只有一組，背景分頁的 `did-start-loading` 不准改正在看的那一頁。關掉分頁／換專案要 `pruneBrowserGuests`。
+  **每個分頁一顆 webview**（共用一顆切回來整頁重載，「上一頁」會走進別的分頁的歷史）；UA 的 `display: flex` 壓得過 `[hidden]`，要自己寫 `webview[hidden] { display: none }`。工具列只有一組，背景分頁的 `did-start-loading` 不准改正在看的那一頁。關掉分頁／移除專案才 `pruneBrowserGuests`；**換專案要停放**（`projectId`＋分頁 id），切回來不重載、不用再按前往。
 - **檢視變更不新開分頁**：同一個檔案（id `e:`）就地把 `kind` 換成 `diff` 並設 `diffView`。存檔時 `kind` 仍要寫 `editor`，否則下次開專案草稿接不回來。
 - **檔案樹執行**：`.exe`／`.lnk` 走 `workspace:openEntry`（`resolveExisting`，只收專案內）；`.cmd`／`.ps1` 開終端機跑。`.js`／`.py` 點下去仍開編輯器。三份清單要有 `openEntry`。
 - **Git 動作鈕**：側欄拖到 180px 時要 `flex-wrap`，按鈕不准 `min-width: 0`（縮了字會溢出疊在一起）。

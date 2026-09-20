@@ -10,6 +10,7 @@ import {
   openBrowserTab,
   openAiSessionTab,
   setActiveProject,
+  forgetProjectBrowsers,
   newTerminalWithCommand,
   closeActiveTab,
   cycleTab,
@@ -416,8 +417,9 @@ async function removeProject(item) {
   if (currentId === item.id) {
     projectSeq += 1
     currentId = ''
-    void setActiveProject(null).catch(() => {})
+    try { await setActiveProject(null) } catch { /* 切走失敗仍要把這個專案的網頁收掉 */ }
   }
+  forgetProjectBrowsers(item.id)
   try {
     await reloadList()
   } catch {

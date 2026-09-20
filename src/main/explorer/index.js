@@ -293,7 +293,7 @@ async function fileIcon(target, opts) {
   const full = paths.resolveExisting(target)
   const resolved = resolvePath(full)
   const wantThumb = Boolean(opts && typeof opts === 'object' && opts.thumb === true)
-  if (wantThumb && !resolved.dir) {
+  if (wantThumb) {
     try {
       const thumb = await shellExt.thumbOf(resolved.path, opts.size)
       if (thumb && thumb.url) {

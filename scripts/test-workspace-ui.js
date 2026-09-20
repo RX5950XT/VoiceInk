@@ -369,8 +369,16 @@ function browserChecks() {
     /\.ws-browser-frame webview\[hidden\]\s*\{\s*display:\s*none/.test(css))
   check('導航事件從 guest 自己的 data-tab-id 找分頁，不是 activeId',
     /guest\?\.dataset\.tabId/.test(tabs))
-  check('關掉分頁與換專案都會收掉 webview',
-    (tabs.match(/pruneBrowserGuests\(\)/g) || []).length >= 3)
+  check('關掉分頁會收掉 webview',
+    /parkedBrowsers\.delete\(guestKey/.test(tabs) && (tabs.match(/pruneBrowserGuests\(\)/g) || []).length >= 3)
+  check('webview 用專案 id 加上分頁 id 找，避免兩個專案的 b:1 撞在一起',
+    /data-project-id/.test(tabs) && /guestKey\(/.test(tabs))
+  check('換專案先停放瀏覽器分頁，不拆掉 webview',
+    /parkCurrentBrowsers\(/.test(tabs)
+    && /parkCurrentBrowsers\(\)/.test(tabs.slice(tabs.indexOf('export async function setActiveProject'))))
+  check('移除專案才忘掉那個專案停放的 webview',
+    /export function forgetProjectBrowsers/.test(tabs)
+    && /forgetProjectBrowsers\(item\.id\)/.test(workspacePage))
   check('上一頁／下一頁在 DOM 上', hasId('wsBrowserBackBtn') && hasId('wsBrowserFwdBtn'))
   check('重新整理鈕在載入中會變成停止', /guest\.isLoading\(\)[\s\S]{0,60}guest\.stop\(\)/.test(tabs))
   check('載入中有看得見的指示', hasId('wsBrowserProgress') && hasSelector('ws-browser-progress'))

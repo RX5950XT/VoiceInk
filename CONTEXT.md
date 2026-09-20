@@ -39,8 +39,8 @@ AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定�
 - **拖著檔案停在資料夾上 0.7 秒會自己進去**（`bindDropTarget` 的 `onHover`），才丟得到深層路徑。
 - **Ctrl+Z 復原**搬移／複製／改名／貼上；復原「複製」是丟資源回收筒不是永久刪。
 - **方格檢視顯示真的縮圖**：殼層 sidecar 的 `thumb` op 走 `IShellItemImageFactory::GetImage`
-  （以前只有 `SHGetFileInfo` 的類型圖示，一資料夾照片長得一模一樣）；只有方格＋會有縮圖的
-  副檔名才要，可見列與併發 4 沿用，快取 key 用 `t:`／`i:` 分開，沒建 sidecar 照舊降級。
+  （以前只有 `SHGetFileInfo` 的類型圖示，一資料夾照片長得一模一樣）；方格裡每個可見列都問
+  （照片／影片／文件／資料夾），可見列與併發 4 沿用，快取 key 用 `t:`／`i:` 分開，沒建 sidecar 照舊降級。
 - 測試：`test-explorer.js` 的 [H2][H3][S4][S5][S6] ＋ `e2e-explorer-cdp.js` 的 [C5]～[C10]
   ＋ `probe-explorer-shell.js` 的 [D]（真的取一張縮圖，並驗它跟類型圖示不是同一張）。
 
@@ -81,6 +81,8 @@ AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定�
 
 - 檔案樹點 `.exe`／`.lnk` 用系統開啟（`workspace:openEntry` → `shell.openPath`，路徑只收專案內）；點 `.cmd`／`.bat`／`.ps1`／`.sh` 開終端機跑。`.js`／`.py` 仍開編輯器，右鍵才有「在終端機執行」。
 - 內建瀏覽器**每個分頁一顆 webview**（各自歷史與捲動），工具列有上一頁／下一頁／停止、載入中、錯誤頁、devtools；快捷鍵 Alt+←／→、F5／Ctrl+R、F12、Ctrl+L。
+  切到別的專案時 webview **停放不拆**，切回來接著原本的畫面，不用再按前往。
+- 方格檢視對每個可見列問殼層縮圖（照片／影片／文件／資料夾預覽），不再用副檔名白名單；清單仍是類型圖示。
 - Git 動作鈕跟著側欄寬度換行（180px 也不疊字）；最近提交可展開看 `--numstat` 那幾列。
 - 「檢視變更」同一個檔案就地切換編輯 ⇄ 變更，不新開分頁。測試：`test-workspace.js`、`test-workspace-ui.js`。
 

@@ -315,13 +315,30 @@ Gemini 3.8 Flash 與 Kimi K3 單價與快取花費拆開與多硬碟分卡。
 工作樹與它們的分支、以及中轉用的 `feat/merged-three` 已清掉；`VoiceInk-usage-sysmon`
 連同 `feat/usage-sysmon` 保留（那份開在專案外，內容已合併，要不要收由你決定）。
 
+# 2026-09-20 — 瀏覽器分頁跨專案停放 ＋ 方格縮圖
+
+- [x] 切走專案時停放瀏覽器 webview（依 projectId+tabId），切回來不重載、不用再按前往
+- [x] 方格檢視對圖片／影片／其他檔案類別與資料夾都問殼層縮圖，不再用副檔名白名單
+- [x] 關掉分頁或移除專案才收掉 webview
+- [x] 清理已合併工作樹 `vi-wt-size`／`vi-wt-attr`／`vi-wt-pending`
+- [x] 測試先紅再綠；打包版工作區 CDP 驗切專案瀏覽器還在
+
+Review：
+- 切專案時瀏覽器 webview 依 `projectId::tabId` 停放，切回來不重載
+- 方格檢視每個可見列都問殼層縮圖（含資料夾）
+- 已刪 `vi-wt-size`／`vi-wt-attr`／`vi-wt-pending` 與對應分支
+- 驗證：`test-explorer-icons-state.js` 3/0（修前紅）、`test-workspace-ui.js` 185/0（修前 3 紅）、
+  `test-workspace.js` 271/0、`test-explorer.js` 295/0、
+  打包 asar 217 支一致、打包版工作區 CDP 184/0（含停放斷言）、
+  打包版檔案總管 CDP 90/0
+
 # 2026-09-20 — 接續檔案總管三包整合
 
 - [x] 還原交接與確認 merge 中斷點，保留兩方測試
 - [x] 三位子代理分別審查資料夾大小、真實屬性與縮圖重試
 - [x] 修復確認問題，重建 shell、打包與隔離 CDP 驗收
 - [x] 完成三包合併（50cb491）、更新交接
-- [ ] 清理三個已合併工作樹（自動批准審查拒絕，保留原樣：`vi-wt-size`／`vi-wt-attr`／`vi-wt-pending`）
+- [x] 清理三個已合併工作樹（`vi-wt-size`／`vi-wt-attr`／`vi-wt-pending` 與對應分支已刪）
 
 Review：
 - 巢狀 `readdir`／`lstat` 失敗改標 `incomplete`，不再當成完整大小

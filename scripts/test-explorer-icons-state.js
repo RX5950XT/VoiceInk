@@ -96,6 +96,25 @@ async function testCooldownCancelsPendingWork() {
   assert.equal(el.child, undefined)
 }
 
+async function testGridAsksThumbForAnyFile() {
+  const html = element('C:\\notes.html')
+  const folder = element('C:\\Photos')
+  const env = loadIcons((filePath) => Promise.resolve({
+    ok: true,
+    data: { url: PNG, pending: false, path: filePath }
+  }))
+  const thumbs = []
+  env.context.window.electronAPI.explorer.fileIcon = (filePath, opts) => {
+    thumbs.push({ filePath, thumb: Boolean(opts && opts.thumb) })
+    return Promise.resolve({ ok: true, data: { url: PNG } })
+  }
+  env.context.paintFileIcons(host(true, [html, folder]), () => Promise.resolve({ ok: false }))
+  await flush()
+  assert.equal(thumbs.length, 2, '方格檢視每個可見列都要問縮圖')
+  assert.equal(thumbs[0].thumb, true, 'html 也要縮圖，不能只收圖片副檔名')
+  assert.equal(thumbs[1].thumb, true, '資料夾也要問殼層縮圖')
+}
+
 async function testStaleFinallyUsesCurrentQueueContext() {
   const oldRequests = []
   const first = [1, 2, 3, 4].map((n) => element(`C:\\old-${n}.pdf`))
@@ -127,8 +146,9 @@ async function testStaleFinallyUsesCurrentQueueContext() {
 
 Promise.resolve()
   .then(testCooldownCancelsPendingWork)
+  .then(testGridAsksThumbForAnyFile)
   .then(testStaleFinallyUsesCurrentQueueContext)
-  .then(() => console.log('2 passed, 0 failed'))
+  .then(() => console.log('3 passed, 0 failed'))
   .catch((error) => {
     console.error(error.stack || error)
     process.exitCode = 1

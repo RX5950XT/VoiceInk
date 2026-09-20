@@ -1406,11 +1406,23 @@ async function main() {
       await wait(250)
       ;[...document.querySelectorAll('.ws-new-item')].find((b) => b.textContent === '瀏覽器').click()
       await wait(600)
+      const urlBox = document.getElementById('wsBrowserUrl')
+      if (urlBox) urlBox.value = 'localhost:5173'
+      document.getElementById('wsBrowserGoBtn')?.click()
+      await wait(500)
+      const visibleGuest = () => [...document.querySelectorAll('#wsBrowserFrame webview')]
+        .find((node) => node.hidden === false)
+      const p1Guest = visibleGuest()
+      const p1Src = p1Guest?.dataset.src || ''
+      const p1GuestId = p1Guest?.dataset.tabId || ''
       const p1Tabs = tabIds()
 
       // 專案二：開一個終端機分頁
       pick('${PROJECT2_ID}').click()
       await wait(1800)
+      const parkedWhileAway = [...document.querySelectorAll('#wsBrowserFrame webview')].some(
+        (node) => node.dataset.tabId === p1GuestId && (node.dataset.src || '') === p1Src
+      )
       const p2Empty = tabIds()
       document.getElementById('wsNewBtn').click()
       await wait(250)
@@ -1423,6 +1435,11 @@ async function main() {
       pick('${PROJECT_ID}').click()
       await wait(2000)
       const backTo1 = tabIds()
+      const backGuest = [...document.querySelectorAll('#wsBrowserFrame webview')]
+        .find((node) => node.dataset.tabId === p1GuestId)
+      const shown = visibleGuest()
+      const backSrc = backGuest?.dataset.src || ''
+      const backShown = Boolean(shown && shown.dataset.tabId === p1GuestId)
       const aliveWhileAway = (await window.electronAPI.terminal.list()).data.some((x) => x.id === termId)
 
       // 再切回專案二：終端機分頁接回來，畫布也重新掛上
@@ -1431,6 +1448,7 @@ async function main() {
       const backTo2 = tabIds()
       return {
         p1Tabs, p2Empty, p2Tabs, termId, backTo1, backTo2, aliveWhileAway,
+        p1Src, parkedWhileAway, backSrc, backShown,
         pane: !!document.querySelector('.term-pane[data-id="' + termId + '"]')
       }
     })()`)
@@ -1446,6 +1464,14 @@ async function main() {
       isolation.p1Tabs.filter((id) => id.startsWith('b:')).every((id) => isolation.backTo1.includes(id)) &&
       isolation.backTo2.includes(isolation.termId) && isolation.pane === true,
       JSON.stringify(isolation))
+    ok('[X] 切走專案時瀏覽器 webview 停放著，不用再按前往',
+      String(isolation.p1Src).startsWith('http://localhost:5173') &&
+      isolation.parkedWhileAway === true && isolation.backSrc === isolation.p1Src &&
+      isolation.backShown === true,
+      JSON.stringify({
+        p1Src: isolation.p1Src, parkedWhileAway: isolation.parkedWhileAway,
+        backSrc: isolation.backSrc, backShown: isolation.backShown
+      }))
     if (isolation.termId) {
       await cdp.eval(`window.electronAPI.terminal.delete(${JSON.stringify(isolation.termId)})`)
     }

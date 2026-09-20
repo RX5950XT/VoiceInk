@@ -75,6 +75,8 @@ let initialized = false
 let browserSeq = 0
 let persistTimer = 0
 let projectSwitch = 0
+/** 切走專案時停放的瀏覽器 webview，key = projectId::tabId */
+const parkedBrowsers = new Set()
 
 /** 目前選定的專案（由 workspace-page 設定，用來決定新終端機的 cwd） */
 let project = null
@@ -167,6 +169,11 @@ const warnedDrafts = new Set()
 async function persistTabsNow() {
   if (!project?.id) return
   stash()
+  for (const t of tabs) {
+    if (t.kind !== 'browser') continue
+    const live = liveBrowserUrl(t)
+    if (live) t.url = live
+  }
   for (const t of tabs) {
     if (!t.dirty || (t.content || '').length <= MAX_DRAFT_CHARS) continue
     if (warnedDrafts.has(t.id)) continue
@@ -736,8 +743,10 @@ function stash() {
       ? live
       : /** @type {HTMLTextAreaElement} */ (el.editorText).value
   }
-  if (tab.kind === 'browser' && el.browserUrl) {
-    tab.url = /** @type {HTMLInputElement} */ (el.browserUrl).value
+  if (tab.kind === 'browser') {
+    const live = liveBrowserUrl(tab)
+    if (live) tab.url = live
+    else if (el.browserUrl) tab.url = /** @type {HTMLInputElement} */ (el.browserUrl).value
   }
 }
 
@@ -865,7 +874,10 @@ export async function closeTab(id) {
   tabs = tabs.filter((item) => item.id !== id)
   disposeModel(id)
   // 關掉的瀏覽器分頁那顆 webview 也要收：留著的話那個網頁還在背景跑
-  if (tab.kind === 'browser') pruneBrowserGuests()
+  if (tab.kind === 'browser') {
+    parkedBrowsers.delete(guestKey(browserProjectId(tab), tab.id))
+    pruneBrowserGuests()
+  }
   // 這個分頁抓著的內容（草稿影子、預覽的 iframe／影片）要當場放掉，
   // 不然關掉之後它們還在背景吃資源，記憶體也回不去
   if (previewKey.id === id && el.editorPreview) {
@@ -2309,7 +2321,7 @@ function safeUrl(raw) {
 export async function openBrowserTab(url = '') {
   browserSeq += 1
   const id = `b:${browserSeq}`
-  tabs.push({ id, kind: 'browser', title: '瀏覽器', url: url || '' })
+  tabs.push({ id, kind: 'browser', title: '瀏覽器', url: url || '', projectId: project?.id || '' })
   await activate(id)
 }
 
@@ -2321,6 +2333,42 @@ export async function openBrowserTab(url = '') {
 // **每個瀏覽器分頁一顆 webview**：共用一顆的話，切回來整頁重載（捲動位置、填到
 // 一半的表單、登入後的畫面全部重來），而且「上一頁」會走進別的分頁逛過的歷史。
 // 不搬 DOM（比照終端機那幾格），切分頁只 toggle `hidden`。
+// 換專案也比照終端機：webview 停放在 DOM 裡，切回來接著原本的畫面，不用再按前往。
+
+function guestKey(projectId, tabId) {
+  return `${projectId || ''}::${tabId || ''}`
+}
+
+function browserProjectId(tab) {
+  return (tab && tab.projectId) || project?.id || ''
+}
+
+function liveBrowserUrl(tab) {
+  const guest = browserGuestOf(tab)
+  const fromGuest = guest?.dataset.src || ''
+  if (fromGuest && fromGuest !== 'about:blank') return fromGuest
+  return ''
+}
+
+function parkCurrentBrowsers() {
+  const pid = project?.id || ''
+  if (!pid) return
+  for (const tab of tabs) {
+    if (tab.kind === 'browser') parkedBrowsers.add(guestKey(pid, tab.id))
+  }
+}
+
+/**
+ * 專案從清單拿掉時，那個專案停放的網頁也要收。
+ * @param {string} projectId
+ */
+export function forgetProjectBrowsers(projectId) {
+  const prefix = `${projectId || ''}::`
+  for (const key of [...parkedBrowsers]) {
+    if (key.startsWith(prefix)) parkedBrowsers.delete(key)
+  }
+  pruneBrowserGuests()
+}
 
 /**
  * 這個分頁那顆 webview（惰性建立）。
@@ -2330,16 +2378,22 @@ export async function openBrowserTab(url = '') {
 function ensureBrowserGuest(tab) {
   const host = el.browserFrame
   if (!host || !tab) return null
+  const pid = browserProjectId(tab)
   let guest = /** @type {Electron.WebviewTag | null} */ (
-    host.querySelector(`webview[data-tab-id="${CSS.escape(tab.id)}"]`)
+    host.querySelector(
+      `webview[data-tab-id="${CSS.escape(tab.id)}"][data-project-id="${CSS.escape(pid)}"]`
+    )
   )
   if (guest) return guest
   guest = document.createElement('webview')
   // 這些屬性要在插入與第一次導航**之前**設好（partition 建了就不能改）
   guest.setAttribute('partition', 'persist:wsbrowser')
   guest.setAttribute('allowpopups', '')
-  guest.setAttribute('src', 'about:blank')
+  const href = safeUrl(tab.url || '')
+  guest.setAttribute('src', href || 'about:blank')
+  guest.dataset.src = href || 'about:blank'
   guest.dataset.tabId = tab.id
+  guest.dataset.projectId = pid
   // 事件處理一律從 guest 自己的 `data-tab-id` 找回分頁：背景分頁也會導航
   // （重新導向、SPA 換頁），照 `activeId` 找會把它記到使用者正在看的那個分頁上
   const own = () => tabs.find((item) => item.id === guest?.dataset.tabId)
@@ -2380,14 +2434,23 @@ function ensureBrowserGuest(tab) {
 
 /**
  * 關掉的分頁那顆 webview 要收掉——留著的話那個網頁還在背景跑（計時器、影片、
- * WebSocket 一樣都沒停）。換專案時 `tabs` 被整個換掉，同一支就順便掃乾淨。
+ * WebSocket 一樣都沒停）。換專案只停放，不拆；切回來才接得上原本的畫面。
  */
 function pruneBrowserGuests() {
   const host = el.browserFrame
   if (!host) return
-  const live = new Set(tabs.filter((tab) => tab.kind === 'browser').map((tab) => tab.id))
+  const pid = project?.id || ''
+  const live = new Set(parkedBrowsers)
+  for (const tab of tabs) {
+    if (tab.kind === 'browser') live.add(guestKey(tab.projectId || pid, tab.id))
+  }
   for (const node of [...host.querySelectorAll('webview')]) {
-    if (!live.has(/** @type {HTMLElement} */ (node).dataset.tabId || '')) node.remove()
+    const elNode = /** @type {HTMLElement} */ (node)
+    const key = guestKey(elNode.dataset.projectId, elNode.dataset.tabId)
+    if (!live.has(key)) {
+      parkedBrowsers.delete(key)
+      node.remove()
+    }
   }
 }
 
@@ -2421,8 +2484,11 @@ function syncBrowserLocation(tab, url) {
  */
 function browserGuestOf(tab) {
   if (!el.browserFrame || !tab) return null
+  const pid = browserProjectId(tab)
   return /** @type {Electron.WebviewTag | null} */ (
-    el.browserFrame.querySelector(`webview[data-tab-id="${CSS.escape(tab.id)}"]`)
+    el.browserFrame.querySelector(
+      `webview[data-tab-id="${CSS.escape(tab.id)}"][data-project-id="${CSS.escape(pid)}"]`
+    )
   )
 }
 
@@ -2474,8 +2540,10 @@ function paintBrowser(tab) {
   paintBrowserChrome(tab)
   if (!guest) return
   const href = safeUrl(tab.url || '')
+  const current = guest.dataset.src || ''
+  const loaded = current !== '' && current !== 'about:blank'
   if (!href) {
-    if (guest.dataset.src !== 'about:blank') {
+    if (!loaded && current !== 'about:blank') {
       guest.dataset.src = 'about:blank'
       guest.setAttribute('src', 'about:blank')
     }
@@ -2483,11 +2551,11 @@ function paintBrowser(tab) {
     input?.focus()
     return
   }
-  // dataset.src 記「這顆 webview 現在真的在哪」：切分頁來回時避免同址重載
-  if (href && guest.dataset.src !== href) {
-    guest.dataset.src = href
-    guest.setAttribute('src', href)
-  }
+  if (input && loaded && document.activeElement !== input) input.value = current
+  // 停放回來的 webview 已經在那個網址，再設 src 會整頁重載，使用者還得再按一次前往
+  if (loaded) return
+  guest.dataset.src = href
+  guest.setAttribute('src', href)
 }
 
 function navigateBrowser() {
@@ -2888,7 +2956,8 @@ async function restoreProjectTabs(proj, generation) {
           id: item.id || `b:${browserSeq}`,
           kind: 'browser',
           title: item.title || '瀏覽器',
-          url: item.url || ''
+          url: item.url || '',
+          projectId: proj.id
         })
       } else if (item.kind === 'ai-session' && item.sessionRow) {
         try {
@@ -2932,6 +3001,7 @@ export async function setActiveProject(next) {
   const hadProject = Boolean(project?.id)
   const keepTerminal = Boolean(next && findTab(activeId)?.kind === 'terminal')
   cancelBridgeTabs()
+  parkCurrentBrowsers()
   project = next
   if (hadProject) {
     // 分頁清單各自還原，xterm 留在 terminal-page，避免切回時重播整份畫面。
@@ -2944,7 +3014,7 @@ export async function setActiveProject(next) {
   // 分頁清單換掉了，上一個專案的 Monaco model 沒人收——每切一次專案就多留
   // 一整份檔案內容（草稿在上面 `persistTabsNow` 的 `stash()` 已經收走了）
   disposeModelsExcept(tabs.map((t) => t.id))
-  // 上一個專案的瀏覽器分頁沒了，那幾顆 webview 也要跟著收（不收就一直在背景跑）
+  // 上一個專案的瀏覽器分頁停放著，prune 只收沒人要的那些
   pruneBrowserGuests()
   // 還沒倒回去的那份影子是上一個專案的內容，別讓它落到新專案的畫面上；
   // 預覽區的 iframe／影片也要收（切走了還在背景跑）
