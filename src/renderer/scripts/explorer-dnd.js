@@ -60,17 +60,42 @@ export function hasExplorerDrag(event) {
   return [...event.dataTransfer.types].includes('Files')
 }
 
-export function bindDropTarget(el, destFn, onDrop) {
+/** 拖著東西停在資料夾上多久會自己進去（Windows 大約 0.7 秒）。 */
+export const HOVER_ENTER_MS = 700
+
+/**
+ * @param {HTMLElement} el
+ * @param {() => string} destFn
+ * @param {(event: DragEvent, dest: string) => void} onDrop
+ * @param {(dest: string) => void} [onHover] 停留夠久就叫一次（拖到深層資料夾用）
+ */
+export function bindDropTarget(el, destFn, onDrop, onHover) {
+  let timer = 0
+  const stopTimer = () => {
+    if (!timer) return
+    clearTimeout(timer)
+    timer = 0
+  }
   el.addEventListener('dragover', (event) => {
     if (!hasExplorerDrag(event)) return
     event.preventDefault()
     const dest = destFn()
     setDropEffect(event, pathKey(dest) === RECYCLE_CWD || !event.ctrlKey ? 'move' : 'copy')
     el.classList.add('is-drop')
+    if (onHover && !timer) {
+      timer = setTimeout(() => {
+        timer = 0
+        onHover(destFn())
+      }, HOVER_ENTER_MS)
+    }
   })
-  el.addEventListener('dragleave', () => el.classList.remove('is-drop'))
+  el.addEventListener('dragleave', () => {
+    stopTimer()
+    el.classList.remove('is-drop')
+  })
   el.addEventListener('drop', (event) => {
     event.preventDefault()
+    stopTimer()
     el.classList.remove('is-drop')
     onDrop(event, destFn())
   })
@@ -187,6 +212,9 @@ export function showExplorerMenu(at, spec) {
     menu.push({ label: '新增檔案', onSelect: act.newFile })
     if (act.pinHere) menu.push({ label: '釘到側欄', onSelect: act.pinHere })
     if (act.openProjectHere) menu.push({ label: '把這個資料夾加入專案', onSelect: act.openProjectHere })
+    if (act.toggleHidden) {
+      menu.push({ label: spec.showHidden ? '不顯示隱藏項目' : '顯示隱藏項目', onSelect: act.toggleHidden })
+    }
   }
   if (act.refresh) {
     menu.push({ sep: true })

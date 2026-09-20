@@ -34,12 +34,18 @@ let cwd = ''
 let view = 'list'
 let sortBy = 'name'
 let sortDesc = false
+/** 要不要把隱藏／系統項目也列出來（跟檔案總管的「顯示隱藏的項目」同一件事）*/
+let showHidden = false
 /** @type {string[]} */
 let history = []
 let histIndex = -1
 /** @type {Set<string>} */
 let selected = new Set()
 let anchor = ''
+/** 方向鍵的游標位置。跟 `anchor`（Shift 連選的錨點）是兩件事 */
+let cursor = ''
+/** 上一次剪下／複製了什麼——貼上要復原時得知道是搬過去還是拷過去的 */
+let lastClip = { mode: 'copy', paths: [] }
 /** @type {Array<{ name: string, path: string, dir: boolean, size: number, mtimeMs: number, ext?: string }>} */
 let entries = []
 /** @type {Array<{ name: string, path: string, dir: boolean, size: number, mtimeMs: number }>} */
@@ -136,6 +142,7 @@ function bindOnce() {
   $('exViewListBtn')?.addEventListener('click', () => setView('list'))
   $('exViewGridBtn')?.addEventListener('click', () => setView('grid'))
   $('exListHead')?.addEventListener('click', onSortClick)
+  $('exList')?.addEventListener('mousedown', onListMouseDown)
   $('exList')?.addEventListener('click', onListClick)
   $('exList')?.addEventListener('contextmenu', onListContext)
   $('exList')?.addEventListener('dragover', onListDragOver)
@@ -453,6 +460,7 @@ function rowEl(entry) {
   row.setAttribute('role', 'option')
   row.tabIndex = -1
   if (selected.has(entryId(entry))) row.classList.add('is-selected')
+  if (entry.hidden) row.classList.add('is-dim')
   const name = document.createElement('div')
   name.className = 'ex-row-name'
   const icon = document.createElement('span')
@@ -491,7 +499,12 @@ function rowEl(entry) {
     openContextMenu(e, selectedEntries())
   })
   row.addEventListener('dragstart', (e) => onDragStart(e, entry))
-  if (entry.dir) bindDropTarget(row, () => entry.path, (event, dest) => void handleDrop(event, dest))
+  if (entry.dir) {
+    bindDropTarget(row, () => entry.path, (event, dest) => void handleDrop(event, dest), (dest) => {
+      // 拖著檔案停在資料夾上就進去，才有辦法丟到深層路徑
+      if (!inSearch() && !inRecycle()) void navigate(dest)
+    })
+  }
   return row
 }
 
@@ -510,10 +523,12 @@ function onRowClick(entry, e) {
     if (selected.has(id)) selected.delete(id)
     else selected.add(id)
     anchor = id
+    cursor = id
   } else {
     selectOnly(id)
     anchor = id
   }
+  cursor = id
   paintList()
   const row = $('exList')?.querySelector('.ex-row.is-selected')
   if (row && typeof row.focus === 'function') row.focus({ preventScroll: true })
@@ -538,7 +553,13 @@ function paintStatus() {
     return
   }
   const dirs = rows.filter((r) => r.dir).length
-  el.textContent = `${rows.length} 個項目 · ${dirs} 個資料夾${extra}`
+  const picked = selectedEntries()
+  // 資料夾的大小要遞迴走完整棵樹才算得出來，這裡不算——跟 Windows 一樣只在全是檔案時報大小
+  const bytes = picked.length && picked.every((p) => !p.dir)
+    ? `，${formatSize(picked.reduce((n, p) => n + (Number(p.size) || 0), 0))}`
+    : ''
+  const picks = picked.length ? ` · 已選取 ${picked.length} 個${bytes}` : ''
+  el.textContent = `${rows.length} 個項目 · ${dirs} 個資料夾${extra}${picks}`
 }
 
 function selectedEntries() {
@@ -740,7 +761,7 @@ async function loadDir(dirPath, opts = {}) {
   const seq = ++navSeq
   let result
   try {
-    result = await electronAPI.explorer.listDir(dirPath, { sort: sortBy, desc: sortDesc })
+    result = await electronAPI.explorer.listDir(dirPath, { sort: sortBy, desc: sortDesc, showHidden })
   } catch {
     result = null
   }
@@ -996,6 +1017,7 @@ function copyPaths(items) {
 
 async function clipboard(items, mode) {
   try {
+    lastClip = { mode, paths: items.map((i) => i.path) }
     await call(
       electronAPI.explorer.setClipboard(items.map((i) => i.path), mode),
       '無法放入剪貼簿'
@@ -1021,7 +1043,12 @@ async function refreshAfterMutate() {
 async function pasteHere() {
   if (!cwd || inHome()) return
   try {
-    await call(electronAPI.explorer.paste(cwd), '貼上失敗')
+    const done = await call(electronAPI.explorer.paste(cwd), '貼上失敗')
+    const landed = (done && done.paths) || []
+    if (landed.length && lastClip.paths.length) {
+      pushUndo(lastClip.mode === 'cut' ? '搬移' : '複製',
+        lastClip.mode === 'cut' ? undoMove(landed, lastClip.paths) : undoCopy(landed))
+    }
     await refreshAfterMutate()
   } catch {
     // toast 已顯示
@@ -1058,7 +1085,12 @@ async function renameItem(item) {
   const name = await askInput('重新命名', { value: item.name })
   if (!name || name === item.name) return
   try {
-    await call(electronAPI.explorer.renameEntry(item.path, name), '改名失敗')
+    const done = await call(electronAPI.explorer.renameEntry(item.path, name), '改名失敗')
+    if (done && done.path) {
+      pushUndo(`改名「${item.name}」`, () => (
+        call(electronAPI.explorer.renameEntry(done.path, item.name), '復原失敗')
+      ))
+    }
     await refreshAfterMutate()
   } catch {
     // toast 已顯示
@@ -1146,6 +1178,7 @@ function openContextMenu(e, items) {
     showExplorerMenu(at, {
       recycle,
       items,
+      showHidden,
       shell: shellItems,
       invokeShell: (cmd) => {
         if (!token) return Promise.resolve()
@@ -1175,6 +1208,7 @@ function openContextMenu(e, items) {
         remove: () => void deleteItems(items),
         newFolder: () => void newFolder(),
         newFile: () => void newFile(),
+        toggleHidden: () => void toggleHidden(),
         refresh: () => void refreshAfterMutate()
       }
     })
@@ -1320,11 +1354,135 @@ async function addNasPlace() {
   }
 }
 
+/** DOM 上那一列代表哪一筆（`dataset.id` 在一般資料夾裡只是檔名，對不上 `selected`）。 */
+function rowId(row) {
+  return (row && (row.dataset.key || row.dataset.path)) || ''
+}
+
+/** 方格檢視一列擺得下幾格——欄數跟著視窗寬度變，只能照實際版面量。 */
+function gridColumns() {
+  const host = $('exList')
+  if (!host || !host.classList.contains('is-grid')) return 1
+  const rows = [...host.querySelectorAll('.ex-row')]
+  if (rows.length < 2) return 1
+  const top = rows[0].offsetTop
+  let n = 0
+  for (const row of rows) {
+    if (row.offsetTop !== top) break
+    n += 1
+  }
+  return Math.max(1, n)
+}
+
+/**
+ * 方向鍵移動選取。游標（`cursor`）跟連選錨點（`anchor`）是兩件事：
+ * Shift 連選時錨點要釘在原地，只有游標在走。
+ * @param {string} key
+ * @param {boolean} extend 有沒有按著 Shift
+ */
+function moveSelection(key, extend) {
+  const rows = listed()
+  if (!rows.length) return
+  const ids = rows.map((r) => entryId(r))
+  const cols = gridColumns()
+  const at = ids.indexOf(cursor)
+  let next
+  if (key === 'Home') next = 0
+  else if (key === 'End') next = rows.length - 1
+  else {
+    const step = key === 'ArrowUp' ? -cols : key === 'ArrowDown' ? cols : key === 'ArrowLeft' ? -1 : 1
+    if (at < 0) next = step > 0 ? 0 : rows.length - 1
+    else next = at + step
+  }
+  next = Math.max(0, Math.min(rows.length - 1, next))
+  cursor = ids[next]
+  if (extend) {
+    if (!anchor || !ids.includes(anchor)) anchor = at >= 0 ? ids[at] : cursor
+    const lo = Math.min(ids.indexOf(anchor), next)
+    const hi = Math.max(ids.indexOf(anchor), next)
+    selected = new Set(ids.slice(lo, hi + 1))
+  } else {
+    anchor = cursor
+    selected = new Set([cursor])
+  }
+  paintList()
+  const host = $('exList')
+  const row = [...(host ? host.querySelectorAll('.ex-row') : [])].find((el) => rowId(el) === cursor)
+  if (row) {
+    row.scrollIntoView({ block: 'nearest' })
+    if (typeof row.focus === 'function') row.focus({ preventScroll: true })
+  }
+}
+
+/**
+ * 空白處按著拖＝框選（跟檔案總管一樣）。在列上按下是拖檔案，那條走原生拖放，
+ * 所以這裡只接「按在空白」的情況。框選期間**不重畫清單**（`paintList` 會把框本身
+ * 一起清掉，而且每動一像素重建整份 DOM 太貴），只就地 toggle class，放開才重畫一次。
+ */
+function onListMouseDown(e) {
+  if (e.button !== 0 || e.target.closest('.ex-row')) return
+  const host = $('exList')
+  if (!host || host.hidden) return
+  const startX = e.clientX
+  const startY = e.clientY
+  const base = e.ctrlKey || e.metaKey ? new Set(selected) : new Set()
+  /** @type {HTMLElement | null} */
+  let box = null
+
+  const onMove = (ev) => {
+    if (!box) {
+      if (Math.abs(ev.clientX - startX) < 4 && Math.abs(ev.clientY - startY) < 4) return
+      box = document.createElement('div')
+      box.className = 'ex-marquee'
+      host.appendChild(box)
+    }
+    const left = Math.min(startX, ev.clientX)
+    const top = Math.min(startY, ev.clientY)
+    const right = Math.max(startX, ev.clientX)
+    const bottom = Math.max(startY, ev.clientY)
+    const hostRect = host.getBoundingClientRect()
+    box.style.left = `${left - hostRect.left + host.scrollLeft}px`
+    box.style.top = `${top - hostRect.top + host.scrollTop}px`
+    box.style.width = `${right - left}px`
+    box.style.height = `${bottom - top}px`
+    const next = new Set(base)
+    for (const row of host.querySelectorAll('.ex-row')) {
+      const r = row.getBoundingClientRect()
+      const hit = r.right >= left && r.left <= right && r.bottom >= top && r.top <= bottom
+      if (hit) next.add(rowId(row))
+      row.classList.toggle('is-selected', next.has(rowId(row)))
+    }
+    selected = next
+  }
+
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove)
+    document.removeEventListener('mouseup', onUp)
+    if (!box) return
+    box.remove()
+    box = null
+    anchor = ''
+    cursor = ''
+    paintList()
+  }
+
+  document.addEventListener('mousemove', onMove)
+  document.addEventListener('mouseup', onUp)
+}
+
 function onListClick(e) {
   if (e.target.closest('.ex-row') || !selected.size) return
   selected = new Set()
   anchor = ''
+  cursor = ''
   paintList()
+}
+
+async function toggleHidden() {
+  showHidden = !showHidden
+  void electronAPI.explorer.saveState({ showHidden })
+  await refreshAfterMutate()
+  showToast(showHidden ? '已顯示隱藏項目' : '已隱藏系統項目')
 }
 
 function onListContext(e) {
@@ -1357,6 +1515,51 @@ function onListDrop(e) {
   void handleDrop(e, cwd)
 }
 
+/** 復原堆疊只記「這次操作怎麼倒回去」，不記快照——檔案太大，快照不起。 */
+const undoStack = []
+const MAX_UNDO = 20
+
+/**
+ * @param {string} label 給 toast 用的人話
+ * @param {() => Promise<unknown>} fn
+ */
+function pushUndo(label, fn) {
+  undoStack.push({ label, fn })
+  while (undoStack.length > MAX_UNDO) undoStack.shift()
+}
+
+/** 搬回原處。來源與結果同順序（main 的 `dropEntries`／`paste` 都是逐筆照順序回）。 */
+function undoMove(newPaths, oldPaths) {
+  return async () => {
+    for (let i = 0; i < newPaths.length; i += 1) {
+      const back = parentOf(oldPaths[i])
+      if (!back) continue
+      // eslint-disable-next-line no-await-in-loop
+      await call(electronAPI.explorer.dropEntries([newPaths[i]], back, 'move'), '復原失敗')
+    }
+  }
+}
+
+/** 複製出來的東西丟進資源回收筒，不永久刪——復原自己也要能反悔。 */
+function undoCopy(newPaths) {
+  return () => call(electronAPI.explorer.dropEntries(newPaths, RECYCLE_CWD, 'move'), '復原失敗')
+}
+
+async function undoLast() {
+  const job = undoStack.pop()
+  if (!job) {
+    showToast('沒有可以復原的動作')
+    return
+  }
+  try {
+    await job.fn()
+    await refreshAfterMutate()
+    showToast(`已復原：${job.label}`)
+  } catch {
+    // call() 已經跳過 toast
+  }
+}
+
 async function handleDrop(e, toDir) {
   e.preventDefault()
   const paths = readDragPaths(e, electronAPI.getPathForFile)
@@ -1375,7 +1578,12 @@ async function handleDrop(e, toDir) {
       if (!ok) return
       await call(electronAPI.explorer.dropEntries(paths, RECYCLE_CWD, 'move'), '刪不掉')
     } else {
-      await call(electronAPI.explorer.dropEntries(paths, toDir, mode), '搬不過去')
+      const done = await call(electronAPI.explorer.dropEntries(paths, toDir, mode), '搬不過去')
+      const landed = (done && done.paths) || []
+      if (landed.length) {
+        pushUndo(mode === 'copy' ? '複製' : '搬移',
+          mode === 'copy' ? undoCopy(landed) : undoMove(landed, paths))
+      }
     }
     await refreshAfterMutate()
   } catch {
@@ -1429,6 +1637,15 @@ function onPageKey(e) {
     e.preventDefault()
     void goUp()
   }
+  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key) && !e.altKey) {
+    // 清單檢視只吃上下：左右留給之後可能的水平操作，方格檢視才四個方向都走
+    const grid = $('exList')?.classList.contains('is-grid')
+    if (grid || !['ArrowLeft', 'ArrowRight'].includes(e.key)) {
+      e.preventDefault()
+      moveSelection(e.key, e.shiftKey)
+      return
+    }
+  }
   if (e.key === 'F2') {
     const items = selectedEntries()
     if (items.length === 1 && !inRecycle()) void renameItem(items[0])
@@ -1438,6 +1655,10 @@ function onPageKey(e) {
     e.preventDefault()
     selected = new Set(listed().map((r) => entryId(r)))
     paintList()
+  }
+  if (e.ctrlKey && (e.key === 'z' || e.key === 'Z')) {
+    e.preventDefault()
+    void undoLast()
   }
   if (e.ctrlKey && e.key === 'c') void clipboard(selectedEntries(), 'copy')
   if (e.ctrlKey && e.key === 'x') void clipboard(selectedEntries(), 'cut')
@@ -1549,6 +1770,7 @@ export async function refreshExplorerPage() {
     view = boot.view === 'grid' ? 'grid' : 'list'
     sortBy = boot.sort === 'date' || boot.sort === 'size' ? boot.sort : 'name'
     sortDesc = boot.sortDesc === true
+    showHidden = boot.showHidden === true
     places = boot.places || []
     disks = boot.drives || []
     setView(view)
