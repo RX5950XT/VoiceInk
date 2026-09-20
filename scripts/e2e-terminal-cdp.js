@@ -23,6 +23,8 @@ const MAIN_PORT = 9248
 // 這時可以打包到別的資料夾再用 VOICEINK_EXE 指過去，測試不必等鎖放掉
 const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-unpacked', 'VoiceInk.exe')
 const USER_DATA_DIR = tempDir('voiceink-e2e-terminal-')
+/** 拿來塞進剪貼簿的假截圖（8×8 紅色 PNG）。1×1 在某些機器上會被當成空圖。 */
+const TINY_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR4nGO4o6GBFTEMLQkAe3tLAfuiUfAAAAAASUVORK5CYII='
 fs.writeFileSync(path.join(USER_DATA_DIR, 'config.json'), JSON.stringify({ sysmonSensors: false }))
 const PROJECT_DIR = path.join(USER_DATA_DIR, 'project')
 fs.mkdirSync(PROJECT_DIR)
@@ -343,6 +345,59 @@ async function main() {
         })()`)
         ok('剪貼簿沒有文字時把 ^V 原樣轉給 CLI（貼上截圖不會被吞掉）',
           rawCtrlV.includes('\x16'), JSON.stringify(rawCtrlV))
+
+        // 剪貼簿裡是**截圖**：App 自己把圖存成 PNG、貼那條路徑進去。
+        // 光丟 `^V` 讓 CLI 自己去翻剪貼簿在 ConPTY 裡多半一聲不吭，
+        // 使用者看到的就是「截圖貼不進終端機」。Alt+V 走同一支。
+        const wroteImage = await mainCdp.eval(`(() => {
+          const e = process.mainModule.require('electron')
+          e.clipboard.clear()
+          const image = e.nativeImage.createFromDataURL(${JSON.stringify(TINY_PNG)})
+          e.clipboard.writeImage(image)
+          const back = e.clipboard.readImage()
+          return { made: !image.isEmpty(), onClipboard: !back.isEmpty(), size: back.getSize() }
+        })()`)
+        ok('測試真的把一張圖放進剪貼簿了', wroteImage.made && wroteImage.onClipboard, JSON.stringify(wroteImage))
+        const savedByMain = await cdp.eval(`window.electronAPI.terminal.clipboardImage()`)
+        ok('main 把剪貼簿的截圖存成檔案並回路徑',
+          savedByMain?.ok === true && typeof savedByMain.data?.path === 'string' && savedByMain.data.path.endsWith('.png'),
+          JSON.stringify(savedByMain))
+
+        for (const [label, keyOpts] of [
+          ['Ctrl+V', { ctrlKey: true }],
+          ['Alt+V', { altKey: true }]
+        ]) {
+          await mainCdp.eval(`(() => {
+            const e = process.mainModule.require('electron')
+            e.clipboard.clear()
+            e.clipboard.writeImage(e.nativeImage.createFromDataURL(${JSON.stringify(TINY_PNG)}))
+            return !e.clipboard.readImage().isEmpty()
+          })()`)
+          const pastedImage = await cdp.eval(`(async () => {
+            const term = window.__testTerminal
+            const sent = []
+            const capture = term.onData((d) => sent.push(d))
+            const opts = { key: 'v', code: 'KeyV', keyCode: 86, which: 86, bubbles: true, cancelable: true, ...${JSON.stringify(keyOpts)} }
+            term.textarea.focus()
+            term.textarea.dispatchEvent(new KeyboardEvent('keydown', opts))
+            term.textarea.dispatchEvent(new KeyboardEvent('keyup', opts))
+            for (let i = 0; i < 50 && !/clip-\\d{8}-\\d{6}/.test(sent.join('')); i += 1) {
+              await new Promise((r) => setTimeout(r, 100))
+            }
+            capture.dispose()
+            return sent.join('')
+          })()`)
+          const match = /clipboard-images[\\\\/](clip-\d{8}-\d{6}-\d{3}(?:-\d+)?\.png)/.exec(pastedImage)
+          ok(`${label}：剪貼簿是截圖時貼的是 PNG 路徑，不是吞掉的 ^V`,
+            Boolean(match) && !pastedImage.includes('\x16'), JSON.stringify(pastedImage.slice(0, 160)))
+          const saved = match ? path.join(USER_DATA_DIR, 'clipboard-images', match[1]) : ''
+          ok(`${label}：那條路徑上真的有一張 PNG`,
+            Boolean(saved) && fs.existsSync(saved) && fs.readFileSync(saved).subarray(1, 4).toString() === 'PNG',
+            saved)
+          // 貼進去的路徑留著會被當成指令，按 Ctrl+C 清掉
+          await cdp.eval(`window.electronAPI.terminal.write(${JSON.stringify(createdId)}, '\\x03')`)
+        }
+        await mainCdp.eval(`process.mainModule.require('electron').clipboard.clear()`)
 
         // 語音輸入在自己的視窗裡走的是這條（main 的 `insertIntoOwnWindow` 用
         // executeJavaScript 叫 `__viInsertText`）：完全不經過剪貼簿，

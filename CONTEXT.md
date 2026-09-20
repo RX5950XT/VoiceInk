@@ -14,12 +14,36 @@ AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定�
 
 ## 架構
 
-### 貼上與語音輸入的插入路徑（2026-09-20）
+### 檔案總管：方格檢視的縮放與大圖預覽（2026-09-21）
 
-- **終端機接下 Ctrl+V／Ctrl+Shift+V**（`attachCustomKeyEventHandler` → `pasteFromClipboard`）：
+- **方格檢視的檔名本來是直書的**：`.ex-row-name` 在清單檢視是「圖示 ＋ 檔名」橫向一列，
+  方格檢視沒把它改成直排，於是圖示留在左邊、檔名被擠成一欄寬＝一個字一行。
+  CSS 補 `.ex-list.is-grid .ex-row-name { flex-direction: column }`，檔名 `.ex-row-label`
+  最多兩行（選取時攤到五行），完整檔名放 `title`。
+- **Ctrl+滾輪縮放**：級距在 `explorer-zoom.js`（純函式，好測）——清單 → 48 → 64 → 96 →
+  128 → 180 → 256，最小的方格再往下滾掉回清單。大小寫進 `#exList` 的 `--ex-tile`（版面）
+  與 `data-tile`（`explorer-icons.js` 拿它決定跟殼層要多大的縮圖，快取鍵也帶尺寸），
+  存進 `explorer.json` 的 `tile`（`store.js` 的 `sanitizeTile` 把怪值靠回最近一級）。
+  `wheel` 要 `{ passive: false }`，不然 `preventDefault()` 無效＝整頁被 Chromium 縮放。
+- **大圖預覽 `image-viewer.js`**：選圖片按**空白鍵**、點側欄小預覽、或右鍵「預覽」開；
+  滾輪縮放、拖曳平移、雙擊切「符合視窗 ⇄ 100%」、←／→ 換同資料夾的圖、Esc 關。
+  圖片走 `vi-media://` 的 `~local` 路線（`explorer:mediaUrl`）**邊讀邊送**，
+  不是 `inspect` 那個卡 2MB 的 `data:` URI。路徑兩道關卡：`explorer/paths.resolveExisting`
+  ＋ 協定端再驗一次。Enter／雙擊仍是「用系統預設程式開」，沒有改掉。
+- 測試：`test-explorer-zoom.js`（級距、消毒、兩邊級距一致、網址編碼）
+  ＋ `e2e-explorer-cdp.js` 的 [C11]（量 computed style，確認檔名不是直書、滾輪真的放大）。
+
+### 貼上與語音輸入的插入路徑（2026-09-20，2026-09-21 補截圖）
+
+- **終端機接下 Ctrl+V／Ctrl+Shift+V／Alt+V**（`attachCustomKeyEventHandler` → `pasteFromClipboard`）：
   xterm 自己不碰剪貼簿，沒接的話那顆鍵只會變成 `^V` 送進 PTY，Claude Code 那類 CLI 不認。
   剪貼簿跟 main 要（`terminal:clipboardText`）——renderer 的 `navigator.clipboard.readText()`
-  沒焦點會 reject。讀不到文字才把 `^V` 原樣轉給 CLI（Claude Code 靠它貼截圖）。右鍵貼上同一支。
+  沒焦點會 reject。右鍵貼上同一支。
+- **剪貼簿裡是截圖就落成 PNG 再貼路徑**（`terminal/clipboard-image.js` →
+  `terminal:clipboardImage`）：存進 `<userData>/clipboard-images`，貼進去的是加好引號的
+  路徑（跟拖放檔案同一套規則），任何 CLI 都讀得到那張圖。**丟 `^V` 讓 CLI 自己去翻剪貼簿
+  在 ConPTY 裡多半一聲不吭**，那是最後的退路不是主路。舊圖超過一天或超過 40 張就掃掉。
+- Alt+V 也收：Claude Code 的說明把它列成「貼上圖片」，不接的話 xterm 只會送 `ESC v`。
 - **語音輸入在自己的視窗裡不走剪貼簿**：`dictation/insert.js` 的 `insertIntoOwnWindow` 用
   `executeJavaScript` 叫 renderer 的 `__viInsertText`（`dictation.js`）；終端機走
   `pasteIntoFocusedTerminal`，一般輸入框走 `execCommand('insertText')`。人在別的程式裡
@@ -190,6 +214,10 @@ AGY 設定、終端機、聊天、語音輸入紀錄**刻意不進** `STORE_ALLO
 - **折行**：xterm `isWrapped` 之外，CLI 自己印的換行若前一列以 `/` `\` 結尾、或剛好填滿一列，也接成同一條邏輯行再掃。`file://`、`www.`、`localhost:埠` 也認得；`file.js:12` 的行號留給開檔。
 - **點下去用 App 開**：網址走內建瀏覽器分頁；路徑在專案裡就開編輯器／檔案樹，否則進檔案頁。不再 `shell.showItemInFolder`。
 - **AGY Ctrl+G**：`EDITOR`／`VISUAL` 改短檔名 `voiceink-edit.cmd`，`editor-bridge` 資料夾接到 PATH 最前面。AGY／Gemini CLI 用 `split(' ')` 再 `spawn({ shell: true })`，完整路徑一加引號就切壞。
+  **2026-09-21 修**：那條 PATH 其實從來沒進到子程序——`{ ...process.env }` 展開出來的鍵是
+  `Path`（Windows 原字），寫 `env.PATH = …` 等於另外開一個空的 `PATH`，生效的還是原封不動的
+  `Path`，症狀是 AGY 回 `editor "voiceink-edit.cmd" not found in PATH`。改成
+  `prependPath()` 就地改本來那個鍵。**宿主活得比 App 久，要按重新啟動宿主才吃得到。**
 - **破圖**：WebGL context 掉了重掛（最多 3 次）；欄列數真的變了才清 glyph atlas 並 refresh。
 
 ### 2026-09-15 — 工作區大檔預覽與編輯

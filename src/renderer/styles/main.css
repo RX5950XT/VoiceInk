@@ -12205,9 +12205,12 @@ h6.md-h { font-size: 14px; }
   display: none;
 }
 
+/* 方格檢視。圖示邊長是 `--ex-tile`（Ctrl+滾輪改它，見 explorer-page.js 的 `setTile`），
+   格子寬度、字級、留白全部跟著它算，所以縮放時整格一起長大，不會只有圖變大。 */
 .ex-list.is-grid {
+  --ex-tile: 96px;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(calc(var(--ex-tile) + 28px), 1fr));
   align-content: start;
   gap: 8px;
   padding: 12px;
@@ -12218,14 +12221,38 @@ h6.md-h { font-size: 14px; }
   flex-direction: column;
   align-items: center;
   text-align: center;
-  padding: 12px 8px;
+  padding: 10px 6px;
   gap: 6px;
 }
 
+/* **這一條是方格檢視的重點**：`.ex-row-name` 在清單檢視是「圖示 ＋ 檔名」橫向一列，
+   方格檢視沒改成直排的話，圖示會留在左邊、檔名被擠成一欄寬，變成一個字一行的直書。 */
+.ex-list.is-grid .ex-row-name {
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  font-size: clamp(11px, calc(var(--ex-tile) * 0.13), 14px);
+}
+
+/* 檔名最多兩行，超出用刪節號——跟檔案總管一樣（滑過去有完整檔名的提示） */
+.ex-list.is-grid .ex-row-label {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+  max-width: 100%;
+}
+
+/* 選取時**不**把檔名攤開：那一格一變高會把整列撐開，畫面每選一次跳一下。
+   看完整檔名靠滑過去的 `title`（跟檔案總管的浮出提示同一件事）。 */
+
 .ex-list.is-grid .ex-row-icon {
-  font-size: 56px;
-  width: 96px;
-  height: 96px;
+  font-size: calc(var(--ex-tile) * 0.58);
+  width: var(--ex-tile);
+  height: var(--ex-tile);
 }
 
 .ex-list.is-grid .ex-row-size,
@@ -12362,4 +12389,117 @@ h6.md-h { font-size: 14px; }
   .ex-search-wrap {
     flex: 1 1 100%;
   }
+}
+
+/* ── 大圖預覽（image-viewer.js）──
+   檔案總管按空白鍵／點右側預覽圖叫出來的全視窗檢視。蓋在右鍵選單（1200）之上，
+   因為它就是從右鍵選單點開的。 */
+.iv-root {
+  position: fixed;
+  inset: 0;
+  z-index: 1400;
+  display: flex;
+  flex-direction: column;
+  background: rgba(8, 10, 14, 0.92);
+  outline: none;
+}
+
+.iv-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  color: #f2f4f8;
+  /* 工具列半透明，圖片可以從底下透出來 */
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.45), transparent);
+}
+
+.iv-caption {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.iv-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.iv-zoom {
+  min-width: 48px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  opacity: 0.85;
+}
+
+.iv-btn {
+  color: #f2f4f8;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.iv-btn:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.iv-stage {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  /* 放大後的圖靠 transform 移動，這裡不要出現捲軸 */
+  min-height: 0;
+}
+
+.iv-img {
+  transform-origin: center center;
+  user-select: none;
+  /* 沒有這一條，放大時整張圖會被瀏覽器重採樣成糊的 */
+  image-rendering: auto;
+}
+
+/* 符合視窗：長邊貼齊，短邊留白 */
+.iv-img.is-fit {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.iv-img.is-pannable {
+  cursor: grab;
+}
+
+.iv-img.is-pannable:active {
+  cursor: grabbing;
+}
+
+.iv-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 40px;
+  height: 64px;
+  font-size: 26px;
+  color: #f2f4f8;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.iv-nav:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.iv-prev { left: 12px; }
+.iv-next { right: 12px; }
+
+/* 側欄的小預覽點得下去＝開大圖（只有圖片會帶 title，別的預覽維持一般游標） */
+.ex-detail-preview[title] {
+  cursor: zoom-in;
 }

@@ -197,6 +197,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** 貼上要讀的剪貼簿文字。**不要改用 `navigator.clipboard.readText()`**：
      *  那支要視窗有焦點，沒焦點直接 reject，Ctrl+V 就變成沒反應。 */
     clipboardText: () => ipcRenderer.invoke('terminal:clipboardText'),
+    /** 剪貼簿裡的截圖：main 存成 PNG 後回 `{ path, width, height }`，沒有圖片回 null。
+     *  終端機貼的是那條路徑——CLI 讀得到圖，比丟 `^V` 讓它自己翻剪貼簿可靠。 */
+    clipboardImage: () => ipcRenderer.invoke('terminal:clipboardImage'),
     /** 終端機桌布：讀回 data: URI（檔案在 main 手上，renderer 只認得檔名） */
     background: (name) => ipcRenderer.invoke('terminal:background', name),
     /** 換桌布：走系統對話框選圖，回新檔名；舊的那張由 main 刪掉 */
@@ -671,6 +674,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     driveInfo: () => ipcRenderer.invoke('explorer:driveInfo'),
     listDir: (dirPath, opts) => ipcRenderer.invoke('explorer:listDir', dirPath, opts),
     preview: (filePath) => ipcRenderer.invoke('explorer:preview', filePath),
+    /** 大預覽的來源網址（`vi-media://`）。側欄小預覽才用 `inspect` 的 data: URI（卡 2MB）。 */
+    mediaUrl: (filePath) => ipcRenderer.invoke('explorer:mediaUrl', filePath),
     inspect: (filePath) => ipcRenderer.invoke('explorer:inspect', filePath),
     createEntry: (dirPath, name, dir) => ipcRenderer.invoke('explorer:createEntry', dirPath, name, dir),
     renameEntry: (target, name) => ipcRenderer.invoke('explorer:renameEntry', target, name),

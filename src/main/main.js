@@ -1753,6 +1753,8 @@ registerTerminalIpc({
     editorCancel: (...args) => loadTerminal().editorCancel(...args),
     // 貼上讀的是 main 的剪貼簿（renderer 那支沒焦點會 reject）
     clipboardText: (...args) => loadTerminal().clipboardText(...args),
+    // 貼上截圖：main 把剪貼簿的圖存成 PNG，renderer 只拿得到路徑
+    clipboardImage: (...args) => loadTerminal().clipboardImage(...args),
     // 終端機桌布（三支都要列，漏一支那顆按鈕就只會回通用錯誤）
     backgroundImage: (...args) => loadTerminal().backgroundImage(...args),
     adoptBackground: (...args) => loadTerminal().adoptBackground(...args),
@@ -1844,6 +1846,8 @@ registerExplorerIpc({
     driveInfo: (...args) => loadExplorer().driveInfo(...args),
     listDir: (...args) => loadExplorer().listDir(...args),
     preview: (...args) => loadExplorer().preview(...args),
+    // 大預覽的來源網址（`vi-media://`，邊讀邊送）
+    mediaUrl: (...args) => loadExplorer().mediaUrl(...args),
     inspect: (...args) => loadExplorer().inspect(...args),
     createEntry: (...args) => loadExplorer().createEntry(...args),
     renameEntry: (...args) => loadExplorer().renameEntry(...args),
@@ -2076,7 +2080,13 @@ app.whenReady().then(() => {
   // 沒搶到鎖的那份只負責把訊號送出去就結束，不可以建窗、更不可以 autoStart 反代（撞埠）
   if (!hasInstanceLock) return
   bootLog('whenReady')
-  workspaceMedia.register(protocol, (projectId) => loadWorkspace().rootOf(projectId))
+  // 第三個參數是檔案總管的大預覽：路徑一律過 `explorer/paths` 的 `resolveExisting`
+  // （跟檔案總管讀檔同一個入口，沒有放寬任何範圍），拿不到就丟例外 → 協定回 404。
+  workspaceMedia.register(
+    protocol,
+    (projectId) => loadWorkspace().rootOf(projectId),
+    (full) => require('./explorer/paths').resolveExisting(full)
+  )
   session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
     desktopCapturer.getSources({ types: ['screen'] })
       .then((sources) => {

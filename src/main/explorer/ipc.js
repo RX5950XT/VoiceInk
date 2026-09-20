@@ -32,6 +32,8 @@ function registerExplorerIpc({ ipcMain, service, isMainSender }) {
     invoke(event, () => service.listDir(dirPath, opts))
   ))
   ipcMain.handle('explorer:preview', (event, filePath) => invoke(event, () => service.preview(filePath)))
+  // 大預覽的來源網址（`vi-media://` 協定，邊讀邊送，不受 data: URI 的 2MB 上限）
+  ipcMain.handle('explorer:mediaUrl', (event, filePath) => invoke(event, () => service.mediaUrl(filePath)))
   ipcMain.handle('explorer:inspect', (event, filePath) => invoke(event, () => service.inspect(filePath)))
   ipcMain.handle('explorer:createEntry', (event, dirPath, name, dir) => (
     invoke(event, () => service.createEntry(dirPath, name, dir))

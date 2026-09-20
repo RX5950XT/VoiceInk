@@ -156,7 +156,7 @@ export async function paintDetail(opts) {
     }
   }
   if (seq !== detailSeq) return
-  host.appendChild(previewEl(item, info))
+  host.appendChild(previewEl(item, info, opts.onPreviewClick))
 
   const dl = document.createElement('dl')
   addFact(dl, '類型', (info && info.type) || (item.dir ? '資料夾' : '檔案'))
@@ -174,7 +174,12 @@ export async function paintDetail(opts) {
   if (folder && explorerPageActive()) void fillFolderSize(item.path, sizeDdEl, seq, opts.formatSize)
 }
 
-function previewEl(item, info) {
+/**
+ * @param {object} item
+ * @param {object | null} info
+ * @param {(() => void) | null} [onPreviewClick] 點小預覽要不要開大預覽（只有圖片會給）
+ */
+function previewEl(item, info, onPreviewClick) {
   const box = document.createElement('div')
   box.className = 'ex-detail-preview-box'
   if (info && info.image) {
@@ -182,6 +187,10 @@ function previewEl(item, info) {
     img.className = 'ex-detail-preview'
     img.alt = item.name
     img.src = info.image
+    if (typeof onPreviewClick === 'function') {
+      img.title = '點一下看大圖'
+      img.addEventListener('click', () => onPreviewClick())
+    }
     box.appendChild(img)
     return box
   }

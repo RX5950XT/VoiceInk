@@ -293,8 +293,8 @@ function initTerminalDrop(pane, term, id) {
       showToast('無法取得可貼上的本機路徑，請從檔案總管拖入', 'error')
       return
     }
-    const cmd = items.find((item) => item.id === id)?.shell === 'cmd'
-    const text = paths.map((path) => cmd ? `"${path}"` : `'${path.replace(/'/g, "''")}'`).join(' ') + ' '
+    const cmd = isCmdShell(id)
+    const text = paths.map((path) => quotePath(path, cmd)).join(' ') + ' '
     term.paste(text)
     term.focus()
   })
@@ -339,15 +339,37 @@ function attachRenderer(term) {
 }
 
 /**
- * 把剪貼簿的文字貼進這一格。
+ * 這一格的 shell 是不是 `cmd`——引號規則不一樣（`cmd` 用雙引號，PowerShell 用單引號）。
+ * @param {string} id
+ */
+function isCmdShell(id) {
+  return items.find((item) => item.id === id)?.shell === 'cmd'
+}
+
+/**
+ * 一條本機路徑貼進終端機時該長什麼樣（跟拖放檔案同一套規則）。
+ * @param {string} filePath
+ * @param {boolean} cmd
+ */
+function quotePath(filePath, cmd) {
+  return cmd ? `"${filePath}"` : `'${filePath.replace(/'/g, "''")}'`
+}
+
+/**
+ * 把剪貼簿貼進這一格：先文字，沒有文字才看有沒有**圖片**。
  *
  * **剪貼簿一定要跟 main 拿**：renderer 的 `navigator.clipboard.readText()` 要視窗有
  * 焦點，沒有焦點就直接 reject（背景視窗、剛從別的程式切回來、語音輸入模擬的 Ctrl+V），
  * 症狀是「Ctrl+V 完全沒反應」而且一聲不吭。main 的 `clipboard.readText()` 沒這個限制。
  *
+ * **截圖不再丟 `^V` 給 CLI 自己去讀**：那條路只有少數 CLI 走得通，在 ConPTY 裡多半
+ * 一聲不吭（使用者看到的就是「截圖貼不進去」）。改成 main 把圖存成 PNG、這裡貼那條
+ * 路徑——Claude Code、Codex、Gemini CLI 看到圖片路徑都會自己把圖讀進去。存不起來
+ * （剪貼簿是別的東西）才退回 `^V`，讓認得那顆鍵的 CLI 還有機會。
+ *
  * @param {Terminal} term
- * @param {{ fallbackKey?: boolean }} [opts] 讀不到文字時要不要把 `^V` 轉給 CLI
- *   （Claude Code 靠那顆鍵自己去讀剪貼簿裡的截圖）。右鍵貼上不需要。
+ * @param {{ fallbackKey?: boolean, id?: string }} [opts] `fallbackKey`：都貼不出東西時
+ *   要不要把 `^V` 轉給 CLI。右鍵貼上不需要。
  */
 async function pasteFromClipboard(term, opts = {}) {
   const fallbackKey = opts.fallbackKey !== false
@@ -358,8 +380,35 @@ async function pasteFromClipboard(term, opts = {}) {
   } catch {
     text = ''
   }
-  if (text) term.paste(text)
-  else if (fallbackKey) term.input('\x16', true)
+  if (text) {
+    term.paste(text)
+    return
+  }
+  if (await pasteClipboardImage(term, opts.id)) return
+  if (fallbackKey) term.input('\x16', true)
+}
+
+/**
+ * 剪貼簿裡的截圖 → PNG 檔 → 把路徑貼進輸入框。
+ *
+ * @param {Terminal} term
+ * @param {string} [id] 這一格的工作階段（決定引號規則）
+ * @returns {Promise<boolean>} 有沒有真的貼出東西
+ */
+async function pasteClipboardImage(term, id) {
+  const api = electronAPI.terminal
+  if (typeof api?.clipboardImage !== 'function') return false
+  let saved = null
+  try {
+    const result = await api.clipboardImage()
+    saved = result?.ok ? result.data : null
+  } catch {
+    saved = null
+  }
+  if (!saved?.path) return false
+  term.paste(`${quotePath(saved.path, isCmdShell(id || currentId))} `)
+  showToast('截圖已存成檔案並貼上路徑', 'info')
+  return true
 }
 
 function createPane(id) {
@@ -422,9 +471,9 @@ function createPane(id) {
       // Ctrl+V 只會被當成普通按鍵（`^V`）送進 PTY，Claude Code 那類 CLI 不認，畫面上
       // 什麼都不會發生——語音輸入模擬的 Ctrl+V 走的也是這條路，所以整理好的文字會
       // 「停在剪貼簿裡」，在別的 App 都好好的，只有這個終端機貼不進去。
-      // 讀不到文字（剪貼簿裡是圖片）才把 `^V` 原樣轉給 CLI，Claude Code 的貼上截圖才不會被吞掉。
+      // 剪貼簿裡是圖片的話存成 PNG 再貼路徑（見 `pasteFromClipboard`）。
       if (event.key === 'v' || event.key === 'V') {
-        if (event.type === 'keydown') void pasteFromClipboard(term)
+        if (event.type === 'keydown') void pasteFromClipboard(term, { id })
         return false
       }
       // 字級：`=` 與 `+` 是同一顆，兩個 key 都要收
@@ -435,6 +484,12 @@ function createPane(id) {
         }
         return false
       }
+    }
+    // Alt+V 也當貼上：Claude Code 的說明把它列成「貼上圖片」的鍵，使用者照做按下去，
+    // 不接的話 xterm 只會送出 `ESC v`（CLI 完全不認）。終端機本來沒有 Alt+V 這個用途。
+    if (event.altKey && !event.ctrlKey && !event.metaKey && (event.key === 'v' || event.key === 'V')) {
+      if (event.type === 'keydown') void pasteFromClipboard(term, { id })
+      return false
     }
     // Esc 關搜尋列——**但只有搜尋列開著時才吞**，不然 AI CLI 收不到 Esc（那是中斷鍵）
     if (event.key === 'Escape' && findOpen()) {
@@ -474,7 +529,7 @@ function createPane(id) {
   }
   pane.addEventListener('contextmenu', (event) => {
     event.preventDefault()
-    void pasteFromClipboard(term, { fallbackKey: false })
+    void pasteFromClipboard(term, { fallbackKey: false, id })
   })
 
   // 分割顯示時點哪一格，哪一格就是作用中的那個（打字、resize、未讀點都跟著它走）。

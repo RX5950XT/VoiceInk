@@ -138,7 +138,15 @@ async function main() {
     // 兩個都要蓋：Claude Code 與 Codex 都先看 VISUAL，只蓋 EDITOR 會被它壓過去
     assert.equal(shell.EDITOR, command, 'EDITOR 要被橋接蓋掉')
     assert.equal(shell.VISUAL, command, 'VISUAL 也要被蓋掉')
-    assert.ok(shell.PATH.startsWith(`${folder}${path.delimiter}`), 'PATH 最前面要是 editor-bridge 資料夾')
+    // PATH 只能有一個鍵。Windows 的環境變數不分大小寫，而 `{ ...process.env }` 展開出來
+    // 的是系統寫的原字（實測是 `Path`）——多寫一個 `PATH` 等於子程序拿到兩份，生效的是
+    // 先進環境區塊的那個，症狀就是 CLI 說 `editor "voiceink-edit.cmd" not found in PATH`。
+    const pathKeys = Object.keys(shell).filter((key) => key.toLowerCase() === 'path')
+    assert.equal(pathKeys.length, 1, `PATH 只能有一個鍵，現在有 ${pathKeys.join('／')}`)
+    const shellPath = shell[pathKeys[0]]
+    assert.ok(shellPath.startsWith(`${folder}${path.delimiter}`), 'PATH 最前面要是 editor-bridge 資料夾')
+    const inherited = process.env.PATH || process.env.Path || ''
+    if (inherited) assert.ok(shellPath.endsWith(inherited), '原本的 PATH 要原封不動接在後面')
   } finally {
     for (const key of ['EDITOR', 'VISUAL']) {
       if (before[key] === undefined) delete process.env[key]
@@ -150,7 +158,9 @@ async function main() {
   // ── AGY／Gemini CLI：`command.split(' ')` 再 spawn(..., { shell: true }) ──
   events.length = 0
   let exited3 = null
-  const env3 = { ...process.env, PATH: `${folder}${path.delimiter}${process.env.PATH || ''}` }
+  // 環境走 `shellEnvironment` 自己產的那一份，才是終端機真的餵給 CLI 的東西
+  // （自己在測試裡拼一個 `PATH` 會把真正的 bug 蓋掉）。
+  const env3 = require('../src/main/terminal/pty').shellEnvironment(command, folder)
   const [agyExe, ...agyRest] = command.split(' ')
   const child3 = spawn(agyExe, [...agyRest, target], { shell: true, stdio: 'ignore', windowsHide: true, env: env3 })
   child3.on('exit', (code) => { exited3 = code })

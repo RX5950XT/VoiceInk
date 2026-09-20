@@ -12,6 +12,8 @@ import { paintDetail as paintDetailPane } from './explorer-detail.js'
 import { paintHomePane } from './explorer-home.js'
 import { paintTabStrip } from './explorer-tabs.js'
 import { clearFileIconWork, paintFileIcons } from './explorer-icons.js'
+import { openImageViewer, imageViewerOpen } from './image-viewer.js'
+import { nextZoomState, TILE_SIZES, DEFAULT_TILE } from './explorer-zoom.js'
 import {
   RECYCLE_CWD,
   pathKey,
@@ -32,6 +34,8 @@ const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 's
 let started = false
 let cwd = ''
 let view = 'list'
+/** 目前的方格圖示大小（Ctrl+滾輪改它，存進 `explorer.json`） */
+let tile = DEFAULT_TILE
 let sortBy = 'name'
 let sortDesc = false
 /** 要不要把隱藏／系統項目也列出來（跟檔案總管的「顯示隱藏的項目」同一件事）*/
@@ -148,6 +152,9 @@ function bindOnce() {
   $('exList')?.addEventListener('dragover', onListDragOver)
   $('exList')?.addEventListener('drop', onListDrop)
   $('exList')?.addEventListener('dragleave', clearDrop)
+  // Ctrl+滾輪換圖示大小。`passive: false` 不能省——預設的 wheel 監聽是被動的，
+  // `preventDefault()` 會被忽略，畫面就變成整頁縮放（側欄跟著一起縮）。
+  $('exList')?.addEventListener('wheel', onListWheel, { passive: false })
   $('exSearch')?.addEventListener('input', onSearchInput)
   $('exSearch')?.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
@@ -310,8 +317,51 @@ function setView(next) {
   $('exViewListBtn')?.setAttribute('aria-pressed', view === 'list' ? 'true' : 'false')
   $('exViewGridBtn')?.setAttribute('aria-pressed', view === 'grid' ? 'true' : 'false')
   $('exList')?.classList.toggle('is-grid', view === 'grid')
+  applyTile()
   paintSortHead()
   void electronAPI.explorer.saveState({ view })
+}
+
+/**
+ * 把目前的圖示大小寫上去：CSS 變數給版面（格子寬度、字級、留白都是從它算的），
+ * `data-tile` 給 `explorer-icons.js` 決定要跟殼層要多大的縮圖。
+ */
+function applyTile() {
+  const host = $('exList')
+  if (!host) return
+  host.style.setProperty('--ex-tile', `${tile}px`)
+  host.dataset.tile = String(tile)
+}
+
+/**
+ * Ctrl+滾輪：跟檔案總管一樣一級一級換大小。級距在 `explorer-zoom.js`
+ * （清單 → 小圖示 → … → 特大圖示），所以在最小的方格往下滾會掉回清單檢視、
+ * 在清單往上滾會跳進最小的方格——不用先去按檢視鈕。
+ *
+ * @param {number} delta 滾輪方向：負的是往上滾（放大）
+ */
+function stepZoom(delta) {
+  const next = nextZoomState({ view, tile }, delta)
+  if (next.view === view && next.tile === tile) return
+  const sameView = next.view === view
+  tile = next.tile
+  if (!sameView) {
+    // `setView` 自己會把新的 `--ex-tile` 寫進去
+    setView(next.view)
+  } else {
+    applyTile()
+  }
+  void electronAPI.explorer.saveState({ tile, view: next.view })
+  // 圖示變大就得跟殼層要一張更大的縮圖，不然放大只是把 96px 那張拉糊。
+  paintList()
+}
+
+/** @param {WheelEvent} e */
+function onListWheel(e) {
+  if (!e.ctrlKey || e.altKey || e.metaKey) return
+  // 不擋的話 Chromium 會把整個畫面縮放（連側欄、工具列一起變小）
+  e.preventDefault()
+  stepZoom(e.deltaY)
 }
 
 function inRecycle() {
@@ -473,7 +523,10 @@ function rowEl(entry) {
     icon.dataset.iconKey = `${entry.path}:${entry.mtimeMs || 0}:${entry.dir ? 'd' : 'f'}`
   }
   const label = document.createElement('span')
+  label.className = 'ex-row-label'
   label.textContent = inSearch() ? entry.path : entry.name
+  // 方格檢視的檔名只畫得下兩行，滑過去要看得到完整的那一條
+  label.title = inSearch() ? entry.path : entry.name
   name.append(icon, label)
   const size = document.createElement('div')
   size.className = 'ex-row-size'
@@ -581,7 +634,9 @@ async function paintDetail() {
       throw new Error('inspect')
     },
     formatSize,
-    formatTime
+    formatTime,
+    // 側欄那張小預覽點下去＝開大預覽（游標也會變成放大鏡）
+    onPreviewClick: isImage(items[0]) ? () => openPreview(items[0]) : null
   })
 }
 
@@ -978,6 +1033,34 @@ async function runSearch(q) {
   }
 }
 
+/**
+ * 這一筆是不是開得了大預覽的圖片。`.svg` 也算——`vi-media://` 送得出它的 MIME。
+ * @param {{ dir?: boolean, ext?: string, name?: string } | undefined} entry
+ */
+function isImage(entry) {
+  if (!entry || entry.dir) return false
+  const ext = String(entry.ext || entry.name?.split('.').pop() || '').toLowerCase()
+  return IMAGE_EXT.has(ext)
+}
+
+/**
+ * 開大預覽。←／→ 走的是**目前這個資料夾裡的圖片**，跟檔案總管一樣。
+ * @param {{ path: string, name: string }} entry
+ */
+function openPreview(entry) {
+  if (!isImage(entry) || inRecycle()) return false
+  const images = listed().filter((item) => isImage(item)).map((item) => ({
+    path: item.path,
+    name: item.name
+  }))
+  const at = Math.max(0, images.findIndex((item) => item.path === entry.path))
+  return openImageViewer({
+    items: images.length ? images : [{ path: entry.path, name: entry.name }],
+    index: at,
+    mediaUrl: (filePath) => electronAPI.explorer.mediaUrl(filePath)
+  })
+}
+
 async function openEntry(entry) {
   if (!entry) return
   if (inRecycle()) {
@@ -1192,6 +1275,7 @@ function openContextMenu(e, items) {
         purge: () => void deleteItems(items, { permanent: true }),
         empty: () => void emptyBin(),
         open: () => void openEntry(items[0]),
+        preview: isImage(items[0]) ? () => openPreview(items[0]) : null,
         openTab: () => void newTab(items[0].path),
         reveal: () => void revealItems(items),
         pin: () => void pinEntries(items),
@@ -1600,6 +1684,8 @@ function onSideButton(e) {
 
 function onPageKey(e) {
   if (!$('page-explorer')?.classList.contains('active')) return
+  // 大預覽開著時，方向鍵／Esc／空白鍵都是它的（見 image-viewer.js）
+  if (imageViewerOpen()) return
   if (document.querySelector('.ws-menu, dialog[open]')) return
   const key = e.key.toLowerCase()
   if (e.ctrlKey && ['t', 'w', 'tab'].includes(key)) {
@@ -1632,6 +1718,17 @@ function onPageKey(e) {
     const items = selectedEntries()
     if (items[0]) void openEntry(items[0])
     return
+  }
+  // 空白鍵＝大預覽（macOS 的 Quick Look 那個習慣）。Enter 仍然是「用系統預設程式開」，
+  // 不動它——雙擊圖片還是跳出 Windows 的相片，跟以前一樣。
+  if (e.key === ' ') {
+    if (tag === 'BUTTON' || tag === 'A' || tag === 'SELECT') return
+    const picked = selectedEntries()
+    if (picked.length === 1 && isImage(picked[0])) {
+      e.preventDefault()
+      openPreview(picked[0])
+      return
+    }
   }
   if (e.key === 'Backspace' || (e.altKey && e.key === 'ArrowUp')) {
     e.preventDefault()
@@ -1768,6 +1865,7 @@ export async function refreshExplorerPage() {
   try {
     const boot = await call(electronAPI.explorer.bootstrap(), '打不開檔案總管')
     view = boot.view === 'grid' ? 'grid' : 'list'
+    tile = TILE_SIZES.includes(Number(boot.tile)) ? Number(boot.tile) : DEFAULT_TILE
     sortBy = boot.sort === 'date' || boot.sort === 'size' ? boot.sort : 'name'
     sortDesc = boot.sortDesc === true
     showHidden = boot.showHidden === true

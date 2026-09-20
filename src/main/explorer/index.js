@@ -77,6 +77,20 @@ const listDir = (dirPath, opts) => {
   return recycle.isRecyclePath(dirPath) ? files.listRecycle(opts) : files.listDir(dirPath, opts)
 }
 const preview = (filePath) => files.preview(filePath)
+
+/**
+ * 大預覽要用的網址。**不回 data: URI**：那會把整個檔案 base64 過一次 IPC，
+ * 大一點的照片就爆掉（`inspect` 的預覽才會卡在 2MB）。改成走 `vi-media://`
+ * 協定邊讀邊送，幾十 MB 的圖也開得動。
+ *
+ * 路徑在這裡先驗一次（存不存在、在不在允許範圍），協定那邊再驗一次。
+ * @param {unknown} filePath
+ * @returns {{ url: string, path: string }}
+ */
+function mediaUrl(filePath) {
+  const full = paths.resolveExisting(filePath)
+  return { url: require('../workspace/media').localUrlFor(full), path: full }
+}
 const inspect = (filePath) => files.inspect(filePath)
 
 async function savePlaces(raw) {
@@ -496,6 +510,7 @@ module.exports = {
   driveInfo,
   listDir,
   preview,
+  mediaUrl,
   inspect,
   createEntry,
   renameEntry,

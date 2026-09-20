@@ -376,9 +376,27 @@ function shellEnvironment(editor, editorDir) {
     env.EDITOR = editor
     env.VISUAL = editor
     const folder = safeEditorDir(editorDir)
-    if (folder) env.PATH = `${folder}${path.delimiter}${env.PATH || ''}`
+    if (folder) prependPath(env, folder)
   }
   return env
+}
+
+/**
+ * 把資料夾接到 PATH 最前面，**改的是環境裡本來那個鍵**。
+ *
+ * Windows 的環境變數不分大小寫，但 `{ ...process.env }` 展開出來的是系統寫的原字
+ * （實測是 `Path`）。直接寫 `env.PATH = ...` 等於**另外開一個空的 `PATH`**：`env.PATH`
+ * 讀出來是 `undefined`，原本那份 `Path` 一個字都沒動，子程序拿到兩個同名的變數，生效的
+ * 是先進環境區塊的 `Path`——症狀就是 `EDITOR` 明明設對了，CLI 仍說
+ * `editor "voiceink-edit.cmd" not found in PATH`，Ctrl+G 整個沒反應。
+ *
+ * @param {Record<string, string>} env
+ * @param {string} folder
+ */
+function prependPath(env, folder) {
+  const key = Object.keys(env).find((name) => name.toLowerCase() === 'path') || 'PATH'
+  const current = env[key] || ''
+  env[key] = current ? `${folder}${path.delimiter}${current}` : folder
 }
 
 /**

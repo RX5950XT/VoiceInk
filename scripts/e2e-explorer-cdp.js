@@ -22,6 +22,12 @@ const SEED_DIR = path.join(USER_DATA_DIR, 'seed-folder')
 fs.mkdirSync(SEED_DIR, { recursive: true })
 fs.writeFileSync(path.join(SEED_DIR, 'hello.txt'), 'hello')
 fs.mkdirSync(path.join(SEED_DIR, 'sub'))
+/** 大預覽要有真的圖片才測得動（8×8 紅色 PNG，檔名刻意含空白與中文） */
+const SEED_IMAGE = '相片 測試.png'
+fs.writeFileSync(path.join(SEED_DIR, SEED_IMAGE), Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR4nGO4o6GBFTEMLQkAe3tLAfuiUfAAAAAASUVORK5CYII=',
+  'base64'
+))
 fs.writeFileSync(path.join(USER_DATA_DIR, 'config.json'), JSON.stringify({ sysmonSensors: false }))
 fs.writeFileSync(path.join(USER_DATA_DIR, 'explorer.json'), JSON.stringify({
   uffsAuto: false,
@@ -621,6 +627,105 @@ async function main() {
       })()`)
       await cdp.eval(`window.electronAPI.explorer.removeEntry(${JSON.stringify(path.join(SEED_DIR, 'desktop.ini'))}, { permanent: true })`)
       await cdp.eval(`window.electronAPI.explorer.removeEntry(${JSON.stringify(path.join(SEED_DIR, '.gitignore'))}, { permanent: true })`)
+    }
+
+    console.log('\n[C11] 方格檢視的版面與 Ctrl+滾輪縮放')
+    {
+      await cdp.eval(`document.getElementById('exViewGridBtn').click()`)
+      const grid = await waitFor(() => cdp.eval(`(() => {
+        const host = document.getElementById('exList')
+        if (!host || !host.classList.contains('is-grid')) return null
+        const name = host.querySelector('.ex-row .ex-row-name')
+        const label = host.querySelector('.ex-row .ex-row-label')
+        const icon = host.querySelector('.ex-row .ex-row-icon')
+        if (!name || !label || !icon) return null
+        const style = getComputedStyle(name)
+        return {
+          direction: style.flexDirection,
+          labelWidth: Math.round(label.getBoundingClientRect().width),
+          labelHeight: Math.round(label.getBoundingClientRect().height),
+          iconWidth: Math.round(icon.getBoundingClientRect().width),
+          tile: host.dataset.tile
+        }
+      })()`), 10_000, '切到方格檢視')
+      // 方格的 `.ex-row-name` 沒改成直排的話，圖示會留在左邊、檔名被擠成一欄寬，
+      // 畫面上就是「一個字一行」的直書（實測的災情長相）。
+      assert(grid.direction === 'column', '方格的檔名排在圖示下面，不是擠在右邊', JSON.stringify(grid))
+      assert(grid.labelWidth > grid.labelHeight, '檔名是橫著寫的，不是一個字一行', JSON.stringify(grid))
+      assert(grid.iconWidth >= 80, '圖示照 tile 的大小畫', JSON.stringify(grid))
+
+      const zoomed = await waitFor(async () => {
+        await cdp.eval(`(() => {
+          const host = document.getElementById('exList')
+          host.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, ctrlKey: true, bubbles: true, cancelable: true }))
+        })()`)
+        const got = await cdp.eval(`(() => {
+          const host = document.getElementById('exList')
+          const icon = host.querySelector('.ex-row .ex-row-icon')
+          return { tile: Number(host.dataset.tile), iconWidth: icon ? Math.round(icon.getBoundingClientRect().width) : 0 }
+        })()`)
+        return got.tile > Number(grid.tile) ? got : null
+      }, 10_000, 'Ctrl+滾輪放大')
+      assert(zoomed.iconWidth > grid.iconWidth, 'Ctrl+滾輪往上滾＝圖示真的變大', JSON.stringify(zoomed))
+
+      const persisted = await cdp.eval(`window.electronAPI.explorer.bootstrap()`)
+      assert(persisted.ok && persisted.data.tile === zoomed.tile, '放大後的大小存得進 explorer.json',
+        JSON.stringify(persisted.data && persisted.data.tile))
+
+      // 一路縮到底要掉回清單檢視（跟檔案總管一樣），不是卡在最小的方格
+      const backToList = await waitFor(async () => {
+        await cdp.eval(`(() => {
+          const host = document.getElementById('exList')
+          host.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, ctrlKey: true, bubbles: true, cancelable: true }))
+        })()`)
+        const isList = await cdp.eval(`!document.getElementById('exList').classList.contains('is-grid')`)
+        return isList ? true : null
+      }, 15_000, '縮到底回清單').catch(() => false)
+      assert(backToList === true, '在最小的方格再往下滾＝回清單檢視')
+      await cdp.eval(`window.electronAPI.explorer.saveState({ view: 'list', tile: 96 })`)
+    }
+
+    console.log('\n[C12] 圖片的大預覽（空白鍵）')
+    {
+      // 選到那張圖，再按空白鍵——Enter 仍然是「用系統預設程式開」，不可以在這裡按到。
+      const picked = await cdp.eval(`(() => {
+        document.getElementById('exSearch')?.blur()
+        const row = [...document.querySelectorAll('#exList .ex-row')]
+          .find((el) => el.dataset.name === ${JSON.stringify(SEED_IMAGE)})
+        if (!row) return false
+        row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true }))
+        return true
+      })()`)
+      assert(picked === true, '找得到種下去的那張圖')
+      // 圖片是走 `vi-media://` 讀的：`naturalWidth > 0` 才代表協定那條路真的通
+      const viewer = await waitFor(() => cdp.eval(`(() => {
+        const img = document.querySelector('.iv-root .iv-img')
+        if (!img || !img.naturalWidth) return null
+        return {
+          protocol: (img.currentSrc || img.src).split(':')[0],
+          natural: img.naturalWidth,
+          caption: document.querySelector('.iv-caption')?.textContent || ''
+        }
+      })()`), 15_000, '大預覽載入圖片')
+      assert(viewer.natural === 8, '大預覽讀到的是真的圖（不是破圖）', JSON.stringify(viewer))
+      assert(viewer.protocol === 'vi-media', '走 vi-media 協定，不是 2MB 上限的 data: URI', JSON.stringify(viewer))
+      assert(viewer.caption.includes('相片 測試'), '標題就是那個檔名（空白與中文都沒壞）', viewer.caption)
+
+      const zoomedIn = await cdp.eval(`(() => {
+        const stage = document.querySelector('.iv-root .iv-stage')
+        stage.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true }))
+        const img = document.querySelector('.iv-root .iv-img')
+        return { transform: img.style.transform, label: document.querySelector('.iv-zoom')?.textContent || '' }
+      })()`)
+      assert(/scale\(/.test(zoomedIn.transform), '滾輪往上滾＝放大', JSON.stringify(zoomedIn))
+
+      const closed = await waitFor(async () => {
+        await cdp.eval(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))`)
+        const gone = await cdp.eval(`!document.querySelector('.iv-root')`)
+        return gone ? true : null
+      }, 10_000, 'Esc 關掉大預覽').catch(() => false)
+      assert(closed === true, 'Esc 關得掉')
     }
 
     const clicked = await cdp.eval(`(() => {
