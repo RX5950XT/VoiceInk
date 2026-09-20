@@ -26,6 +26,7 @@ function makeFakeAutoUpdater() {
   return {
     autoDownload: true,
     autoInstallOnAppQuit: true,
+    disableDifferentialDownload: false,
     installCalls: [],
     quitCalls: [],
     checkCount: 0,
@@ -90,6 +91,8 @@ async function main() {
     await updater.check()
     assert.strictEqual(fake.autoDownload, false, 'autoUpdate 關掉時 autoDownload 一定要跟著關')
     assert.strictEqual(fake.autoInstallOnAppQuit, false, 'quit 事件在這個 App 不會發，要自己接管')
+    assert.strictEqual(fake.disableDifferentialDownload, true,
+      '差分下載一定要關：GitHub 上是一段一個請求且完全序列，實測比整包下載慢 36 倍')
     fake.fire('update-available', { version: '1.12.0' })
     assert.strictEqual(updater.status().state, 'available')
     assert.strictEqual(updater.status().version, '1.12.0')
@@ -162,6 +165,15 @@ async function main() {
     // 上傳到 GitHub 會被改名成 `VoiceInk.Setup.x.y.z.exe`，跟 latest.yml 對不上，下載時 404
     assert.strictEqual(pkg.build.nsis.artifactName, '${productName}-Setup-${version}.${ext}',
       '安裝檔檔名要跟 latest.yml 裡的 url 一模一樣，否則更新下載會 404')
+    // 假的 autoUpdater 收得下任何屬性名，打錯字一樣全綠 → 對真的那顆型別定義核一次
+    const updaterOut = path.dirname(require.resolve('electron-updater/out/AppUpdater.js'))
+    const dts = fs.readFileSync(path.join(updaterOut, 'AppUpdater.d.ts'), 'utf8')
+    assert.ok(/disableDifferentialDownload:\s*boolean/.test(dts),
+      'electron-updater 換掉了 disableDifferentialDownload 這個名字 → 差分下載會自己開回來（更新慢 36 倍）')
+    const nsis = fs.readFileSync(path.join(updaterOut, 'NsisUpdater.js'), 'utf8')
+    assert.ok(nsis.includes('downloadUpdateOptions.disableDifferentialDownload'),
+      'NsisUpdater 不再看這面旗子了 → 要重新確認關法')
+
     console.log('[E] IPC／before-quit／publish 接線 ✓')
   }
 

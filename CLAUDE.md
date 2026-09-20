@@ -54,7 +54,9 @@ gh release create vX.Y.Z --title "vX.Y.Z" --notes "..."  # 3) 不可加 --draft�
 gh release upload vX.Y.Z dist/VoiceInk-Setup-X.Y.Z.exe dist/VoiceInk-Setup-X.Y.Z.exe.blockmap dist/latest.yml
 ```
 
-三個檔案缺一：`.exe` → 下載 404；`latest.yml` → 舊版說「沒有附帶更新資訊」；`.blockmap` → 退回下載完整 360MB。
+兩個檔案缺一：`.exe` → 下載 404；`latest.yml` → 舊版說「沒有附帶更新資訊」。
+`.blockmap` 是**差分下載**用的，而差分下載在這個 App 上已經關掉（`updater.js` 的
+`disableDifferentialDownload`，見地雷「更新」），上傳它只是留個後路，不上傳也不影響更新。
 tag 要與 `package.json` 的 version 一致。
 
 ## 作業守則
@@ -115,6 +117,14 @@ tag 要與 `package.json` 的 version 一致。
   ——**別把 `tail` 之後的 exit code 當成建置成功**（管線的離開碼是 `tail` 的）。
 - `electron:pack` 中途失敗會留下壞掉的 `dist/win-unpacked`（症狀：啟動無 log、CDP 埠連不上）：**整個刪掉重打**。
 - **`latest.yml` 只在 `build.publish` 有設定時才產出**；**`nsis.artifactName` 不能改回預設**（預設帶空白，上傳 GitHub 會被改名成點分隔版 → 下載 404）。回歸 `test-updater.js` 的 [E]。
+- **差分下載一定要關著（`disableDifferentialDownload = true`），開著會讓更新慢 70 倍**：
+  electron-updater 在 GitHub 上只能走「一段一個 HTTP request、完全序列」那條
+  （GitHub 不支援 multipart range，`providerFactory` 寫死 `isUseMultipleRangeRequest: false`），
+  而且每 100 段還強制 sleep 1 秒。實測 v1.22.0 → v1.23.0：406MB 切成 2 萬塊、比對後仍有
+  **1963 段**要下載（220MB），每段 115KB 的 range 請求 **506ms** ＝ **約 17 分鐘**；
+  整包 406MB 單連線 14MB/s 只要 **28 秒**。省 185MB 流量換 36 倍時間。
+  症狀是「按了更新之後進度條爬得比下載整包還慢」，而且**不會報錯**。
+  回歸 `test-updater.js` 的 [B]；要重新評估時用 `probe-updater-diff.js` 拿真 blockmap 重算。
 - **`electron:pack`（dir target）的預覽版永遠檢查不到更新，那不是 bug**（只有 nsis／appx 才寫 `app-update.yml`）；**不可以把 error 當成測試通過**。`autoInstallOnAppQuit` 在本 App 無效——`installOnQuit()` 要在 `app.exit(0)` 前一行。
 - CDP 腳本都吃 `VOICEINK_EXE` 環境變數。
 
@@ -476,4 +486,4 @@ tag 要與 `package.json` 的 version 一致。
 | ASR／即時字幕 | `e2e-llama-asr.js`／`e2e-asr-threads.js`／`e2e-stt-cdp.js`／`probe-cloud-asr.js`（真金鑰打真上游）；`test-vad.js` ＋ `e2e-live-pipeline.js` ＋ `e2e-live-cdp.js` |
 | 翻譯 | `probe-prompt-path.js`（prompt 逐 token）＋ `verify-chat-wrapper-fix.js` ＋ `probe-packed-local-llm.js`（動 `build.files` 前後）＋ `probe-translate-lang.js` |
 | 彈窗 | `e2e-app-dialog-cdp.js`（自己開 vite ＋ electron，**會叫到最前面**：驗確認／輸入／告知三種都是 `app-dialog` 且套到玻璃樣式、Esc 與取消回得對、節點會收掉）|
-| 跨模組 | `test-taskbar-identity.js`（工作列身分與圖示）＋ `probe-taskbar-icon.js`（量安裝好的捷徑解析得到 App 圖示；動 `build/installer.nsh` 前後跑）／`test-error-hygiene.js`（錯誤衛生）／`test-ipc-invoke.js`（IPC 外殼）／`e2e-tray-cdp.js`（常駐）／`test-updater.js` ＋ `e2e-update-cdp.js`（會連 GitHub）／`e2e-visual-cdp.js`（七頁 × 主題 × 三尺寸）／`e2e-ux-tweaks-cdp.js`（**會叫到最前面**）／`e2e-cdp-smoke.js`／`test-temp-hygiene.js`（腳本不撒暫存、沒有遞迴 rmSync）＋ `test-safe-rm.js`（junction 不被穿過，另可用 Electron 內建 Node 24 跑）＋ `test-asar-lock.js`（`npx electron`：列資料夾不鎖 `app.asar`）|
+| 跨模組 | `test-taskbar-identity.js`（工作列身分與圖示）＋ `probe-taskbar-icon.js`（量安裝好的捷徑解析得到 App 圖示；動 `build/installer.nsh` 前後跑）／`test-error-hygiene.js`（錯誤衛生）／`test-ipc-invoke.js`（IPC 外殼）／`e2e-tray-cdp.js`（常駐）／`test-updater.js` ＋ `e2e-update-cdp.js`（會連 GitHub）＋ `probe-updater-diff.js`（唯讀：拿最近兩版真 blockmap 重算差分划不划算）／`e2e-visual-cdp.js`（七頁 × 主題 × 三尺寸）／`e2e-ux-tweaks-cdp.js`（**會叫到最前面**）／`e2e-cdp-smoke.js`／`test-temp-hygiene.js`（腳本不撒暫存、沒有遞迴 rmSync）＋ `test-safe-rm.js`（junction 不被穿過，另可用 Electron 內建 Node 24 跑）＋ `test-asar-lock.js`（`npx electron`：列資料夾不鎖 `app.asar`）|
