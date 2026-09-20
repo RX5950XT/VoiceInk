@@ -188,6 +188,8 @@ export function showExplorerMenu(at, spec) {
   }
   if (items.length) {
     menu.push({ label: '開啟', onSelect: act.open })
+    // 大預覽（空白鍵也是同一支）。只有選到圖片才列，資料夾與別的檔案看不到這一條。
+    if (act.preview) menu.push({ label: '預覽（空白鍵）', onSelect: act.preview })
     if (items.length === 1 && items[0].dir && act.openTab) menu.push({ label: '在新分頁開啟', onSelect: act.openTab })
     if (items.length === 1 && items[0].dir && act.openProject) {
       menu.push({ label: '加入工作區專案', onSelect: act.openProject })

@@ -1,3 +1,25 @@
+# 2026-09-21 — 方格檢視縮放、大圖預覽、終端機貼截圖、Ctrl+G 的 PATH
+
+- [x] 方格檢視檔名直書：`.ex-row-name` 在 grid 下改直排，檔名限兩行 ＋ `title` 放完整檔名
+- [x] Ctrl+滾輪縮放：`explorer-zoom.js` 純函式級距（清單↔48/64/96/128/180/256），
+      `--ex-tile` 驅動版面、`data-tile` 驅動縮圖尺寸，存進 `explorer.json` 的 `tile`
+- [x] 縮圖跟著放大：`explorer-icons.js` 的請求尺寸與快取鍵都帶 tile
+- [x] 大圖預覽 `image-viewer.js`：空白鍵／側欄預覽圖／右鍵「預覽」開，滾輪縮放、拖曳、
+      ←→ 換圖、Esc 關；圖片走 `vi-media://` 的 `~local`（不再卡 2MB）
+- [x] 終端機貼上截圖：`terminal/clipboard-image.js` 落成 PNG 後貼路徑，Ctrl+V／Alt+V 都收
+- [x] Ctrl+G 的 `editor "voiceink-edit.cmd" not found in PATH`：`shellEnvironment` 的
+      `env.PATH = …` 在 Windows 等於另開一個空 PATH，改成就地改本來那個 `Path` 鍵
+- [x] 測試：`test-explorer-zoom.js`（新）、`probe-terminal-editor.js` [F][H] 改成會抓到這個 bug、
+      `e2e-explorer-cdp.js` [C11]、`e2e-terminal-cdp.js` 貼截圖兩條
+- [x] 文件：AGENTS 地雷四條、CONTEXT 架構兩段
+
+Review：
+- 根因一（Ctrl+G）：Windows 環境變數不分大小寫，但 `{ ...process.env }` 展開後的鍵是 `Path`，
+  `env.PATH = …` 新增的是第二個同名變數，子程序生效的仍是原本那份 → CLI 找不到 shim。
+  舊測試讀的是自己寫進去的那個假鍵，所以一直是綠的。
+- 根因二（方格直書）：只改了 `.ex-row` 的 flex 方向，沒改裡面那層 `.ex-row-name`。
+- 使用者要重新啟動終端機宿主，Ctrl+G 的修正才會生效（宿主活得比 App 久）。
+
 # 2026-09-20 — 檢查更新下載走鏡像（GitHub APAC 過慢）
 
 - [x] `update-mirrors.js`：GitHub Releases 的 `.exe` 先走 gh-proxy／ghfast，最後才官方

@@ -12,6 +12,12 @@ const places = require('./places')
 
 const VIEW_MODES = new Set(['list', 'grid'])
 const SORT_KEYS = new Set(['name', 'date', 'size'])
+/**
+ * 方格檢視的圖示邊長（px）。Ctrl+滾輪一次跳一級，像檔案總管的
+ * 小圖示→中圖示→大圖示→特大圖示。renderer 也認同一份（`explorer-page.js`）。
+ */
+const TILE_SIZES = [48, 64, 96, 128, 180, 256]
+const DEFAULT_TILE = 96
 const RECYCLE_CWD = 'recyclebin'
 const THIS_PC = 'thispc'
 
@@ -67,6 +73,21 @@ function sanitizeView(raw) {
 }
 
 /**
+ * 方格圖示大小。只收清單裡的那幾級，別的值（包括舊版寫進去的）一律靠回最接近的一級，
+ * 免得殼層被要一張沒人要的尺寸。
+ * @param {unknown} raw
+ * @returns {number}
+ */
+function sanitizeTile(raw) {
+  const n = Number(raw)
+  if (!Number.isFinite(n)) return DEFAULT_TILE
+  if (TILE_SIZES.includes(n)) return n
+  return TILE_SIZES.reduce((best, size) => (
+    Math.abs(size - n) < Math.abs(best - n) ? size : best
+  ), DEFAULT_TILE)
+}
+
+/**
  * @param {unknown} raw
  * @returns {'name'|'date'|'size'}
  */
@@ -84,7 +105,7 @@ function sanitizeAuto(raw) {
 }
 
 /**
- * @returns {Promise<{ lastPath: string, view: 'list'|'grid', sort: string, sortDesc: boolean, showHidden: boolean, uffsAuto: boolean, places: object[] }>}
+ * @returns {Promise<{ lastPath: string, view: 'list'|'grid', tile: number, sort: string, sortDesc: boolean, showHidden: boolean, uffsAuto: boolean, places: object[] }>}
  */
 function readState() {
   return withStore(async () => {
@@ -92,6 +113,7 @@ function readState() {
     return {
       lastPath: sanitizePath(s.get('lastPath', '')),
       view: sanitizeView(s.get('view', 'list')),
+      tile: sanitizeTile(s.get('tile', DEFAULT_TILE)),
       sort: sanitizeSortKey(s.get('sort', 'name')),
       sortDesc: s.get('sortDesc', false) === true,
       showHidden: s.get('showHidden', false) === true,
@@ -102,8 +124,8 @@ function readState() {
 }
 
 /**
- * @param {{ lastPath?: unknown, view?: unknown, sort?: unknown, sortDesc?: unknown, showHidden?: unknown, uffsAuto?: unknown, places?: unknown }} patch
- * @returns {Promise<{ lastPath: string, view: 'list'|'grid', sort: string, sortDesc: boolean, showHidden: boolean, uffsAuto: boolean, places: object[] }>}
+ * @param {{ lastPath?: unknown, view?: unknown, tile?: unknown, sort?: unknown, sortDesc?: unknown, showHidden?: unknown, uffsAuto?: unknown, places?: unknown }} patch
+ * @returns {Promise<{ lastPath: string, view: 'list'|'grid', tile: number, sort: string, sortDesc: boolean, showHidden: boolean, uffsAuto: boolean, places: object[] }>}
  */
 function writeState(patch) {
   return withStore(async () => {
@@ -115,6 +137,9 @@ function writeState(patch) {
       view: patch.view !== undefined
         ? sanitizeView(patch.view)
         : sanitizeView(s.get('view', 'list')),
+      tile: patch.tile !== undefined
+        ? sanitizeTile(patch.tile)
+        : sanitizeTile(s.get('tile', DEFAULT_TILE)),
       sort: patch.sort !== undefined
         ? sanitizeSortKey(patch.sort)
         : sanitizeSortKey(s.get('sort', 'name')),
@@ -133,6 +158,7 @@ function writeState(patch) {
     }
     s.set('lastPath', next.lastPath)
     s.set('view', next.view)
+    s.set('tile', next.tile)
     s.set('sort', next.sort)
     s.set('sortDesc', next.sortDesc)
     s.set('showHidden', next.showHidden)
@@ -147,6 +173,9 @@ module.exports = {
   SORT_KEYS,
   sanitizePath,
   sanitizeView,
+  sanitizeTile,
+  TILE_SIZES,
+  DEFAULT_TILE,
   sanitizeSortKey,
   sanitizeAuto,
   readState,

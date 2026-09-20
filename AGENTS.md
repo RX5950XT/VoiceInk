@@ -232,6 +232,17 @@ tag 要與 `package.json` 的 version 一致。
 - **方向鍵的游標（`cursor`）跟 Shift 連選的錨點（`anchor`）是兩個變數**：混用的話
   Shift+↓ 會每走一步就把錨點帶著跑，連選永遠只有兩列。方格檢視一列幾格要照實際版面量
   （`offsetTop` 相同的算同一列），寫死欄數在視窗一縮就錯。
+- **方格檢視要另外把 `.ex-row-name` 轉成直排**：它在清單檢視是「圖示 ＋ 檔名」的橫向 flex，
+  只把外層 `.ex-row` 改成 column 沒有用——圖示會留在左邊、檔名被擠成一欄寬，畫面上是
+  **一個字一行的直書**（實測災情）。檔名限兩行（`-webkit-line-clamp`）並把完整檔名放 `title`。
+- **Ctrl+滾輪縮放要 `addEventListener('wheel', fn, { passive: false })`**：預設的 wheel 監聽是
+  被動的，`preventDefault()` 會被忽略，結果變成 Chromium 把整頁（連側欄、工具列）一起縮放。
+  圖示大小同時寫 `--ex-tile`（版面）與 `data-tile`（縮圖尺寸），**縮圖快取鍵要帶尺寸**，
+  不然放大後還是拿到 96px 那張拉糊的圖。級距在 `explorer-zoom.js` 的純函式，
+  main 的 `store.sanitizeTile` 認同一份數字，回歸 `test-explorer-zoom.js` 會比對兩邊。
+- **大圖預覽不要走 `inspect` 的 `data:` URI**（卡 2MB，整個檔案 base64 過一次 IPC）：
+  走 `vi-media://` 的 `~local` 路線（`explorer:mediaUrl`）邊讀邊送。路徑兩端都要驗
+  （`explorer/paths.resolveExisting` ＋ 協定端再驗一次），協定的 host 仍是隨機 token。
 - **Ctrl+Z 復原「複製」要丟資源回收筒，不是永久刪**：復原本身也要能反悔。復原只記
   「怎麼倒回去」不記快照（檔案太大，快照不起），搬移是逐筆搬回**原本各自的父目錄**
   （一次拖多筆可能來自不同資料夾）。刪除不進這個堆疊——本來就能去資源回收筒撈。
@@ -339,8 +350,21 @@ tag 要與 `package.json` 的 version 一致。
   `attachCustomKeyEventHandler`，而**剪貼簿一定要跟 main 要**（`terminal:clipboardText`）
   ——renderer 的 `navigator.clipboard.readText()` 要視窗有焦點，沒焦點（背景視窗、剛從別的
   程式切回來、模擬按鍵）直接 reject，症狀跟沒接一模一樣而且一聲不吭（實測修好按鍵綁定後
-  打包版仍然只送出 `\x16`）。讀不到文字時要把 `^V` **原樣轉給 CLI**，Claude Code 的貼上截圖
-  才不會被吞掉；右鍵貼上走同一支 `pasteFromClipboard`。回歸 `e2e-terminal-cdp.js`。
+  打包版仍然只送出 `\x16`）。右鍵貼上走同一支 `pasteFromClipboard`。回歸 `e2e-terminal-cdp.js`。
+- **剪貼簿裡是截圖就自己落檔、貼路徑，不要只丟 `^V` 指望 CLI 自己去翻剪貼簿**：那條路在
+  ConPTY 裡多半一聲不吭（使用者的話是「Ctrl+V／Alt+V 都貼不了圖」）。main 的
+  `terminal/clipboard-image.js` 把 `clipboard.readImage()` 存成 `<userData>/clipboard-images/clip-*.png`，
+  renderer 貼**加好引號的路徑**（跟拖放檔案同一套規則），Claude Code／Codex／Gemini CLI
+  看到圖片路徑都會自己讀進去。`^V` 只留成最後的退路。**Alt+V 也要接**（Claude Code 的說明
+  把它列成「貼上圖片」，不接就只送出 `ESC v`）。舊圖一天或 40 張以上掃掉，免得無限長。
+  回歸 `e2e-terminal-cdp.js` ＋ `test-explorer-zoom.js` 的 [D]。
+- **在 Windows 上改 PATH 要改「本來那個鍵」**：`{ ...process.env }` 展開出來的是系統寫的原字
+  （實測是 `Path`），直接寫 `env.PATH = …` 等於**另外開一個空的 `PATH`**——`env.PATH` 讀出來是
+  `undefined`，原本那份一個字都沒動，子程序拿到兩個同名變數而生效的是先進環境區塊的那個。
+  Ctrl+G 的 `editor-bridge` 就是這樣整整幾版都沒接上 PATH，症狀是 AGY 回
+  `editor "voiceink-edit.cmd" not found in PATH`，而測試因為讀的是同一個假鍵所以全綠。
+  斷言要寫成「不分大小寫只有一個 path 鍵，而且原本的 PATH 還在後面」。
+  回歸 `probe-terminal-editor.js` 的 [F][H]。
 - **Shift+Enter 送的是 `\x1b\r` 不是 CSI u**：`\x1b[13;2u` 要終端機與 CLI 先協商 kitty keyboard
   protocol，xterm.js 不宣告支援、CLI 也就不會啟用，那串序列會被當成一般字元——使用者看到的是
   輸入框裡直接冒出 `[13;2u`。`ESC`＋`CR` 是 Claude Code `/terminal-setup` 綁的同一個東西。

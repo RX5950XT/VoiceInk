@@ -32,12 +32,26 @@ const CORS = {
 }
 
 /**
+ * 檔案總管的大預覽走這個假專案 id：後面接的是**絕對路徑**，由 `register` 收到的
+ * `resolveLocal` 把關（檔案總管本來就讀得到那些路徑，這裡沒有放寬任何東西）。
+ */
+const LOCAL_ID = '~local'
+
+/**
  * @param {string} projectId
  * @param {string} rel 專案內的相對路徑（`/` 分隔）
  */
 function urlFor(projectId, rel) {
   const encoded = String(rel).split('/').map(encodeURIComponent).join('/')
   return `${SCHEME}://${TOKEN}/${encodeURIComponent(projectId)}/${encoded}`
+}
+
+/**
+ * 檔案總管的大預覽網址。整條絕對路徑當成一段，所以反斜線、空白、中文都不會被切壞。
+ * @param {string} full 本機絕對路徑
+ */
+function localUrlFor(full) {
+  return `${SCHEME}://${TOKEN}/${LOCAL_ID}/${encodeURIComponent(String(full || ''))}`
 }
 
 /**
@@ -86,14 +100,23 @@ async function serve(full, request) {
 /**
  * @param {Electron.Protocol} protocol
  * @param {(projectId: string) => Promise<string>} rootOf
+ * @param {((full: string) => string) | undefined} [resolveLocal] 檔案總管的大預覽：
+ *   把使用者給的絕對路徑驗過再回正規化的那一條（沒給就不開放 `~local`）
  */
-function register(protocol, rootOf) {
+function register(protocol, rootOf, resolveLocal) {
   protocol.handle(SCHEME, async (request) => {
     try {
       if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS })
       const url = new URL(request.url)
       if (url.hostname !== TOKEN) return new Response(null, { status: 404 })
       const [projectId, ...segments] = url.pathname.slice(1).split('/').map(decodeURIComponent)
+      // 檔案總管那一條：後面就是一整條絕對路徑，驗證交給呼叫端給的 `resolveLocal`
+      if (projectId === LOCAL_ID) {
+        if (typeof resolveLocal !== 'function') return new Response(null, { status: 404 })
+        const target = resolveLocal(segments.join('/'))
+        if (!files.mediaMime(target)) return new Response(null, { status: 404 })
+        return await serve(target, request)
+      }
       const root = await rootOf(projectId)
       const full = files.resolveIn(root, segments.join('/'))
       if (!files.mediaMime(full)) return new Response(null, { status: 404 })
@@ -106,4 +129,4 @@ function register(protocol, rootOf) {
   })
 }
 
-module.exports = { SCHEME, PRIVILEGES, urlFor, parseRange, register }
+module.exports = { SCHEME, PRIVILEGES, LOCAL_ID, urlFor, localUrlFor, parseRange, register }
