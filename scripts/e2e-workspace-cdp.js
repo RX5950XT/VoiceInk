@@ -750,6 +750,38 @@ async function main() {
     })()`)
     ok('[I] 刪不掉專案根目錄', rootGuard === true && fs.existsSync(PROJECT_DIR))
 
+    // ===== [I2] 從外面拖檔案進檔案樹 =====
+    {
+      const outside = path.join(PROJECT_DIR, '..', 'wsdrop-src.txt')
+      fs.writeFileSync(outside, 'from outside')
+      const target = await cdp.eval(`(() => {
+        const row = [...document.querySelectorAll('#wsTree .ws-tree-row')]
+          .find((r) => r.dataset.rel === 'src')
+        if (!row) return null
+        const b = row.getBoundingClientRect()
+        return { x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height / 2) }
+      })()`)
+      ok('[I2] 找得到要拖進去的資料夾那一列', !!target, JSON.stringify(target))
+      if (target) {
+        const data = { items: [], files: [path.resolve(outside)], dragOperationsMask: 17 }
+        for (const type of ['dragEnter', 'dragOver', 'drop']) {
+          await cdp.send('Input.dispatchDragEvent', { type, x: target.x, y: target.y, data })
+        }
+        const landed = path.join(PROJECT_DIR, 'src', 'wsdrop-src.txt')
+        let arrived = false
+        for (let i = 0; i < 60 && !arrived; i += 1) {
+          arrived = fs.existsSync(landed)
+          if (!arrived) await sleep(250)
+        }
+        ok('[I2] 外面的檔案真的複製進專案資料夾', arrived, landed)
+        ok('[I2] 是複製不是搬移（來源還在）', fs.existsSync(outside))
+        ok('[I2] 內容一樣',
+          arrived && fs.readFileSync(landed, 'utf8') === 'from outside')
+        if (arrived) fs.rmSync(landed) // temp-ok: 自己剛複製進去的單一檔案
+      }
+      fs.rmSync(outside) // temp-ok: 自己種的單一檔案
+    }
+
     // ===== [J] 埠號面板 =====
     await cdp.eval(`document.querySelector('.ws-right-tab[data-panel="ports"]').click()`)
     ok('[J] 埠號面板顯示出來',
