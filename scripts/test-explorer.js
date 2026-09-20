@@ -841,6 +841,145 @@ console.log('\n[S6] 隱藏／系統項目有開關')
   ok('版本控制資料夾仍然藏著（它真的有 hidden 屬性）', fsMod6.isHiddenName('.git'))
 }
 
+console.log('\n[S7] 縮圖 pending 會延遲重取，暫時的圖不進快取')
+{
+  const vm = require('vm')
+  const src = fs.readFileSync(path.join(ROOT, 'src/renderer/scripts/explorer-icons.js'), 'utf8')
+    .replace(/^import[\s\S]*?from '[^']+'\r?\n/gm, '')
+    .replace(/^export /gm, '')
+  const PNG = 'data:image/png;base64,AAA'
+  const PNG2 = 'data:image/png;base64,BBB'
+
+  function loadIcons(fileIcon) {
+    /** @type {{ id: number, fn: Function, ms: number }[]} */
+    const timers = []
+    let nextId = 1
+    const observers = []
+    const context = {
+      console,
+      Map, Set, WeakMap, WeakSet, Math,
+      setTimeout(fn, ms) {
+        const id = nextId++
+        timers.push({ id, fn, ms })
+        return id
+      },
+      clearTimeout(id) {
+        const i = timers.findIndex((t) => t.id === id)
+        if (i >= 0) timers.splice(i, 1)
+      },
+      IntersectionObserver: class {
+        constructor(cb) { this.cb = cb; observers.push(this) }
+        observe(el) { this.cb([{ isIntersecting: true, target: el }]) }
+        unobserve() {}
+        disconnect() {}
+      },
+      document: { createElement() { return { src: '', alt: '', draggable: false } } },
+      window: { electronAPI: { explorer: { fileIcon } } }
+    }
+    vm.createContext(context)
+    vm.runInContext(src, context)
+    return { context, timers, observers }
+  }
+
+  function iconEl(filePath) {
+    return {
+      dataset: { path: filePath },
+      isConnected: true,
+      textContent: '',
+      child: null,
+      replaceChildren(node) { this.child = node }
+    }
+  }
+  function hostEl(els) {
+    return {
+      classList: { contains: (name) => name === 'is-grid' },
+      querySelectorAll: () => els,
+      isConnected: true
+    }
+  }
+  const tick = () => Promise.resolve().then(() => Promise.resolve())
+
+  {
+    let calls = 0
+    const el = iconEl('D:\\a.pdf')
+    async function fileIcon() {
+      calls += 1
+      if (calls === 1) return { ok: true, data: { url: PNG, pending: true } }
+      return { ok: true, data: { url: PNG2 } }
+    }
+    const { context, timers } = loadIcons(fileIcon)
+    context.paintFileIcons(hostEl([el]), () => Promise.resolve({ ok: false }))
+    await tick()
+    ok('第一次會去問', calls === 1, `calls=${calls}`)
+    ok('pending 排了 400ms 重試', timers.length === 1 && timers[0].ms === 400,
+      timers.map((t) => t.ms).join(','))
+    if (timers.length) {
+      timers.shift().fn()
+      await tick()
+    }
+    ok('(a) 真的有第二次呼叫', calls === 2, `calls=${calls}`)
+    ok('第二次不是 pending 就不再排', timers.length === 0, `timers=${timers.length}`)
+  }
+
+  {
+    let calls = 0
+    const el = iconEl('D:\\b.pdf')
+    async function fileIcon() {
+      calls += 1
+      return { ok: true, data: { url: PNG, pending: true } }
+    }
+    const { context, timers } = loadIcons(fileIcon)
+    const host = hostEl([el])
+    context.paintFileIcons(host, () => Promise.resolve({ ok: false }))
+    await tick()
+    ok('pending 第一次有叫', calls === 1, `calls=${calls}`)
+    context.paintFileIcons(host, () => Promise.resolve({ ok: false }))
+    await tick()
+    ok('(b) pending 那張沒有被寫進快取', calls === 2, `calls=${calls}`)
+    ok('換資料夾會清掉待重試', timers.length === 1 && timers[0].ms === 400,
+      `timers=${timers.length}`)
+  }
+
+  {
+    let calls = 0
+    const el = iconEl('D:\\c.pdf')
+    const delays = []
+    async function fileIcon() {
+      calls += 1
+      return { ok: true, data: { url: PNG, pending: true } }
+    }
+    const { context, timers } = loadIcons(fileIcon)
+    context.paintFileIcons(hostEl([el]), () => Promise.resolve({ ok: false }))
+    await tick()
+    while (timers.length) {
+      delays.push(timers[0].ms)
+      timers.shift().fn()
+      await tick()
+    }
+    ok('(c) 最多重試 3 次就停', calls === 4, `calls=${calls}`)
+    ok('退避是 400／800／1600', delays.join(',') === '400,800,1600', delays.join(','))
+    ok('停了之後沒有再排隊', timers.length === 0, `timers=${timers.length}`)
+  }
+
+  {
+    let calls = 0
+    const el = iconEl('D:\\gone.pdf')
+    async function fileIcon() {
+      calls += 1
+      return { ok: true, data: { url: PNG, pending: true } }
+    }
+    const { context, timers, observers } = loadIcons(fileIcon)
+    context.paintFileIcons(hostEl([el]), () => Promise.resolve({ ok: false }))
+    await tick()
+    if (observers[0]) observers[0].cb([{ isIntersecting: false, target: el }])
+    if (timers.length) {
+      timers.shift().fn()
+      await tick()
+    }
+    ok('捲走了就不再重取', calls === 1, `calls=${calls}`)
+  }
+}
+
 console.log('\n[Q] index.js 的 exports 都有定義')
 {
   const indexSource = fs.readFileSync(path.join(ROOT, 'src/main/explorer/index.js'), 'utf8')

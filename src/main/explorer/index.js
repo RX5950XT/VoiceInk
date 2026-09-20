@@ -294,8 +294,10 @@ async function fileIcon(target, opts) {
   const wantThumb = Boolean(opts && typeof opts === 'object' && opts.thumb === true)
   if (wantThumb && !resolved.dir) {
     try {
-      const url = await shellExt.thumbOf(resolved.path, opts.size)
-      if (url) return { url }
+      const thumb = await shellExt.thumbOf(resolved.path, opts.size)
+      if (thumb && thumb.url) {
+        return thumb.pending === true ? { url: thumb.url, pending: true } : { url: thumb.url }
+      }
     } catch (error) {
       console.error('[explorer] 殼層縮圖失敗:', error?.message || error)
     }

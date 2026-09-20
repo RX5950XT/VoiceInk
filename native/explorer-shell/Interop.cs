@@ -249,10 +249,12 @@ namespace VoiceInkShell
         public const uint SHGFI_ADDOVERLAYS = 0x000000020;
 
         // IShellItemImageFactory.GetImage：有縮圖給縮圖，沒有就給圖示。
-        // 不要用 SIIGBF_THUMBNAILONLY（0x8）——沒縮圖的檔會直接失敗。
+        // THUMBNAILONLY 只拿來探「有沒有真縮圖」；沒有就退回 RESIZETOFIT | BIGGERSIZEOK。
         public const int SIIGBF_RESIZETOFIT = 0x00000000;
         public const int SIIGBF_BIGGERSIZEOK = 0x00000001;
+        public const int SIIGBF_ICONONLY = 0x00000004;
         public const int SIIGBF_THUMBNAILONLY = 0x00000008;
+        public const int SIIGBF_INCACHEONLY = 0x00000010;
 
         [DllImport("ole32.dll")] public static extern int OleInitialize(IntPtr reserved);
 

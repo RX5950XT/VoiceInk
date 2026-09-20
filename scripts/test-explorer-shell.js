@@ -128,11 +128,16 @@ function finishRest() {
     ok('pidl 陣列明寫 LPArray', interop.includes('UnmanagedType.LPArray'))
     ok('縮圖走 IShellItemImageFactory', thumbs.includes('IShellItemImageFactory') && thumbs.includes('GetImage'))
     ok('縮圖旗標 RESIZETOFIT + BIGGERSIZEOK', thumbs.includes('SIIGBF_RESIZETOFIT') && thumbs.includes('SIIGBF_BIGGERSIZEOK'))
-    ok('縮圖不用 THUMBNAILONLY', thumbs.includes('SIIGBF_RESIZETOFIT | Native.SIIGBF_BIGGERSIZEOK') && !/GetImage\([^)]*THUMBNAILONLY/.test(thumbs))
+    ok('fallback 仍給可顯示的圖', thumbs.includes('SIIGBF_RESIZETOFIT | Native.SIIGBF_BIGGERSIZEOK'))
+    ok('先用 THUMBNAILONLY | INCACHEONLY 探快取裡有沒有真縮圖',
+      thumbs.includes('SIIGBF_THUMBNAILONLY') && thumbs.includes('SIIGBF_INCACHEONLY'))
+    ok('sidecar 不 Sleep 等縮圖', !/Thread\.Sleep/.test(thumbs) && !/Task\.Delay/.test(thumbs))
+    ok('pending 寫進 thumb JSON', /WriteBoolean\("pending"/.test(program))
     ok('HBITMAP 用完 DeleteObject', thumbs.includes('DeleteObject(hbmp)'))
     ok('sidecar 有 thumb op', program.includes('case "thumb"'))
     ok('圖示與縮圖快取 key 分開', icons.includes("? 't' : 'i'"))
     ok('只在方格檢視要縮圖', icons.includes('is-grid') && icons.includes('pdf') && icons.includes('docx'))
+    ok('pending 縮圖會重試且不進快取', /pending === true/.test(icons) && /MAX_RETRY/.test(icons))
   }
 
   console.log('\n[E] ipc／main／preload 有殼層三支')
