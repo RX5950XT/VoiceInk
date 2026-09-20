@@ -295,12 +295,56 @@ export async function refreshDictationRuntime() {
   }
 }
 
+/** 可以直接插字的 `<input type="...">`。其餘（date、color、checkbox…）插進去只會被丟掉。 */
+const TEXT_INPUT_TYPES = new Set(['text', 'search', 'url', 'email', 'tel', 'password', 'number'])
+
+/**
+ * 把整理好的文字插進游標現在的位置。
+ *
+ * main 只有在「焦點就在 VoiceInk 自己的視窗」時才呼叫這支（`dictation/insert.js` 的
+ * `insertIntoOwnWindow`），走這條路**一個位元組都不會寫進剪貼簿**——使用者原本複製的
+ * 東西不會被擠到 Win+V 歷史後面去。這裡回 false（沒有焦點、焦點在不能打字的東西上）
+ * main 就退回剪貼簿 ＋ 模擬 Ctrl+V。
+ *
+ * @param {string} text
+ * @returns {Promise<boolean>}
+ */
+async function insertAtCaret(text) {
+  const el = /** @type {HTMLElement & { value?: string, type?: string, readOnly?: boolean, disabled?: boolean }} */ (
+    document.activeElement
+  )
+  if (!el || !text) return false
+  // 終端機要先問：xterm 的隱形輸入框也是 `<textarea>`，直接塞值它不會送進 PTY
+  if (typeof el.closest === 'function' && el.closest('.term-pane')) {
+    const mod = await import('./terminal-page.js')
+    return mod.pasteIntoFocusedTerminal(text)
+  }
+  const tag = el.tagName
+  const editable = tag === 'TEXTAREA'
+    || (tag === 'INPUT' && TEXT_INPUT_TYPES.has(String(el.type || 'text').toLowerCase()))
+    || el.isContentEditable
+  if (!editable || el.readOnly || el.disabled) return false
+  // `execCommand` 是唯一能把這次插入記進 undo 堆疊的方法（使用者 Ctrl+Z 收得回去），
+  // 而且會自己送出 input 事件——聊天輸入框的自動長高、送出鈕的啟用都等那個事件。
+  try {
+    if (document.execCommand('insertText', false, text)) return true
+  } catch { /* 有些元素不吃，往下走手動那條 */ }
+  if (typeof el.setRangeText !== 'function') return false
+  const start = /** @type {any} */ (el).selectionStart ?? String(el.value || '').length
+  const end = /** @type {any} */ (el).selectionEnd ?? start
+  /** @type {any} */ (el).setRangeText(text, start, end, 'end')
+  el.dispatchEvent(new Event('input', { bubbles: true }))
+  return true
+}
+
 /**
  * 啟動時掛一次：不論停在哪一頁都要能收熱鍵（使用者多半在別的程式裡按）
  */
 export async function initDictation() {
   if (bound) return
   bound = true
+  // main 用 `executeJavaScript` 叫這支（要拿回傳值，不是單向事件）
+  window.__viInsertText = insertAtCaret
   electronAPI.dictation?.onEvent((payload) => {
     const type = payload?.type
     if (type === 'start') startRecording()

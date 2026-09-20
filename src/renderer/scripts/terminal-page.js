@@ -1066,6 +1066,21 @@ export async function openTerminalSession(id, isActive = () => true) {
   await openSession(id, isActive)
 }
 
+/**
+ * 把文字貼進「現在有焦點的那一格終端機」（語音輸入用，見 `dictation.js` 的
+ * `insertAtCaret`）。`term.paste` 走的是 xterm 自己的貼上路徑，bracketed paste
+ * 開著時會照規矩包起來，AI CLI 才知道那是貼上不是逐字打的。
+ * @param {string} text
+ * @returns {boolean} 找不到有焦點的終端機就回 false（呼叫端會換別的方式）
+ */
+export function pasteIntoFocusedTerminal(text) {
+  const pane = /** @type {HTMLElement | null} */ (document.activeElement)?.closest?.('.term-pane')
+  const entry = pane instanceof HTMLElement ? panes.get(pane.dataset.id || '') : null
+  if (!entry || !text) return false
+  entry.term.paste(text)
+  return true
+}
+
 export function refreshTerminalPage() {
   initTerminalPage()
   // 主題（App 的深／淺色，或設定頁的終端機外觀）可能在別頁被切過

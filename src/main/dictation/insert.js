@@ -1,11 +1,16 @@
 /**
  * VoiceInk - 把整理好的文字送進「使用者現在正在打字的地方」
  *
- * 做法是剪貼簿 + 模擬 Ctrl+V，不是逐字模擬輸入：
+ * **使用者正在打字的地方如果就是 VoiceInk 自己的視窗，就直接送進去，完全不碰剪貼簿**
+ * （`insertIntoOwnWindow`）：那是最常見的情況（在自己的終端機、聊天輸入框講話），
+ * 而走剪貼簿會在 Windows 的剪貼簿歷史（Win+V）裡插進兩筆——我們的文字一筆、還原舊值
+ * 又一筆，使用者原本複製的東西就被擠到後面去，順序整個亂掉。
+ *
+ * 在別的程式裡才退回剪貼簿 + 模擬 Ctrl+V，不是逐字模擬輸入：
  *   - 逐字送鍵在中文／表情符號上不可靠（要拆成 unicode 事件，而且輸入法會插手）
  *   - 一段話逐字送要數百次事件，慢而且中途被使用者打斷就是半句話
  *
- * 代價是會動到剪貼簿，所以貼完要還原。只還原純文字：原本若是圖片或帶格式的內容，
+ * 那條路的代價是會動到剪貼簿，所以貼完要還原。只還原純文字：原本若是圖片或帶格式的內容，
  * Electron 的 clipboard API 沒辦法無損搬回來，這一點在 UI 上講清楚比假裝做得到好。
  */
 
@@ -25,13 +30,51 @@ const RESTORE_DELAY_MS = 800
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 /**
+ * 焦點就在 VoiceInk 自己的視窗裡：直接交給 renderer 插進游標的位置。
+ *
+ * `getFocusedWindow()` 只認得自己 App 的視窗，使用者在別的程式裡講話時它就是 null，
+ * 自然會退回剪貼簿那條路。語音輸入的浮藥丸（HUD）是 `focusable: false`，搶不走焦點；
+ * 萬一真的拿到它，它沒有 `__viInsertText`，回 false 一樣退回剪貼簿。
+ *
+ * @param {string} payload
+ * @param {{ getFocusedWindow?: () => object | null }} deps
+ * @returns {Promise<boolean>} 有沒有真的插進去
+ */
+async function insertIntoOwnWindow(payload, deps = {}) {
+  const get = deps.getFocusedWindow || (() => require('electron').BrowserWindow.getFocusedWindow())
+  let win
+  try {
+    win = get()
+  } catch {
+    return false
+  }
+  if (!win || win.isDestroyed?.()) return false
+  try {
+    const done = await win.webContents.executeJavaScript(
+      `window.__viInsertText?.(${JSON.stringify(payload)}) ?? false`,
+      true
+    )
+    return done === true
+  } catch (err) {
+    console.error('[dictation] 送進自己的視窗失敗:', err?.message || err)
+    return false
+  }
+}
+
+/**
  * @param {string} text
- * @param {{ load?: () => { uIOhook: object }, delayMs?: number }} [deps] 測試用注入
- * @returns {Promise<{ ok: boolean, error?: string, chars?: number }>}
+ * @param {{ load?: () => { uIOhook: object }, delayMs?: number,
+ *   getFocusedWindow?: () => object | null }} [deps] 測試用注入
+ * @returns {Promise<{ ok: boolean, error?: string, chars?: number, viaWindow?: boolean }>}
  */
 async function insertText(text, deps = {}) {
   const payload = sanitizeInsertText(text)
   if (!payload) return { ok: false, error: 'EMPTY' }
+
+  // 自己的視窗有焦點就走這條：一個位元組都不寫進剪貼簿
+  if (await insertIntoOwnWindow(payload, deps)) {
+    return { ok: true, chars: payload.length, viaWindow: true }
+  }
 
   let uIOhook
   try {
@@ -68,4 +111,4 @@ async function insertText(text, deps = {}) {
   return { ok: true, chars: payload.length }
 }
 
-module.exports = { insertText, RESTORE_DELAY_MS }
+module.exports = { insertText, insertIntoOwnWindow, RESTORE_DELAY_MS }

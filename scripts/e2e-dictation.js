@@ -303,6 +303,60 @@ async function main() {
     check('有警告', Boolean(result.warning))
   }
 
+  console.log('\n[K0] 插入路徑：自己的視窗直接插，不碰剪貼簿')
+  {
+    const { clipboard } = require('electron')
+    const insert = require(path.join(__dirname, '..', 'src', 'main', 'dictation', 'insert.js'))
+    const sentinel = `VI-CLIP-${Date.now()}`
+    clipboard.writeText(sentinel)
+
+    // **一定要注入假的 uiohook**：漏掉的話沒走成 viaWindow 時會真的送出 Ctrl+V，
+    // 把測試用的字貼進使用者當下正在用的程式（CLAUDE.md 有這條）。
+    const taps = []
+    const fakeHook = { uIOhook: { keyTap: (key, mods) => taps.push([key, mods]) } }
+    let sentCode = ''
+    const fakeWindow = {
+      isDestroyed: () => false,
+      webContents: {
+        executeJavaScript: async (code) => { sentCode = code; return true }
+      }
+    }
+    const viaWindow = await insert.insertText('語音輸入的文字', {
+      getFocusedWindow: () => fakeWindow,
+      load: () => fakeHook,
+      delayMs: 20
+    })
+    check('焦點在自己的視窗時直接插進去', viaWindow.ok === true && viaWindow.viaWindow === true,
+      JSON.stringify(viaWindow))
+    check('送給 renderer 的就是整理後的文字', sentCode.includes('語音輸入的文字'), sentCode.slice(0, 80))
+    // 這兩條就是使用者說的「剪貼簿順序被打亂」：走這條路一個位元組都不准寫進去，
+    // 也不准去按 Ctrl+V（按了就代表剪貼簿被動過）
+    check('剪貼簿一個字都沒動過', clipboard.readText() === sentinel, clipboard.readText())
+    check('完全沒有走模擬按鍵那條路', taps.length === 0, JSON.stringify(taps))
+
+    // renderer 說插不進去（焦點在不能打字的東西上）就要退回剪貼簿那條路
+    const refused = { isDestroyed: () => false, webContents: { executeJavaScript: async () => false } }
+    const fallback = await insert.insertText('插不進去的情況', {
+      getFocusedWindow: () => refused,
+      load: () => fakeHook,
+      delayMs: 20
+    })
+    check('renderer 插不進去就退回剪貼簿＋Ctrl+V',
+      fallback.ok === true && !fallback.viaWindow && taps.length === 1, JSON.stringify({ fallback, taps }))
+    check('那條路走完仍把剪貼簿還原回去', clipboard.readText() === sentinel, clipboard.readText())
+
+    // 使用者在別的程式裡講話：拿不到 focused window，照樣走剪貼簿
+    taps.length = 0
+    const outside = await insert.insertText('別的程式裡的文字', {
+      getFocusedWindow: () => null,
+      load: () => fakeHook,
+      delayMs: 20
+    })
+    check('在別的程式裡維持原本的剪貼簿貼上',
+      outside.ok === true && !outside.viaWindow && taps.length === 1, JSON.stringify({ outside, taps }))
+    clipboard.clear()
+  }
+
   console.log('\n[K] 桌面指示器（真的開一扇視窗）')
   {
     const { screen } = require('electron')
