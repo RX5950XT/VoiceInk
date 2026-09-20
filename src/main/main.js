@@ -1871,7 +1871,9 @@ registerExplorerIpc({
     uffsInstall: (...args) => loadExplorer().uffsInstall(...args),
     uffsCancelInstall: (...args) => loadExplorer().uffsCancelInstall(...args),
     uffsInstallBroker: (...args) => loadExplorer().uffsInstallBroker(...args),
-    uffsEnsure: (...args) => loadExplorer().uffsEnsure(...args)
+    uffsEnsure: (...args) => loadExplorer().uffsEnsure(...args),
+    folderSize: (...args) => loadExplorer().folderSize(...args),
+    folderSizeCancel: (...args) => loadExplorer().folderSizeCancel(...args)
   },
   isMainSender: assertMainWindowSender
 })

@@ -327,8 +327,11 @@ export const electronAPI = window.electronAPI || {
     uffsInstall: async () => { throw new Error('僅 Electron 環境可用') },
     uffsCancelInstall: async () => true,
     uffsInstallBroker: async () => { throw new Error('僅 Electron 環境可用') },
+    folderSize: async () => ({ bytes: 0, files: 0, dirs: 0, incomplete: false, cancelled: false }),
+    folderSizeCancel: async () => true,
     onChanged: () => () => {},
-    onUffsProgress: () => () => {}
+    onUffsProgress: () => () => {},
+    onFolderSizeProgress: () => () => {}
   }
 }
 

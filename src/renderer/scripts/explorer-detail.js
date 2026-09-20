@@ -2,7 +2,107 @@
  * 檔案總管右側詳情：預覽＋詳細資訊。操作鈕在上方命令列。
  */
 
+import { electronAPI } from './app.js'
+
 let detailSeq = 0
+let sizeToken = ''
+/** @type {HTMLElement | null} */
+let sizeDd = null
+/** @type {((n: number) => string) | null} */
+let sizeFormat = null
+/** @type {(() => void) | null} */
+let unsubSize = null
+/** @type {MutationObserver | null} */
+let pageObserver = null
+
+function explorerApi() {
+  return (electronAPI && electronAPI.explorer) || null
+}
+
+function explorerPageActive() {
+  const page = typeof document === 'undefined' ? null : document.getElementById('page-explorer')
+  return !page || page.classList.contains('active')
+}
+
+function cancelSize() {
+  const tok = sizeToken
+  sizeToken = ''
+  sizeDd = null
+  sizeFormat = null
+  const api = explorerApi()
+  if (tok && api && typeof api.folderSizeCancel === 'function') {
+    void api.folderSizeCancel(tok)
+  }
+}
+
+function watchPageLeave() {
+  if (pageObserver || typeof MutationObserver === 'undefined') return
+  const page = document.getElementById('page-explorer')
+  if (!page) return
+  pageObserver = new MutationObserver(() => {
+    if (!page.classList.contains('active')) cancelSize()
+  })
+  pageObserver.observe(page, { attributes: true, attributeFilter: ['class'] })
+}
+
+function prettyBytes(n, formatSize) {
+  const bytes = Number(n) || 0
+  if (bytes <= 0) return '0 B'
+  return formatSize(bytes)
+}
+
+function sizeLabel(info, formatSize, done) {
+  const files = Number(info && info.files) || 0
+  const pretty = prettyBytes(info && info.bytes, formatSize)
+  const count = `${files.toLocaleString('zh-TW')} 個檔案`
+  if (!done) return (info && (info.bytes || info.files)) ? `計算中… ${pretty}` : '計算中…'
+  if (info && info.incomplete) return `至少 ${pretty}（${count}）`
+  return `${pretty}（${count}）`
+}
+
+function ensureSizeProgress() {
+  const api = explorerApi()
+  if (unsubSize || !api || typeof api.onFolderSizeProgress !== 'function') return
+  unsubSize = api.onFolderSizeProgress((info) => {
+    if (!info || info.done || info.token !== sizeToken || !sizeDd || !sizeFormat) return
+    sizeDd.textContent = sizeLabel(info, sizeFormat, false)
+  })
+}
+
+/**
+ * @param {string} dirPath
+ * @param {HTMLElement} dd
+ * @param {number} seq
+ * @param {(n: number) => string} formatSize
+ */
+async function fillFolderSize(dirPath, dd, seq, formatSize) {
+  const api = explorerApi()
+  if (!api || typeof api.folderSize !== 'function') {
+    dd.textContent = '算不出來'
+    return
+  }
+  if (!explorerPageActive()) return
+  const token = `sz${seq}`
+  sizeToken = token
+  sizeDd = dd
+  sizeFormat = formatSize
+  ensureSizeProgress()
+  watchPageLeave()
+  try {
+    const result = await api.folderSize(dirPath, token)
+    if (seq !== detailSeq || token !== sizeToken || !explorerPageActive()) return
+    if (!result || result.ok === false) {
+      dd.textContent = '算不出來'
+      return
+    }
+    const data = result.data || result
+    if (data && data.cancelled) return
+    dd.textContent = sizeLabel(data, formatSize, true)
+  } catch {
+    if (seq !== detailSeq) return
+    dd.textContent = '算不出來'
+  }
+}
 
 /**
  * @param {{
@@ -16,6 +116,8 @@ let detailSeq = 0
  */
 export async function paintDetail(opts) {
   const seq = ++detailSeq
+  cancelSize()
+  watchPageLeave()
   const host = opts.host
   if (!host) return
   host.replaceChildren()
@@ -59,7 +161,8 @@ export async function paintDetail(opts) {
   const dl = document.createElement('dl')
   addFact(dl, '類型', (info && info.type) || (item.dir ? '資料夾' : '檔案'))
   addFact(dl, '位置', item.path)
-  addFact(dl, '大小', item.dir ? '資料夾' : opts.formatSize((info && info.size) || item.size))
+  const folder = Boolean(item.dir) && !opts.inRecycle
+  const sizeDdEl = addFact(dl, '大小', folder ? '計算中…' : (item.dir ? '資料夾' : opts.formatSize((info && info.size) || item.size)))
   addFact(dl, '建立', opts.formatTime((info && info.ctimeMs) || 0))
   addFact(dl, '修改', opts.formatTime((info && info.mtimeMs) || item.mtimeMs))
   addFact(dl, '存取', opts.formatTime((info && info.atimeMs) || 0))
@@ -68,6 +171,7 @@ export async function paintDetail(opts) {
   if (info && info.linkTarget) addFact(dl, '連結', info.linkTarget)
   if (info && info.tooLarge) addFact(dl, '預覽', '檔案太大')
   host.appendChild(dl)
+  if (folder && explorerPageActive()) void fillFolderSize(item.path, sizeDdEl, seq, opts.formatSize)
 }
 
 function previewEl(item, info) {
@@ -107,4 +211,5 @@ function addFact(dl, key, value) {
   dd.textContent = value || '—'
   wrap.append(dt, dd)
   dl.appendChild(wrap)
+  return dd
 }

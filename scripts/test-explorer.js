@@ -841,6 +841,80 @@ console.log('\n[S6] 隱藏／系統項目有開關')
   ok('版本控制資料夾仍然藏著（它真的有 hidden 屬性）', fsMod6.isHiddenName('.git'))
 }
 
+console.log('\n[T] 資料夾大小')
+{
+  let size
+  try {
+    size = require(path.join(ROOT, 'src/main/explorer/size.js'))
+    ok('size.js 存在', typeof size.folderSize === 'function' && typeof size.folderSizeCancel === 'function')
+  } catch (error) {
+    ok('size.js 存在', false, error && error.message)
+  }
+
+  if (!size || typeof size.folderSize !== 'function') {
+    ok('巢狀資料夾總和算得對', false, 'size.js 不存在')
+    ok('junction 不跟著走', false, 'size.js 不存在')
+    ok('取消真的會停', false, 'size.js 不存在')
+    ok('上限到了標記不完整', false, 'size.js 不存在')
+  } else {
+    const nested = tempDir('vi-ex-sz-')
+    fs.mkdirSync(path.join(nested, 'sub'))
+    fs.writeFileSync(path.join(nested, 'a.bin'), Buffer.alloc(1000))
+    fs.writeFileSync(path.join(nested, 'sub', 'b.bin'), Buffer.alloc(1000))
+    fs.writeFileSync(path.join(nested, 'sub', 'c.bin'), Buffer.alloc(1000))
+    const sum = await size.folderSize(nested, 't-sum')
+    ok('巢狀資料夾總和算得對', sum && sum.bytes === 3000 && sum.files === 3 && sum.incomplete !== true,
+      JSON.stringify(sum))
+    removeTree(nested)
+
+    const jdir = tempDir('vi-ex-sz-junc-')
+    const root = path.join(jdir, 'root')
+    const outside = path.join(jdir, 'outside')
+    fs.mkdirSync(root)
+    fs.mkdirSync(outside)
+    fs.writeFileSync(path.join(root, 'keep.bin'), Buffer.alloc(1000))
+    fs.writeFileSync(path.join(outside, 'secret.bin'), Buffer.alloc(50000))
+    const link = path.join(root, 'link')
+    try {
+      fs.symlinkSync(outside, link, 'junction')
+      const jsum = await size.folderSize(root, 't-junc')
+      ok('junction 不跟著走', jsum && jsum.bytes === 1000 && jsum.files === 1,
+        JSON.stringify(jsum))
+    } catch (error) {
+      ok('junction 不跟著走', false, `${error && error.code}: ${error && error.message}`)
+    }
+    removeTree(jdir)
+
+    const cdir = tempDir('vi-ex-sz-cancel-')
+    fs.mkdirSync(path.join(cdir, 'deep'))
+    for (let i = 0; i < 80; i += 1) {
+      fs.writeFileSync(path.join(cdir, 'deep', `f${i}.bin`), Buffer.alloc(10))
+    }
+    const pending = size.folderSize(cdir, 't-cancel')
+    size.folderSizeCancel('t-cancel')
+    const stopped = await pending
+    ok('取消真的會停', stopped && stopped.cancelled === true && stopped.incomplete === true,
+      JSON.stringify(stopped))
+    removeTree(cdir)
+
+    const ldir = tempDir('vi-ex-sz-lim-')
+    fs.writeFileSync(path.join(ldir, 'one.bin'), Buffer.alloc(1000))
+    fs.writeFileSync(path.join(ldir, 'two.bin'), Buffer.alloc(1000))
+    fs.writeFileSync(path.join(ldir, 'three.bin'), Buffer.alloc(1000))
+    const limited = await size.folderSize(ldir, 't-lim', { maxFiles: 1 })
+    ok('上限到了標記不完整', limited && limited.incomplete === true && limited.files === 1 && limited.bytes === 1000,
+      JSON.stringify(limited))
+    removeTree(ldir)
+  }
+
+  const detailSrcT = fs.readFileSync(path.join(ROOT, 'src/renderer/scripts/explorer-detail.js'), 'utf8')
+  ok('選到資料夾先顯示計算中', /計算中/.test(detailSrcT))
+  ok('算完列出檔案數', /個檔案/.test(detailSrcT))
+  ok('到上限寫至少', /至少/.test(detailSrcT))
+  ok('失敗顯示算不出來', /算不出來/.test(detailSrcT))
+  ok('換選取會取消正在算的那次', /folderSizeCancel/.test(detailSrcT))
+}
+
 console.log('\n[Q] index.js 的 exports 都有定義')
 {
   const indexSource = fs.readFileSync(path.join(ROOT, 'src/main/explorer/index.js'), 'utf8')

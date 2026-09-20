@@ -702,6 +702,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     uffsCancelInstall: () => ipcRenderer.invoke('explorer:uffsCancelInstall'),
     uffsInstallBroker: () => ipcRenderer.invoke('explorer:uffsInstallBroker'),
     uffsEnsure: (opts) => ipcRenderer.invoke('explorer:uffsEnsure', opts),
+    folderSize: (dirPath, token) => ipcRenderer.invoke('explorer:folderSize', dirPath, token),
+    folderSizeCancel: (token) => ipcRenderer.invoke('explorer:folderSizeCancel', token),
     onChanged: (callback) => {
       const handler = (_event, payload) => callback(payload)
       ipcRenderer.on('explorer:changed', handler)
@@ -711,6 +713,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       const handler = (_event, payload) => callback(payload)
       ipcRenderer.on('explorer:uffsProgress', handler)
       return () => ipcRenderer.removeListener('explorer:uffsProgress', handler)
+    },
+    onFolderSizeProgress: (callback) => {
+      const handler = (_event, payload) => callback(payload)
+      ipcRenderer.on('explorer:folderSizeProgress', handler)
+      return () => ipcRenderer.removeListener('explorer:folderSizeProgress', handler)
     }
   }
 })

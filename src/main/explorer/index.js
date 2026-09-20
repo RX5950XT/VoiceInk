@@ -20,6 +20,7 @@ const uffs = require('./uffs')
 const recycle = require('./recycle')
 const places = require('./places')
 const shellExt = require('./shell')
+const size = require('./size')
 
 /** @type {(channel: string, payload: any) => void} */
 let emit = () => {}
@@ -376,7 +377,18 @@ function shellRelease(token) {
   return shellExt.release(token)
 }
 
+function folderSize(dirPath, token) {
+  return size.folderSize(dirPath, token, {
+    onProgress: (info) => emit('explorer:folderSizeProgress', info)
+  })
+}
+
+function folderSizeCancel(token) {
+  return size.folderSizeCancel(token)
+}
+
 function shutdown() {
+  size.folderSizeCancel()
   watch.stop()
   shellExt.shutdown()
   return true
@@ -510,5 +522,7 @@ module.exports = {
   uffsInstall,
   uffsCancelInstall,
   uffsInstallBroker,
-  uffsEnsure
+  uffsEnsure,
+  folderSize,
+  folderSizeCancel
 }

@@ -79,6 +79,12 @@ function registerExplorerIpc({ ipcMain, service, isMainSender }) {
   ipcMain.handle('explorer:uffsCancelInstall', (event) => invoke(event, () => service.uffsCancelInstall()))
   ipcMain.handle('explorer:uffsInstallBroker', (event) => invoke(event, () => service.uffsInstallBroker()))
   ipcMain.handle('explorer:uffsEnsure', (event, opts) => invoke(event, () => service.uffsEnsure(opts)))
+  ipcMain.handle('explorer:folderSize', (event, dirPath, token) => (
+    invoke(event, () => service.folderSize(dirPath, token))
+  ))
+  ipcMain.handle('explorer:folderSizeCancel', (event, token) => (
+    invoke(event, () => service.folderSizeCancel(token))
+  ))
 }
 
 module.exports = { registerExplorerIpc }
