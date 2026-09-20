@@ -177,6 +177,58 @@ async function main() {
     console.log('[E] IPC／before-quit／publish 接線 ✓')
   }
 
+  // [F] GitHub 安裝檔要先走鏡像：APAC 上官方 CDN 實測 ~50KB/s，代理 ~25MB/s。
+  // latest.yml 仍只從 GitHub 讀（sha512 是信任根，不可跟 exe 走同一條代理）。
+  {
+    const mirrors = require('../src/main/update-mirrors')
+    const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
+    const pub = pkg.build.publish[0]
+    assert.strictEqual(mirrors.OWNER, pub.owner, '鏡像的 owner 要跟 publish 一致')
+    assert.strictEqual(mirrors.REPO, pub.repo, '鏡像的 repo 要跟 publish 一致')
+    assert.ok(mirrors.MIRRORS.length >= 2, '至少兩條代理，一條掛了還有下一條')
+    for (const prefix of mirrors.MIRRORS) {
+      assert.ok(prefix.startsWith('https://') && prefix.endsWith('/'), `代理前綴要是 https://…/：${prefix}`)
+    }
+
+    const exe = `https://github.com/${pub.owner}/${pub.repo}/releases/download/v1.24.0/VoiceInk-Setup-1.24.0.exe`
+    const urls = mirrors.downloadUrls(exe).map((u) => String(u))
+    assert.strictEqual(urls[urls.length - 1], exe, '最後一個一定是官方 GitHub，代理全掛才走它')
+    assert.ok(urls[0].startsWith(mirrors.MIRRORS[0]), '第一個要走第一條代理')
+    assert.ok(urls.includes(`${mirrors.MIRRORS[0]}${exe}`))
+    assert.ok(urls.includes(`${mirrors.MIRRORS[1]}${exe}`))
+    assert.ok(!urls.some((u, i) => i < urls.length - 1 && u === exe), '官方網址不可排在代理前面（慢但會成功＝永遠輪不到代理）')
+
+    const yml = `https://github.com/${pub.owner}/${pub.repo}/releases/download/v1.24.0/latest.yml`
+    assert.deepStrictEqual(mirrors.downloadUrls(yml).map(String), [yml], 'latest.yml 不准走代理')
+
+    const other = 'https://github.com/other/repo/releases/download/v1.0.0/Setup.exe'
+    assert.deepStrictEqual(mirrors.downloadUrls(other).map(String), [other], '別人的 repo 不准改寫')
+
+    const dest = path.join(resources, 'installer.exe')
+    const calls = []
+    const failing = {
+      async download(url, destination) {
+        calls.push(String(url))
+        if (String(url).includes('gh-proxy.com') || String(url).includes('ghfast.top')) {
+          fs.writeFileSync(destination, 'partial')
+          throw new Error('proxy down')
+        }
+        fs.writeFileSync(destination, 'full-ok')
+        return destination
+      }
+    }
+    mirrors.downloadWithFallback(failing)
+    await failing.download(new URL(exe), dest, {})
+    assert.ok(calls[0].startsWith(mirrors.MIRRORS[0]), '實際下載第一跳要走代理')
+    assert.strictEqual(calls[calls.length - 1], exe, '代理失敗要落到官方')
+    assert.strictEqual(fs.readFileSync(dest, 'utf8'), 'full-ok', '失敗那跳留下的半截檔要清掉再試')
+
+    const src = fs.readFileSync(path.join(ROOT, 'src/main/updater.js'), 'utf8')
+    assert.ok(src.includes("require('./update-mirrors')"), 'updater.js 沒接鏡像')
+    assert.ok(src.includes('downloadWithFallback'), 'httpExecutor.download 沒包鏡像回退')
+    console.log('[F] 安裝檔鏡像順序與回退 ✓')
+  }
+
   console.log('\n全部通過')
 
 }

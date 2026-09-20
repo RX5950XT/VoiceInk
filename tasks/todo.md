@@ -1,3 +1,11 @@
+# 2026-09-20 — 檢查更新下載走鏡像（GitHub APAC 過慢）
+
+- [x] `update-mirrors.js`：GitHub Releases 的 `.exe` 先走 gh-proxy／ghfast，最後才官方
+- [x] `updater.js` 包住 `httpExecutor.download`；失敗刪掉半截再試下一個
+- [x] `latest.yml` 仍只從 GitHub 讀（sha512 信任根不走代理）
+- [x] 測試先紅再綠；probe 量鏡像 vs GitHub 的實際速度
+- [x] 文件：AGENTS 更新地雷、發行流程不用多一步
+
 # 2026-09-20 — 電腦安裝版 VoiceInk 更新至最新發行版（v1.23.1）
 
 - [x] 調查安裝版檢查更新失敗根因：v1.22.0 差分下載與快取狀態、網路或 Range 請求中斷觸發 error；v1.23.1 已修正關閉差分下載

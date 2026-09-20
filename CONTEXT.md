@@ -6,8 +6,8 @@
 ## 專案概況
 
 VoiceInk：Windows Electron AI 工作台。Vanilla JS + Vite（無前端框架），Electron 43.4.1 ＋ Node.js 22。
-目前版本 **v1.24.0**（檔案總管縮圖／大小／真實隱藏屬性、切專案瀏覽器不停掉；
-前版關掉更新差分下載；再前為整機檔案總管、UFFS、系統監控多 GPU）。
+目前版本 **v1.24.1**（檢查更新改走鏡像，不再卡在 GitHub CDN；
+前版檔案總管縮圖／大小／真實隱藏屬性、切專案瀏覽器不停掉；再前關掉更新差分下載）。
 
 nav 十頁：聊天（預設，**專案工作區與終端機都在同一頁**）｜檔案｜CC代理（`data-page` 仍是 `ccswitch`）｜額度｜
 AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定。
@@ -100,7 +100,8 @@ src/main/
   main.js             frameless 主窗、IPC 註冊、store allowlist 與一次性遷移、單一實例鎖與系統匣
   updater.js          App 內自動更新（electron-updater ＋ GitHub Releases 的 latest.yml）；
                       結束前在 app.exit(0) 前一行靜默安裝（autoInstallOnAppQuit 對本 App 無效）；
-                      差分下載強制關閉（GitHub 只能逐段序列下載，實測比整包慢 36 倍）
+                      差分下載強制關閉（GitHub 只能逐段序列下載，實測比整包慢 36 倍）；
+                      安裝檔經 update-mirrors.js 先走代理（GitHub CDN 在 APAC 會限速）
   chat.js             雲端聊天 SSE；每個對話一條 in-flight（不同對話可併發）、雙逾時、上下文裁切、model allowlist、圖片與生圖、重新生成
   chat-params.js      每對話取樣參數（只收通用的 Temperature／Top P／Max tokens／Stop）的驗證與轉 API 欄位
   chat-title.js       第一輪回覆後 AI 自動取標題（改過名就不動）
@@ -433,6 +434,7 @@ AGY 設定、終端機、聊天、語音輸入紀錄**刻意不進** `STORE_ALLO
 | 時間 | 內容 |
 |---|---|
 | 2026-09-20 | 關掉差分下載：設定頁的更新從 ~17 分鐘降到 ~30 秒（1963 段序列 range 請求 → 一條整包）|
+| 2026-09-20 | 安裝檔改走 GitHub 鏡像：APAC 官方 CDN ~50KB/s，ghfast／gh-proxy 可到 ~30MB/s；latest.yml 仍只從 GitHub 讀 |
 | 2026-09-05 | 工作區適配 Orca 核心：分頁持久化、外部變更偵測、尋找取代、AI 會話卡片 |
 | 2026-09-04 | 用量統計徹查：修掉 Codex 子代理重播雪崩（60 份 fork 重播出 7.8 萬筆假請求）與 Grok 花費灌水 10 倍 |
 | 2026-09-04 | 使用時長（Tai 相容）、效能調整（第五、六子分頁）、App 內自動更新、使用體驗四項 |

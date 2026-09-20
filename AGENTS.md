@@ -24,7 +24,7 @@ nav：聊天（預設，**工作區與終端機同一頁**）｜檔案｜CC代�
 | AGY 反代 | Antigravity 憑證 → OpenAI／Anthropic 端點；只綁 127.0.0.1＋強制金鑰 |
 | ASR／翻譯／TTS | 本地 sherpa（CPU）／llama-server（GPU）或雲端；翻譯 local（LinguaForge）／cloud；TTS 走 Edge TTS |
 | 語音輸入 | 全域右 Alt（原生 sidecar 吞鍵）→ 錄音 → ASR → 個人字典 → LLM 整理 → 剪貼簿＋Ctrl+V，底部浮藥丸 |
-| 常駐／更新 | 關窗縮系統匣（`closeToTray`）；`updater.js` ＝ electron-updater ＋ GitHub Releases 的 `latest.yml` |
+| 常駐／更新 | 關窗縮系統匣（`closeToTray`）；`updater.js` ＝ electron-updater ＋ GitHub Releases 的 `latest.yml`（安裝檔經鏡像下載） |
 | 視覺 | Token Anxiety Aurora glass；深／淺共用 12px surface、blur；RWD 900／640px；本機字體 |
 
 模型 registry `src/main/models.js`，下載至 `%APPDATA%/voiceink/models/`。
@@ -125,6 +125,11 @@ tag 要與 `package.json` 的 version 一致。
   整包 406MB 單連線 14MB/s 只要 **28 秒**。省 185MB 流量換 36 倍時間。
   症狀是「按了更新之後進度條爬得比下載整包還慢」，而且**不會報錯**。
   回歸 `test-updater.js` 的 [B]；要重新評估時用 `probe-updater-diff.js` 拿真 blockmap 重算。
+- **安裝檔不准直接打 GitHub CDN（APAC 會限到 ~50KB/s，406MB 要一小時）**：
+  `latest.yml` 仍從 GitHub 讀（sha512 是信任根，不可走代理），`.exe` 由
+  `update-mirrors.js` 先走 `ghfast.top`／`gh-proxy.com`，官方放最後——官方慢但會成功，
+  排前面就永遠輪不到代理。下完仍由 electron-updater 對雜湊，代理換檔會失敗並試下一跳。
+  回歸 `test-updater.js` 的 [F]；代理還活著、而且比官方快，跑 `probe-updater-mirrors.js`。
 - **`electron:pack`（dir target）的預覽版永遠檢查不到更新，那不是 bug**（只有 nsis／appx 才寫 `app-update.yml`）；**不可以把 error 當成測試通過**。`autoInstallOnAppQuit` 在本 App 無效——`installOnQuit()` 要在 `app.exit(0)` 前一行。
 - CDP 腳本都吃 `VOICEINK_EXE` 環境變數。
 
@@ -549,4 +554,4 @@ tag 要與 `package.json` 的 version 一致。
 | ASR／即時字幕 | `e2e-llama-asr.js`／`e2e-asr-threads.js`／`e2e-stt-cdp.js`／`probe-cloud-asr.js`（真金鑰打真上游）；`test-vad.js` ＋ `e2e-live-pipeline.js` ＋ `e2e-live-cdp.js` |
 | 翻譯 | `probe-prompt-path.js`（prompt 逐 token）＋ `verify-chat-wrapper-fix.js` ＋ `probe-packed-local-llm.js`（動 `build.files` 前後）＋ `probe-translate-lang.js` |
 | 彈窗 | `e2e-app-dialog-cdp.js`（自己開 vite ＋ electron，**會叫到最前面**：驗確認／輸入／告知三種都是 `app-dialog` 且套到玻璃樣式、Esc 與取消回得對、節點會收掉）|
-| 跨模組 | `test-taskbar-identity.js`（工作列身分與圖示）＋ `probe-taskbar-icon.js`（量安裝好的捷徑解析得到 App 圖示；動 `build/installer.nsh` 前後跑）／`test-error-hygiene.js`（錯誤衛生）／`test-ipc-invoke.js`（IPC 外殼）／`e2e-tray-cdp.js`（常駐）／`test-updater.js` ＋ `e2e-update-cdp.js`（會連 GitHub）＋ `probe-updater-diff.js`（唯讀：拿最近兩版真 blockmap 重算差分划不划算）／`e2e-visual-cdp.js`（七頁 × 主題 × 三尺寸）／`e2e-ux-tweaks-cdp.js`（**會叫到最前面**）／`e2e-cdp-smoke.js`／`test-temp-hygiene.js`（腳本不撒暫存、沒有遞迴 rmSync）＋ `test-safe-rm.js`（junction 不被穿過，另可用 Electron 內建 Node 24 跑）＋ `test-asar-lock.js`（`npx electron`：列資料夾不鎖 `app.asar`）|
+| 跨模組 | `test-taskbar-identity.js`（工作列身分與圖示）＋ `probe-taskbar-icon.js`（量安裝好的捷徑解析得到 App 圖示；動 `build/installer.nsh` 前後跑）／`test-error-hygiene.js`（錯誤衛生）／`test-ipc-invoke.js`（IPC 外殼）／`e2e-tray-cdp.js`（常駐）／`test-updater.js` ＋ `e2e-update-cdp.js`（會連 GitHub）＋ `probe-updater-diff.js`（唯讀：拿最近兩版真 blockmap 重算差分划不划算）＋ `probe-updater-mirrors.js`（唯讀：量官方 vs 鏡像的實際 KB/s）／`e2e-visual-cdp.js`（七頁 × 主題 × 三尺寸）／`e2e-ux-tweaks-cdp.js`（**會叫到最前面**）／`e2e-cdp-smoke.js`／`test-temp-hygiene.js`（腳本不撒暫存、沒有遞迴 rmSync）＋ `test-safe-rm.js`（junction 不被穿過，另可用 Electron 內建 Node 24 跑）＋ `test-asar-lock.js`（`npx electron`：列資料夾不鎖 `app.asar`）|

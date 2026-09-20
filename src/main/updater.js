@@ -2,6 +2,7 @@
 
 /**
  * 應用程式內自動更新（electron-updater + GitHub Releases）。
+ * 安裝檔下載會經 `update-mirrors.js` 先走代理（GitHub CDN 在 APAC 會限速到幾十 KB/s）。
  *
  * 為什麼不是 Electron 內建的 autoUpdater：內建那顆在 Windows 上只吃 Squirrel.Windows，
  * 我們打的是 NSIS。electron-updater 讀的是 electron-builder 產出的 `latest.yml`
@@ -13,6 +14,7 @@
  */
 
 const { app } = require('electron')
+const { downloadWithFallback } = require('./update-mirrors')
 
 /** @typedef {'idle'|'checking'|'available'|'downloading'|'downloaded'|'none'|'error'|'unsupported'} UpdateState */
 
@@ -77,6 +79,7 @@ function get() {
     console.error('[updater] update failed')
     emit({ state: 'error', percent: 0, message: '檢查更新失敗（無法連線到 GitHub，或這個版本沒有附帶更新資訊）。' })
   })
+  downloadWithFallback(autoUpdater.httpExecutor)
   updater = autoUpdater
   return updater
 }
