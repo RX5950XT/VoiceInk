@@ -1002,7 +1002,8 @@ console.log('\n[O] workspace IPC service 接線')
     'gitStageAll',
     'gitUnstageAll',
     'listFiles',
-    'agentSessionDetail'
+    'agentSessionDetail',
+    'importDropped'
   ]
   for (const name of expected) {
     const wired = `${name}: (...args) => loadWorkspace().${name}(...args)`
@@ -1129,6 +1130,65 @@ console.log('\n[S] 拖曳搬檔 files.moveEntry')
   ok('搬到原本就在的那一層＝什麼都不做', same.rel === 'a.txt', same.rel)
 
   removeTree(dir)
+}
+
+// ===== [S2] 從外面拖進來的檔案 files.importDropped =====
+// 複製不是搬移：來源還在。撞名不覆寫，變成 `name (2).ext`。
+// 目的地一定走 resolveIn，relPath 給 `../../Windows` 要被拒絕。
+console.log('\n[S2] 從外面拖進來的檔案 files.importDropped')
+{
+  /**
+   * @param {string} label
+   * @param {() => Promise<unknown>} run
+   * @param {string} code
+   */
+  const denies = async (label, run, code) => {
+    try {
+      await run()
+      ok(label, false, '沒有擋下來')
+    } catch (error) {
+      ok(label, error && error.code === code, `code=${error && error.code}`)
+    }
+  }
+
+  const project = tempDir('vi-ws-imp-')
+  const outside = tempDir('vi-ws-imp-src-')
+  fs.mkdirSync(path.join(project, 'docs'), { recursive: true })
+  fs.writeFileSync(path.join(project, 'docs', 'notes.txt'), 'KEEP')
+  fs.writeFileSync(path.join(outside, 'notes.txt'), 'NEW')
+  fs.writeFileSync(path.join(outside, 'hello.txt'), 'hello-content')
+  fs.mkdirSync(path.join(outside, 'pack', 'sub'), { recursive: true })
+  fs.writeFileSync(path.join(outside, 'pack', 'a.txt'), 'A')
+  fs.writeFileSync(path.join(outside, 'pack', 'sub', 'b.txt'), 'B')
+
+  const copied = await files.importDropped(project, '', [path.join(outside, 'hello.txt')])
+  ok('匯入把檔案複製進專案', copied.imported === 1 && copied.rels.includes('hello.txt'), JSON.stringify(copied))
+  ok('內容一致', fs.readFileSync(path.join(project, 'hello.txt'), 'utf8') === 'hello-content')
+  ok('來源檔案還在', fs.readFileSync(path.join(outside, 'hello.txt'), 'utf8') === 'hello-content')
+
+  const clash = await files.importDropped(project, 'docs', [path.join(outside, 'notes.txt')])
+  ok('撞名變成 notes (2).txt', clash.rels.includes('docs/notes (2).txt'), JSON.stringify(clash))
+  ok('原本的 notes.txt 沒被覆寫', fs.readFileSync(path.join(project, 'docs', 'notes.txt'), 'utf8') === 'KEEP')
+  ok('新檔是外面那份', fs.readFileSync(path.join(project, 'docs', 'notes (2).txt'), 'utf8') === 'NEW')
+
+  await denies(
+    '目的地爬不出專案',
+    () => files.importDropped(project, '../../Windows', [path.join(outside, 'hello.txt')]),
+    'BAD_PATH'
+  )
+
+  const folder = await files.importDropped(project, '', [path.join(outside, 'pack')])
+  ok(
+    '資料夾遞迴複製得進去',
+    fs.readFileSync(path.join(project, 'pack', 'a.txt'), 'utf8') === 'A'
+      && fs.readFileSync(path.join(project, 'pack', 'sub', 'b.txt'), 'utf8') === 'B',
+    JSON.stringify(folder)
+  )
+  ok('來源資料夾還在', fs.existsSync(path.join(outside, 'pack', 'sub', 'b.txt')))
+  ok('資料夾算一個項目', folder.imported === 1, JSON.stringify(folder))
+
+  removeTree(project)
+  removeTree(outside)
 }
 
 // ===== [T] git worktree =====

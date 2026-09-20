@@ -65,6 +65,9 @@ function registerWorkspaceIpc({ ipcMain, service, isMainSender, dialog, getWindo
   ipcMain.handle('workspace:moveEntry', (event, id, fromRel, toRelDir) => (
     invoke(event, () => service.moveEntry(id, fromRel, toRelDir))
   ))
+  ipcMain.handle('workspace:importDropped', (event, id, relDir, paths) => (
+    invoke(event, () => service.importDropped(id, relDir, paths))
+  ))
   ipcMain.handle('workspace:renameEntry', (event, id, relPath, name) => (
     invoke(event, () => service.renameEntry(id, relPath, name))
   ))

@@ -1785,6 +1785,7 @@ registerWorkspaceIpc({
     createEntry: (...args) => loadWorkspace().createEntry(...args),
     renameEntry: (...args) => loadWorkspace().renameEntry(...args),
     moveEntry: (...args) => loadWorkspace().moveEntry(...args),
+    importDropped: (...args) => loadWorkspace().importDropped(...args),
     removeEntry: (...args) => loadWorkspace().removeEntry(...args),
     searchFiles: (...args) => loadWorkspace().searchFiles(...args),
     listFiles: (...args) => loadWorkspace().listFiles(...args),
