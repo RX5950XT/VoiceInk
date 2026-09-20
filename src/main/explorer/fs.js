@@ -11,9 +11,22 @@ const paths = require('./paths')
 const recycle = require('./recycle')
 
 const MAX_ENTRIES = 2000
+/** 為排序去 stat 的硬上限；超過就先砍再排。本機 10000 筆約 0.8s，20000 會超過 1.5s。 */
+const MAX_STAT = 10000
+const STAT_CONCURRENCY = 64
 const MAX_READ_BYTES = 2 * 1024 * 1024
 const MAX_TEXT_BYTES = 8 * 1024
 const SORT_KEYS = new Set(['name', 'date', 'size'])
+const HIDDEN_NAMES = new Set([
+  '$recycle.bin',
+  'system volume information',
+  'desktop.ini',
+  'thumbs.db',
+  'pagefile.sys',
+  'hiberfil.sys',
+  'swapfile.sys',
+  'ntuser.ini'
+])
 const TEXT_EXT = new Set([
   'txt', 'md', 'json', 'js', 'mjs', 'cjs', 'css', 'html', 'htm', 'xml',
   'csv', 'log', 'ini', 'cfg', 'yml', 'yaml', 'ps1', 'bat', 'cmd', 'svg'
@@ -61,9 +74,47 @@ function imageMime(full) {
 }
 
 /**
+ * Windows 檔案總管預設會藏的名字（啟發式；Node 讀不到 FILE_ATTRIBUTE_HIDDEN）。
+ * @param {unknown} name
+ * @returns {boolean}
+ */
+function isHiddenName(name) {
+  const s = String(name || '')
+  if (!s) return false
+  if (s.startsWith('.')) return true
+  const lower = s.toLowerCase()
+  if (HIDDEN_NAMES.has(lower)) return true
+  return lower.startsWith('ntuser.dat')
+}
+
+/**
+ * @template T, R
+ * @param {T[]} items
+ * @param {number} limit
+ * @param {(item: T) => Promise<R>} fn
+ * @returns {Promise<R[]>}
+ */
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length)
+  let next = 0
+  async function worker() {
+    while (next < items.length) {
+      const i = next
+      next += 1
+      out[i] = await fn(items[i])
+    }
+  }
+  const n = Math.max(1, Math.min(limit, items.length || 1))
+  const workers = []
+  for (let w = 0; w < n; w++) workers.push(worker())
+  await Promise.all(workers)
+  return out
+}
+
+/**
  * @param {fs.Dirent} dirent
  * @param {string} full
- * @returns {Promise<{ name: string, path: string, dir: boolean, size: number, mtimeMs: number, ext: string }>}
+ * @returns {Promise<{ name: string, path: string, dir: boolean, size: number, mtimeMs: number, ext: string, hidden: boolean }>}
  */
 async function statEntry(dirent, full) {
   let dir = dirent.isDirectory()
@@ -94,7 +145,8 @@ async function statEntry(dirent, full) {
     link,
     size,
     mtimeMs,
-    ext: dir ? '' : path.extname(dirent.name).slice(1).toLowerCase()
+    ext: dir ? '' : path.extname(dirent.name).slice(1).toLowerCase(),
+    hidden: isHiddenName(dirent.name)
   }
 }
 
@@ -110,11 +162,12 @@ function isIntoSelf(from, dir) {
 
 /**
  * @param {unknown} raw
- * @returns {{ by: 'name'|'date'|'size', desc: boolean }}
+ * @returns {{ by: 'name'|'date'|'size', desc: boolean, showHidden: boolean }}
  */
 function sanitizeSort(raw) {
-  const by = raw && typeof raw === 'object' && SORT_KEYS.has(raw.sort) ? raw.sort : 'name'
-  return { by, desc: Boolean(raw && typeof raw === 'object' && raw.desc) }
+  const obj = raw && typeof raw === 'object' ? raw : {}
+  const by = SORT_KEYS.has(obj.sort) ? obj.sort : 'name'
+  return { by, desc: Boolean(obj.desc), showHidden: obj.showHidden === true }
 }
 
 /**
@@ -180,6 +233,7 @@ function withTimeout(promise, ms) {
 
 async function listDir(dirPath, rawOpts) {
   const full = paths.resolveAbs(dirPath)
+  const opts = sanitizeSort(rawOpts)
   let dirents
   try {
     const read = fsp.readdir(full, { withFileTypes: true })
@@ -187,12 +241,17 @@ async function listDir(dirPath, rawOpts) {
   } catch {
     throw paths.fail('READ_FAILED', '讀不到這個資料夾')
   }
-  const slice = dirents.slice(0, MAX_ENTRIES)
-  const entries = await Promise.all(slice.map((d) => statEntry(d, path.join(full, d.name))))
+  const visible = opts.showHidden ? dirents : dirents.filter((d) => !isHiddenName(d.name))
+  const overStat = visible.length > MAX_STAT
+  const toStat = overStat ? visible.slice(0, MAX_ENTRIES) : visible
+  const entries = await mapLimit(toStat, STAT_CONCURRENCY, (d) => (
+    statEntry(d, path.join(full, d.name))
+  ))
+  const sorted = sortEntries(entries, opts)
   return {
     path: full,
-    entries: sortEntries(entries, sanitizeSort(rawOpts)),
-    truncated: dirents.length > MAX_ENTRIES
+    entries: overStat ? sorted : sorted.slice(0, MAX_ENTRIES),
+    truncated: visible.length > MAX_ENTRIES
   }
 }
 
@@ -535,9 +594,11 @@ async function copyEntry(fromPath, toDir) {
 
 module.exports = {
   MAX_ENTRIES,
+  MAX_STAT,
   MAX_READ_BYTES,
   IMAGE_MIME,
   SORT_KEYS,
+  isHiddenName,
   sanitizeSort,
   sortEntries,
   uniqueDest,

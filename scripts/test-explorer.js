@@ -264,6 +264,83 @@ console.log('\n[H] 排序是 listDir 的真實轉換（資料夾在前）')
   removeTree(dir)
 }
 
+console.log('\n[H2] 大於 MAX_ENTRIES 時先全資料夾排序再截斷')
+{
+  const dir = tempDir('vi-ex-trunc-')
+  const n = files.MAX_ENTRIES + 100
+  for (let i = 0; i < n; i++) {
+    fs.writeFileSync(path.join(dir, `n${String(i).padStart(4, '0')}.txt`), 'x')
+  }
+  const bigName = 'zzzz-big.bin'
+  fs.writeFileSync(path.join(dir, bigName), Buffer.alloc(64 * 1024))
+  const order = fs.readdirSync(dir)
+  const bigIdx = order.indexOf(bigName)
+  ok(
+    '大檔在 readdir 第 MAX_ENTRIES 筆之後',
+    bigIdx >= files.MAX_ENTRIES,
+    `idx=${bigIdx} total=${order.length}`
+  )
+  const listed = await files.listDir(dir, { sort: 'size', desc: true })
+  const first = listed.entries.find((e) => !e.dir)
+  ok(
+    '按大小排序的第一筆是整個資料夾裡最大的',
+    Boolean(first && first.name === bigName),
+    first ? first.name : 'empty'
+  )
+  ok('超過上限要標 truncated', listed.truncated === true)
+  ok('回傳不超過 MAX_ENTRIES', listed.entries.length === files.MAX_ENTRIES)
+  removeTree(dir)
+}
+
+console.log('\n[H3] 隱藏項目啟發式與 showHidden')
+{
+  ok('isHiddenName 是函式', typeof files.isHiddenName === 'function')
+  const hiddenFn = typeof files.isHiddenName === 'function' ? files.isHiddenName : () => false
+  ok('isHiddenName .git', hiddenFn('.git') === true)
+  ok('isHiddenName $RECYCLE.BIN', hiddenFn('$RECYCLE.BIN') === true)
+  ok('isHiddenName NTUSER.DAT.LOG1', hiddenFn('NTUSER.DAT.LOG1') === true)
+  ok('isHiddenName desktop.ini', hiddenFn('desktop.ini') === true)
+  ok('isHiddenName a.txt', hiddenFn('a.txt') === false)
+  ok('isHiddenName 專案.md', hiddenFn('專案.md') === false)
+  ok('isHiddenName node_modules', hiddenFn('node_modules') === false)
+
+  const dir = tempDir('vi-ex-hidden-')
+  fs.writeFileSync(path.join(dir, 'a.txt'), 'x')
+  fs.writeFileSync(path.join(dir, '專案.md'), 'x')
+  fs.mkdirSync(path.join(dir, 'node_modules'))
+  fs.mkdirSync(path.join(dir, '.git'))
+  fs.mkdirSync(path.join(dir, '$RECYCLE.BIN'))
+  fs.writeFileSync(path.join(dir, 'desktop.ini'), 'x')
+  fs.writeFileSync(path.join(dir, 'NTUSER.DAT.LOG1'), 'x')
+
+  const hiddenOff = await files.listDir(dir)
+  const offNames = hiddenOff.entries.map((e) => e.name)
+  ok('showHidden false 濾掉 .git', !offNames.includes('.git'))
+  ok('showHidden false 濾掉 $RECYCLE.BIN', !offNames.includes('$RECYCLE.BIN'))
+  ok('showHidden false 濾掉 desktop.ini', !offNames.includes('desktop.ini'))
+  ok('showHidden false 濾掉 NTUSER.DAT.LOG1', !offNames.includes('NTUSER.DAT.LOG1'))
+  ok('showHidden false 留下 a.txt', offNames.includes('a.txt'))
+  ok('showHidden false 留下 專案.md', offNames.includes('專案.md'))
+  ok('showHidden false 留下 node_modules', offNames.includes('node_modules'))
+  ok(
+    '預設不帶 hidden 的項目 hidden=false',
+    hiddenOff.entries.every((e) => e.hidden === false),
+    hiddenOff.entries.map((e) => `${e.name}:${e.hidden}`).join(',')
+  )
+
+  const hiddenOn = await files.listDir(dir, { showHidden: true })
+  const onNames = hiddenOn.entries.map((e) => e.name)
+  ok('showHidden true 留 .git', onNames.includes('.git'))
+  ok('showHidden true 留 $RECYCLE.BIN', onNames.includes('$RECYCLE.BIN'))
+  ok('showHidden true 留 desktop.ini', onNames.includes('desktop.ini'))
+  ok('showHidden true 留 NTUSER.DAT.LOG1', onNames.includes('NTUSER.DAT.LOG1'))
+  const git = hiddenOn.entries.find((e) => e.name === '.git')
+  const visible = hiddenOn.entries.find((e) => e.name === 'a.txt')
+  ok('.git 帶 hidden:true', Boolean(git && git.hidden === true))
+  ok('a.txt 帶 hidden:false', Boolean(visible && visible.hidden === false))
+  removeTree(dir)
+}
+
 console.log('\n[I] 預設刪除進資源回收筒，可還原；永久刪除是另一支')
 {
   ok('回收筒是虛擬位置不是 UNC', recycle.RECYCLE_CWD === 'recyclebin' && recycle.isRecyclePath('recyclebin'))
