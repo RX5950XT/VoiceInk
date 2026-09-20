@@ -114,8 +114,9 @@ const BUILTIN_PRICES = {
   'grok-4.5': { input: 2, output: 6, cacheRead: 0.3, cacheWrite: 0, cacheWrite1h: 0 },
   'grok-4.3': { input: 1.25, output: 2.5, cacheRead: 0.125, cacheWrite: 0, cacheWrite1h: 0 },
   // Google（ai.google.dev/gemini-api/docs/pricing，2026-09 查證；
-  // 3.7／3.6 Flash 現在是introductory 價，2027-01-01 起翻倍）。
+  // 3.8／3.7／3.6 Flash 現在是 introductory 價，2027-01-01 起翻倍）。
   // 顯式快取是按「存多久」收錢、不是按寫入 token，所以這裡的寫入價是 0
+  'gemini-3.8-flash': { input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0, cacheWrite1h: 0 },
   'gemini-3.7-flash': { input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0, cacheWrite1h: 0 },
   'gemini-3.6-flash': { input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0, cacheWrite1h: 0 },
   'gemini-3.5-flash': { input: 1.5, output: 9, cacheRead: 0.15, cacheWrite: 0, cacheWrite1h: 0 },
@@ -130,7 +131,10 @@ const BUILTIN_PRICES = {
   'deepseek-chat': { input: 0.14, output: 0.28, cacheRead: 0.014, cacheWrite: 0, cacheWrite1h: 0 },
   'deepseek-reasoner': { input: 0.55, output: 2.19, cacheRead: 0.14, cacheWrite: 0, cacheWrite1h: 0 },
   'deepseek-r1': { input: 0.55, output: 2.19, cacheRead: 0.14, cacheWrite: 0, cacheWrite1h: 0 },
-  // Moonshot / Kimi 官方公開報價
+  // Moonshot / Kimi 官方公開報價（platform.kimi.ai/docs/pricing/chat，2026-09 查證）。
+  // K3 的 5 分鐘快取寫入＝input（不是 Anthropic 的 ×1.25），1 小時＝input × 2；
+  // 不寫死的話 costOf 會用 Anthropic 規則把 5m 寫入灌成 $3.75。
+  'kimi-k3': { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3, cacheWrite1h: 6 },
   'kimi-k2.6': { input: 0.6, output: 2.4, cacheRead: 0.15, cacheWrite: 0, cacheWrite1h: 0 },
   // 阿里雲通義千問 Qwen 官方公開報價
   'qwen-2.5-coder-32b': { input: 0.2, output: 0.6, cacheRead: 0.02, cacheWrite: 0, cacheWrite1h: 0 },
@@ -231,17 +235,35 @@ function priceFor(model, custom = {}) {
  * @returns {number | null}
  */
 function costOf(usage, price) {
+  const parts = costParts(usage, price)
+  if (!parts) return null
+  return parts.input + parts.output + parts.cacheRead + parts.cacheWrite
+}
+
+/**
+ * 把一筆用量拆成輸入／輸出／快取讀／快取寫四格錢。
+ *
+ * Claude Code 長對話的用量可能以快取讀取為主，
+ * 只給一個總額會讓人以為「Opus 單價算錯了」。沒有單價回 null。
+ *
+ * @param {{ input?: number, output?: number, cacheRead?: number, cacheWrite?: number,
+ *           cacheWrite1h?: number }} usage
+ * @param {Price | null} price
+ * @returns {{ input: number, output: number, cacheRead: number, cacheWrite: number } | null}
+ */
+function costParts(usage, price) {
   if (!price) return null
   const cacheWrite = Number.isFinite(price.cacheWrite) ? price.cacheWrite : price.input * 1.25
   // 1h 快取是 5m 的 1.6 倍（input × 2 ÷ input × 1.25）。使用者只填得起一格 5m 價時用它推
   const cacheWrite1h = Number.isFinite(price.cacheWrite1h) ? price.cacheWrite1h : cacheWrite * 1.6
   const cacheRead = Number.isFinite(price.cacheRead) ? price.cacheRead : price.input * 0.1
-  const total = (usage.input || 0) * price.input
-    + (usage.output || 0) * price.output
-    + (usage.cacheWrite || 0) * cacheWrite
-    + (usage.cacheWrite1h || 0) * cacheWrite1h
-    + (usage.cacheRead || 0) * cacheRead
-  return total / PER_TOKENS
+  const u = usage || {}
+  return {
+    input: (u.input || 0) * price.input / PER_TOKENS,
+    output: (u.output || 0) * price.output / PER_TOKENS,
+    cacheRead: (u.cacheRead || 0) * cacheRead / PER_TOKENS,
+    cacheWrite: ((u.cacheWrite || 0) * cacheWrite + (u.cacheWrite1h || 0) * cacheWrite1h) / PER_TOKENS
+  }
 }
 
 /**
@@ -313,6 +335,7 @@ module.exports = {
   isJunkModel,
   priceFor,
   costOf,
+  costParts,
   sanitizeCustomPrices,
   priceList
 }

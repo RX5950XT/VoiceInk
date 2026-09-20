@@ -71,7 +71,7 @@ function Open-PhysicalDrive([int]$n) {
 }
 
 # STORAGE_PROPERTY_QUERY(8) + STORAGE_PROTOCOL_SPECIFIC_DATA(40) + 資料區。
-# propId 49=StorageDeviceProtocolSpecificProperty、50=StorageAdapterProtocolSpecificProperty。
+# Windows SDK：49=StorageAdapterProtocolSpecificProperty、50=StorageDeviceProtocolSpecificProperty。
 function Get-NvmeBlock([IntPtr]$h, [uint32]$propId, [uint32]$dataType, [uint32]$reqVal, [int]$len) {
   $hdr = 8
   $psd = 40
@@ -129,6 +129,7 @@ function Emit-Smart($add, $indexes) {
       $h = Open-PhysicalDrive $n
       if ($h -eq [IntPtr]::Zero) { continue }
 
+      # SMART 走裝置屬性 50；Identify Controller 走轉接器屬性 49。
       $log = Get-NvmeBlock $h 50 2 2 512
       if ($null -ne $log) {
         $idc = Get-NvmeBlock $h 49 1 1 4096

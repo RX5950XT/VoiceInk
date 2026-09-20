@@ -5,6 +5,15 @@
 - [x] 玻璃選單合併殼層項（去重 App 自己的開啟／剪下複製）
 - [x] 可見列圖示走疊好的殼層圖（Drive 綠勾）；沒 sidecar 降級
 - [x] 驗證：`test-explorer-shell.js` 26/0、`test-explorer.js` 186/0；probe 看到 WinRAR／7-Zip／傳送到；Drive `學校的資料` overlay 槽 14、PNG 2038 bytes
+# 2026-09-20 — 用量單價、Claude Opus 計價、多硬碟排版
+
+工作樹：`D:\\Workspace\\Personal_Project\\VoiceInk-usage-sysmon`（分支 `feat/usage-sysmon`）
+
+- [x] Gemini 3.8 Flash、Kimi K3 公開單價（測試先紅再綠）
+- [x] Claude Opus：核對本機 jsonl（去重後快取讀佔大宗，不是重複加總）；補花費拆帳讓畫面看得出為什麼貴
+- [x] 系統監控：虛擬磁區（Google Drive）不進容量總計；多顆實體碟各一卡；磁碟計數器繞回不做差值
+- [x] `test-code-usage.js` 158/0、`test-sysmon.js` 188/0、`e2e-sysmon.js` 63/0、`e2e-code-usage.js` 16/0
+  未做：`electron:pack` 與打包版 CDP（在工作樹裡改，預覽請用 `npm run dev:sandbox`）
 
 # 2026-09-20 — 合併前審查（上一輪未提交的 34 檔）
 

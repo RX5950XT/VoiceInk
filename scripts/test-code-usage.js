@@ -117,6 +117,28 @@ console.log('\n[A] 模型正規化與單價')
   ok('claude-3.7-sonnet 內建單價正確', pricing.priceFor('claude-3.7-sonnet')?.input === 3)
   ok('deepseek-v4-pro 內建單價正確', pricing.priceFor('deepseek-v4-pro')?.input === 0.27)
   ok('kimi-k2.6 內建單價正確', pricing.priceFor('kimi-k2.6')?.input === 0.6)
+  const g38 = pricing.priceFor('gemini-3.8-flash')
+  ok('gemini-3.8-flash 內建單價（introductory）', g38?.input === 0.75 && g38?.output === 3.75 && g38?.cacheRead === 0.075)
+  ok('gemini-3.8-flash 顯式快取不收寫入費', g38?.cacheWrite === 0 && g38?.cacheWrite1h === 0)
+  ok('gemini-3.8-flash-high 合併到同一顆', pricing.normalizeModel('gemini-3.8-flash-high') === 'gemini-3.8-flash')
+  const k3 = pricing.priceFor('kimi-k3')
+  ok('kimi-k3 內建單價', k3?.input === 3 && k3?.output === 15 && k3?.cacheRead === 0.3)
+  ok('kimi-k3 快取寫入是官方 5m=$3／1h=$6，不是 Anthropic 的 1.25 倍',
+    k3?.cacheWrite === 3 && k3?.cacheWrite1h === 6)
+  ok('kimi-k3:cloud 收斂成 kimi-k3', pricing.normalizeModel('kimi-k3:cloud') === 'kimi-k3')
+  const opusTurn = { input: 2, output: 167, cacheRead: 68308, cacheWrite: 0, cacheWrite1h: 1019 }
+  const opusParts = pricing.costParts(opusTurn, opus)
+  ok('典型 Opus 回合有花費拆帳', Boolean(opusParts))
+  ok('典型 Opus 回合快取讀遠大於輸入（不是把 cache 算成 input）',
+    opusParts && opusParts.cacheRead > opusParts.input * 50,
+    opusParts ? JSON.stringify(opusParts) : 'no parts')
+  const opusSum = opusParts
+    ? opusParts.input + opusParts.output + opusParts.cacheRead + opusParts.cacheWrite
+    : 0
+  ok('花費拆帳加總等於 costOf',
+    Boolean(opusParts) && Math.abs(opusSum - pricing.costOf(opusTurn, opus)) < 1e-9,
+    String(opusSum))
+  ok('沒有單價時拆帳也是 null', pricing.costParts(opusTurn, null) === null)
   ok('priceList 支援 extraModels', pricing.priceList({}, ['custom-model-x']).some((m) => m.model === 'custom-model-x' && m.source === 'none'))
 
   // 桶子存的是正規化後的名字，規則改過的話舊桶子掛在舊 key 上、增量掃描碰不到，
