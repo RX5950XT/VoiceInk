@@ -44,6 +44,14 @@ function get() {
   if (updater) return updater
   const { autoUpdater } = require('electron-updater')
   autoUpdater.autoDownload = autoEnabled
+  // 差分下載在這個 App 上是**反向優化**，一定要關（實測 v1.22.0 → v1.23.0）：
+  // blockmap 把 406MB 的安裝檔切成 2 萬塊，比對後仍有 1963 段要下載（220MB），
+  // 而 electron-updater 在 GitHub 上走的是「一段一個 HTTP request、完全序列」那條
+  // （GitHub 不支援 multipart range，`providerFactory` 寫死 isUseMultipleRangeRequest: false），
+  // 還每 100 段強制 sleep 1 秒。實測每段 115KB 的 range 請求 506ms ＝ 約 17 分鐘，
+  // 而整包 406MB 單連線 14MB/s 只要 28 秒。省下的 185MB 流量換來 36 倍的時間，
+  // 這就是「設定頁更新很慢」的根因。重新評估跑 scripts/probe-updater-diff.js。
+  autoUpdater.disableDifferentialDownload = true
   // 交給 main.js 的 before-quit 處理（見檔頭）
   autoUpdater.autoInstallOnAppQuit = false
   autoUpdater.on('checking-for-update', () => emit({ state: 'checking', message: '正在檢查更新…', percent: 0 }))
