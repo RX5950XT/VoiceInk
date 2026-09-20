@@ -53,6 +53,11 @@ function registerExplorerIpc({ ipcMain, service, isMainSender }) {
   ))
   ipcMain.handle('explorer:openPath', (event, target) => invoke(event, () => service.openPath(target)))
   ipcMain.handle('explorer:fileIcon', (event, target) => invoke(event, () => service.fileIcon(target)))
+  ipcMain.handle('explorer:shellMenu', (event, spec) => invoke(event, () => service.shellMenu(spec)))
+  ipcMain.handle('explorer:shellInvoke', (event, token, cmd, dir) => (
+    invoke(event, () => service.shellInvoke(token, cmd, dir))
+  ))
+  ipcMain.handle('explorer:shellRelease', (event, token) => invoke(event, () => service.shellRelease(token)))
   ipcMain.handle('explorer:reveal', (event, target) => invoke(event, () => service.reveal(target)))
   ipcMain.handle('explorer:setClipboard', (event, items, mode) => (
     invoke(event, () => service.setClipboard(items, mode))

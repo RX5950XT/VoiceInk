@@ -1,3 +1,20 @@
+# 2026-09-20 — 檔案總管殼層選單 ＋ Google Drive 綠勾
+
+- [x] sidecar：`IContextMenu` 讀 7-Zip／WinRAR／傳送到；overlay 改 `SHGFI_ADDOVERLAYS`
+- [x] 「傳送到」空選單：`CMF_SYNCCASCADEMENU` ＋ IContextMenu3 沒填再退 IContextMenu2
+- [x] 玻璃選單合併殼層項（去重 App 自己的開啟／剪下複製）
+- [x] 可見列圖示走疊好的殼層圖（Drive 綠勾）；沒 sidecar 降級
+- [x] 驗證：`test-explorer-shell.js` 26/0、`test-explorer.js` 186/0；probe 看到 WinRAR／7-Zip／傳送到；Drive `學校的資料` overlay 槽 14、PNG 2038 bytes
+# 2026-09-20 — 用量單價、Claude Opus 計價、多硬碟排版
+
+工作樹：`D:\\Workspace\\Personal_Project\\VoiceInk-usage-sysmon`（分支 `feat/usage-sysmon`）
+
+- [x] Gemini 3.8 Flash、Kimi K3 公開單價（測試先紅再綠）
+- [x] Claude Opus：核對本機 jsonl（去重後快取讀佔大宗，不是重複加總）；補花費拆帳讓畫面看得出為什麼貴
+- [x] 系統監控：虛擬磁區（Google Drive）不進容量總計；多顆實體碟各一卡；磁碟計數器繞回不做差值
+- [x] `test-code-usage.js` 158/0、`test-sysmon.js` 188/0、`e2e-sysmon.js` 63/0、`e2e-code-usage.js` 16/0
+  未做：`electron:pack` 與打包版 CDP（在工作樹裡改，預覽請用 `npm run dev:sandbox`）
+
 # 2026-09-20 — 合併前審查（上一輪未提交的 34 檔）
 
 - [x] 逐模組審查未提交變更（終端機／HF／系統監控／檔案總管／文件）
@@ -233,6 +250,18 @@ Review（2026-09-20）：
 - `node scripts/e2e-explorer-cdp.js`：舊包先在真實 .lnk 解析失敗；新包 44 項 PASS。真實 Windows .lnk 在目前分頁開啟，檔案圖示在 list/grid 均載入，CDP `Input.dispatchMouseEvent` back/forward/back 保留 App 網址，分頁與深淺／窄版回歸全過。
 - 截圖改用既有 workspace 探針的 `capturePage({ stayHidden, stayAwake })` 方式，解決隱藏視窗 CDP 截圖等待；圖片在 `dist/explorer-tabs-qa/icons-list.png`／`icons-grid.png`。
 - 邊界：未操作實體滑鼠；程式／一般檔案捷徑仍沿用原捷徑開啟，以保留啟動參數。未提交、合併或發行，未改使用者安裝版與主工作樹。
+
+## 2026-09-20 工作區：執行腳本、瀏覽器、Git 面板、diff 切換
+
+- [x] 1 檔案樹可以執行檔案：`.exe`／`.lnk` 走 `shell.openPath`；`.cmd`／`.ps1` 開終端機跑；`.js`／`.py` 仍開編輯器
+- [x] 2 內建瀏覽器補上：每個分頁一顆 webview（各自歷史與捲動）、上一頁／下一頁／停止、載入中、錯誤頁、devtools、快捷鍵
+- [x] 3 Git 面板：動作鈕跟著側欄寬度換行（180px 也不疊字）；最近提交可展開看變更檔案
+- [x] 4 檢視變更不新開分頁：同一個檔案在「編輯 ⇄ 變更」之間就地切換
+- [x] 5 回歸：test-workspace.js（parseLog 帶檔案清單）、test-workspace-ui.js（版面／切換契約）
+
+Review：工作在 `.claude/worktrees/ws-browser-git-exec`（分支 `worktree-ws-browser-git-exec`），尚未合併、尚未 `electron:pack`。
+`node scripts/test-workspace.js` 260/0；`node scripts/test-workspace-ui.js` 176/0。
+`.js`／`.py` 點下去仍開編輯器（右鍵才跑）；`.cmd`／`.ps1` 點下去會開終端機，要改內容走右鍵「開啟」。
 
 # 2026-09-20 — 三工作樹驗收與整合
 

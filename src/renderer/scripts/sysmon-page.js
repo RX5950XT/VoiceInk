@@ -491,6 +491,252 @@ function smartRows(sm) {
 }
 
 /**
+ * 效能計數器的磁碟名是「實體碟序號 + 第一個分割區代號」（`0 C:`）。
+ * @param {string} name
+ * @returns {string}
+ */
+function diskIndexOf(name) {
+  return /^(\d+)\s/.exec(name || '')?.[1] ?? ''
+}
+
+/**
+ * @param {string} idx
+ * @param {any} pdisk
+ * @param {any} sensors
+ * @param {any[]} liveTemps
+ * @returns {number|null}
+ */
+function diskTempOf(idx, pdisk, sensors, liveTemps) {
+  const temps = (sensors?.groups || [])
+    .filter((hw) => hw.t === 'Storage' && hw.n === pdisk?.name)
+    .flatMap((hw) => (hw.s || []).filter((x) => x.t === 'Temperature' && /Temperature$/.test(x.n)))
+  const live = (liveTemps || []).find((t) => t.id === idx)
+  if (temps.length) return Math.max(...temps.map((x) => x.v))
+  return live ? live.tempC : null
+}
+
+/**
+ * 儲存區塊。一顆碟維持一張總卡；兩顆以上改成總覽 + 每碟一卡（跟 GPU 同一套 span）。
+ * 虛擬磁區（Google Drive 那種）不進容量總計。
+ * @param {any} s
+ * @param {any} inv
+ * @param {any} sensors
+ * @returns {any[]}
+ */
+function describeStorage(s, inv, sensors) {
+  const disks = s.disks || []
+  const totalRow = disks.find((d) => d.name === '_Total')
+  const read = totalRow ? totalRow.read : disks.reduce((n, d) => n + d.read, 0)
+  const write = totalRow ? totalRow.write : disks.reduce((n, d) => n + d.write, 0)
+  const vols = inv?.volumes || []
+  const pdisks = inv?.physicalDisks || []
+  const smart = inv?.smart || []
+  const liveTemps = s.driveTemps || []
+  const realVols = vols.filter((v) => !v.virtual)
+  const virtVols = vols.filter((v) => v.virtual)
+  const rawTotal = pdisks.reduce((n, d) => n + d.size, 0)
+  const volTotal = realVols.reduce((n, v) => n + v.size, 0)
+  const volFree = realVols.reduce((n, v) => n + v.free, 0)
+  const diskRows = disks
+    .filter((d) => d.name !== '_Total')
+    .map((d) => {
+      const idx = diskIndexOf(d.name)
+      const pdisk = pdisks.find((p) => p.id === idx)
+      const drive = (d.name.match(/([A-Z]:)/) || [])[1] || ''
+      return {
+        name: d.name,
+        idx,
+        pdisk,
+        label: pdisk ? `${pdisk.name}${drive ? `（${drive}）` : ''}` : (d.name || '磁碟'),
+        read: d.read,
+        write: d.write,
+        temp: diskTempOf(idx, pdisk, sensors, liveTemps)
+      }
+    })
+  const RANK = { bad: 2, caution: 1, good: 0 }
+  const worst = smart.reduce((acc, x) => (
+    !acc || RANK[x.health?.level] > RANK[acc.health?.level] ? x : acc
+  ), null)
+  const maxTemp = diskRows.reduce((n, d) => (d.temp != null ? Math.max(n, d.temp) : n), 0)
+  const maxHours = smart.reduce((n, x) => Math.max(n, x.powerOnHours), 0)
+  const totalWritten = smart.reduce((n, x) => n + x.bytesWritten, 0)
+  const many = pdisks.length > 1
+  const volumeGroup = (list, title) => list.length ? {
+    title,
+    rows: list.map((v) => {
+      const host = pdisks.find((p) => p.id === v.diskId)
+      return [
+        `${v.drive} ${v.label || ''}`.trim(),
+        [
+          `${fmtBytes(v.size - v.free)} 已用 / ${fmtBytes(v.size)}`,
+          v.size > 0 ? `可用 ${fmtBytes(v.free)}（${((v.free / v.size) * 100).toFixed(0)}%）` : '',
+          v.fileSystem,
+          host ? host.name : '虛擬／網路磁碟'
+        ].filter(Boolean).join(' · ')
+      ]
+    })
+  } : null
+
+  const summary = {
+    id: 'storage',
+    span: 2,
+    title: '儲存',
+    accent: 'var(--accent-hover)',
+    sub: pdisks.length ? pdisks.map((d) => d.name).join('、') : '偵測中…',
+    value: null,
+    valueText: read + write >= 1024 ? fmtRate(read + write) : '閒置',
+    spark: { key: 'disk', value: read + write, max: 0 },
+    stats: [
+      ['總讀取', fmtRate(read)],
+      ['總寫入', fmtRate(write)],
+      ['實體硬碟', String(pdisks.length || diskRows.length || 0)]
+    ],
+    viz: {
+      kind: 'meters',
+      label: '各硬碟讀寫速率',
+      items: diskRows.map((d) => ({
+        label: d.label,
+        value: d.read + d.write,
+        max: Math.max(1024, ...diskRows.map((x) => x.read + x.write)),
+        text: `讀 ${fmtRate(d.read)}　寫 ${fmtRate(d.write)}${d.temp != null ? `　${d.temp.toFixed(0)} °C` : ''}`
+      }))
+    },
+    specs: [
+      ['實體磁碟', pdisks.length ? `${pdisks.length} 顆` : DASH],
+      ['磁碟區', realVols.length ? `${realVols.length} 個` : DASH],
+      ['硬體總容量', rawTotal ? fmtBytes(rawTotal) : DASH],
+      ['磁碟區總容量', volTotal ? fmtBytes(volTotal) : DASH],
+      ['磁碟區已用', volTotal ? `${fmtBytes(volTotal - volFree)}（${(((volTotal - volFree) / volTotal) * 100).toFixed(1)}%）` : DASH],
+      ['磁碟區可用', volTotal ? fmtBytes(volFree) : DASH],
+      ['健康狀態', worst ? `${HEALTH_TEXT[worst.health?.level] || DASH}${worst.health?.reason ? `（${worst.health.reason}）` : ''}` : DASH],
+      ['最高溫度', maxTemp ? `${maxTemp.toFixed(0)} °C` : DASH],
+      ['最長通電時數', fmtHours(maxHours) || DASH],
+      ['累計寫入量', totalWritten ? fmtBytes(totalWritten) : DASH],
+      ['目前讀取', fmtRate(read)],
+      ['目前寫入', fmtRate(write)]
+    ],
+    groups: [
+      {
+        title: '各硬碟即時速率',
+        rows: diskRows.map((d) => [d.label, [
+          `讀 ${fmtRate(d.read)}`,
+          `寫 ${fmtRate(d.write)}`,
+          d.temp != null ? `${d.temp.toFixed(0)} °C` : ''
+        ].filter(Boolean).join(' · ')])
+      },
+      {
+        title: '實體磁碟',
+        rows: pdisks.map((d) => [d.name, [
+          d.mediaType, d.busType, fmtBytes(d.size),
+          d.partitionStyle, d.isBoot ? '開機碟' : '',
+          d.partitions > 0 ? `${d.partitions} 個分割區` : '',
+          d.spindleRpm > 0 ? `${d.spindleRpm} RPM` : '',
+          d.logicalSector > 0 ? `磁區 ${d.logicalSector}B/${d.physicalSector}B` : '',
+          d.firmware ? `韌體 ${d.firmware}` : '',
+          d.fruId || d.adapterSerial || d.serial ? `序號 ${d.fruId || d.adapterSerial || d.serial}` : '',
+          d.location || '',
+          d.health === 'Healthy' ? '健康' : d.health
+        ].filter(Boolean).join(' · ')])
+      },
+      ...(!many ? smart.map((sm) => {
+        const owner = pdisks.find((p) => p.id === sm.id)
+        return { title: `S.M.A.R.T.｜${owner?.name || `磁碟 ${sm.id}`}`, rows: smartRows(sm) }
+      }) : []),
+      ...(!many ? smart.filter((sm) => sm.attributes.length).map((sm) => {
+        const owner = pdisks.find((p) => p.id === sm.id)
+        return {
+          title: `S.M.A.R.T. 屬性｜${owner?.name || `磁碟 ${sm.id}`}`,
+          rows: sm.attributes.map((a) => [
+            `${a.id} ${a.name}`,
+            `目前 ${a.current} · 最差 ${a.worst}${a.threshold > 0 ? ` · 門檻 ${a.threshold}` : ''} · 原始值 ${fmtNum(a.raw)}`
+          ])
+        }
+      }) : []),
+      volumeGroup(realVols, '磁碟區'),
+      volumeGroup(virtVols, '虛擬／雲端磁碟區')
+    ].filter((g) => g && g.rows.length)
+  }
+
+  const blocks = [summary]
+  if (!many) return blocks
+
+  for (const p of pdisks) {
+    const row = diskRows.find((d) => d.idx === p.id)
+    const sm = smart.find((x) => x.id === p.id)
+    const ownVols = realVols.filter((v) => v.diskId === p.id)
+    const rate = row ? row.read + row.write : 0
+    const temp = row ? row.temp : diskTempOf(p.id, p, sensors, liveTemps)
+    const used = ownVols.reduce((n, v) => n + (v.size - v.free), 0)
+    const size = ownVols.reduce((n, v) => n + v.size, 0) || p.size
+    blocks.push({
+      id: `disk-${p.id}`,
+      span: 1,
+      title: p.name,
+      accent: 'var(--accent-hover)',
+      sub: [
+        p.mediaType, p.busType, fmtBytes(p.size),
+        p.isBoot ? '開機碟' : ''
+      ].filter(Boolean).join(' · ') || '實體磁碟',
+      value: null,
+      valueText: rate >= 1024 ? fmtRate(rate) : '閒置',
+      spark: { key: `disk-${p.id}`, value: rate, max: 0 },
+      stats: [
+        ['讀取', fmtRate(row?.read || 0)],
+        ['寫入', fmtRate(row?.write || 0)],
+        ['溫度', temp != null ? `${temp.toFixed(0)} °C` : DASH],
+        ['健康', sm ? (HEALTH_TEXT[sm.health?.level] || DASH) : (p.health === 'Healthy' ? '健康' : (p.health || DASH))]
+      ],
+      viz: {
+        kind: 'meters',
+        label: '即時狀態',
+        items: [
+          {
+            label: '讀寫',
+            value: rate,
+            max: Math.max(1024, ...diskRows.map((x) => x.read + x.write)),
+            text: `讀 ${fmtRate(row?.read || 0)}　寫 ${fmtRate(row?.write || 0)}`
+          },
+          size ? {
+            label: '已用容量',
+            value: used,
+            max: size,
+            text: `${fmtBytes(used)} / ${fmtBytes(size)}`
+          } : null,
+          temp != null ? {
+            label: '溫度',
+            value: temp,
+            max: 100,
+            text: `${temp.toFixed(0)} °C`
+          } : null
+        ].filter(Boolean)
+      },
+      specs: [
+        ['型號', p.name],
+        ['匯流排', [p.mediaType, p.busType].filter(Boolean).join(' · ') || DASH],
+        ['容量', fmtBytes(p.size)],
+        ['分割配置', p.partitionStyle || DASH],
+        ['磁區', p.logicalSector > 0 ? `${p.logicalSector}B / ${p.physicalSector}B` : DASH],
+        ['韌體', p.firmware || DASH],
+        ['序號', p.fruId || p.adapterSerial || p.serial || DASH],
+        ['位置', p.location || DASH]
+      ],
+      groups: [
+        sm ? { title: `S.M.A.R.T.｜${p.name}`, rows: smartRows(sm) } : null,
+        sm && sm.attributes.length ? {
+          title: `S.M.A.R.T. 屬性｜${p.name}`,
+          rows: sm.attributes.map((a) => [
+            `${a.id} ${a.name}`,
+            `目前 ${a.current} · 最差 ${a.worst}${a.threshold > 0 ? ` · 門檻 ${a.threshold}` : ''} · 原始值 ${fmtNum(a.raw)}`
+          ])
+        } : null,
+        volumeGroup(ownVols, '磁碟區')
+      ].filter((g) => g && g.rows.length)
+    })
+  }
+  return blocks
+}
+
+/**
  * 每一輪把「現在該顯示什麼」整份描述出來，再交給通用的渲染器去比對。
  * 這樣新增一塊硬體只要多推一個物件，不必再寫一份 DOM 組裝。
  * @param {any} s 這一輪的取樣
@@ -821,156 +1067,7 @@ function describeBlocks(s, inv) {
   }
 
   // ── 儲存 ───────────────────────────────────────────────────────
-  {
-    // 效能計數器的磁碟名是「實體碟序號 + 第一個分割區代號」（`0 C:`、`1 D:`），
-    // `_Total` 是彙總列。前綴數字對到 `Win32_PhysicalDisk.DeviceId`，
-    // 這樣每顆硬碟的讀寫能標上自己的型號——只顯示一個總量的話，
-    // 插很多顆硬碟時看不出是誰在動。
-    const totalRow = s.disks.find((d) => d.name === '_Total')
-    const read = totalRow ? totalRow.read : s.disks.reduce((n, d) => n + d.read, 0)
-    const write = totalRow ? totalRow.write : s.disks.reduce((n, d) => n + d.write, 0)
-    const vols = inv?.volumes || []
-    const pdisks = inv?.physicalDisks || []
-    const smart = inv?.smart || []
-    const liveTemps = s.driveTemps || []
-    const rawTotal = pdisks.reduce((n, d) => n + d.size, 0)
-    const volTotal = vols.reduce((n, v) => n + v.size, 0)
-    const volFree = vols.reduce((n, v) => n + v.free, 0)
-    /**
-     * 效能計數器的磁碟列 → 顯示用資訊。每顆實體碟一筆，帶型號與它掛的磁碟代號。
-     * @type {Array<{ name: string, label: string, read: number, write: number, temp: number|null }>}
-     */
-    const diskRows = s.disks
-      .filter((d) => d.name !== '_Total')
-      .map((d) => {
-        const idx = /^(\d+)\s/.exec(d.name)?.[1] ?? ''
-        const pdisk = pdisks.find((p) => p.id === idx)
-        const drive = (d.name.match(/([A-Z]:)/) || [])[1] || ''
-        const temps = (sensors?.groups || [])
-          .filter((hw) => hw.t === 'Storage' && hw.n === pdisk?.name)
-          .flatMap((hw) => (hw.s || []).filter((x) => x.t === 'Temperature' && /Temperature$/.test(x.n)))
-        // 感測器 sidecar 要 UAC，大多數人不會按；NVMe 的 SMART 溫度免權限，
-        // 所以沒有 sidecar 時退回它——兩個都沒有才留空
-        const live = liveTemps.find((t) => t.id === idx)
-        const temp = temps.length
-          ? Math.max(...temps.map((x) => x.v))
-          : (live ? live.tempC : null)
-        return {
-          name: d.name,
-          label: pdisk ? `${pdisk.name}${drive ? `（${drive}）` : ''}` : (d.name || '磁碟'),
-          read: d.read,
-          write: d.write,
-          temp
-        }
-      })
-    // 摘要用最壞的那顆：多碟機器上「有一顆快掛了」不該被另外三顆的良好蓋掉
-    const RANK = { bad: 2, caution: 1, good: 0 }
-    const worst = smart.reduce((acc, x) => (
-      !acc || RANK[x.health?.level] > RANK[acc.health?.level] ? x : acc
-    ), null)
-    const maxTemp = diskRows.reduce((n, d) => (d.temp != null ? Math.max(n, d.temp) : n), 0)
-    const maxHours = smart.reduce((n, x) => Math.max(n, x.powerOnHours), 0)
-    const totalWritten = smart.reduce((n, x) => n + x.bytesWritten, 0)
-    out.push({
-      id: 'storage',
-      title: '儲存',
-      accent: 'var(--accent-hover)',
-      sub: pdisks.length ? pdisks.map((d) => d.name).join('、') : '偵測中…',
-      value: null,
-      valueText: read + write >= 1024 ? fmtRate(read + write) : '閒置',
-      spark: { key: 'disk', value: read + write, max: 0 },
-      stats: [
-        ['總讀取', fmtRate(read)],
-        ['總寫入', fmtRate(write)],
-        ['實體硬碟', String(pdisks.length || diskRows.length || 0)]
-      ],
-      viz: {
-        kind: 'meters',
-        label: '各硬碟讀寫速率',
-        // 速率沒有天花板：拿這一輪最忙的那顆當滿格，看得出相對忙碌程度（同網路那格）
-        items: diskRows.map((d) => ({
-          label: d.label,
-          value: d.read + d.write,
-          max: Math.max(1024, ...diskRows.map((x) => x.read + x.write)),
-          text: `讀 ${fmtRate(d.read)}　寫 ${fmtRate(d.write)}${d.temp != null ? `　${d.temp.toFixed(0)} °C` : ''}`
-        }))
-      },
-      specs: [
-        ['實體磁碟', pdisks.length ? `${pdisks.length} 顆` : DASH],
-        ['磁碟區', vols.length ? `${vols.length} 個` : DASH],
-        ['硬體總容量', rawTotal ? fmtBytes(rawTotal) : DASH],
-        ['磁碟區總容量', volTotal ? fmtBytes(volTotal) : DASH],
-        ['磁碟區已用', volTotal ? `${fmtBytes(volTotal - volFree)}（${(((volTotal - volFree) / volTotal) * 100).toFixed(1)}%）` : DASH],
-        ['磁碟區可用', volTotal ? fmtBytes(volFree) : DASH],
-        ['健康狀態', worst ? `${HEALTH_TEXT[worst.health?.level] || DASH}${worst.health?.reason ? `（${worst.health.reason}）` : ''}` : DASH],
-        ['最高溫度', maxTemp ? `${maxTemp.toFixed(0)} °C` : DASH],
-        ['最長通電時數', fmtHours(maxHours) || DASH],
-        ['累計寫入量', totalWritten ? fmtBytes(totalWritten) : DASH],
-        ['目前讀取', fmtRate(read)],
-        ['目前寫入', fmtRate(write)]
-      ],
-      groups: [
-        // 每顆硬碟一列：型號＋現在的讀寫速率＋溫度，一眼分清楚是誰在動
-        {
-          title: '各硬碟即時速率',
-          rows: diskRows.map((d) => [d.label, [
-            `讀 ${fmtRate(d.read)}`,
-            `寫 ${fmtRate(d.write)}`,
-            d.temp != null ? `${d.temp.toFixed(0)} °C` : ''
-          ].filter(Boolean).join(' · ')])
-        },
-        {
-          title: '實體磁碟',
-          rows: pdisks.map((d) => [d.name, [
-            d.mediaType, d.busType, fmtBytes(d.size),
-            d.partitionStyle, d.isBoot ? '開機碟' : '',
-            d.partitions > 0 ? `${d.partitions} 個分割區` : '',
-            d.spindleRpm > 0 ? `${d.spindleRpm} RPM` : '',
-            // 4Kn／512e 的差別會影響對齊與相容性，是規格表上真的會查的一格
-            d.logicalSector > 0 ? `磁區 ${d.logicalSector}B/${d.physicalSector}B` : '',
-            d.firmware ? `韌體 ${d.firmware}` : '',
-            // 韌體那組序號常是一長串補零；標籤上刻的那組（FruId）優先
-            d.fruId || d.adapterSerial || d.serial ? `序號 ${d.fruId || d.adapterSerial || d.serial}` : '',
-            d.location || '',
-            d.health === 'Healthy' ? '健康' : d.health
-          ].filter(Boolean).join(' · ')])
-        },
-        // 一顆碟一組：CrystalDiskInfo 的上半部。多碟機器把它們擠在同一組會看不出誰是誰
-        ...smart.map((sm) => {
-          const owner = pdisks.find((p) => p.id === sm.id)
-          return { title: `S.M.A.R.T.｜${owner?.name || `磁碟 ${sm.id}`}`, rows: smartRows(sm) }
-        }),
-        // ATA／SATA 才有的原始屬性表（NVMe 沒有這套編號制）
-        ...smart.filter((sm) => sm.attributes.length).map((sm) => {
-          const owner = pdisks.find((p) => p.id === sm.id)
-          return {
-            title: `S.M.A.R.T. 屬性｜${owner?.name || `磁碟 ${sm.id}`}`,
-            rows: sm.attributes.map((a) => [
-              `${a.id} ${a.name}`,
-              `目前 ${a.current} · 最差 ${a.worst}${a.threshold > 0 ? ` · 門檻 ${a.threshold}` : ''} · 原始值 ${fmtNum(a.raw)}`
-            ])
-          }
-        }),
-        {
-          title: '磁碟區',
-          // 標出住在哪一顆實體碟：多碟機器上「D 槽滿了」得先知道 D 在誰身上
-          rows: vols.map((v) => {
-            const host = pdisks.find((p) => p.id === v.diskId)
-            return [
-              `${v.drive} ${v.label || ''}`.trim(),
-              [
-                `${fmtBytes(v.size - v.free)} 已用 / ${fmtBytes(v.size)}`,
-                v.size > 0 ? `可用 ${fmtBytes(v.free)}（${((v.free / v.size) * 100).toFixed(0)}%）` : '',
-                v.fileSystem,
-                // 對不到實體碟的多半是掛載出來的虛擬碟（雲端硬碟、映像檔）
-                host ? host.name : '虛擬／網路磁碟'
-              ].filter(Boolean).join(' · ')
-            ]
-          })
-        }
-      ]
-    })
-  }
+  out.push(...describeStorage(s, inv, sensors))
 
   // ── 網路 ───────────────────────────────────────────────────────
   {

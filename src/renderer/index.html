@@ -371,9 +371,15 @@
                         <span id="wsEditorUnsupportedType"></span>
                       </div>
                       <p class="ws-unsupported-desc">無法在這裡預覽</p>
-                      <button type="button" id="wsEditorUnsupportedRevealBtn" class="btn btn-secondary btn-sm">
-                        在檔案總管顯示
-                      </button>
+                      <div class="ws-unsupported-actions">
+                        <!-- 執行檔就是拿來跑的：這裡是「點開一個 .exe」之後唯一看得到的畫面 -->
+                        <button type="button" id="wsEditorUnsupportedOpenBtn" class="btn btn-secondary btn-sm" hidden>
+                          執行
+                        </button>
+                        <button type="button" id="wsEditorUnsupportedRevealBtn" class="btn btn-secondary btn-sm">
+                          在檔案總管顯示
+                        </button>
+                      </div>
                     </div>
                     <div class="ws-ide-statusbar" id="wsIdeStatusbar">
                       <div class="ws-ide-status-left">
@@ -423,7 +429,13 @@
                   -->
                   <div id="wsBrowser" class="ws-browser" hidden>
                     <div class="ws-browser-bar">
-                      <button type="button" id="wsBrowserReloadBtn" class="btn-icon" title="重新整理" aria-label="重新整理">
+                      <button type="button" id="wsBrowserBackBtn" class="btn-icon" title="上一頁 (Alt+←)" aria-label="上一頁" disabled>
+                        ←
+                      </button>
+                      <button type="button" id="wsBrowserFwdBtn" class="btn-icon" title="下一頁 (Alt+→)" aria-label="下一頁" disabled>
+                        →
+                      </button>
+                      <button type="button" id="wsBrowserReloadBtn" class="btn-icon" title="重新整理 (Ctrl+R)" aria-label="重新整理">
                         ⟳
                       </button>
                       <input
@@ -434,13 +446,23 @@
                         aria-label="網址"
                       />
                       <button type="button" id="wsBrowserGoBtn" class="btn btn-secondary btn-sm">前往</button>
+                      <button type="button" id="wsBrowserDevBtn" class="btn-icon" title="開發人員工具 (F12)" aria-label="開發人員工具">
+                        ⛭
+                      </button>
                       <button type="button" id="wsBrowserExternalBtn" class="btn btn-secondary btn-sm">
                         用系統瀏覽器開
                       </button>
                     </div>
-                    <!-- 真的瀏覽器：<webview> 由 JS 建立放進這個容器
+                    <!-- 真的瀏覽器：每個分頁一顆 <webview>，由 JS 建立放進這個容器
                          （partition 持久＝登入狀態留著；popup 交給 main 的系統瀏覽器） -->
-                    <div id="wsBrowserFrame" class="ws-browser-frame" title="網頁預覽"></div>
+                    <div id="wsBrowserFrame" class="ws-browser-frame" title="網頁預覽">
+                      <div class="ws-browser-progress" id="wsBrowserProgress" hidden aria-hidden="true"></div>
+                      <div class="ws-browser-error" id="wsBrowserError" hidden role="alert">
+                        <p class="ws-browser-error-title" id="wsBrowserErrorTitle">開不了這個網頁</p>
+                        <p class="ws-browser-error-note" id="wsBrowserErrorNote"></p>
+                        <button type="button" id="wsBrowserRetryBtn" class="btn btn-secondary btn-sm">再試一次</button>
+                      </div>
+                    </div>
                   </div>
 
                   <!-- AI 會話結構化卡片檢視面板（不用 resume，直接檢視） -->
@@ -1282,6 +1304,7 @@
                   <p id="cuError" class="live-error hidden" role="alert"></p>
 
                   <div id="cuSummary" class="cu-summary"></div>
+                  <p class="cc-panel-desc">花費依 API 公開單價估算；訂閱方案扣的是額度，不是這筆錢。Claude Code 長對話幾乎都是快取讀取。</p>
                   <p id="cuUncosted" class="cu-note hidden" role="status"></p>
                 </section>
 

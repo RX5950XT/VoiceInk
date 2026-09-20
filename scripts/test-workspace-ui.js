@@ -303,6 +303,139 @@ function gitLogLayoutChecks() {
   const hash = css.slice(css.indexOf('.ws-git-log-hash {'), css.indexOf('.ws-git-log-hash:hover'))
   check('複製 hash 的按鈕常駐（沒有靠 opacity 藏起來）',
     css.includes('.ws-git-log-hash {') && !/opacity:\s*0/.test(hash))
+
+  // 展開看這筆改了哪些檔案（資料是 `git log --numstat` 本來就帶著的那幾列）
+  check('提交列可以展開', /aria-expanded/.test(logFn) && /gitLogFiles\(/.test(logFn))
+  check('清單第一次展開才建（十筆 × 幾百個檔案不先畫出來）',
+    /if \(!open && !files\)[\s\S]{0,120}gitLogFiles\(/.test(logFn))
+  const filesFn = workspacePage.slice(
+    workspacePage.indexOf('function gitLogFiles'),
+    workspacePage.indexOf('function gitLogRow')
+  )
+  check('每個檔案各自畫得出增刪', /gitLineCounts\(file\)/.test(filesFn))
+  check('點檔案開得起來', /openEditorTab\(project, file\.path\)/.test(filesFn))
+  check('超過上限時講得出還有幾個', /entry\.more/.test(filesFn))
+  check('展開的清單收得起來（`[hidden]` 要自己補 display:none）',
+    /\.ws-git-log-files\[hidden\]\s*\{\s*display:\s*none/.test(css))
+}
+
+/**
+ * Git 面板那幾顆動作鈕。側欄拖得到 180px（`SIDEBAR_MIN_W`），
+ * 三顆鈕擺不下一列時要**換行**——縮的話字會溢出按鈕框，看起來就是字疊在一起。
+ */
+function gitActionsWrapChecks() {
+  console.log('\n[F3] Git 動作鈕跟著側欄寬度走')
+  const actions = css.slice(css.indexOf('.ws-git-actions {'), css.indexOf('/* ── AI 對話記錄 ── */'))
+  check('動作鈕會換行', /flex-wrap:\s*wrap/.test(actions))
+  check('按鈕不准縮到比字窄（縮了就是字疊在一起）',
+    /flex:\s*1 1 auto/.test(actions) && !/min-width:\s*0/.test(actions))
+  check('按鈕裡的字不折行', /white-space:\s*nowrap/.test(actions))
+  const review = css.slice(css.indexOf('.ws-review-bar {'), css.indexOf('.ws-review-files {'))
+  check('分支比較那一列也會換行', /flex-wrap:\s*wrap/.test(review))
+  check('分支名長起來不會把圖示鈕壓扁',
+    /\.ws-right-head \.btn-icon \{[^}]*flex:\s*none/.test(css))
+}
+
+/**
+ * 「檢視變更」不再開第二個分頁：同一個分頁在 editor ⇄ diff 之間換面。
+ */
+function diffToggleChecks() {
+  console.log('\n[H] 編輯 ⇄ 變更 就地切換')
+  check('開 diff 前先找這個檔案的編輯分頁', /findTab\(`e:\$\{proj\.id\}:\$\{relPath\}`\)/.test(tabs))
+  check('就地換面只換 kind，不新增分頁',
+    /tab\.kind = 'diff'[\s\S]{0,80}tab\.diffView = true/.test(tabs)
+    && !/showDiffInEditorTab[\s\S]{0,400}tabs\.push/.test(tabs))
+  check('換面前先把草稿收回分頁（不然回來會被蓋掉）',
+    /if \(activeId === tab\.id\) stash\(\)[\s\S]{0,60}tab\.kind = 'diff'/.test(tabs))
+  check('有回得去的路', /function backToEditorTab/.test(tabs) && /回到編輯/.test(tabs))
+  check('點檔案樹同一個檔案會換回編輯那一面',
+    /if \(existing\.diffView\) await backToEditorTab\(existing\)/.test(tabs))
+  check('存檔時要存回 editor（存 diff 的話下次開專案接不回草稿）',
+    /kind: t\.diffView \? 'editor' : t\.kind/.test(tabs))
+  check('未存草稿的關閉確認不再綁 kind === editor',
+    /\/\/ `dirty` 只有編輯分頁會有[\s\S]{0,80}if \(tab\.dirty\) \{/.test(tabs))
+  check('檔案樹的高亮在變更那一面不掉', /tab\.kind === 'editor' \|\| tab\.diffView/.test(tabs))
+}
+
+/**
+ * 內建瀏覽器：**每個分頁一顆 webview**。共用一顆的話切回來整頁重載，
+ * 而且「上一頁」會走進別的分頁逛過的歷史。
+ */
+function browserChecks() {
+  console.log('\n[I] 內建瀏覽器')
+  check('webview 照分頁 id 找', /webview\[data-tab-id="\$\{CSS\.escape\(tab\.id\)\}"\]/.test(tabs))
+  check('切分頁只藏不搬（不重新 attach）', /\(node\)\.hidden = node !== guest/.test(tabs))
+  check('webview 的 [hidden] 要自己寫 display:none（UA 是 display:flex）',
+    /\.ws-browser-frame webview\[hidden\]\s*\{\s*display:\s*none/.test(css))
+  check('導航事件從 guest 自己的 data-tab-id 找分頁，不是 activeId',
+    /guest\?\.dataset\.tabId/.test(tabs))
+  check('關掉分頁與換專案都會收掉 webview',
+    (tabs.match(/pruneBrowserGuests\(\)/g) || []).length >= 3)
+  check('上一頁／下一頁在 DOM 上', hasId('wsBrowserBackBtn') && hasId('wsBrowserFwdBtn'))
+  check('重新整理鈕在載入中會變成停止', /guest\.isLoading\(\)[\s\S]{0,60}guest\.stop\(\)/.test(tabs))
+  check('載入中有看得見的指示', hasId('wsBrowserProgress') && hasSelector('ws-browser-progress'))
+  check('載不起來時講得出原因', hasId('wsBrowserErrorNote') && /errorDescription/.test(tabs))
+  check('使用者自己中斷（-3）與子框架不算載入失敗',
+    /errorCode === -3 \|\| detail\.isMainFrame === false/.test(tabs))
+  check('背景分頁載入中不會改正在看的工具列',
+    /did-start-loading[\s\S]{0,220}activeId === target\.id/.test(tabs)
+    && /did-stop-loading[\s\S]{0,220}activeId === target\.id/.test(tabs))
+  check('Alt+←／→ 只在瀏覽器分頁收', /tab\.kind !== 'browser'[\s\S]{0,400}ArrowLeft/.test(tabs))
+  check('有開發人員工具', hasId('wsBrowserDevBtn') && /openDevTools\(\)/.test(tabs))
+}
+
+/**
+ * 檔案樹跑得動 EXE 與一鍵啟動腳本。
+ * IPC 要三份清單都對得上（`index.js` 匯出／`main.js` 白名單／`preload.js`）。
+ */
+async function runFileChecks() {
+  console.log('\n[J] 執行檔案')
+  const mainJs = fs.readFileSync(path.join(ROOT, 'src/main/main.js'), 'utf8')
+  const preload = fs.readFileSync(path.join(ROOT, 'src/preload/preload.js'), 'utf8')
+  const ipc = fs.readFileSync(path.join(ROOT, 'src/main/workspace/ipc.js'), 'utf8')
+  const service = fs.readFileSync(path.join(ROOT, 'src/main/workspace/index.js'), 'utf8')
+  check('service 有 openEntry', /async function openEntry/.test(service) && /^ {2}openEntry,$/m.test(service))
+  check('openEntry 走 resolveExisting（只收專案內的路徑）',
+    /function openEntry[\s\S]{0,200}files\.resolveExisting/.test(service))
+  check('openPath 回字串＝失敗，要當錯誤處理',
+    /function openEntry[\s\S]{0,320}if \(error\) throw fail/.test(service))
+  check('IPC 有 workspace:openEntry', /ipcMain\.handle\('workspace:openEntry'/.test(ipc))
+  check('main.js 的白名單有 openEntry', /openEntry: \(\.\.\.args\) => loadWorkspace\(\)\.openEntry/.test(mainJs))
+  check('preload 接得到 openEntry', /openEntry: \(id, relPath\) =>/.test(preload))
+
+  check('右鍵選單有「在終端機執行」與「用預設程式開啟」',
+    /在終端機執行/.test(workspacePage) && /用預設程式開啟/.test(workspacePage))
+  check('只有腳本類才給「在終端機執行」', /isTerminalRunnable\(entry\.rel\)/.test(workspacePage))
+  check('點執行檔直接用系統開啟（不開「無法預覽」分頁）',
+    /isDirectRunnable\(entry\.rel\)/.test(workspacePage)
+    && /openWithSystem\(project\.id, entry\.rel\)/.test(workspacePage))
+  check('點啟動腳本開終端機跑',
+    /isLaunchScript\(entry\.rel\)/.test(workspacePage)
+    && /runInTerminal\(entry\.rel\)/.test(workspacePage))
+  check('啟動腳本的右鍵有「開啟」（點下去是跑，編輯走右鍵）',
+    /isLaunchScript\(entry\.rel\)[\s\S]{0,180}label: '開啟'/.test(workspacePage))
+  check('`.js`／`.py` 不在點擊就跑的清單裡',
+    /const LAUNCH_EXTS = \['bat', 'cmd', 'ps1', 'sh'\]/.test(tabs)
+    && /const DIRECT_EXTS = \['exe', 'com', 'msi', 'lnk'\]/.test(tabs))
+  const runFn = tabs.slice(tabs.indexOf('export async function runInTerminal'), tabs.indexOf('export async function openEditorTab'))
+  const commands = []
+  const run = new Function('newTerminalWithCommand', 'extOf', `${runFn.replace('export ', '')}; return runInTerminal`)(
+    async (_title, command) => commands.push(command), (rel) => rel.split('.').pop().toLowerCase())
+  for (const [file, expected] of [
+    ['hello.js', "node './hello.js'"], ['hello.mjs', "node './hello.mjs'"],
+    ['hello.py', "python './hello.py'"], ['hello.jar', "java -jar './hello.jar'"],
+    ['hello.sh', "bash './hello.sh'"], ["it's.ps1", "& './it''s.ps1'"]
+  ]) {
+    await run(file)
+    check(`執行 ${file} 使用對應程式`, commands.pop() === expected)
+  }
+  check('終端機指令用 PowerShell 的 & 與單引號（路徑有空白也跑得動）',
+    /\|\| '&'/.test(runFn) && /rel\.replace\(\/'\/g, "''"\)/.test(runFn))
+  check('路徑有換行就不送（送進終端機的是按鍵）', /\/\[\\r\\n\]\/\.test\(rel\)/.test(runFn))
+  check('開不了的檔案畫面上有「執行」鈕', hasId('wsEditorUnsupportedOpenBtn'))
+  check('只有執行檔才顯示那顆鈕', /el\.unsupportedOpen\.hidden = !isRunnable\(/.test(tabs))
+  check('藏起來的按鈕真的不見（`.btn` 有寫 display）',
+    /\.ws-unsupported-actions \.btn\[hidden\]\s*\{\s*display:\s*none/.test(css))
 }
 
 /** 文件類（md／html／svg）開起來就停在預覽那一面，Ctrl+S 在 Monaco／預覽下也存得到 */
@@ -353,7 +486,7 @@ function editorDefaultsChecks() {
   check('Ctrl+S 真的呼叫存檔', /saveActiveFile\(\)/.test(save))
 }
 
-runAgentPathChecks().then(gitStatusCacheChecks).then(zoomChecks).then(gitRowLayoutChecks).then(gitLogLayoutChecks).then(treeRefreshAndStatusSpinChecks).then(editorDefaultsChecks).then(() => {
+runAgentPathChecks().then(gitStatusCacheChecks).then(zoomChecks).then(gitRowLayoutChecks).then(gitLogLayoutChecks).then(gitActionsWrapChecks).then(treeRefreshAndStatusSpinChecks).then(editorDefaultsChecks).then(diffToggleChecks).then(browserChecks).then(runFileChecks).then(() => {
   console.log(`\n${passed} passed, ${failed} failed`)
   process.exitCode = failed ? 1 : 0
 }).catch((error) => {

@@ -19,6 +19,7 @@ const watch = require('./watch')
 const uffs = require('./uffs')
 const recycle = require('./recycle')
 const places = require('./places')
+const shellExt = require('./shell')
 
 /** @type {(channel: string, payload: any) => void} */
 let emit = () => {}
@@ -290,6 +291,12 @@ async function openPath(target) {
 async function fileIcon(target) {
   const full = paths.resolveExisting(target)
   const resolved = resolvePath(full)
+  try {
+    const url = await shellExt.iconOf(resolved.path)
+    if (url) return { url }
+  } catch (error) {
+    console.error('[explorer] 殼層圖示失敗:', error?.message || error)
+  }
   if (resolved.dir) return { folder: true }
   try {
     const icon = await app.getFileIcon(resolved.path, { size: 'normal' })
@@ -298,6 +305,24 @@ async function fileIcon(target) {
   } catch {
     throw paths.fail('ICON_FAILED', '讀不到檔案圖示')
   }
+}
+
+function shellMenu(spec) {
+  return shellExt.menu(spec)
+}
+
+function shellInvoke(token, cmd, dir) {
+  return shellExt.invoke(token, cmd, dir)
+}
+
+function shellRelease(token) {
+  return shellExt.release(token)
+}
+
+function shutdown() {
+  watch.stop()
+  shellExt.shutdown()
+  return true
 }
 
 /**
@@ -411,6 +436,10 @@ module.exports = {
   moveEntry,
   openPath,
   fileIcon,
+  shellMenu,
+  shellInvoke,
+  shellRelease,
+  shutdown,
   reveal,
   setClipboard,
   paste,

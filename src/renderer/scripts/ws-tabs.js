@@ -60,6 +60,8 @@ const MAX_TAB_TITLE = 28
  *   cwd?: string,
  *   unread?: boolean,
  *   diffData?: { diff: string, additions: number, deletions: number },
+ *   diffView?: boolean,
+ *   loadError?: string,
   versions?: { original: string, modified: string } | null,
  *   sessionRow?: any,
  *   sessionData?: any
@@ -177,7 +179,10 @@ async function persistTabsNow() {
     // 存了的話下次開專案會被當成一般的 Git diff 去打 `gitDiff`
     tabs: tabs.filter((t) => !t.conflict && !t.reviewRef && !t.bridgeId).map((t) => ({
       id: t.id,
-      kind: t.kind,
+      // 停在「變更」那一面的還是一個編輯分頁（`kind` 只是現在畫哪一面）：
+      // 照 `diff` 存的話，下次開專案會拿 `e:` 的 id 去還原成 Git diff 分頁，
+      // 草稿與檔案內容整個接不回來
+      kind: t.diffView ? 'editor' : t.kind,
       title: t.title,
       projectId: t.projectId,
       relPath: t.relPath,
@@ -405,6 +410,7 @@ function renderTabs() {
  * @returns {string}
  */
 function tabTooltip(tab) {
+  if (tab.diffView) return `${tab.relPath || tab.title}（正在看變更）`
   if (tab.kind === 'editor') return tab.relPath || tab.title
   if (tab.kind !== 'terminal') return tab.title
   const parts = [tab.title]
@@ -771,7 +777,8 @@ async function activate(id) {
   document.dispatchEvent(new CustomEvent('ws:active-file', {
     detail: {
       projectId: tab.projectId || '',
-      rel: tab.kind === 'editor' ? (tab.relPath || '') : ''
+      // 停在「變更」那一面時開著的還是同一個檔案，檔案樹的高亮不該掉
+      rel: tab.kind === 'editor' || tab.diffView ? (tab.relPath || '') : ''
     }
   }))
   renderTabs()
@@ -808,7 +815,7 @@ export function retargetTabs(projectId, fromRel, toRel) {
       : oldId
     retargetModel(oldId, tab.id)
     tab.relPath = nextRel
-    if (tab.kind === 'editor') tab.title = nextRel.split('/').pop() || nextRel
+    if (tab.kind === 'editor' || tab.diffView) tab.title = nextRel.split('/').pop() || nextRel
     if (activeId === oldId) activeId = tab.id
     changed = true
   }
@@ -841,7 +848,8 @@ export async function cycleTab(delta) {
 export async function closeTab(id) {
   const tab = findTab(id)
   if (!tab) return
-  if (tab.kind === 'editor' && tab.dirty) {
+  // `dirty` 只有編輯分頁會有（包含停在「變更」那一面的那些）
+  if (tab.dirty) {
     // 就地二次確認：關掉有未存內容的分頁是不可逆的
     if (!confirmDiscard(id, '還沒儲存，再按一次×才會關掉')) return
   }
@@ -856,6 +864,8 @@ export async function closeTab(id) {
   if (tab.bridgeId) void electronAPI.terminal.editorCancel(tab.bridgeId)
   tabs = tabs.filter((item) => item.id !== id)
   disposeModel(id)
+  // 關掉的瀏覽器分頁那顆 webview 也要收：留著的話那個網頁還在背景跑
+  if (tab.kind === 'browser') pruneBrowserGuests()
   // 這個分頁抓著的內容（草稿影子、預覽的 iframe／影片）要當場放掉，
   // 不然關掉之後它們還在背景吃資源，記憶體也回不去
   if (previewKey.id === id && el.editorPreview) {
@@ -1065,6 +1075,80 @@ function staleOpen(gen, projectId) {
   return gen !== projectSwitch || (project?.id || '') !== projectId
 }
 
+// ===== 執行檔案（EXE 與一鍵啟動腳本）=====
+
+/** 在 Windows 上「點下去就會跑起來」的那幾種。`.lnk` 是捷徑，指到哪由系統決定 */
+const RUNNABLE_EXTS = ['exe', 'com', 'msi', 'bat', 'cmd', 'ps1', 'sh', 'py', 'js', 'mjs', 'jar', 'lnk']
+/** 適合開在終端機裡跑的（看得到輸出、停得下來）。`.msi`／`.lnk` 沒有輸出，不列 */
+const TERMINAL_EXTS = ['exe', 'bat', 'cmd', 'ps1', 'sh', 'py', 'js', 'mjs', 'jar']
+/** 檔案樹點下去就用系統開啟的（沒有內容可編，開編輯分頁只會看到「無法預覽」） */
+const DIRECT_EXTS = ['exe', 'com', 'msi', 'lnk']
+/** 一鍵啟動腳本：檔案樹點下去開終端機跑。`.js`／`.py` 是原始碼，點下去仍開編輯器 */
+const LAUNCH_EXTS = ['bat', 'cmd', 'ps1', 'sh']
+
+/**
+ * @param {string} relPath
+ * @returns {boolean} 這個檔案點下去會「跑起來」嗎
+ */
+export function isRunnable(relPath) {
+  return RUNNABLE_EXTS.includes(extOf(relPath))
+}
+
+/**
+ * @param {string} relPath
+ * @returns {boolean} 適不適合開在終端機裡跑
+ */
+export function isTerminalRunnable(relPath) {
+  return TERMINAL_EXTS.includes(extOf(relPath))
+}
+
+/**
+ * @param {string} relPath
+ * @returns {boolean} 檔案樹點下去要直接用系統開啟嗎
+ */
+export function isDirectRunnable(relPath) {
+  return DIRECT_EXTS.includes(extOf(relPath))
+}
+
+/**
+ * @param {string} relPath
+ * @returns {boolean} 檔案樹點下去要開終端機跑嗎
+ */
+export function isLaunchScript(relPath) {
+  return LAUNCH_EXTS.includes(extOf(relPath))
+}
+
+/**
+ * 用系統的預設程式開啟（`.exe` ＝把它跑起來，`.docx` ＝開 Word）。
+ * @param {string} projectId
+ * @param {string} relPath
+ */
+export async function openWithSystem(projectId, relPath) {
+  if (!projectId || !relPath) return
+  try {
+    await call(electronAPI.workspace.openEntry(projectId, relPath), '這個檔案打不開')
+  } catch {
+    // call() 已經提示過了
+  }
+}
+
+/**
+ * 開一個終端機把這支腳本跑起來（開發時最常要的那種「一鍵啟動」）。
+ *
+ * 預設 shell 是 PowerShell，所以用 `& '相對路徑'`：加了 `&` 才跑得動帶空白的路徑，
+ * 而單引號字串裡只有單引號要跳脫（成對寫兩個），不像雙引號還會展開 `$`。
+ *
+ * @param {string} relPath
+ */
+export async function runInTerminal(relPath) {
+  const rel = String(relPath || '')
+  // 送進終端機的是「按鍵」，換行＝直接執行下一行，一定要擋
+  if (!rel || /[\r\n]/.test(rel)) return
+  const name = rel.split('/').pop() || rel
+  const runner = { js: 'node', mjs: 'node', py: 'python', jar: 'java -jar', sh: 'bash' }[extOf(rel)] || '&'
+  await newTerminalWithCommand(`執行 ${name}`, `${runner} './${rel.replace(/'/g, "''")}'`)
+}
+
 /**
  * 點檔案總管的一個檔案。同一個檔案已經開過就切回去，不重開一份。
  * @param {{ id: string, name: string }} proj
@@ -1075,7 +1159,9 @@ export async function openEditorTab(proj, relPath, line = 0) {
   const id = `e:${proj.id}:${relPath}`
   const existing = findTab(id)
   if (existing) {
-    await activate(id)
+    // 停在「變更」那一面時點這個檔案＝要看檔案本身，換回編輯那一面
+    if (existing.diffView) await backToEditorTab(existing)
+    else await activate(id)
     if (line > 0) goToLine(line)
     return
   }
@@ -1322,6 +1408,8 @@ function paintEditor(tab) {
     if (el.unsupportedName) el.unsupportedName.textContent = tab.relPath || tab.title
     if (el.unsupportedSize) el.unsupportedSize.textContent = formatBytes(tab.fileSize || 0)
     if (el.unsupportedType) el.unsupportedType.textContent = (tab.fileExt || 'BIN').toUpperCase()
+    // 執行檔不是「預覽失敗」，是「這裡就是拿來跑它的地方」
+    if (el.unsupportedOpen) el.unsupportedOpen.hidden = !isRunnable(tab.relPath || '')
     if (el.editorPreviewBtn) el.editorPreviewBtn.hidden = true
     if (el.editorSaveBtn) el.editorSaveBtn.hidden = true
     if (el.editorFindBtn) el.editorFindBtn.hidden = true
@@ -1811,12 +1899,72 @@ async function openConflictTab() {
 }
 
 /**
+ * 已經開著的那個檔案就**原地換面**，不開第二個分頁。
+ *
+ * 「檔案」與「它的未提交變更」是同一份東西的兩種看法，分成兩個分頁只會讓
+ * 分頁列長出一排同名的東西，而且兩邊的捲動位置各走各的。
+ *
+ * 換的只有 `kind`：存檔、Ctrl+S、外部變更偵測那些「只對 editor 做」的守衛
+ * 自動就不會在變更那一面誤觸發；分頁 id 維持 `e:`，Monaco 的一般 model 與
+ * diff model 本來就是兩份 map，不會打架。
+ *
+ * @param {WsTab} tab 那個編輯分頁
+ * @param {boolean} staged
+ */
+async function showDiffInEditorTab(tab, staged) {
+  const gen = projectSwitch
+  const projectId = tab.projectId || ''
+  const relPath = tab.relPath || ''
+  let diffData
+  try {
+    diffData = await call(electronAPI.workspace.gitDiff(projectId, relPath, staged), '讀取 Diff 失敗')
+  } catch {
+    return
+  }
+  let versions = null
+  try {
+    const res = await electronAPI.workspace.gitFileVersions(projectId, relPath, staged)
+    if (res?.ok && res.data && !res.data.binary && !res.data.truncated) versions = res.data
+  } catch {
+    versions = null
+  }
+  if (staleOpen(gen, projectId) || findTab(tab.id) !== tab) return
+  // 手上的草稿要先收回 `tab.content`：等一下換回編輯那一面時，`showTab` 是拿
+  // `tab.content` 跟 model 比的，沒收的話那幾個字會被當成「外面改的」蓋掉
+  if (activeId === tab.id) stash()
+  tab.kind = 'diff'
+  tab.diffView = true
+  tab.staged = staged
+  tab.diffData = diffData
+  tab.versions = versions
+  await activate(tab.id)
+}
+
+/**
+ * 變更那一面換回編輯（同一個分頁）。
+ * @param {WsTab} tab
+ */
+async function backToEditorTab(tab) {
+  tab.kind = 'editor'
+  tab.diffView = false
+  tab.versions = null
+  await activate(tab.id)
+}
+
+/**
  * 開啟 Git Diff 檢視分頁
  * @param {{ id: string, name: string }} proj
  * @param {string} relPath
  * @param {boolean} [staged]
  */
 export async function openDiffTab(proj, relPath, staged = false) {
+  // 這個檔案已經開著（不管停在哪一面）＝就地切換，不再開一個分頁
+  const opened = findTab(`e:${proj.id}:${relPath}`)
+  if (opened) {
+    if (opened.diffView && opened.staged === staged) await activate(opened.id)
+    else await showDiffInEditorTab(opened, staged)
+    return
+  }
   const id = `d:${proj.id}:${staged ? 's:' : 'w:'}${relPath}`
   const existing = findTab(id)
   if (existing) {
@@ -1924,6 +2072,9 @@ function paintDiff(tab) {
   }
   // 暫存鈕只對「工作區 ⇄ 暫存區」那種 diff 有意義
   if (el.diffStageBtn) el.diffStageBtn.hidden = Boolean(tab.conflict || tab.reviewRef)
+  if (el.diffOpenEditorBtn) {
+    el.diffOpenEditorBtn.textContent = tab.diffView ? '回到編輯' : '在編輯器開啟'
+  }
   paintReviewCount(tab)
   if (el.diffStats && tab.conflict) el.diffStats.replaceChildren()
   if (el.diffStats && tab.diffData) {
@@ -2166,54 +2317,147 @@ export async function openBrowserTab(url = '') {
 //
 // 比照 Orca：guest 不掛 preload、`partition` 用持久 session（登入狀態留著）、
 // `allowpopups` 交給 main 的 app 層 handler 轉系統瀏覽器。X-Frame-Options 從此不存在。
+//
+// **每個瀏覽器分頁一顆 webview**：共用一顆的話，切回來整頁重載（捲動位置、填到
+// 一半的表單、登入後的畫面全部重來），而且「上一頁」會走進別的分頁逛過的歷史。
+// 不搬 DOM（比照終端機那幾格），切分頁只 toggle `hidden`。
 
-/** @returns {Electron.WebviewTag | null} 這個容器裡唯一的 webview（惰性建立） */
-function ensureBrowserGuest() {
+/**
+ * 這個分頁那顆 webview（惰性建立）。
+ * @param {WsTab} tab
+ * @returns {Electron.WebviewTag | null}
+ */
+function ensureBrowserGuest(tab) {
   const host = el.browserFrame
-  if (!host) return null
-  let guest = /** @type {Electron.WebviewTag | null} */ (host.querySelector('webview'))
-  if (!guest) {
-    guest = document.createElement('webview')
-    // 這些屬性要在插入與第一次導航**之前**設好（partition 建了就不能改）
-    guest.setAttribute('partition', 'persist:wsbrowser')
-    guest.setAttribute('allowpopups', '')
-    guest.setAttribute('src', 'about:blank')
-    guest.addEventListener('did-navigate', (event) => {
-      syncBrowserLocation(/** @type {any} */ (event).url)
-    })
-    guest.addEventListener('did-navigate-in-page', (event) => {
-      syncBrowserLocation(/** @type {any} */ (event).url)
-    })
-    guest.addEventListener('page-title-updated', (event) => {
-      const tab = findTab(activeId)
-      if (!tab || tab.kind !== 'browser') return
-      const title = /** @type {any} */ (event).title
-      tab.title = String(title || tab.title)
-      renderTabs()
-    })
-    host.appendChild(guest)
+  if (!host || !tab) return null
+  let guest = /** @type {Electron.WebviewTag | null} */ (
+    host.querySelector(`webview[data-tab-id="${CSS.escape(tab.id)}"]`)
+  )
+  if (guest) return guest
+  guest = document.createElement('webview')
+  // 這些屬性要在插入與第一次導航**之前**設好（partition 建了就不能改）
+  guest.setAttribute('partition', 'persist:wsbrowser')
+  guest.setAttribute('allowpopups', '')
+  guest.setAttribute('src', 'about:blank')
+  guest.dataset.tabId = tab.id
+  // 事件處理一律從 guest 自己的 `data-tab-id` 找回分頁：背景分頁也會導航
+  // （重新導向、SPA 換頁），照 `activeId` 找會把它記到使用者正在看的那個分頁上
+  const own = () => tabs.find((item) => item.id === guest?.dataset.tabId)
+  const onNavigate = (event) => {
+    const target = own()
+    if (target) syncBrowserLocation(target, /** @type {any} */ (event).url)
   }
+  guest.addEventListener('did-navigate', onNavigate)
+  guest.addEventListener('did-navigate-in-page', onNavigate)
+  guest.addEventListener('page-title-updated', (event) => {
+    const target = own()
+    if (!target) return
+    target.title = String(/** @type {any} */ (event).title || target.title)
+    renderTabs()
+  })
+  guest.addEventListener('did-start-loading', () => {
+    const target = own()
+    // 工具列只有一組：背景分頁在載入不可以改正在看的那一頁的上一頁／進度條
+    if (target && activeId === target.id) paintBrowserChrome(target)
+  })
+  guest.addEventListener('did-stop-loading', () => {
+    const target = own()
+    if (target && activeId === target.id) paintBrowserChrome(target)
+  })
+  guest.addEventListener('did-fail-load', (event) => {
+    const detail = /** @type {any} */ (event)
+    // -3＝使用者自己中斷（按了停止、又點了別的連結），不是錯誤；
+    // 子框架載不起來也不該把整頁換成錯誤畫面
+    if (detail.errorCode === -3 || detail.isMainFrame === false) return
+    const target = own()
+    if (!target) return
+    target.loadError = `${detail.errorDescription || '載入失敗'}（${detail.errorCode}）`
+    if (activeId === target.id) paintBrowserChrome(target)
+  })
+  host.appendChild(guest)
   return guest
 }
 
 /**
- * 導航事件 → 更新目前瀏覽器分頁的 url／標題與網址列。
+ * 關掉的分頁那顆 webview 要收掉——留著的話那個網頁還在背景跑（計時器、影片、
+ * WebSocket 一樣都沒停）。換專案時 `tabs` 被整個換掉，同一支就順便掃乾淨。
+ */
+function pruneBrowserGuests() {
+  const host = el.browserFrame
+  if (!host) return
+  const live = new Set(tabs.filter((tab) => tab.kind === 'browser').map((tab) => tab.id))
+  for (const node of [...host.querySelectorAll('webview')]) {
+    if (!live.has(/** @type {HTMLElement} */ (node).dataset.tabId || '')) node.remove()
+  }
+}
+
+/**
+ * 導航事件 → 更新那個瀏覽器分頁的 url／標題與（正在看時）網址列。
+ * @param {WsTab} tab
  * @param {string} url
  */
-function syncBrowserLocation(url) {
-  const tab = findTab(activeId)
+function syncBrowserLocation(tab, url) {
   if (!tab || tab.kind !== 'browser' || !url || url === 'about:blank') return
-  const guest = el.browserFrame?.querySelector('webview')
+  const guest = browserGuestOf(tab)
   if (guest) guest.dataset.src = url
   tab.url = url
-  const input = /** @type {HTMLInputElement | null} */ (el.browserUrl)
-  if (input && document.activeElement !== input) input.value = url
+  tab.loadError = ''
   try {
     tab.title = new URL(url).host || '瀏覽器'
   } catch {
     tab.title = '瀏覽器'
   }
+  if (activeId === tab.id) {
+    const input = /** @type {HTMLInputElement | null} */ (el.browserUrl)
+    if (input && document.activeElement !== input) input.value = url
+    paintBrowserChrome(tab)
+  }
   renderTabs()
+}
+
+/**
+ * @param {WsTab} tab
+ * @returns {Electron.WebviewTag | null}
+ */
+function browserGuestOf(tab) {
+  if (!el.browserFrame || !tab) return null
+  return /** @type {Electron.WebviewTag | null} */ (
+    el.browserFrame.querySelector(`webview[data-tab-id="${CSS.escape(tab.id)}"]`)
+  )
+}
+
+/**
+ * 工具列的狀態：上一頁／下一頁能不能按、正在載入、載不起來的那塊。
+ * webview 還沒 attach 時問 `canGoBack()` 會丟例外，所以整段包起來。
+ * @param {WsTab} tab
+ */
+function paintBrowserChrome(tab) {
+  const guest = /** @type {any} */ (browserGuestOf(tab))
+  let back = false
+  let forward = false
+  let loading = false
+  try {
+    back = Boolean(guest?.canGoBack())
+    forward = Boolean(guest?.canGoForward())
+    loading = Boolean(guest?.isLoading())
+  } catch {
+    // 還沒 attach（剛建出來那一瞬間）：當成三個都不成立
+  }
+  if (el.browserBackBtn) el.browserBackBtn.disabled = !back
+  if (el.browserFwdBtn) el.browserFwdBtn.disabled = !forward
+  if (el.browserReloadBtn) {
+    el.browserReloadBtn.textContent = loading ? '✕' : '⟳'
+    el.browserReloadBtn.title = loading ? '停止載入' : '重新整理 (Ctrl+R)'
+    el.browserReloadBtn.setAttribute('aria-label', loading ? '停止載入' : '重新整理')
+  }
+  if (el.browserProgress) el.browserProgress.hidden = !loading
+  if (el.browserError) {
+    const failed = Boolean(tab.loadError) && !loading
+    el.browserError.hidden = !failed
+    // 錯誤字串來自 Chromium 的網路層（`ERR_CONNECTION_REFUSED` 那種），
+    // 不是上游回應的內容——這是使用者唯一看得到「為什麼開不起來」的地方
+    if (failed && el.browserErrorNote) el.browserErrorNote.textContent = tab.loadError || ''
+  }
 }
 
 /**
@@ -2221,8 +2465,13 @@ function syncBrowserLocation(url) {
  */
 function paintBrowser(tab) {
   const input = /** @type {HTMLInputElement | null} */ (el.browserUrl)
-  const guest = ensureBrowserGuest()
+  const guest = ensureBrowserGuest(tab)
   if (input) input.value = tab.url || ''
+  // 每個分頁一顆，所以切分頁＝只留自己那顆看得見
+  for (const node of [...(el.browserFrame?.querySelectorAll('webview') || [])]) {
+    /** @type {HTMLElement} */ (node).hidden = node !== guest
+  }
+  paintBrowserChrome(tab)
   if (!guest) return
   const href = safeUrl(tab.url || '')
   if (!href) {
@@ -2230,6 +2479,8 @@ function paintBrowser(tab) {
       guest.dataset.src = 'about:blank'
       guest.setAttribute('src', 'about:blank')
     }
+    // 空白分頁：游標直接落在網址列（不然使用者得自己去點那一格）
+    input?.focus()
     return
   }
   // dataset.src 記「這顆 webview 現在真的在哪」：切分頁來回時避免同址重載
@@ -2242,14 +2493,16 @@ function paintBrowser(tab) {
 function navigateBrowser() {
   const tab = findTab(activeId)
   const input = /** @type {HTMLInputElement | null} */ (el.browserUrl)
-  const guest = ensureBrowserGuest()
-  if (!tab || tab.kind !== 'browser' || !input || !guest) return
+  if (!tab || tab.kind !== 'browser' || !input) return
+  const guest = ensureBrowserGuest(tab)
+  if (!guest) return
   const href = safeUrl(input.value)
   if (!href) {
     showToast('只支援 http 與 https 的網址', 'error')
     return
   }
   tab.url = href
+  tab.loadError = ''
   input.value = href
   guest.dataset.src = href
   guest.setAttribute('src', href)
@@ -2258,7 +2511,37 @@ function navigateBrowser() {
   } catch {
     tab.title = '瀏覽器'
   }
+  paintBrowserChrome(tab)
   renderTabs()
+}
+
+/**
+ * 工具列與快捷鍵共用的一組動作。
+ * @param {'back' | 'forward' | 'reload' | 'devtools'} action
+ */
+function browserAction(action) {
+  const tab = findTab(activeId)
+  if (!tab || tab.kind !== 'browser') return
+  const guest = /** @type {any} */ (browserGuestOf(tab))
+  if (!guest) return
+  try {
+    if (action === 'back' && guest.canGoBack()) guest.goBack()
+    else if (action === 'forward' && guest.canGoForward()) guest.goForward()
+    else if (action === 'reload') {
+      // 同一顆鈕：正在載入時是「停止」
+      if (guest.isLoading()) guest.stop()
+      else {
+        tab.loadError = ''
+        guest.reload()
+      }
+    } else if (action === 'devtools') {
+      if (guest.isDevToolsOpened()) guest.closeDevTools()
+      else guest.openDevTools()
+    }
+  } catch {
+    // webview 還沒 attach：這一次就當沒按到
+  }
+  paintBrowserChrome(tab)
 }
 
 // ===== AI 會話結構化分頁（不需 resume） =====
@@ -2661,6 +2944,8 @@ export async function setActiveProject(next) {
   // 分頁清單換掉了，上一個專案的 Monaco model 沒人收——每切一次專案就多留
   // 一整份檔案內容（草稿在上面 `persistTabsNow` 的 `stash()` 已經收走了）
   disposeModelsExcept(tabs.map((t) => t.id))
+  // 上一個專案的瀏覽器分頁沒了，那幾顆 webview 也要跟著收（不收就一直在背景跑）
+  pruneBrowserGuests()
   // 還沒倒回去的那份影子是上一個專案的內容，別讓它落到新專案的畫面上；
   // 預覽區的 iframe／影片也要收（切走了還在背景跑）
   resetEditorSurface()
@@ -2727,6 +3012,12 @@ export function initWsTabs() {
   el.browser = document.getElementById('wsBrowser')
   el.browserUrl = document.getElementById('wsBrowserUrl')
   el.browserFrame = document.getElementById('wsBrowserFrame')
+  el.browserBackBtn = document.getElementById('wsBrowserBackBtn')
+  el.browserFwdBtn = document.getElementById('wsBrowserFwdBtn')
+  el.browserReloadBtn = document.getElementById('wsBrowserReloadBtn')
+  el.browserProgress = document.getElementById('wsBrowserProgress')
+  el.browserError = document.getElementById('wsBrowserError')
+  el.browserErrorNote = document.getElementById('wsBrowserErrorNote')
 
   // AI 會話元素
   el.aiSession = document.getElementById('wsAiSession')
@@ -2766,6 +3057,7 @@ export function initWsTabs() {
   el.unsupportedSize = document.getElementById('wsEditorUnsupportedSize')
   el.unsupportedType = document.getElementById('wsEditorUnsupportedType')
   el.unsupportedReveal = document.getElementById('wsEditorUnsupportedRevealBtn')
+  el.unsupportedOpen = document.getElementById('wsEditorUnsupportedOpenBtn')
 
   // Git Diff 元素
   el.diff = document.getElementById('wsDiff')
@@ -2925,6 +3217,12 @@ export function initWsTabs() {
     schedulePersistTabs()
   })
 
+  el.unsupportedOpen?.addEventListener('click', () => {
+    const tab = findTab(activeId)
+    if (!tab || tab.kind !== 'editor' || !tab.projectId || !tab.relPath) return
+    void openWithSystem(tab.projectId, tab.relPath)
+  })
+
   el.unsupportedReveal?.addEventListener('click', () => {
     const tab = findTab(activeId)
     if (!tab || tab.kind !== 'editor' || !tab.projectId || !tab.relPath) return
@@ -2990,7 +3288,9 @@ export function initWsTabs() {
   el.diffOpenEditorBtn?.addEventListener('click', () => {
     const tab = findTab(activeId)
     if (!tab || tab.kind !== 'diff' || !tab.projectId || !tab.relPath) return
-    void openEditorTab({ id: tab.projectId, name: '' }, tab.relPath)
+    // 這個分頁本來就是那個檔案：換回編輯那一面，不要再開一個同名分頁
+    if (tab.diffView) void backToEditorTab(tab)
+    else void openEditorTab({ id: tab.projectId, name: '' }, tab.relPath)
   })
 
   el.diffStageBtn?.addEventListener('click', async () => {
@@ -3011,7 +3311,10 @@ export function initWsTabs() {
       // （只換 diffData 的話統計是新的、畫面上那兩欄還是舊的）
       const res = await electronAPI.workspace.gitFileVersions(tab.projectId, tab.relPath, tab.staged)
       tab.versions = (res?.ok && res.data && !res.data.binary && !res.data.truncated) ? res.data : null
-      tab.title = `${tab.staged ? '[暫存] ' : ''}${tab.relPath.split('/').pop() || tab.relPath}`
+      // 就地切換的那種分頁本體是那個檔案，標題不掛 `[暫存]`（面的差別在工具列上講）
+      if (!tab.diffView) {
+        tab.title = `${tab.staged ? '[暫存] ' : ''}${tab.relPath.split('/').pop() || tab.relPath}`
+      }
       renderTabs()
       paintDiff(tab)
       schedulePersistTabs()
@@ -3021,10 +3324,11 @@ export function initWsTabs() {
   })
 
   document.getElementById('wsBrowserGoBtn')?.addEventListener('click', navigateBrowser)
-  document.getElementById('wsBrowserReloadBtn')?.addEventListener('click', () => {
-    const guest = el.browserFrame?.querySelector('webview')
-    if (guest) /** @type {any} */ (guest).reload()
-  })
+  el.browserBackBtn?.addEventListener('click', () => browserAction('back'))
+  el.browserFwdBtn?.addEventListener('click', () => browserAction('forward'))
+  el.browserReloadBtn?.addEventListener('click', () => browserAction('reload'))
+  document.getElementById('wsBrowserDevBtn')?.addEventListener('click', () => browserAction('devtools'))
+  document.getElementById('wsBrowserRetryBtn')?.addEventListener('click', () => browserAction('reload'))
   document.getElementById('wsBrowserExternalBtn')?.addEventListener('click', () => {
     const href = safeUrl(/** @type {HTMLInputElement} */ (el.browserUrl)?.value || '')
     if (href) void electronAPI.workspace.openExternal(href)
@@ -3034,6 +3338,39 @@ export function initWsTabs() {
     if (event.key === 'Enter') {
       event.preventDefault()
       navigateBrowser()
+    }
+  })
+  // 瀏覽器的快捷鍵。**只在瀏覽器分頁、而且工作區真的看得見時**才收，
+  // 不然會把別頁的 Alt+← 與 Ctrl+R 吃掉。
+  // 注意：焦點在 webview 裡面時這些事件根本不會傳到這裡（guest 有自己的
+  // 事件迴圈），所以按鈕本身仍然是主要入口。
+  document.addEventListener('keydown', (event) => {
+    const tab = findTab(activeId)
+    if (!tab || tab.kind !== 'browser') return
+    const main = document.getElementById('termMain')
+    if (!main || main.offsetParent === null) return
+    if (event.altKey && !event.ctrlKey && !event.metaKey
+      && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+      event.preventDefault()
+      browserAction(event.key === 'ArrowLeft' ? 'back' : 'forward')
+      return
+    }
+    if (event.key === 'F12') {
+      event.preventDefault()
+      browserAction('devtools')
+      return
+    }
+    if (event.key === 'F5' || ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'r')) {
+      event.preventDefault()
+      browserAction('reload')
+      return
+    }
+    // Ctrl+L＝跳到網址列（跟一般瀏覽器一樣），順手把整段選起來
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'l') {
+      event.preventDefault()
+      const input = /** @type {HTMLInputElement | null} */ (el.browserUrl)
+      input?.focus()
+      input?.select()
     }
   })
 

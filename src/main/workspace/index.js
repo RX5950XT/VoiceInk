@@ -121,6 +121,25 @@ async function reveal(projectId, relPath) {
 }
 
 /**
+ * 用系統的預設程式開啟專案裡的一個檔案——`.exe` 就是把它跑起來，
+ * `.docx` 就是開 Word。跟檔案總管按兩下同一件事。
+ *
+ * 路徑一樣只收專案內的相對路徑（`resolveExisting` 會把符號連結也解開再比一次），
+ * 所以 renderer 送不出「跑 C:\Windows\System32\…」這種要求。
+ *
+ * @param {string} projectId
+ * @param {string} relPath
+ * @returns {Promise<{ opened: true }>}
+ */
+async function openEntry(projectId, relPath) {
+  const full = files.resolveExisting(await rootOf(projectId), relPath)
+  // 回傳字串＝失敗原因（Electron 的 API 就是這樣設計的），空字串才是成功
+  const error = await shell.openPath(full)
+  if (error) throw fail('OPEN_FAILED', '這個檔案打不開')
+  return { opened: true }
+}
+
+/**
  * 用系統瀏覽器開一個網址（內建瀏覽器撞到 X-Frame-Options 時的退路）。
  *
  * **只放行 http(s)**：這個字串來自 renderer 的網址列，`file:` 會用檔案總管開本機檔案、
@@ -248,6 +267,7 @@ module.exports = {
   listFiles,
   listPorts,
   reveal,
+  openEntry,
   openExternal,
   gitStatus,
   gitLog,

@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    VoiceInk 的 Windows 殼層 sidecar。
+
+    為什麼要獨立一顆執行檔：右鍵選單裡的 7-Zip／WinRAR／Git／「傳送到」／「內容」
+    都是 COM 的 `IContextMenu` 動態處理常式——**登錄檔裡沒有它們的項目文字**，
+    只有一個 CLSID。要拿到那些項目，只能真的把介面叫起來讓它往 HMENU 裡塞，
+    再把塞好的東西讀回來。同一顆程序順便用 `SHGetFileInfo` 問圖示重疊（overlay）
+    索引，Google Drive／OneDrive 的同步狀態標記就是那個。
+
+    為什麼不做成 Node 原生模組：跟 `dictation-hook` 同一個理由——node-gyp／ABI
+    對齊比多一顆小程式貴。
+
+    **這顆不提權**：殼層擴充要以使用者身分跑，提權反而會讓 7-Zip 那類看不到
+    使用者自己的設定。
+
+    net8.0 而不是 net8.0-windows：後者會把 WindowsDesktop 整包拉進自帶執行環境
+    （感測器那顆量過，72MB → 37MB 的差距）。所以圖示不經 System.Drawing，
+    直接把 BGRA 位元組交給 renderer 用 canvas 畫。
+
+    建置：npm run build:shell
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>VoiceInkShell</AssemblyName>
+    <RootNamespace>VoiceInkShell</RootNamespace>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <!-- COM interop 走內建 marshalling -->
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <!-- 不開 trimming：整支都是 COM 介面，裁掉會在執行時才炸，而且是安靜地回空選單 -->
+    <PublishTrimmed>false</PublishTrimmed>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <DebugType>none</DebugType>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+</Project>

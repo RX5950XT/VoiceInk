@@ -38,9 +38,10 @@ npm run electron:pack    # 免安裝預覽 → dist/win-unpacked/VoiceInk.exe（
 npm run electron:build   # 完整打包：NSIS 安裝檔＋ win-unpacked → dist/
 npm run build:sensors    # 系統監控提權感測器 sidecar（需 .NET 8 SDK）→ resources/sensors/
 npm run build:hook       # 語音輸入原生熱鍵 sidecar（需 .NET 8 SDK）→ resources/hook/
+npm run build:shell      # 檔案總管殼層 sidecar（需 .NET 8 SDK）→ resources/shell/
 ```
 
-`resources/sensors/`、`resources/hook/` 不進版控（沒建置也打得起來，只是那兩個功能降級）。
+`resources/sensors/`、`resources/hook/`、`resources/shell/` 不進版控（沒建置也打得起來，只是那兩個功能降級；shell 沒建＝右鍵少 7-Zip／WinRAR、沒有 Drive 綠勾）。
 打包前先關掉 `dist/win-unpacked/VoiceInk.exe`。使用者同時在用電腦時，桌面 QA 只能用 CDP 背景操作。
 
 ### 發行流程（五步一整條，漏一步舊版永遠檢查不到更新，且**不會報錯**）
@@ -148,7 +149,7 @@ tag 要與 `package.json` 的 version 一致。
 -「讀過」跟「改過」要分開回；工具名不認得時算「讀過」，**不可以憑空說人家改過**。
 - **存檔一定要帶開檔當下的 mtime**（`STALE` → 提示條給比較／重新載入／覆寫／保留編輯，草稿一個字都不能動）；同一檔案的寫入要排隊（Windows 上兩個 rename 指向同一目的地會 EPERM）；草稿上限（4MB，main 與 renderer 同一個數字）比存檔上限（50MB）小，超過的草稿**整個欄位不送**並提示先存檔（送空字串會把分頁還原成空白的未存狀態）。
 - **開分頁的每一次 await 之後都要核對 `projectSwitch`，回來還要再 `findTab` 一次**；改名／搬檔後要 `retargetTabs`（分頁 id 內嵌相對路徑，不接的話存檔會把舊檔重新建出來）。
-- `git status` 用 `--porcelain=v2 -b -z`；欄位是**位置**決定的，改名（`2`）那型後面還跟著一格原檔名。衝突（`u`）要自成一組。`git log` 的欄位分隔用 `%x1f`，**不能跟 `-z` 混用**；`for-each-ref` **不吃 `%x1f`**。
+- `git status` 用 `--porcelain=v2 -b -z`；欄位是**位置**決定的，改名（`2`）那型後面還跟著一格原檔名。衝突（`u`）要自成一組。`git log` 的欄位分隔用 `%x1f`，**不能跟 `-z` 混用**；`for-each-ref` **不吃 `%x1f`**。展開看檔案用的就是 `--numstat` 那幾列（上限 `MAX_LOG_FILES`），要帶 `--no-renames` 與 `-c core.quotepath=false`（改名路徑與中文檔名才點得開）。
 - 跟分支比要比 `merge-base` 不是分支頂端；`--numstat` 一定要配 `--no-renames`。切到非 git 專案時 `renderGit` 的提早 return **要把工作樹、分支下拉、審閱清單三塊都清乾淨**。
 - **Git 面板列上的 `+新增 −刪除` 來自 `status()` 多跑的一次 `diff --numstat -z --no-renames HEAD`**：
   未追蹤的檔案沒有數字（git 不 diff 它），**全新的 repo 還沒有 HEAD，那一跑會失敗——當成沒數字，不是錯誤**。
@@ -175,6 +176,10 @@ tag 要與 `package.json` 的 version 一致。
 - **存檔後要重讀一次現在的內容**（`monaco ? currentValue() : text.value`）：等 main 寫檔的期間使用者可能又打了字，
   直接把送出去的那份塞回 `tab.content` 會把那幾個字吃掉。回歸 `test-workspace-state.js` 的「存檔守衛」。
 - 內建瀏覽器是 `<webview>`：`webviewTag` **只開在主視窗**、guest 不掛 preload、popup 在 app 層用 `web-contents-created` ＋ `setWindowOpenHandler` 收斂。網址正規化要先照原樣解析、**協定不是 http(s) 才**補 `http://`（`localhost:5173` 會被當成協定）。本機 HTML 預覽用 `srcdoc` ＋ `sandbox="allow-scripts"`，**不給 `allow-same-origin`**。
+  **每個分頁一顆 webview**（共用一顆切回來整頁重載，「上一頁」會走進別的分頁的歷史）；UA 的 `display: flex` 壓得過 `[hidden]`，要自己寫 `webview[hidden] { display: none }`。工具列只有一組，背景分頁的 `did-start-loading` 不准改正在看的那一頁。關掉分頁／換專案要 `pruneBrowserGuests`。
+- **檢視變更不新開分頁**：同一個檔案（id `e:`）就地把 `kind` 換成 `diff` 並設 `diffView`。存檔時 `kind` 仍要寫 `editor`，否則下次開專案草稿接不回來。
+- **檔案樹執行**：`.exe`／`.lnk` 走 `workspace:openEntry`（`resolveExisting`，只收專案內）；`.cmd`／`.ps1` 開終端機跑。`.js`／`.py` 點下去仍開編輯器。三份清單要有 `openEntry`。
+- **Git 動作鈕**：側欄拖到 180px 時要 `flex-wrap`，按鈕不准 `min-width: 0`（縮了字會溢出疊在一起）。
 - 分頁拖曳是 pointer 跟手＋FLIP（不是 HTML5 DnD），transform 只吃 X、讓位距離用量出來的 gap、要加 `scrollLeft` 變化量；檔案樹的拖曳**刻意**用 HTML5 DnD（兩邊取捨不同，不要統一）。切分頁的 click 掛在 `.ws-tab-open` 不是 `.ws-tab`。
 - 檔案樹展開／收合只動自己那一列後面的子樹（整棵重畫會把捲動位置跳回最上面）。
 - 新增／改名的名字要在 `checkName` 就擋（斜線、冒號、Windows 保留檔名）；刪除要擋專案根目錄；搬檔要擋「搬進自己底下」與同名覆蓋。
@@ -186,6 +191,7 @@ tag 要與 `package.json` 的 version 一致。
 - **整機搜尋不准自己 walk C:\\**：檔名搜尋只代跑本機 `uffs`（NTFS MFT）。pattern 拒 `>` regex 與以 `-` 開頭的參數。進檔案頁自動下載並跳一次 UAC 裝 Access Broker、拉起 daemon；開機不跳 UAC。使用者按否就寫 `uffsAuto: false`，只留「啟用快速搜尋」。
 - **`uffs.exe` 不打進 asar**；只跑 `<userData>/uffs/`，不認 PATH／`%LOCALAPPDATA%\uffs`。zip checksum 缺或對不上就失敗。關 App **不停** UFFS daemon。刪／改名／搬移擋磁碟根目錄、`%SystemRoot%` 本身、使用者家目錄本身（`assertMutable`）；家目錄根層可以新增／貼上／還原子項（`assertCreatable` 只擋磁碟根與 Windows 目錄）。`resolveExisting` 回使用者路徑，刪 junction 不跟目標。清空回收筒不吃 list 的 2000 上限。預設刪除丟進系統資源回收筒（寫 `$I`／`$R`，Electron 裡走 `shell.trashItem`）；`{ permanent: true }` 才 `rm`。複製／搬移撞名產出 `name (2).ext`，不覆寫。CDP 暫存 userData 與沙箱的 `uffsAuto` 關掉，且忽略 `uffsEnsure({ force })`，避免自動化卡在 UAC。
 - 三份清單：`explorer/index.js` exports、`main.js` 的 `registerExplorerIpc` service、`preload.js` 的 `electronAPI.explorer`。回歸 `test-explorer.js` 的 [Q][Q2]。
+- **右鍵的 7-Zip／WinRAR／「傳送到」不能從登錄檔靜態列舉**（只有 CLSID）：要 `IContextMenu` sidecar（`native/explorer-shell`，`npm run build:shell`）。pidl 陣列一定要 `LPArray`（預設 SAFEARRAY ＝ GetUIObjectOf AV）；路徑只吃反斜線。子選單要 `CMF_SYNCCASCADEMENU` ＋ `WM_INITMENUPOPUP`，而且 **IContextMenu3 不做事時要退回 IContextMenu2**（「傳送到」只實作 v2，7-Zip 實作 v3）。Google Drive 綠勾走 `SHGFI_ICON | SHGFI_ADDOVERLAYS` 拿已經疊好的圖，**不要** `IImageList::GetOverlayImage`（每個槽位都回同一張）。沒建 sidecar 就少那些項、資料夾維持 emoji。回歸 `test-explorer-shell.js` ＋ `probe-explorer-shell.js`。
 
 ### 終端機
 
@@ -454,7 +460,7 @@ tag 要與 `package.json` 的 version 一致。
 | 範圍 | 指令 |
 |---|---|
 | 開發沙箱 | `probe-dev-sandbox.js`（**實測**沙箱讀得到你的模型與供應商，而你正在用的那份一個位元組都沒動；動 `dev-sandbox.js` 前後都要跑）|
-| 檔案總管 | `test-explorer.js`（路徑守衛＋自種暫存目錄）＋ `e2e-explorer-cdp.js`（暫存 user-data-dir，**不點第一列**）＋ `probe-explorer-uffs.js`（機器上真有 `uffs` 才打真搜尋） |
+| 檔案總管 | `test-explorer.js`（路徑守衛＋自種暫存目錄）＋ `e2e-explorer-cdp.js`（暫存 user-data-dir，**不點第一列**）＋ `probe-explorer-uffs.js`（機器上真有 `uffs` 才打真搜尋）＋ `test-explorer-shell.js`（殼層選單去重／sidecar 協定）＋ `probe-explorer-shell.js`（真 IContextMenu：7-Zip／WinRAR／傳送到、Drive 綠勾） |
 | 專案工作區 | `test-workspace.js`／`-nav`／`-ui`／`-state`／`-perf` ＋ `e2e-workspace-cdp.js`（暫存 user-data-dir ＋自種專案）；動 Monaco 前後跑 `probe-workspace-monaco.js`，動 PDF 前跑 `probe-workspace-pdf.js`；動編輯器／diff／預覽／專案切換前後跑 `probe-workspace-perf.js`（**打包版**開 1.4MB／4 萬行的檔，數 `createModel` 有沒有重做、量輸入法游標位置、驗專案隔離）；動大檔開關與記憶體前後跑 `probe-workspace-bigfile.js`（**打包版**量 1.4MB／4 萬行的開檔毫秒數、並排變更毫秒數，以及關掉之後堆積回不回得去、預覽的 iframe 有沒有被收掉） |
 | 終端機 | `test-terminal.js` ＋ `test-terminal-ui.js`（輸出合併、輸入法對位）＋ `probe-terminal-flicker.js`（**會叫到最前面**：DOM vs WebGL 量游標重建與 textarea 抖動）＋ `probe-terminal-upgrade.js`（**打包版**驗 WebGL／Unicode 11／字級／搜尋／分割／OSC 標題與 cwd）＋ `probe-terminal-ime.js`（**打包版**真的走一次 Chromium 輸入法組字）＋ `e2e-terminal.js`（真 ConPTY）＋ `e2e-terminal-cdp.js` ＋ `test-terminal-host.js`（獨立宿主）＋ `test-terminal-links.js` ＋ `probe-terminal-links.js`（真 xterm 座標，`npx electron`） ＋ `probe-terminal-editor.js`（Ctrl+G 的 $EDITOR 橋接：真的把那支 batch 跑起來，量它會不會卡住、送出與取消放不放得走） ＋ `probe-terminal-host-version.js`（唯讀：問這台機器上真的跑著的宿主是哪一份執行環境、還活著幾個 shell——「更新了卻沒生效」先跑這支）；動宿主或 `build.files`／`asarUnpack` 前後跑 `probe-terminal-restart.js`（**打包版**真的關 App、覆寫安裝檔再開回來）；管理員 `probe-terminal-admin.js`（免 UAC）／`probe-terminal-admin-elevate.js`（**跳一次 UAC**）；動 `foreground.js` 前後跑 `probe-terminal-foreground.js`（**會開／關記事本**，重現「記事本已經開著」再開第二次）；動配色或桌布前後跑 `probe-terminal-background.js`（**打包版**量桌布那一層畫不畫得出來、字有沒有被 opacity 一起壓掉、拿掉圖之後底色回不回得到不透明）|
 | 聊天／Markdown | `e2e-chat.js`（mock SSE）＋ `e2e-chat-cdp.js` ＋ `test-markdown.js` |

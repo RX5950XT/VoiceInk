@@ -281,6 +281,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** 這台機器正在聽的本機 TCP 埠（跟專案無關） */
     listPorts: () => ipcRenderer.invoke('workspace:listPorts'),
     reveal: (id, relPath) => ipcRenderer.invoke('workspace:reveal', id, relPath),
+    /** 用系統預設程式開啟專案裡的檔案（`.exe` ＝把它跑起來） */
+    openEntry: (id, relPath) => ipcRenderer.invoke('workspace:openEntry', id, relPath),
     /** 用系統瀏覽器開（main 只放行 http(s)） */
     openExternal: (url) => ipcRenderer.invoke('workspace:openExternal', url),
     gitStatus: (id) => ipcRenderer.invoke('workspace:gitStatus', id),
@@ -651,6 +653,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     moveEntry: (fromPath, toDir) => ipcRenderer.invoke('explorer:moveEntry', fromPath, toDir),
     openPath: (target) => ipcRenderer.invoke('explorer:openPath', target),
     fileIcon: (target) => ipcRenderer.invoke('explorer:fileIcon', target),
+    shellMenu: (spec) => ipcRenderer.invoke('explorer:shellMenu', spec),
+    shellInvoke: (token, cmd, dir) => ipcRenderer.invoke('explorer:shellInvoke', token, cmd, dir),
+    shellRelease: (token) => ipcRenderer.invoke('explorer:shellRelease', token),
     reveal: (target) => ipcRenderer.invoke('explorer:reveal', target),
     setClipboard: (items, mode) => ipcRenderer.invoke('explorer:setClipboard', items, mode),
     paste: (toDir) => ipcRenderer.invoke('explorer:paste', toDir),

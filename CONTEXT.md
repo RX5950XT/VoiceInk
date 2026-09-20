@@ -15,6 +15,13 @@ AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定�
 
 ## 架構
 
+### 工作區：執行檔、瀏覽器、Git 面板（2026-09-20）
+
+- 檔案樹點 `.exe`／`.lnk` 用系統開啟（`workspace:openEntry` → `shell.openPath`，路徑只收專案內）；點 `.cmd`／`.bat`／`.ps1`／`.sh` 開終端機跑。`.js`／`.py` 仍開編輯器，右鍵才有「在終端機執行」。
+- 內建瀏覽器**每個分頁一顆 webview**（各自歷史與捲動），工具列有上一頁／下一頁／停止、載入中、錯誤頁、devtools；快捷鍵 Alt+←／→、F5／Ctrl+R、F12、Ctrl+L。
+- Git 動作鈕跟著側欄寬度換行（180px 也不疊字）；最近提交可展開看 `--numstat` 那幾列。
+- 「檢視變更」同一個檔案就地切換編輯 ⇄ 變更，不新開分頁。測試：`test-workspace.js`、`test-workspace-ui.js`。
+
 ### 檔案總管分頁與首頁（2026-09-19）
 
 - `explorer-page.js` 管理各分頁的路徑與上一頁／下一頁；切換 App 頁面仍保留。分頁只保留於本次開啟，重啟沿用既有 `lastPath`。
@@ -22,7 +29,8 @@ AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定�
 - `explorer-home.js` 畫 `thispc` 虛擬首頁，顯示常用資料夾、磁碟容量與網路磁碟；沒有 `lastPath` 時預設首頁。不能把首頁當資料夾新增／貼上。
 - `explorer:driveInfo` 非同步讀取 CIM 磁碟資訊（8 秒上限，同時查詢共用一份）；晚到回覆不得改到另一分頁。測試：`test-explorer-page-state.js`、`test-explorer.js`、`e2e-explorer-cdp.js`。
 - `.lnk` 經 `resolvePath` 解析（最多 16 層，拒循環）；`openPath` 遇到資料夾回傳導航目的地，renderer 留在目前分頁。一般檔案捷徑仍執行原捷徑，保留參數。
-- `explorer-icons.js` 只載入可見檔案圖示（同時最多 4 筆、快取 256 筆）；`explorer:fileIcon` 由 `app.getFileIcon` 讀取，資料夾使用資料夾圖示、捷徑附箭頭。滑鼠側鍵 3／4 走目前分頁歷史，攔截瀏覽器預設跳頁。
+- `explorer-icons.js` 只載入可見列圖示（同時最多 4 筆、快取 256 筆）；`explorer:fileIcon` 優先問殼層 sidecar 拿**已經疊好 overlay 的圖**（Google Drive 綠勾／雲朵跟檔案總管同一張），問不到才退回 `app.getFileIcon`／資料夾 emoji。捷徑附箭頭。滑鼠側鍵 3／4 走目前分頁歷史，攔截瀏覽器預設跳頁。
+- 右鍵選單：App 自己的開啟／剪下複製貼上／釘側欄，再加上殼層 `IContextMenu`（7-Zip／WinRAR／Git／傳送到／內容）。擴充項目畫進玻璃選單，子選單 hover 展開。sidecar 是 `native/explorer-shell` → `resources/shell/VoiceInkShell.exe`（`npm run build:shell`），沒建就少那些項。測試：`test-explorer-shell.js`、`probe-explorer-shell.js`。
 
 ```
 src/main/
@@ -43,7 +51,8 @@ src/main/
                       git.js（porcelain=v2 -z 解析＋commit／push／審閱）、agents.js（本機 AI session）、
                       worktree.js、watch.js（一次看一個專案的 recursive watcher）、index.js、ipc.js
   explorer/           整機檔案總管：paths.js（resolveAbs）、fs.js、recycle.js（系統資源回收筒）、
-                      drives.js、watch.js、uffs.js（代跑 UFFS CLI）、store.js（explorer.json）、index.js、ipc.js
+                      drives.js、watch.js、uffs.js（代跑 UFFS CLI）、store.js（explorer.json）、
+                      shell-host.js／shell.js（IContextMenu sidecar）、index.js、ipc.js
   hfmodels/           hub.js（HF API 唯讀）、catalog.js、gguf.js（檔頭＋KV 估算）、hardware.js、plan.js、
                       fit.js（官方 llama-fit-params）、download.js、library.js、presets.js（INI）、
                       runtime.js（router 生死）、bench.js、index.js、ipc.js
@@ -74,6 +83,7 @@ src/renderer/scripts/
   list-reorder.js  grid-reorder.js  hf-page.js  sysmon-fans.js  sysmon-oc.js  sysmon-screentime.js
 
 native/  dictation-hook/（WH_KEYBOARD_LL → resources/hook/）  sysmon-sensors/（→ resources/sensors/）
+         explorer-shell/（IContextMenu + overlay → resources/shell/）
 scripts/ 測試與探針（指令表見 CLAUDE.md「驗證方式」），dev-sandbox.js ＝ npm run dev:sandbox
 ```
 

@@ -47,6 +47,7 @@ let hits = []
 let searching = false
 let searchSeq = 0
 let navSeq = 0
+let contextMenuSeq = 0
 /** @type {ReturnType<typeof setTimeout> | 0} */
 let searchTimer = 0
 let truncated = false
@@ -458,9 +459,9 @@ function rowEl(entry) {
   icon.textContent = iconFor(entry)
   icon.setAttribute('aria-hidden', 'true')
   icon.classList.toggle('is-shortcut', entry.ext === 'lnk')
-  if (!inRecycle() && !entry.dir) {
+  if (!inRecycle() && entry.path) {
     icon.dataset.path = entry.path
-    icon.dataset.iconKey = `${entry.path}:${entry.mtimeMs}`
+    icon.dataset.iconKey = `${entry.path}:${entry.mtimeMs || 0}:${entry.dir ? 'd' : 'f'}`
   }
   const label = document.createElement('span')
   label.textContent = inSearch() ? entry.path : entry.name
@@ -1113,31 +1114,68 @@ async function emptyBin() {
 }
 
 function openContextMenu(e, items) {
-  showExplorerMenu({ x: e.clientX, y: e.clientY }, {
-    recycle: inRecycle(),
-    items,
-    actions: {
-      restore: () => void restoreItems(items),
-      purge: () => void deleteItems(items, { permanent: true }),
-      empty: () => void emptyBin(),
-      open: () => void openEntry(items[0]),
-      openTab: () => void newTab(items[0].path),
-      reveal: () => void revealItems(items),
-      pin: () => void pinEntries(items),
-      pinHere: () => void pinPath(cwd, ''),
-      cut: () => void clipboard(items, 'cut'),
-      copy: () => void clipboard(items, 'copy'),
-      paste: () => void pasteHere(),
-      copyPath: () => copyPaths(items),
-      copyName: () => copyNames(items),
-      shortcut: () => void makeShortcut(items),
-      rename: () => void renameItem(items[0]),
-      remove: () => void deleteItems(items),
-      newFolder: () => void newFolder(),
-      newFile: () => void newFile(),
-      refresh: () => void refreshAfterMutate()
+  const request = ++contextMenuSeq
+  const navigation = navSeq
+  const at = { x: e.clientX, y: e.clientY }
+  const recycle = inRecycle()
+  const extended = Boolean(e.shiftKey)
+  const folder = cwd
+  void (async () => {
+    let shellItems = []
+    let token = 0
+    if (!recycle && folder && folder !== THIS_PC) {
+      try {
+        const res = await electronAPI.explorer.shellMenu({
+          paths: items.map((item) => item.path).filter(Boolean),
+          dir: folder,
+          extended
+        })
+        if (res && res.ok && res.data) {
+          shellItems = res.data.items || []
+          token = Number(res.data.token) || 0
+        }
+      } catch {
+        // sidecar 沒建置就只顯示 App 自己的項目
+      }
     }
-  })
+    if (request !== contextMenuSeq || navigation !== navSeq || !$('page-explorer')?.classList.contains('active')) {
+      if (token) void electronAPI.explorer.shellRelease(token)
+      return
+    }
+    showExplorerMenu(at, {
+      recycle,
+      items,
+      shell: shellItems,
+      invokeShell: (cmd) => {
+        if (!token) return Promise.resolve()
+        return electronAPI.explorer.shellInvoke(token, cmd, folder)
+      },
+      onClose: () => {
+        if (token) void electronAPI.explorer.shellRelease(token)
+      },
+      actions: {
+        restore: () => void restoreItems(items),
+        purge: () => void deleteItems(items, { permanent: true }),
+        empty: () => void emptyBin(),
+        open: () => void openEntry(items[0]),
+        openTab: () => void newTab(items[0].path),
+        reveal: () => void revealItems(items),
+        pin: () => void pinEntries(items),
+        pinHere: () => void pinPath(cwd, ''),
+        cut: () => void clipboard(items, 'cut'),
+        copy: () => void clipboard(items, 'copy'),
+        paste: () => void pasteHere(),
+        copyPath: () => copyPaths(items),
+        copyName: () => copyNames(items),
+        shortcut: () => void makeShortcut(items),
+        rename: () => void renameItem(items[0]),
+        remove: () => void deleteItems(items),
+        newFolder: () => void newFolder(),
+        newFile: () => void newFile(),
+        refresh: () => void refreshAfterMutate()
+      }
+    })
+  })()
 }
 
 function copyNames(items) {

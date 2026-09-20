@@ -2940,6 +2940,17 @@ body:has(.ws-monaco .find-widget.visible) .workbench-hover-container {
   line-height: 1.5;
 }
 
+.ws-unsupported-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.ws-unsupported-actions .btn[hidden] {
+  display: none;
+}
+
 .ws-editor-media {
   display: flex;
   flex-direction: column;
@@ -3099,19 +3110,28 @@ body:has(.ws-monaco .find-widget.visible) .workbench-hover-container {
 .ws-browser-bar {
   flex: none;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   min-width: 0;
 }
 
+/* 視窗窄的時候先讓網址列縮、按鈕換行，不要把字擠到疊在一起 */
+.ws-browser-bar .btn,
+.ws-browser-bar .btn-icon {
+  flex: none;
+  white-space: nowrap;
+}
+
 .ws-browser-url {
-  flex: 1;
+  flex: 1 1 160px;
   min-width: 0;
   font-family: var(--font-mono);
 }
 
-/* webview 的宿主容器；webview 本身由 JS 建立並吃滿容器 */
+/* webview 的宿主容器；webview 本身由 JS 建立並吃滿容器（每個分頁一顆） */
 .ws-browser-frame {
+  position: relative;
   flex: 1;
   min-height: 0;
   width: 100%;
@@ -3119,12 +3139,84 @@ body:has(.ws-monaco .find-widget.visible) .workbench-hover-container {
   border-radius: var(--radius-md);
   background-color: var(--surface-solid);
   display: flex;
+  overflow: hidden;
 }
 
 .ws-browser-frame webview {
   flex: 1;
   min-width: 0;
   min-height: 0;
+}
+
+/* webview 的 UA 樣式是 `display: flex`，`[hidden]` 壓不過它——
+   沒有這一條，切到別的瀏覽器分頁時兩顆會並排在一起 */
+.ws-browser-frame webview[hidden] {
+  display: none;
+}
+
+/* 載入中的那條細線。不知道進度（webview 不給百分比），所以是來回跑的一段 */
+.ws-browser-progress {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  overflow: hidden;
+  background-color: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.ws-browser-progress[hidden] {
+  display: none;
+}
+
+.ws-browser-progress::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 30%;
+  background-color: var(--accent-primary);
+  animation: ws-browser-progress 1.1s ease-in-out infinite;
+}
+
+@keyframes ws-browser-progress {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(333%); }
+}
+
+.ws-browser-error {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  background-color: var(--surface-solid);
+  text-align: center;
+}
+
+.ws-browser-error[hidden] {
+  display: none;
+}
+
+.ws-browser-error-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.ws-browser-error-note {
+  margin: 0;
+  max-width: 420px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 /* ── AI 會話結構化卡片檢視 ── */
@@ -3473,6 +3565,11 @@ body:has(.ws-monaco .find-widget.visible) .workbench-hover-container {
   min-width: 0;
 }
 
+/* 分支名長起來會把這幾顆圖示鈕壓成半顆（它們沒有內容撐著） */
+.ws-right-head .btn-icon {
+  flex: none;
+}
+
 .ws-right-project,
 .ws-git-branch {
   flex: 1;
@@ -3502,6 +3599,7 @@ body:has(.ws-monaco .find-widget.visible) .workbench-hover-container {
   flex-direction: column;
   min-width: 160px;
   padding: 4px;
+  overflow: visible;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   background-color: var(--surface-solid);
@@ -3509,6 +3607,9 @@ body:has(.ws-monaco .find-widget.visible) .workbench-hover-container {
 }
 
 .ws-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 6px 10px;
   border: none;
   border-radius: var(--radius-sm);
@@ -3528,6 +3629,39 @@ body:has(.ws-monaco .find-widget.visible) .workbench-hover-container {
 .ws-menu-item.is-danger:hover {
   color: var(--danger);
   background-color: var(--surface-hover);
+}
+
+.ws-menu-item:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.ws-menu-icon,
+.ws-menu-icon-slot {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+.ws-menu-icon {
+  object-fit: contain;
+}
+
+.ws-menu-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.ws-menu-item.has-sub::after {
+  content: '▸';
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+.ws-menu-sub {
+  position: fixed;
+  min-width: 160px;
 }
 
 .ws-menu-sep {
@@ -4124,11 +4258,60 @@ body:has(.ws-monaco .find-widget.visible) .workbench-hover-container {
   background-color: var(--surface-hover);
 }
 
+/* 主旨那一塊是展開鈕：`<button>` 預設會置中、截字、吃掉字型，全部要蓋回來 */
 .ws-git-log-top {
   display: flex;
   align-items: flex-start;
   gap: 8px;
   min-width: 0;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ws-git-log-caret {
+  flex: none;
+  width: 10px;
+  color: var(--text-tertiary);
+  line-height: 1.4;
+}
+
+.ws-git-log-files {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: 4px;
+  padding-left: 18px;
+}
+
+.ws-git-log-files[hidden] {
+  display: none;
+}
+
+.ws-git-log-file {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  padding: 3px 6px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ws-git-log-file:hover {
+  background-color: var(--surface-hover);
+  color: var(--text-primary);
 }
 
 .ws-git-log-subject {
@@ -4289,13 +4472,17 @@ body:has(.ws-monaco .find-widget.visible) .workbench-hover-container {
   resize: vertical;
 }
 
+/* 側欄拖得到 180px，三顆鈕擺不下一列：**換行**，不要讓它們縮。
+   縮（`min-width: 0`）＝字溢出按鈕框，看起來就是字疊在一起。 */
 .ws-git-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
 .ws-git-actions .btn {
-  flex: 1;
+  flex: 1 1 auto;
+  white-space: nowrap;
 }
 
 /* ── AI 對話記錄 ── */
@@ -4483,14 +4670,20 @@ body:has(.ws-monaco .find-widget.visible) .workbench-hover-container {
 
 .ws-review-bar {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   align-items: center;
   padding: 0 8px;
 }
 
 .ws-review-bar .select {
-  flex: 1;
+  flex: 1 1 120px;
   min-width: 0;
+}
+
+.ws-review-bar .btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .ws-review-files {
