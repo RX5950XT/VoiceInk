@@ -61,6 +61,12 @@ native/dictation-hook/bin/
 native/dictation-hook/obj/
 resources/hook/
 
+# 檔案總管的殼層 sidecar（右鍵 7-Zip／WinRAR、Google Drive 綠勾）
+# 打包前跑 `npm run build:shell` 產生；不進版控
+native/explorer-shell/bin/
+native/explorer-shell/obj/
+resources/shell/
+
 # 指示器外觀檢查的截圖（scripts/probe-dictation-hud.js）
 .tmp-hud/
 

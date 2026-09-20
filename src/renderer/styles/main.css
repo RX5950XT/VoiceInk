@@ -3502,6 +3502,7 @@ body:has(.ws-monaco .find-widget.visible) .workbench-hover-container {
   flex-direction: column;
   min-width: 160px;
   padding: 4px;
+  overflow: visible;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   background-color: var(--surface-solid);
@@ -3509,6 +3510,9 @@ body:has(.ws-monaco .find-widget.visible) .workbench-hover-container {
 }
 
 .ws-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 6px 10px;
   border: none;
   border-radius: var(--radius-sm);
@@ -3528,6 +3532,39 @@ body:has(.ws-monaco .find-widget.visible) .workbench-hover-container {
 .ws-menu-item.is-danger:hover {
   color: var(--danger);
   background-color: var(--surface-hover);
+}
+
+.ws-menu-item:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.ws-menu-icon,
+.ws-menu-icon-slot {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+.ws-menu-icon {
+  object-fit: contain;
+}
+
+.ws-menu-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.ws-menu-item.has-sub::after {
+  content: '▸';
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+.ws-menu-sub {
+  position: fixed;
+  min-width: 160px;
 }
 
 .ws-menu-sep {

@@ -13,7 +13,8 @@
     "start": "electron .",
     "test:sysmon": "node scripts/test-sysmon.js",
     "build:sensors": "dotnet publish native/sysmon-sensors -c Release -o resources/sensors",
-    "build:hook": "dotnet publish native/dictation-hook -c Release -o resources/hook"
+    "build:hook": "dotnet publish native/dictation-hook -c Release -o resources/hook",
+    "build:shell": "dotnet publish native/explorer-shell -c Release -o resources/shell"
   },
   "author": "",
   "license": "MIT",
@@ -109,6 +110,13 @@
       {
         "from": "resources/hook",
         "to": "hook",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/shell",
+        "to": "shell",
         "filter": [
           "**/*"
         ]

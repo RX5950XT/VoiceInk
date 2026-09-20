@@ -1851,6 +1851,9 @@ registerExplorerIpc({
     moveEntry: (...args) => loadExplorer().moveEntry(...args),
     openPath: (...args) => loadExplorer().openPath(...args),
     fileIcon: (...args) => loadExplorer().fileIcon(...args),
+    shellMenu: (...args) => loadExplorer().shellMenu(...args),
+    shellInvoke: (...args) => loadExplorer().shellInvoke(...args),
+    shellRelease: (...args) => loadExplorer().shellRelease(...args),
     reveal: (...args) => loadExplorer().reveal(...args),
     setClipboard: (...args) => loadExplorer().setClipboard(...args),
     paste: (...args) => loadExplorer().paste(...args),
@@ -2183,8 +2186,12 @@ app.on('before-quit', (e) => {
   isQuitting = true
   // 終端機由獨立宿主持有；更新／結束 App 只斷線，明確關閉分頁才結束程序。
   if (terminalMod) terminalMod.disconnect()
-  // 檔案總管只收自己的 fs.watch；UFFS daemon 是整機索引，關 App 不停它
-  if (explorerMod) explorerMod.unwatch()
+  // 檔案總管只收自己的 fs.watch；UFFS daemon 是整機索引，關 App 不停它。
+  // 殼層 sidecar 要一起收：它抓著 IContextMenu COM 物件，不放會留程序。
+  if (explorerMod) {
+    if (typeof explorerMod.shutdown === 'function') explorerMod.shutdown()
+    else explorerMod.unwatch()
+  }
   // 系統監控有三顆子程序（probe.ps1／nvidia-smi／感測器 sidecar），少收一顆就變孤兒。
   // **這條是 await 得到的**：風扇的手動 PWM 留在晶片裡，沒等它交還就退出等於把風扇
   // 釘在最後的轉速（事後 SetDefault 也救不回來，只有重開機）。

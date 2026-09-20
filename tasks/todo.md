@@ -1,3 +1,11 @@
+# 2026-09-20 — 檔案總管殼層選單 ＋ Google Drive 綠勾
+
+- [x] sidecar：`IContextMenu` 讀 7-Zip／WinRAR／傳送到；overlay 改 `SHGFI_ADDOVERLAYS`
+- [x] 「傳送到」空選單：`CMF_SYNCCASCADEMENU` ＋ IContextMenu3 沒填再退 IContextMenu2
+- [x] 玻璃選單合併殼層項（去重 App 自己的開啟／剪下複製）
+- [x] 可見列圖示走疊好的殼層圖（Drive 綠勾）；沒 sidecar 降級
+- [x] 驗證：`test-explorer-shell.js` 26/0、`test-explorer.js` 186/0；probe 看到 WinRAR／7-Zip／傳送到；Drive `學校的資料` overlay 槽 14、PNG 2038 bytes
+
 # 2026-09-20 — 合併前審查（上一輪未提交的 34 檔）
 
 - [x] 逐模組審查未提交變更（終端機／HF／系統監控／檔案總管／文件）
