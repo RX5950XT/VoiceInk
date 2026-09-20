@@ -146,6 +146,9 @@ export function showExplorerMenu(at, spec) {
   if (items.length) {
     menu.push({ label: '開啟', onSelect: act.open })
     if (items.length === 1 && items[0].dir && act.openTab) menu.push({ label: '在新分頁開啟', onSelect: act.openTab })
+    if (items.length === 1 && items[0].dir && act.openProject) {
+      menu.push({ label: '加入工作區專案', onSelect: act.openProject })
+    }
     if (act.reveal) menu.push({ label: '顯示位置', onSelect: act.reveal })
     if (act.pin) menu.push({ label: '釘到側欄', onSelect: act.pin })
     menu.push({ sep: true })
@@ -165,6 +168,7 @@ export function showExplorerMenu(at, spec) {
     menu.push({ label: '新增資料夾', onSelect: act.newFolder })
     menu.push({ label: '新增檔案', onSelect: act.newFile })
     if (act.pinHere) menu.push({ label: '釘到側欄', onSelect: act.pinHere })
+    if (act.openProjectHere) menu.push({ label: '把這個資料夾加入專案', onSelect: act.openProjectHere })
   }
   if (act.refresh) {
     menu.push({ sep: true })

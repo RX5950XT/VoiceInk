@@ -471,6 +471,42 @@ async function addProject() {
 }
 
 /**
+ * 檔案頁的右鍵選單用：把一個資料夾加成專案並選中它。
+ * 已經在清單裡的不重複加，直接選中既有那筆（`store.create` 撞路徑就回原本那筆）。
+ * @param {string} absPath 檔案總管剛列出來的絕對路徑
+ * @returns {Promise<boolean>}
+ */
+export async function openFolderAsProject(absPath) {
+  initWorkspacePage()
+  let result
+  try {
+    result = await electronAPI.workspace.addFolders([absPath])
+  } catch {
+    result = null
+  }
+  if (!result?.ok) {
+    showToast(result?.error?.message || '加入專案失敗', 'error')
+    return false
+  }
+  try {
+    await reloadList()
+  } catch {
+    return false
+  }
+  const key = (value) => String(value || '').replace(/[\\/]+$/, '').toLowerCase()
+  const found = projects.find((item) => key(item.path) === key(absPath))
+  if (!found) {
+    showToast('加不了這個資料夾', 'error')
+    return false
+  }
+  showToast(result.data?.added ? '已加入專案' : '這個資料夾已經是專案')
+  if (await selectProject(found.id)) return true
+  // 切頁時 refreshWorkspacePage 也在讀清單，它晚到的那份可能還沒有這筆新專案
+  await reloadList()
+  return selectProject(found.id)
+}
+
+/**
  * 專案區支援直接拖資料夾進來加入。File → 路徑的轉換在 preload（webUtils），
  * 驗證在 main（store.create）。drop 的對象是整個 #projPanel，空清單也接得住。
  */

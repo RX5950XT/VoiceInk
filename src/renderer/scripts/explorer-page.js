@@ -4,7 +4,7 @@
  * DOM 一律 createElement + textContent（零 innerHTML）。路徑是外部輸入。
  */
 
-import { electronAPI, showToast, switchPage } from './app.js'
+import { electronAPI, showToast, switchPage, setSidebarMode } from './app.js'
 import { askConfirm, askInput } from './app-dialog.js'
 import { showMenu } from './ws-menu.js'
 import { createListReorder } from './list-reorder.js'
@@ -1162,6 +1162,8 @@ function openContextMenu(e, items) {
         reveal: () => void revealItems(items),
         pin: () => void pinEntries(items),
         pinHere: () => void pinPath(cwd, ''),
+        openProject: () => void openInWorkspace(items[0]?.path),
+        openProjectHere: () => void openInWorkspace(cwd),
         cut: () => void clipboard(items, 'cut'),
         copy: () => void clipboard(items, 'copy'),
         paste: () => void pasteHere(),
@@ -1204,6 +1206,19 @@ async function pinEntries(items) {
   if (!first) return
   const target = first.dir ? first.path : first.path.replace(/\\[^\\]+$/, '')
   await pinPath(target, first.dir ? first.name : '')
+}
+
+/**
+ * 把這個資料夾加進聊天頁左側欄的專案清單，然後切過去選中它。
+ * 虛擬位置（本機首頁、資源回收筒）不是真資料夾，擋掉。
+ * @param {string} dirPath
+ */
+async function openInWorkspace(dirPath) {
+  if (!dirPath || [RECYCLE_CWD, THIS_PC].includes(pathKey(dirPath))) return
+  const workspace = await import('./workspace-page.js')
+  switchPage('chat')
+  setSidebarMode('projects')
+  await workspace.openFolderAsProject(dirPath)
 }
 
 async function pinPath(dirPath, label) {
