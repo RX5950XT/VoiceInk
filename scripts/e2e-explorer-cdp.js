@@ -430,17 +430,18 @@ async function main() {
           rows: rows.length
         }
       })()`)
-      const press = async (type, x, y) => cdp.send('Input.dispatchMouseEvent', {
-        type, x, y, button: 'left', buttons: type === 'mouseReleased' ? 0 : 1, clickCount: 1
+      const press = async (type, x, y, buttons = 1) => cdp.send('Input.dispatchMouseEvent', {
+        type, x, y, button: 'left', buttons, clickCount: 1
       })
       const onRow6 = await cdp.eval(`(() => {
         const el = document.elementFromPoint(${geo.startX}, ${geo.startY})
         return !!(el && el.closest('.ex-row'))
       })()`)
       assert(!onRow6, '框選的起點是空白不是某一列', JSON.stringify(geo))
+      // 先把游標移到起點再按下去：Chromium 對「憑空出現在某處的 mousePressed」
+      // 不一定會派 mousedown，實測少了這一下，整串合成事件會安靜落空
+      await press('mouseMoved', geo.startX, geo.startY, 0)
       await press('mousePressed', geo.startX, geo.startY)
-      // mousedown 的 handler 要先掛上 document 的 mousemove 才收得到後面那幾下，
-      // 合成事件送太快會整串落空（實測第二次跑就抓不到框）
       await sleep(80)
       await press('mouseMoved', geo.endX, Math.round((geo.startY + geo.endY) / 2))
       await press('mouseMoved', geo.endX, geo.endY)
@@ -454,7 +455,7 @@ async function main() {
       assert(marquee && marquee.bg !== 'rgba(0, 0, 0, 0)', '框有底色（不是透明的）', JSON.stringify(marquee))
       const live = await cdp.eval(`document.querySelectorAll('#exList .ex-row.is-selected').length`)
       assert(live === geo.rows, '框到的每一列當場都反白', `${live}/${geo.rows}`)
-      await press('mouseReleased', geo.endX, geo.endY)
+      await press('mouseReleased', geo.endX, geo.endY, 0)
       const after = await cdp.eval(`(() => ({
         gone: !document.querySelector('#exList .ex-marquee'),
         picked: document.querySelectorAll('#exList .ex-row.is-selected').length
