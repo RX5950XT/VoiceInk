@@ -834,6 +834,11 @@ console.log('\n[S6] 隱藏／系統項目有開關')
       && /s\.set\('showHidden', next\.showHidden\)/.test(storeSrc6))
   const cssSrc6 = fs.readFileSync(path.join(ROOT, 'src/renderer/styles/main.css'), 'utf8')
   ok('淡化樣式在', /\.ex-row\.is-dim/.test(cssSrc6))
+  const fsMod6 = require(path.join(ROOT, 'src/main/explorer/fs.js'))
+  // 這條是刻意的決定，不要「順手」改回 Unix 慣例：Windows 上點開頭沒有隱藏的意思
+  ok('.gitignore／.env／.vscode 不准被當成隱藏檔',
+    !fsMod6.isHiddenName('.gitignore') && !fsMod6.isHiddenName('.env') && !fsMod6.isHiddenName('.vscode'))
+  ok('版本控制資料夾仍然藏著（它真的有 hidden 屬性）', fsMod6.isHiddenName('.git'))
 }
 
 console.log('\n[Q] index.js 的 exports 都有定義')
