@@ -43,6 +43,10 @@ console.log('\n[probe.ps1]')
   const code = text.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n')
   ok('沒有用 Get-Counter', !code.includes('Get-Counter'), '實測 5.3 秒／輪')
   ok('沒有用 PerfFormattedData', !code.includes('PerfFormattedData'), '實測 500ms／輪')
+  ok('NVMe SMART 靜態與即時都走裝置屬性 50（Windows SDK）',
+    /Get-NvmeBlock \$h 50 2 2 512/.test(code)
+    && /Get-NvmeBlock \$dh 50 2 2 512/.test(code)
+    && !/Get-NvmeBlock \$\w+ 49 2 2 512/.test(code))
 }
 
 // ===== 框解析 =====
@@ -137,6 +141,14 @@ console.log('\n[靜態清單]')
   ok('記憶體插槽總數與上限', extra.memoryArray.slots === 4 && extra.memoryArray.maxCapacity === 137438953472)
   ok('VRAM 用 64 位元真值不用爆掉的 AdapterRAM', extra.gpus[0].vram === 17103323136)
   ok('磁碟區標得出住在哪顆實體碟', extra.volumes[0].diskId === '1')
+  ok('對得到實體碟的磁碟區不是虛擬', extra.volumes[0].virtual === false)
+  const mixedVol = m.parseStatic([
+    'VOL|C:|OS|1023135444992|425396494336|NTFS|0',
+    'VOL|G:|Google Drive|1023135444992|422578831360|FAT32|'
+  ])
+  ok('Google Drive 這種沒有實體碟的磁碟區標成虛擬',
+    mixedVol.volumes.length === 2 && mixedVol.volumes[1].virtual === true && mixedVol.volumes[0].virtual === false)
+  ok('舊格式沒有任何 diskId 時不誤標虛擬', s.volumes[0].virtual === false)
   ok('網路卡帶閘道／DNS／取得方式', extra.nics[0].gateway === '192.168.1.1' && extra.nics[0].dns === '8.8.8.8' && extra.nics[0].dhcp === 'dhcp')
   // 舊 probe 沒有第 11 格時要退回 AdapterRAM，不能變成 0
   const oldGpu = m.parseStatic(['GPU|GTX 1060|6442450944|31.0|1920 x 1080|2024-01-01|1920|1080|60|GP106|PCI\\VEN_10DE'])
@@ -431,6 +443,15 @@ console.log('\n[差值計算]')
   const d4 = m.diffSamples(prev, curr, 8)
   ok('整機磁碟讀取速率', near(d4.disks[0].read, 5 * 1024 * 1024, 1))
   ok('網路速率用牆上時鐘算（T 差 1000ms）', near(d4.nets[0].rx, 1024 * 1024, 1))
+
+  const diskWrapCurr = m.parseTick([
+    'T|1001000',
+    'D|0 C:|' + String(2 ** 64 - 100) + '|2000|0|' + (T0 + SEC)
+  ])
+  const dDiskWrap = m.diffSamples(prev, diskWrapCurr, 8)
+  ok('磁碟累計值繞回不做差值（不爆成 EB/s）',
+    dDiskWrap.disks[0].read === 0 && dDiskWrap.disks[0].write === 0,
+    `read=${dDiskWrap.disks[0].read}`)
 
   // 第一輪沒有前一筆
   const first = m.diffSamples(null, curr, 8)

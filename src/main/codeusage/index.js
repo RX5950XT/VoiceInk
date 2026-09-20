@@ -457,10 +457,22 @@ async function stats(query = {}) {
     }
 
     for (const [map, key] of [[byModel, row.model], [byProvider, row.provider]]) {
-      const item = map.get(key) || { key, ...emptyTotals(), uncosted: false }
+      const item = map.get(key) || {
+        key, ...emptyTotals(), uncosted: false,
+        costParts: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+      }
       addTotals(item, row)
       if (row.costUsd === null) item.uncosted = true
       else item.costUsd += row.costUsd
+      if (row.costSource === 'estimated') {
+        const parts = pricing.costParts(row, pricing.priceFor(row.model, custom))
+        if (parts) {
+          item.costParts.input += parts.input
+          item.costParts.output += parts.output
+          item.costParts.cacheRead += parts.cacheRead
+          item.costParts.cacheWrite += parts.cacheWrite
+        }
+      }
       map.set(key, item)
     }
   }

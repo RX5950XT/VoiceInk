@@ -150,6 +150,17 @@ function partsText(item) {
   const bits = TOKEN_PARTS
     .filter((part) => (item[part.key] || 0) > 0)
     .map((part) => `${part.label} ${formatTokens(item[part.key])}`)
+  const cp = item.costParts
+  if (cp) {
+    const money = [
+      ['輸入', cp.input],
+      ['輸出', cp.output],
+      ['快取讀', cp.cacheRead],
+      ['快取寫', cp.cacheWrite]
+    ].filter(([, n]) => n > 0.00005)
+      .map(([label, n]) => `${label} ${formatMoney(n)}`)
+    if (money.length) bits.push(money.join('，'))
+  }
   return bits.join(' · ')
 }
 

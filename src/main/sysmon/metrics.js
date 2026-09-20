@@ -420,6 +420,11 @@ function parseStatic(rows) {
         break
     }
   }
+  // 有任何磁碟區標了實體碟序號，沒標到的就是虛擬／雲端碟（Google Drive 的 G:
+  // 是 DriveType=3 的 FAT32，會把 C: 的容量再算一次）。舊 probe 整批沒有 diskId，
+  // 那時全部當實體，不能全標成虛擬。
+  const mapped = out.volumes.some((v) => v.diskId)
+  for (const v of out.volumes) v.virtual = mapped && !v.diskId
   return out
 }
 
@@ -623,9 +628,14 @@ function diffSamples(prev, curr, logicalCores) {
     let write = 0
     if (before) {
       const sec = (d.ts - before.ts) / HUNDRED_NS_PER_SEC
+      // 跟 GPU engine 同一條：uint64 繞回／垃圾值不做差值，否則畫面上是 EB/s
       if (sec > 0) {
-        read = Math.max(0, (d.read - before.read) / sec)
-        write = Math.max(0, (d.write - before.write) / sec)
+        if (d.read < COUNTER_WRAP && before.read < COUNTER_WRAP) {
+          read = Math.max(0, (d.read - before.read) / sec)
+        }
+        if (d.write < COUNTER_WRAP && before.write < COUNTER_WRAP) {
+          write = Math.max(0, (d.write - before.write) / sec)
+        }
       }
     }
     return { name: d.name, read, write }
