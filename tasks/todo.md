@@ -1,3 +1,17 @@
+# 2026-09-20 — 電腦安裝版 VoiceInk 更新至最新發行版（v1.23.1）
+
+- [x] 調查安裝版檢查更新失敗根因：v1.22.0 差分下載與快取狀態、網路或 Range 請求中斷觸發 error；v1.23.1 已修正關閉差分下載
+- [x] 確認安裝檔：`dist/VoiceInk-Setup-1.23.1.exe` SHA-512 與 GitHub Release 完全吻合
+- [x] 安全關閉目前背景常駐的 1.22.0 主程序與關聯程序
+- [x] 執行 NSIS 靜默安裝更新至 v1.23.1
+- [x] 驗證安裝後的執行檔版本（1.23.1.0）、捷徑、app-update.yml
+- [x] 啟動新版並驗證檢查更新功能正常（已是最新版本，不報錯）
+- [x] 清理暫存檔案與回顧
+
+Review：
+- 根因：舊版 v1.22.0 預設開啟差分下載（Differential Download），在進行增量下載時需發送數千次 HTTP Range 請求，若遭遇 GitHub CDN 中斷、超時或快取 blockmap 不一致即觸發 error 事件，且 updater 錯誤提示一律為「檢查更新失敗（無法連線到 GitHub，或這個版本沒有附帶更新資訊）」。
+- 處置：下載官方發行 v1.23.1 安裝包（SHA-512 校驗一致），關閉舊版常駐程序後完成 NSIS 靜默安裝。安裝後 `VoiceInk.exe` 版本為 1.23.1.0，新版已內建關閉差分下載改為整包單連線下載，檢查更新確認顯示「已經是最新版本」，後續升級通道恢復正常。
+
 # 2026-09-20 — 檔案總管殼層選單 ＋ Google Drive 綠勾
 
 - [x] sidecar：`IContextMenu` 讀 7-Zip／WinRAR／傳送到；overlay 改 `SHGFI_ADDOVERLAYS`
@@ -300,3 +314,21 @@ Gemini 3.8 Flash 與 Kimi K3 單價與快取花費拆開與多硬碟分卡。
 邊界：未發行（沒有 bump 版本、沒有 tag、沒有 release）。`.claude/worktrees/` 下那兩個
 工作樹與它們的分支、以及中轉用的 `feat/merged-three` 已清掉；`VoiceInk-usage-sysmon`
 連同 `feat/usage-sysmon` 保留（那份開在專案外，內容已合併，要不要收由你決定）。
+
+# 2026-09-20 — 接續檔案總管三包整合
+
+- [x] 還原交接與確認 merge 中斷點，保留兩方測試
+- [x] 三位子代理分別審查資料夾大小、真實屬性與縮圖重試
+- [x] 修復確認問題，重建 shell、打包與隔離 CDP 驗收
+- [x] 完成三包合併（50cb491）、更新交接
+- [ ] 清理三個已合併工作樹（自動批准審查拒絕，保留原樣：`vi-wt-size`／`vi-wt-attr`／`vi-wt-pending`）
+
+Review：
+- 巢狀 `readdir`／`lstat` 失敗改標 `incomplete`，不再當成完整大小
+- 縮圖：切清單／方格時晚到回覆改走目前佇列；離開檔案頁清掉重試
+- `CLAUDE.md` 改成只指向 `AGENTS.md`
+- 驗證：`test-explorer-size-errors.js`、`test-explorer-icons-state.js` 2/0、
+  `test-explorer-shortcuts.js`、`test-explorer-page-state.js`、
+  `test-explorer.js` 295/0、`test-workspace.js` 271/0、
+  打包 asar 217 支 src 一致、打包版檔案總管 CDP 90/0、
+  打包版工作區 CDP 183/0

@@ -300,6 +300,29 @@ async function main() {
       await waitFor(() => cdp.eval(`document.getElementById('page-explorer')?.classList.contains('active') === true`), 10_000, '切回檔案頁')
     }
 
+    console.log('\n[C2b] 資料夾大小與真正隱藏屬性')
+    {
+      const childFile = path.join(SEED_DIR, 'sub', 'size-check.bin')
+      fs.writeFileSync(childFile, Buffer.alloc(1234))
+      await cdp.eval(`document.querySelector('#exList [data-id="sub"]').click()`)
+      const detail = await waitFor(() => cdp.eval(`(() => {
+        const host = document.getElementById('exDetail')
+        const row = [...host.querySelectorAll('dl > div')].find(n => n.querySelector('dt')?.textContent === '大小')
+        const text = row?.querySelector('dd')?.textContent || ''
+        return text.includes('1 個檔案') ? text : null
+      })()`), 10_000, '資料夾大小計算完成')
+      assert(/1\.2.*KB/.test(detail), '詳情顯示真實資料夾大小與檔案數', detail)
+      fs.unlinkSync(childFile)
+      const hiddenFile = path.join(SEED_DIR, 'hidden-check.txt')
+      fs.writeFileSync(hiddenFile, 'hidden')
+      execFileSync(path.join(process.env.SystemRoot, 'System32', 'attrib.exe'), ['+h', hiddenFile], { windowsHide: true })
+      const off = await cdp.eval(`window.electronAPI.explorer.listDir(${JSON.stringify(SEED_DIR)})`)
+      const on = await cdp.eval(`window.electronAPI.explorer.listDir(${JSON.stringify(SEED_DIR)}, { showHidden: true })`)
+      assert(off.ok && !off.data.entries.some(e => e.name === 'hidden-check.txt'), '打包版預設藏起真正隱藏檔')
+      assert(on.ok && on.data.entries.some(e => e.name === 'hidden-check.txt' && e.hidden), '打包版顯示隱藏項目保留屬性')
+      fs.unlinkSync(hiddenFile)
+    }
+
     console.log('\n[C3] 多選之後點空白取消選取')
     {
       const picked = await cdp.eval(`(() => {

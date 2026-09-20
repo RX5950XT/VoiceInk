@@ -1,6 +1,6 @@
 # CONTEXT.md — 交接文件
 
-> 只寫「現在長什麼樣」與「最近改了什麼」。規則與地雷見 [CLAUDE.md](./CLAUDE.md)＝[AGENTS.md](./AGENTS.md)（同一份），
+> 只寫「現在長什麼樣」與「最近改了什麼」。規則與地雷見 [AGENTS.md](./AGENTS.md)；[CLAUDE.md](./CLAUDE.md) 僅作相容入口，
 > 可遷移的判斷原則見 [tasks/lessons.md](./tasks/lessons.md)，歷史細節查 git log。
 
 ## 專案概況
@@ -32,11 +32,9 @@ AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定�
 - **排序不再被 2000 筆截斷毀掉**：`listDir` 改成先排序再截斷（`MAX_STAT = 10000`、64 並發；
   超過上限才退回「先砍再排」並標 `truncated`）。以前在大資料夾按大小排，拿到的是
   「readdir 前 2000 筆裡最大的」。
-- **系統項目預設藏起來**：`statEntry` 多一個 `hidden`（啟發式：寫死的 Windows 系統名單，
-  **不照 Unix 的點開頭慣例**），`listDir` 接 `showHidden`；空白處右鍵可切換，存進 `explorer.json`，
-  列出來的隱藏項目畫淡一點。
+- **系統項目預設藏起來**：本機優先用殼層 `attrs` 讀 Windows hidden／system 屬性（每層前 2000 筆、200ms 等待上限）；缺資料、逾時或 UNC 才退回系統名稱名單，不把點開頭一律藏起來。`showHidden` 由空白處右鍵切換並存進 `explorer.json`，隱藏列畫淡。
 - **鍵盤走得動**：方向鍵／Home／End 移動選取，Shift 連選；方格檢視四個方向都走（欄數照版面量）。
-- **空白處拖出框選**，框選期間不重畫清單（見 CLAUDE.md 地雷）。
+- **空白處拖出框選**，框選期間不重畫清單（見 AGENTS.md 地雷）。
 - **狀態列講得出「已選取 N 個」**，全是檔案時報總大小（選到資料夾不報，要遞迴才算得出來）。
 - **拖著檔案停在資料夾上 0.7 秒會自己進去**（`bindDropTarget` 的 `onHover`），才丟得到深層路徑。
 - **Ctrl+Z 復原**搬移／複製／改名／貼上；復原「複製」是丟資源回收筒不是永久刪。
@@ -45,6 +43,12 @@ AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定�
   副檔名才要，可見列與併發 4 沿用，快取 key 用 `t:`／`i:` 分開，沒建 sidecar 照舊降級。
 - 測試：`test-explorer.js` 的 [H2][H3][S4][S5][S6] ＋ `e2e-explorer-cdp.js` 的 [C5]～[C10]
   ＋ `probe-explorer-shell.js` 的 [D]（真的取一張縮圖，並驗它跟類型圖示不是同一張）。
+
+### 檔案總管：大小、屬性與縮圖重試（2026-09-20）
+
+- `explorer/size.js` 以 `raw-fs` 加總資料夾，不追 junction／symlink；單一工作可取消，5 萬檔／32 層／8 秒停止，未讀完顯示「至少」。詳情換選取或離開檔案頁取消，晚到結果不覆蓋新選取。
+- 縮圖以 `THUMBNAILONLY | INCACHEONLY` 探快取，未完成先給圖示並帶 `pending`；renderer 以 400／800／1600ms 最多重試三次，暫時圖不進快取。
+- 驗證包含真 `attrib +h`、真 PNG 與無法生成縮圖的檔案；正常 PDF／影片不保證能重現 `E_PENDING`。
 
 ### 工作區：檔案樹收得下外面拖進來的檔案（2026-09-20）
 
@@ -452,7 +456,7 @@ AGY 設定、終端機、聊天、語音輸入紀錄**刻意不進** `STORE_ALLO
 
 ## 給下一個人的三個提醒
 
-1. **先讀 CLAUDE.md 對應模組的地雷再動手**——那份清單裡的每一條都是實際改壞過的。
+1. **先讀 AGENTS.md 對應模組的地雷再動手**——那份清單裡的每一條都是實際改壞過的。
 2. **宣告完成前一定要跑驗證並貼輸出**；UI／功能改動還要 `npm run electron:pack` 更新免安裝預覽。
 3. **這個 repo 的測試跑在使用者的真實資料上**：要手動開一份來玩走 `npm run dev:sandbox`；
    CDP 只殺自己 spawn 的 PID、只用 `[data-id]` 指涉自己建的東西、語音輸入測試一定要把 `insert` 換成 stub。

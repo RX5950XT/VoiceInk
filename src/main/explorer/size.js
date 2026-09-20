@@ -86,6 +86,11 @@ function emitProgress(state, done) {
   state.onProgress({ ...snapshot(state), done: Boolean(done) })
 }
 
+function markIncomplete(state, reason) {
+  state.incomplete = true
+  if (!state.reason) state.reason = reason
+}
+
 /**
  * @param {any} state
  * @param {number} depth
@@ -127,6 +132,7 @@ async function walk(full, depth, state) {
     entries = await fsp.readdir(full, { withFileTypes: true })
   } catch {
     if (depth === 0) throw paths.fail('READ_FAILED', '沒有權限讀這個資料夾')
+    markIncomplete(state, 'read')
     return
   }
   if (hitLimit(state, depth)) return
@@ -140,6 +146,7 @@ async function walk(full, depth, state) {
     try {
       st = await fsp.lstat(child)
     } catch {
+      markIncomplete(state, 'read')
       continue
     }
     if (st.isSymbolicLink()) continue

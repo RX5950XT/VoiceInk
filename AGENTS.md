@@ -1,6 +1,6 @@
 # VoiceInk — 專案規範與 AI 作業守則
 
-> **本檔與 [AGENTS.md](./AGENTS.md) 內容完全相同**（兩個入口、一份規則，改一份要同步另一份）。
+> 本檔是專案規則正文；`CLAUDE.md` 僅作相容入口。
 > 現行架構與最近變更見 [CONTEXT.md](./CONTEXT.md)，可遷移的判斷原則見 [tasks/lessons.md](./tasks/lessons.md)。
 > 底下「地雷」每一條都是實際改壞過的；細節查 git log。
 
@@ -219,8 +219,8 @@ tag 要與 `package.json` 的 version 一致。
   那個資料夾（它建立時自己設了 hidden 屬性）。**不可以順手加回 `name.startsWith('.')`**：
   `.gitignore`／`.env`／`.vscode`／`.eslintrc` 在 Windows 上沒有 hidden 屬性、檔案總管照顯示，
   而這個 App 的使用者天天要看它們，藏掉等於把專案資料夾挖空。回歸 `test-explorer.js` 的 [S6]。
-  判定是啟發式的：Node 在 Windows 讀不到 `FILE_ATTRIBUTE_HIDDEN`，使用者自己設成隱藏的
-  普通檔案認不出來——要做到真的屬性只能走殼層 sidecar。
+  本機優先問 sidecar `attrs` 的真實 hidden／system（前 2000 筆、200ms 等候上限），
+  缺資料／逾時／UNC 才退回上述啟發式；不可把 fallback 當成真正屬性。
 - **框選期間不可以 `paintList()`**：框本身是 `#exList` 的子元素，重畫會把它一起清掉；
   而且每動一像素重建整份 DOM 太貴。框選中只就地 `classList.toggle('is-selected')`，
   放開才重畫一次。`.ex-list` 要有 `position: relative`，不然框的座標會飄到整頁去。
@@ -241,8 +241,9 @@ tag 要與 `package.json` 的 version 一致。
   **會一路阻塞到使用者放手——CDP 測試絕對不可以呼叫它**（要驗交出去的內容就注入假的 sender）。
   回歸 `e2e-explorer-drag.js` ＋ `test-explorer.js` 的 [S3] ＋ `e2e-explorer-cdp.js` 的 [C3][C4]。
 - **縮圖跟圖示是兩支 API**：`SHGetFileInfo`（`iconOf`）回的是**類型圖示**，一資料夾照片會長得
-  一模一樣；縮圖要 `IShellItemImageFactory::GetImage`（`thumbOf`）。旗標用
-  `RESIZETOFIT | BIGGERSIZEOK`，**不要 `THUMBNAILONLY`**（沒縮圖的檔會直接失敗而不是退回圖示）。
+  一模一樣；縮圖要 `IShellItemImageFactory::GetImage`（`thumbOf`）。
+  fallback 用 `RESIZETOFIT | BIGGERSIZEOK`；只有探快取才用 `THUMBNAILONLY | INCACHEONLY`。
+  尚未拿到真縮圖就帶 `pending`，renderer 最多重試三次且不快取暫時圖。
   尺寸要夾上下限：一張 96px 的 BGRA 就 36KB、256px 是 256KB，列一百個檔 IPC 會肥掉。
   `HBITMAP` 用完一定要 `DeleteObject`（這支會被連叫上百次）。測試**一定要斷言「縮圖跟類型圖示
   不是同一張 base64」**，否則「其實還是回圖示」也會全綠。回歸 `probe-explorer-shell.js` 的 [D]。

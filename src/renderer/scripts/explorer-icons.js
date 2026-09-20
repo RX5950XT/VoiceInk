@@ -10,6 +10,7 @@ let queue = []
 let running = 0
 let generation = 0
 const retryTimers = new Set()
+let activeContext = null
 
 const THUMB_SIZE = 96
 const RETRY_MS = 400
@@ -50,6 +51,16 @@ function loadIcon(el, host, readIcon) {
 function clearRetries() {
   for (const id of retryTimers) clearTimeout(id)
   retryTimers.clear()
+}
+
+export function clearFileIconWork() {
+  generation += 1
+  clearRetries()
+  retryCount.clear()
+  observer?.disconnect()
+  observer = undefined
+  queue = []
+  activeContext = null
 }
 
 function enqueue(el, host) {
@@ -95,6 +106,7 @@ export function paintFileIcons(host, readIcon) {
   retryCount.clear()
   observer?.disconnect()
   queue = []
+  activeContext = { host, readIcon }
   observer = new IntersectionObserver((entries) => {
     for (const entry of entries) {
       if (entry.isIntersecting) {
@@ -130,7 +142,7 @@ function pump(host, readIcon) {
     }).finally(() => {
       inflight.delete(el)
       running--
-      pump(host, readIcon)
+      if (activeContext) pump(activeContext.host, activeContext.readIcon)
     })
   }
 }

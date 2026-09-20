@@ -43,5 +43,5 @@ function link(name, target) {
     await explorer.openPath(fileLink)
     assert.deepEqual(launched, [fileLink], '檔案捷徑沿用原捷徑，以保留啟動參數')
     console.log('PASS: folder shortcut, chained shortcut, path input, cycle, missing target, file shortcut')
-  } finally { removeTree(root) }
+  } finally { require('../src/main/explorer/shell').shutdown(); removeTree(root) }
 })().catch(error => { console.error(error); process.exitCode = 1 })

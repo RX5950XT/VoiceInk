@@ -11,7 +11,7 @@ import { createListReorder } from './list-reorder.js'
 import { paintDetail as paintDetailPane } from './explorer-detail.js'
 import { paintHomePane } from './explorer-home.js'
 import { paintTabStrip } from './explorer-tabs.js'
-import { paintFileIcons } from './explorer-icons.js'
+import { clearFileIconWork, paintFileIcons } from './explorer-icons.js'
 import {
   RECYCLE_CWD,
   pathKey,
@@ -1787,6 +1787,7 @@ export async function refreshExplorerPage() {
 export function cooldownExplorerPage() {
   searchSeq++
   navSeq++
+  clearFileIconWork()
   if (searchTimer) clearTimeout(searchTimer)
   void electronAPI.explorer.uffsCancel()
   void electronAPI.explorer.unwatch()
