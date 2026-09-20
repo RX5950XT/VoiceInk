@@ -24,6 +24,8 @@ const files = require('./files')
 const TIMEOUT_MS = 60000
 /** 變更檔案最多列幾筆（幾萬筆的 repo 不要把 UI 弄死） */
 const MAX_FILES = 500
+/** 單筆提交展開時最多列幾個檔案（一次 merge 可以動到幾千個） */
+const MAX_LOG_FILES = 200
 
 /**
  * @param {string} code
@@ -333,8 +335,11 @@ function relPathOf(value) {
  * 純函式，可直接 node 測。**不能也用 -z**：NUL 同時是記錄與欄位的界線，整包會變成一鍋粥。
  * 舊的三欄格式（沒有作者）仍收得下來。
  *
+ * numstat 那幾列同時是「這筆改了哪些檔案」（面板上展開看的就是它），所以除了加總
+ * 也逐列留著。單筆上限 `MAX_LOG_FILES`——一次 merge 幾千個檔案送進 renderer 只會卡住畫面。
+ *
  * @param {string} raw
- * @returns {Array<{ short: string, subject: string, at: number, author: string, added: number, removed: number }>}
+ * @returns {Array<{ short: string, subject: string, at: number, author: string, added: number, removed: number, files: Array<{ path: string, added: number, removed: number, binary: boolean }>, more: number }>}
  */
 function parseLog(raw) {
   const out = []
@@ -359,15 +364,25 @@ function parseLog(raw) {
         author: hasAuthor ? parts[2] : '',
         subject: hasAuthor ? parts.slice(3).join('\x1f') : parts[2],
         added: 0,
-        removed: 0
+        removed: 0,
+        files: [],
+        more: 0
       }
       continue
     }
     if (!current) continue
     const cols = line.split('\t')
     if (cols.length < 3) continue
-    if (cols[0] !== '-') current.added += Number(cols[0]) || 0
-    if (cols[1] !== '-') current.removed += Number(cols[1]) || 0
+    const binary = cols[0] === '-' && cols[1] === '-'
+    const added = cols[0] === '-' ? 0 : Number(cols[0]) || 0
+    const removed = cols[1] === '-' ? 0 : Number(cols[1]) || 0
+    current.added += added
+    current.removed += removed
+    // 檔名裡可以有 tab（git 那時會加引號），所以後面全部接回來
+    const file = cols.slice(2).join('\t')
+    if (!file) continue
+    if (current.files.length < MAX_LOG_FILES) current.files.push({ path: file, added, removed, binary })
+    else current.more += 1
   }
   take()
   return out
@@ -380,9 +395,13 @@ function parseLog(raw) {
 async function log(projectId) {
   const cwd = await rootOf(projectId)
   const res = await run(cwd, [
+    '-c',
+    'core.quotepath=false',
     'log',
     '--pretty=format:%h%x1f%at%x1f%an%x1f%s',
     '--numstat',
+    // 改名那型的 numstat 會印成 `path{old => new}`，展開時點不開那個檔案
+    '--no-renames',
     '-n',
     '10'
   ])
@@ -730,6 +749,7 @@ async function fileVersionsAgainst(projectId, relPath, ref) {
 
 module.exports = {
   MAX_FILES,
+  MAX_LOG_FILES,
   MAX_BRANCHES,
   TIMEOUT_MS,
   checkRef,

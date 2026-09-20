@@ -1788,6 +1788,7 @@ registerWorkspaceIpc({
     listFiles: (...args) => loadWorkspace().listFiles(...args),
     listPorts: (...args) => loadWorkspace().listPorts(...args),
     reveal: (...args) => loadWorkspace().reveal(...args),
+    openEntry: (...args) => loadWorkspace().openEntry(...args),
     openExternal: (...args) => loadWorkspace().openExternal(...args),
     gitStatus: (...args) => loadWorkspace().gitStatus(...args),
     gitLog: (...args) => loadWorkspace().gitLog(...args),

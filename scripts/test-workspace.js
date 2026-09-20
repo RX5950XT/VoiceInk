@@ -883,6 +883,27 @@ console.log('\n[J] git log 解析與檔名守衛')
   ok('二進位 numstat 不加進總數', rich[1].added === 0 && rich[1].removed === 0, JSON.stringify(rich[1]))
   ok('純改名 0/0 不算增刪', rich[2].added === 0 && rich[2].removed === 0, JSON.stringify(rich[2]))
   ok('log 指令帶作者與 numstat', /%an/.test(git.log.toString()) && /numstat/.test(git.log.toString()))
+
+  // 面板上那一筆可以展開看「改了哪些檔案」，資料就是 numstat 那幾列
+  ok('展開得出這筆改了哪些檔案',
+    rich[0].files.map((f) => f.path).join(',') === 'file.js,other.js', JSON.stringify(rich[0].files))
+  ok('每個檔案各自帶增刪',
+    rich[0].files[0].added === 12 && rich[0].files[0].removed === 3, JSON.stringify(rich[0].files[0]))
+  ok('二進位檔標得出來（不畫 +0 −0）',
+    rich[1].files[0].binary === true && rich[1].files[0].added === 0, JSON.stringify(rich[1].files))
+  // 檔名裡可以有 tab（git 會加引號），不可以在第三格就把它切掉
+  const tabbed = git.parseLog(`aaa1111\x1f1710000000\x1fA\x1fsubject\n1\t0\t"we\tird.js"`)
+  ok('檔名含 tab 不會被切掉', tabbed[0].files[0].path === '"we\tird.js"', JSON.stringify(tabbed[0].files))
+  // 一次 merge 可以動到幾千個檔案：清單要有上限，但不能安靜吞掉
+  const many = [`bbb2222\x1f1710000000\x1fA\x1fbig`]
+  for (let i = 0; i < git.MAX_LOG_FILES + 7; i += 1) many.push(`1\t1\tf${i}.js`)
+  const big = git.parseLog(many.join('\n'))
+  ok('單筆檔案清單有上限', big[0].files.length === git.MAX_LOG_FILES, String(big[0].files.length))
+  ok('超過上限的講得出還有幾個', big[0].more === 7, String(big[0].more))
+  ok('總增刪仍然算完整包', big[0].added === git.MAX_LOG_FILES + 7, String(big[0].added))
+  // 改名那型的 numstat 是 `path{old => new}`，展開時點不開那個檔案
+  ok('log 帶 --no-renames', /--no-renames/.test(git.log.toString()))
+  ok('log 關掉 quotepath（中文檔名才點得開）', /core\.quotepath=false/.test(git.log.toString()))
 }
 
 // ===== [K] git diff 解析與統計 =====
