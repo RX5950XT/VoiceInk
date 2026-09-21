@@ -267,6 +267,10 @@ tag 要與 `package.json` 的 version 一致。
   否則 App 拿到的還是舊的 exe，症狀是「程式碼都對、就是沒有縮圖」而且一聲不吭。
 - **右鍵的 7-Zip／WinRAR／「傳送到」不能從登錄檔靜態列舉**（只有 CLSID）：要 `IContextMenu` sidecar（`native/explorer-shell`，`npm run build:shell`）。pidl 陣列一定要 `LPArray`（預設 SAFEARRAY ＝ GetUIObjectOf AV）；路徑只吃反斜線。子選單要 `CMF_SYNCCASCADEMENU` ＋ `WM_INITMENUPOPUP`，而且 **IContextMenu3 不做事時要退回 IContextMenu2**（「傳送到」只實作 v2，7-Zip 實作 v3）。Google Drive 綠勾走 `SHGFI_ICON | SHGFI_ADDOVERLAYS` 拿已經疊好的圖，**不要** `IImageList::GetOverlayImage`（每個槽位都回同一張）。沒建 sidecar 就少那些項、資料夾維持 emoji。回歸 `test-explorer-shell.js` ＋ `probe-explorer-shell.js`。
 
+- **虛擬清單要「捲到已載入的那幾頁也重畫」**：`loadVisiblePages()` 原本在需要的頁都已在手上時直接 return，2,600 筆的資料夾往下捲，DOM 永遠停在最前面 29 列，後面整片空白——`scrollHeight` 是對的，所以看起來像「捲得動但沒東西」。回歸 `test-explorer-browse-wiring.js` ＋ `e2e-explorer-files-plan-cdp.js` 的 [3]。
+- **`paintList()` 要在 `replaceChildren()` 之前記 `scrollTop`**：清掉子節點會把捲動位置歸零，之後再讀永遠是 0，虛擬清單每次重畫都彈回頂端。相對地 `loadDir` 結尾要**無條件**把 `scrollTop` 設回分頁記的值（新資料夾就是 0），否則會沿用上一個資料夾的位置。
+- **`switchTab` 呼叫 `loadDir` 要帶 `keepSelection: true`**：它先用 `applyTabState` 還原選取，`loadDir` 沒帶旗標就立刻清掉，切回分頁選取永遠是空的。而且分頁載入時手上只有已載到的那幾頁，**沒載完（`truncated`）就不准拿「不在清單裡」當理由裁掉選取**。
+- **雙欄沒開過就不要存右欄狀態**：`saveSecondPaneState()` 會被 `switchTab`／`loadDir` 一路呼叫，雙欄還沒開時把預設的「本機」寫進 `paneStates`，下次按「雙欄」就還原成一個空的本機，而不是目前這個資料夾。開頭補 `if (!dualPane) return`。
 ### 終端機
 
 - **忙碌判定不能只靠 OSC 133**（PSReadLine 會重送整份提示字元）：標記要帶 `Get-History` 的 id 且**比大小**，第一個看到的標記只是「現在這個提示字元」；也不能只靠靜默（AI CLI 是常駐 REPL）。兩者都要。
@@ -539,6 +543,7 @@ tag 要與 `package.json` 的 version 一致。
 - 設定頁只管「裝了什麼、怎麼推論、雲端端點」，選哪一顆模型在功能頁選；未安裝的本地模型仍要留在選單裡標「（未安裝）」。
 - `.subtab-panel` 的顯示只由 `.active` 控制；狀態樣式要比 hover 更高特異度；可以拖的東西一律 `user-select: none`。
 
+- **renderer 的 JS 不准 `import './x.css'`**：打包版是用 `file://` 直接載 `src/` 的原始 ES module，CSS 不是 JS module，整條 import 鏈會 `Failed to fetch dynamically imported module`，掛掉的是最上層那支（症狀寫著 `explorer-page.js`，真兇是它 import 的那支）。開發版有 Vite 轉換所以全綠。樣式一律掛 `index.html` 的 `<link>`；守門 `test-explorer-operations-ui.js`。
 ### 測試（CDP／e2e）
 
 - **在這個 App 裡開發這個 App，一律 `npm run dev:sandbox`**（`scripts/dev-sandbox.js`）：三份 VoiceInk 預設共用 `%APPDATA%\voiceink`，而 `requestSingleInstanceLock()` 綁的是 **userData 路徑**（`main.js` 特地在搶鎖前就套用 `--user-data-dir`）——不換路徑只會把使用者的視窗叫到前面然後自己關掉，還跟他搶資料檔與 AGY 的埠。沙箱在 `%APPDATA%\voiceink-dev`：`models`／`hf-models` 用 junction 接回真的那份（唯讀，30GB 不能複製）；`config.json`／`workspaces.json` **複製**一份（有真資料可用又弄不髒）；會累積的紀錄（usage／code-usage／ agy-logs／dictations／terminals）**不接**；`agyEnabled`／`dictationEnabled`／`sysmonSensors`／檔案頁 `uffsAuto` 強制關掉（這幾個的影響跑得出 userData 之外）。**寫進沙箱前一律先 `rm` 目的地**——`writeFileSync`／`copyFileSync` 會跟著符號連結寫到對面去，沙箱裡只要有一條指回真 userData 的連結，這支「保護資料」的腳本就會親手覆寫使用者的設定。
