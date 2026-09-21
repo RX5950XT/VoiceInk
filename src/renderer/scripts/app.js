@@ -10,6 +10,7 @@ import {
   saveChatSettings
 } from './chat-page.js'
 import { DEFAULT_ASR_API_URL, DEFAULT_ASR_MODEL } from './api.js'
+import { initResizer } from './pane-resize.js'
 import { initCustomSelects, syncCustomSelects } from './custom-select.js'
 import { askConfirm } from './app-dialog.js'
 import { TERM_THEMES, DEFAULT_TERM_THEME, DEFAULT_TERM_BG_OPACITY, MIN_TERM_BG_OPACITY } from './term-themes.js'
@@ -800,68 +801,6 @@ let chatPaneMode = 'chat'
  * @param {'chat' | 'workspace'} mode
  */
 /** 側欄寬度可拖：終端機吃的是 term-host 的 ResizeObserver，不必另外通知 */
-const SIDEBAR_MIN_W = 180
-const SIDEBAR_MAX_W = 560
-
-/**
- * 一條可拖的分隔把手。左右兩側欄共用這一份——右側欄只差在「往左拖是變寬」（`invert`）。
- *
- * @param {{
- *   handleId: string,
- *   panelSelector: string,
- *   cssVar: string,
- *   storageKey: string,
- *   invert?: boolean
- * }} options
- */
-function initResizer({ handleId, panelSelector, cssVar, storageKey, invert = false }) {
-  const handle = document.getElementById(handleId)
-  const panel = /** @type {HTMLElement | null} */ (document.querySelector(panelSelector))
-  if (!handle || !panel) return
-
-  /** @param {number} width */
-  function apply(width) {
-    const px = Math.round(Math.min(SIDEBAR_MAX_W, Math.max(SIDEBAR_MIN_W, width)))
-    document.documentElement.style.setProperty(cssVar, `${px}px`)
-    try {
-      localStorage.setItem(storageKey, String(px))
-    } catch {
-      // 沒有 storage 就只是這次有效，不值得為它中斷拖曳
-    }
-  }
-
-  let saved = 0
-  try {
-    saved = Number(localStorage.getItem(storageKey)) || 0
-  } catch {
-    saved = 0
-  }
-  if (saved) apply(saved)
-
-  /** @param {PointerEvent} event */
-  const onMove = (event) => {
-    const rect = panel.getBoundingClientRect()
-    apply(invert ? rect.right - event.clientX : event.clientX - rect.left)
-  }
-  const stop = () => {
-    handle.classList.remove('is-dragging')
-    window.removeEventListener('pointermove', onMove)
-    window.removeEventListener('pointerup', stop)
-  }
-  // 監聽掛 window：拖到把手外（甚至拖出視窗）仍要跟得上、放得掉
-  handle.addEventListener('pointerdown', (event) => {
-    event.preventDefault()
-    handle.classList.add('is-dragging')
-    window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', stop)
-  })
-  handle.addEventListener('keydown', (event) => {
-    const raw = event.key === 'ArrowLeft' ? -16 : event.key === 'ArrowRight' ? 16 : 0
-    if (!raw) return
-    event.preventDefault()
-    apply(panel.getBoundingClientRect().width + (invert ? -raw : raw))
-  })
-}
 
 function initSidebarResize() {
   initResizer({

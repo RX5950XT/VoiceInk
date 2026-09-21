@@ -19,21 +19,26 @@ const DRAG_THRESHOLD_PX = 4
  *   itemSelector: string,
  *   ignoreSelector: string,
  *   onCommit: () => void,
- *   dropZone?: (x: number, y: number) => HTMLElement | null
+ *   dropZone?: (x: number, y: number) => HTMLElement | null,
+ *   axis?: 'y' | 'x'
  * }} config dropZone：游標底下若是「可以整個丟進去」的容器（例如收合的資料夾標題），
  *   回傳要放進去的那個容器；拖曳的那一列會被搬進它的尾端。
+ *   axis：鍵盤搬動用哪一組方向鍵（清單是上下，分頁列那種橫排是左右）。
  * @returns {{ onPointerDown: (event: PointerEvent) => void, onKeydown: (event: KeyboardEvent) => void }}
  */
-export function createListReorder({ getList, itemSelector, ignoreSelector, onCommit, dropZone }) {
+export function createListReorder({ getList, itemSelector, ignoreSelector, onCommit, dropZone, axis = 'y' }) {
   /** @type {{ id: string, el: HTMLElement, startX: number, startY: number, active: boolean } | null} */
   let dragState = null
 
   /** 搬完之後焦點要留在那一列上，否則鍵盤連按第二下就沒對象了 */
   const focusItem = (el) => {
-    const opener = el.querySelector('.chat-list-open')
+    const opener = el.querySelector('.chat-list-open, .ex-tab-open')
     if (opener) opener.focus()
     else el.focus()
   }
+
+  const BACK = axis === 'x' ? 'ArrowLeft' : 'ArrowUp'
+  const FORWARD = axis === 'x' ? 'ArrowRight' : 'ArrowDown'
 
   const onDragMove = (event) => {
     const listEl = getList()
@@ -92,16 +97,16 @@ export function createListReorder({ getList, itemSelector, ignoreSelector, onCom
     },
 
     /**
-     * Alt+↑／↓ 搬動（不用滑鼠也要能排序）
+     * Alt+方向鍵搬動（不用滑鼠也要能排序）。直的清單是 ↑／↓，橫的分頁列是 ←／→。
      * @param {KeyboardEvent} event
      */
     onKeydown(event) {
-      if (!event.altKey || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return
+      if (!event.altKey || (event.key !== BACK && event.key !== FORWARD)) return
       const el = event.currentTarget
-      const sibling = event.key === 'ArrowUp' ? el.previousElementSibling : el.nextElementSibling
+      const sibling = event.key === BACK ? el.previousElementSibling : el.nextElementSibling
       if (!sibling || !sibling.matches(itemSelector)) return
       event.preventDefault()
-      if (event.key === 'ArrowUp') sibling.before(el)
+      if (event.key === BACK) sibling.before(el)
       else sibling.after(el)
       focusItem(el)
       onCommit()

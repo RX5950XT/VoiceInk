@@ -1,3 +1,32 @@
+# 2026-09-21 — 欄寬可拖、分頁列縮小並可拖曳排序
+
+回報：四塊欄位（側欄／主欄／右欄／詳情）之間的縫隙要能拖大小；分頁列要窄一點矮一點，
+而且像瀏覽器那樣可以左右拖。
+
+- `initResizer()` 從 `app.js` 抽成 `pane-resize.js`（多了 min／max／onResize），聊天側欄沿用，
+  檔案總管三條把手共用同一份。寬度進 CSS 變數＋localStorage。
+- 詳情欄本來是 CSS `resize: horizontal`：把手只在右下角一個小三角、換頁就忘記，換掉。
+- 分頁列 padding 8→3、分頁 180px→`flex: 0 1 148px`（最小 96px）、字 13→12px、
+  關閉鈕 28→20px、新增鈕 32→26px。整條從 54px 降到 34px。
+- 分頁左右拖排序：`createListReorder` 加 `axis`，鍵盤改 Alt+←→。
+
+地雷：
+1. `.ex-resizer` 沒有 `position: relative` 的話 `z-index` 不生效，`margin-inline: -3px`
+   會讓左右欄疊在把手上面，整條點不到（詳情欄那條完全拖不動，查了三輪才看到
+   `elementFromPoint` 回傳的是隔壁欄）。
+2. 操作中心那塊浮動面板蓋在右下角，詳情欄把手中段被它擋住。使用者抓上半段沒問題，
+   測試也要抓 `rect.top + 40`。
+3. **CDP 的滑鼠「按下／放開」在視窗沒有前景時會被 Chromium 丟掉**，只剩 mousemove。
+   探針一開始沒加 `--hidden`，三個拖曳全部靜靜地沒反應，差點以為是程式壞了。
+4. 右欄要吃固定寬（`flex: 0 0 var(--ex-second-w)`），兩邊都 `flex: 1` 的話把手一拖會互推。
+
+驗收：`e2e-explorer-cdp.js` 112 條（新增 [J]）、`test-explorer.js` 297 條、
+`e2e-explorer-dual-cdp.js` 42 條全綠。
+
+已知偶發（改動前就有，跟這次無關）：`e2e-explorer-cdp.js` 的 [C6] 框選與 [C8]／[F] 的
+資料夾監看會偶爾紅。[C6] 紅的時候現場是 `selected: 3` 但 `marquees: 0`——框選其實跑了，
+是晚一步的監看事件重畫清單把框洗掉。腳本現在會在紅的時候把現場印出來。
+
 # 2026-09-21 — 雙欄右欄換不了磁碟
 
 回報：「開啟雙欄預設在 C，沒辦法便捷地切其他槽。」

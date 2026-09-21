@@ -3,7 +3,10 @@
  *
  * 只畫畫面：分頁資料與切換／關閉由 explorer-page.js 決定。零 innerHTML。
  * 關閉鈕常駐不做 hover-only（hover 才出現的操作等於沒有）。
+ * 左右拖曳排序沿用側欄那支 `createListReorder`，只是改成橫的（`axis: 'x'`）。
  */
+
+import { createListReorder } from './list-reorder.js'
 
 /**
  * @param {{
@@ -13,11 +16,22 @@
  *   titleOf: (cwd: string) => string,
  *   onSelect: (id: string) => void,
  *   onClose: (id: string) => void,
+ *   onReorder?: (ids: string[]) => void,
  *   controls?: string
  * }} spec
  */
 export function paintTabStrip(spec) {
-  const { host, tabs, activeId, titleOf, onSelect, onClose, controls = 'exContent' } = spec
+  const { host, tabs, activeId, titleOf, onSelect, onClose, onReorder, controls = 'exContent' } = spec
+  // 拖完之後照 DOM 現在的順序回報；重畫是呼叫端的事（它得先把資料排好）。
+  const reorder = onReorder && tabs.length > 1
+    ? createListReorder({
+      getList: () => host,
+      itemSelector: '.ex-tab',
+      ignoreSelector: '.ex-tab-close',
+      axis: 'x',
+      onCommit: () => onReorder([...host.querySelectorAll('.ex-tab')].map((el) => el.dataset.id))
+    })
+    : null
   const hadFocus = host.contains(document.activeElement)
   host.replaceChildren()
   const closable = tabs.length > 1
@@ -70,6 +84,12 @@ export function paintTabStrip(spec) {
       e.preventDefault()
       onClose(tab.id)
     })
+    if (reorder) {
+      el.addEventListener('pointerdown', reorder.onPointerDown)
+      // 掛在 `el` 而不是按鈕上：onKeydown 讀 currentTarget 當「要搬的那一頁」，
+      // 掛在按鈕上的話它會去找按鈕的兄弟節點（關閉鈕），搬不動。
+      el.addEventListener('keydown', reorder.onKeydown)
+    }
     host.appendChild(el)
   }
   if (hadFocus) host.querySelector('.is-active .ex-tab-open')?.focus({ preventScroll: true })

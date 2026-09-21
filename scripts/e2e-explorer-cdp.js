@@ -492,6 +492,26 @@ async function main() {
         const s = getComputedStyle(el)
         return { w: el.offsetWidth, h: el.offsetHeight, bg: s.backgroundColor, border: s.borderTopWidth }
       })()`), 5_000, '框畫出來').catch(() => null)
+      // 這條偶發會紅（資料夾監看晚一步送事件，重畫清單會把框一起洗掉，
+      // 症狀是 selected 有值但 marquees 是 0）。紅的時候把現場印出來。
+      if (!marquee) {
+        console.log('DIAG geo', JSON.stringify(geo))
+        console.log('DIAG', JSON.stringify(await cdp.eval(`(() => {
+          const host = document.getElementById('exList')
+          const el = document.elementFromPoint(${geo.startX}, ${geo.startY})
+          return {
+            at: el ? el.tagName + '.' + (el.className || '') : null,
+            hostHidden: host.hidden,
+            marquees: document.querySelectorAll('.ex-marquee').length,
+            reordering: document.querySelectorAll('.is-reordering').length,
+            dragging: document.querySelectorAll('.is-dragging').length,
+            tabs: document.querySelectorAll('#exTabStrip .ex-tab').length,
+            selected: document.querySelectorAll('#exList .ex-row.is-selected').length,
+            body: document.body.className
+          }
+        })()`)))
+        console.log('DIAG errors', JSON.stringify(cdp.errors))
+      }
       assert(marquee && marquee.w > 0 && marquee.h > 0, '拖出來的框畫得出來', JSON.stringify(marquee))
       assert(marquee && marquee.bg !== 'rgba(0, 0, 0, 0)', '框有底色（不是透明的）', JSON.stringify(marquee))
       const live = await cdp.eval(`document.querySelectorAll('#exList .ex-row.is-selected').length`)
@@ -941,6 +961,108 @@ async function main() {
     const bootHome = await cdp.eval(`(async () => { await window.electronAPI.explorer.saveState({lastPath: ''}); return window.electronAPI.explorer.bootstrap() })()`)
     assert(bootHome.ok && bootHome.data.lastPath === 'thispc', '未存路徑時預設本機首頁')
     assert(cdp.errors.length === 0, '分頁操作沒有未處理的 renderer 例外', cdp.errors.join(', '))
+
+    console.log('\n[J] 欄寬可拖、分頁可左右拖排序')
+    {
+      // 注意：這些是真的滑鼠事件。視窗沒在前景時 Chromium 會丟掉「按下／放開」，
+      // 只剩 mousemove——這支本來就用 --hidden 啟動，剛好避開。
+      const drag = async (fromX, toX, y) => {
+        await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: fromX, y, button: 'left', buttons: 1, clickCount: 1 })
+        for (let i = 1; i <= 8; i += 1) {
+          await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: Math.round(fromX + ((toX - fromX) * i) / 8), y, button: 'left', buttons: 1 })
+        }
+        await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: toX, y, button: 'left', buttons: 0, clickCount: 1 })
+        await sleep(400)
+      }
+      const boxOf = (sel) => cdp.eval(`(() => {
+        const el = document.querySelector(${JSON.stringify(sel)})
+        if (!el) return null
+        const r = el.getBoundingClientRect()
+        return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), w: Math.round(r.width) }
+      })()`)
+
+      // 上一段把視埠縮到 800 量「narrow 無水平溢出」，沒有復原。900px 以下詳情欄整個
+      // display:none，量出來會是 0——先把視埠調回來。
+      await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 860, deviceScaleFactor: 1, mobile: false })
+      await sleep(600)
+      // 前面那段把 lastPath 清成首頁了。詳情欄在「本機」首頁是 display:none（.ex-detail.is-home），
+      // 量寬度會是 0，所以先走回真的資料夾。
+      await cdp.eval(`(() => {
+        document.getElementById('exPathBar').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+        const input = document.getElementById('exPathInput')
+        input.value = ${JSON.stringify(SEED_DIR)}
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+        return true
+      })()`)
+      await waitFor(() => cdp.eval(`document.querySelectorAll('#exList .ex-row').length > 0`), 20_000, '回到種好的資料夾')
+      await sleep(600)
+
+      const sideBefore = (await boxOf('#page-explorer .ex-sidebar')).w
+      // 抓把手的上半段：操作中心那塊浮動面板蓋在右下角，會蓋掉把手中間那一段。
+      const sideHandle = await cdp.eval(`(() => {
+        const r = document.getElementById('exSidebarResizer').getBoundingClientRect()
+        return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + 40) }
+      })()`)
+      await drag(sideHandle.x, sideHandle.x + 70, sideHandle.y)
+      const sideAfter = (await boxOf('#page-explorer .ex-sidebar')).w
+      assert(sideAfter > sideBefore + 40, '側欄拖得寬', `${sideBefore} -> ${sideAfter}`)
+      assert(await cdp.eval(`localStorage.getItem('exSidebarWidth')`) === String(sideAfter),
+        '側欄寬度存起來了', String(sideAfter))
+
+      // 前面驗過「詳情欄收得起來」，收著的話 display:none，量不到寬度——先確定它是開的。
+      await cdp.eval(`(() => {
+        if (document.getElementById('exDetail').classList.contains('is-collapsed')) {
+          document.getElementById('exDetailToggleBtn').click()
+        }
+        return true
+      })()`)
+      await sleep(400)
+      const detailBefore = (await boxOf('#exDetail')).w
+      const detailHandle = await cdp.eval(`(() => {
+        const r = document.getElementById('exDetailResizer').getBoundingClientRect()
+        return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + 40) }
+      })()`)
+      await drag(detailHandle.x, detailHandle.x - 60, detailHandle.y)
+      const detailAfter = (await boxOf('#exDetail')).w
+      assert(detailAfter > detailBefore + 30, '詳情欄往左拖是變寬', `${detailBefore} -> ${detailAfter}`)
+
+      assert(await cdp.eval(`document.getElementById('exSecondResizer').hidden === true`), '單欄時右欄把手收著')
+      await cdp.eval(`document.getElementById('exDualBtn').click()`)
+      await waitFor(() => cdp.eval(`document.querySelectorAll('#exSecondList .ex-row').length > 0`), 30_000, '右欄列出來')
+      await sleep(800)
+      const secondBefore = (await boxOf('#exSecondPane')).w
+      const secondHandle = await cdp.eval(`(() => {
+        const r = document.getElementById('exSecondResizer').getBoundingClientRect()
+        return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + 40) }
+      })()`)
+      assert(await cdp.eval(`document.getElementById('exSecondResizer').hidden === false`), '雙欄時右欄把手出現')
+      await drag(secondHandle.x, secondHandle.x - 90, secondHandle.y)
+      const secondAfter = (await boxOf('#exSecondPane')).w
+      assert(secondAfter > secondBefore + 50, '右欄往左拖是變寬', `${secondBefore} -> ${secondAfter}`)
+      await cdp.eval(`document.getElementById('exDualBtn').click()`)
+      await sleep(500)
+
+      // 分頁列：先開到三頁，把第一頁拖到最後
+      while (await cdp.eval(`document.querySelectorAll('#exTabStrip .ex-tab').length`) < 3) {
+        await cdp.eval(`document.getElementById('exTabAddBtn').click()`)
+        await sleep(900)
+      }
+      const strip = await cdp.eval(`(() => {
+        const tabs = [...document.querySelectorAll('#exTabStrip .ex-tab')]
+        const a = tabs[0].getBoundingClientRect()
+        const b = tabs[tabs.length - 1].getBoundingClientRect()
+        return { ids: tabs.map((t) => t.dataset.id), fromX: Math.round(a.left + 28), toX: Math.round(b.right - 18), y: Math.round(a.top + a.height / 2),
+          stripH: Math.round(document.querySelector('#page-explorer .ex-tabs').getBoundingClientRect().height), tabW: Math.round(a.width) }
+      })()`)
+      assert(strip.stripH <= 40 && strip.tabW <= 160, '分頁列沒有以前那麼寬那麼高', JSON.stringify(strip))
+      await drag(strip.fromX, strip.toX, strip.y)
+      const moved = await cdp.eval(`[...document.querySelectorAll('#exTabStrip .ex-tab')].map((t) => t.dataset.id)`)
+      assert(moved.length === strip.ids.length && moved[moved.length - 1] === strip.ids[0] && moved[0] !== strip.ids[0],
+        '分頁拖得動，第一頁拖到最後', JSON.stringify({ before: strip.ids, after: moved }))
+      const persisted = await cdp.eval(`(async () => (await window.electronAPI.explorer.bootstrap()).data.tabs.map((t) => t.id))()`)
+      assert(JSON.stringify(persisted) === JSON.stringify(moved), '新順序存得住', JSON.stringify({ persisted, moved }))
+      assert(cdp.errors.length === 0, '拖欄寬與拖分頁都沒有丟例外', cdp.errors.join(', '))
+    }
   } finally {
     if (mainCdp) mainCdp.close()
     if (cdp) cdp.close()

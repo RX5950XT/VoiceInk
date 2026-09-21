@@ -14,6 +14,27 @@ AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定�
 
 ## 架構
 
+### 檔案總管：欄寬可拖與分頁列（2026-09-21）
+
+- **三條把手**：`#exSidebarResizer`／`#exSecondResizer`／`#exDetailResizer`，共用
+  `pane-resize.js` 的 `initResizer()`（本來長在 `app.js` 裡面只給聊天側欄用，這次抽出來）。
+  寬度寫進 `--ex-sidebar-w`／`--ex-second-w`／`--ex-detail-w` 並記進 localStorage。
+  詳情欄原本用 CSS `resize: horizontal`（把手只在右下角、也存不住），換掉了。
+- **坑**：`.ex-resizer` 一定要 `position: relative`。`margin-inline: -3px` 讓左右欄疊上來，
+  沒有 position 的話 `z-index` 不生效，把手整條點不到。
+- **坑**：右欄改吃固定寬（`flex: 0 0 var(--ex-second-w)`），剩下的才給左欄。兩邊都 `flex: 1`
+  的話把手一拖兩欄會互相推。窄視窗（≤640px）時改回 `flex: 1 1 0`，不然左欄會被擠沒。
+- **坑**：操作中心那塊浮動面板蓋在右下角，詳情欄把手中段會被它擋住（`elementFromPoint`
+  回傳 `.ex-ops-actions`）。使用者往上半段抓就好；測試也要抓 `rect.top + 40`。
+- **分頁列**：整條變矮變窄（padding 8→3、分頁 180px→`flex: 0 1 148px` 最小 96px、
+  字 13→12px、關閉鈕 28→20px），分頁多了會一起縮，縮到底才橫向捲。
+- **分頁可左右拖排序**：沿用側欄那支 `createListReorder`，多一個 `axis: "x"`（鍵盤從
+  Alt+↑↓ 換成 Alt+←→）。拖完由 `reorderTabs()` 照 DOM 順序原地 `splice` 重排——
+  `tabs`／`secondTabs` 到處都有人拿著參考，換成新陣列的話那些地方會看到舊的。
+  `onKeydown` 要掛在 `.ex-tab` 上不是按鈕上（它讀 `currentTarget` 當要搬的那一頁）。
+- 測試：`e2e-explorer-cdp.js` 的 [J]（整支 112 條）。那支用真的滑鼠事件，
+  **視窗一定要 `--hidden`**：視窗沒在前景時 Chromium 會把 CDP 的「按下／放開」丟掉，只剩 mousemove。
+
 ### 檔案總管：雙欄的「作用欄」（2026-09-21）
 
 - 雙欄不是兩套流程，是**一套流程＋一個作用欄**。`explorer-page.js` 的 `activePane`

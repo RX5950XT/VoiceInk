@@ -16,6 +16,7 @@ import { openImageViewer, imageViewerOpen } from './image-viewer.js'
 import { openPreview as openFilePreview, closePreview as closeFilePreview, previewKind, previewOpen } from './explorer-preview.js'
 import { mountExplorerOperations } from './explorer-operations.js'
 import { nextZoomState } from './explorer-zoom.js'
+import { initResizer } from './pane-resize.js'
 import {
   BROWSE_PAGE_SIZE as BROWSE_PAGE_SIZE_IMPORT,
   normalizeBrowseState as normalizeBrowseStateImport,
@@ -352,9 +353,43 @@ function paintActivePane() {
   $('exSecondPane')?.classList.toggle('is-active-pane', rightActive())
 }
 
+/**
+ * 側欄／右欄／詳情欄之間的三條把手。寬度寫進 CSS 變數並記進 localStorage。
+ * 右欄那條只有雙欄時有意義，收合時跟著藏起來（見 `paintSecondPane`）。
+ */
+function initExplorerResizers() {
+  initResizer({
+    handleId: 'exSidebarResizer',
+    panelSelector: '#page-explorer .ex-sidebar',
+    cssVar: '--ex-sidebar-w',
+    storageKey: 'exSidebarWidth',
+    min: 140,
+    max: 420
+  })
+  initResizer({
+    handleId: 'exSecondResizer',
+    panelSelector: '#exSecondPane',
+    cssVar: '--ex-second-w',
+    storageKey: 'exSecondWidth',
+    invert: true,
+    min: 220,
+    max: 1200
+  })
+  initResizer({
+    handleId: 'exDetailResizer',
+    panelSelector: '#exDetail',
+    cssVar: '--ex-detail-w',
+    storageKey: 'exDetailWidth',
+    invert: true,
+    min: 220,
+    max: 520
+  })
+}
+
 function bindOnce() {
   if (started) return
   started = true
+  initExplorerResizers()
   disposeOperations = mountExplorerOperations({ root: $('page-explorer'), api: electronAPI.explorer })
   $('exTabAddBtn')?.addEventListener('click', () => void newTab())
   $('exBackBtn')?.addEventListener('click', () => goHistory(-1))
@@ -823,6 +858,9 @@ function toggleDetailPane() {
   const collapsed = detail.classList.toggle('is-collapsed')
   button.setAttribute('aria-pressed', collapsed ? 'false' : 'true')
   button.textContent = collapsed ? '顯示詳情' : '收合詳情'
+  // 欄位收起來了，它那條把手也要收——留著會變成一條拖不動的線。
+  const handle = $('exDetailResizer')
+  if (handle) handle.hidden = collapsed
 }
 
 function onListScroll() {
@@ -952,7 +990,12 @@ function paintSecondTabs() {
     titleOf: tabTitle,
     controls: 'exSecondList',
     onSelect: (id) => void switchSecondTab(id),
-    onClose: (id) => void closeSecondTab(id)
+    onClose: (id) => void closeSecondTab(id),
+    onReorder: (ids) => reorderTabs(secondTabs, ids, () => {
+      saveSecondPaneState()
+      persistTabs()
+      paintSecondTabs()
+    })
   })
 }
 
@@ -1175,6 +1218,8 @@ function paintSecondPane() {
   const list = $('exSecondList')
   if (!pane || !list) return
   pane.hidden = !dualPane
+  const handle = $('exSecondResizer')
+  if (handle) handle.hidden = !dualPane
   if (!dualPane) return
   const searching = secondInSearch()
   paintSecondCrumbs()
@@ -2004,8 +2049,28 @@ function paintTabs() {
     activeId,
     titleOf: tabTitle,
     onSelect: (id) => void switchTab(id),
-    onClose: (id) => void closeTab(id)
+    onClose: (id) => void closeTab(id),
+    onReorder: (ids) => reorderTabs(tabs, ids, () => {
+      persistTabs()
+      paintTabs()
+    })
   })
+}
+
+/**
+ * 把分頁陣列照拖完的 DOM 順序排好。原地改（`splice`）是因為 `tabs`／`secondTabs`
+ * 這兩個陣列到處都有人拿著參考，換成新陣列的話那些地方會看到舊的。
+ *
+ * @param {Array<{ id: string }>} list
+ * @param {string[]} ids
+ * @param {() => void} done
+ */
+function reorderTabs(list, ids, done) {
+  const sorted = ids.map((id) => list.find((t) => t.id === id)).filter(Boolean)
+  // 拖曳途中分頁被關掉之類的怪狀況：數量對不上就當沒發生，不要弄丟分頁。
+  if (sorted.length !== list.length) return
+  list.splice(0, list.length, ...sorted)
+  done()
 }
 
 /**
