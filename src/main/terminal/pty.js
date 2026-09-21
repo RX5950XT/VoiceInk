@@ -386,9 +386,13 @@ function shellEnvironment(editor, editorDir) {
  *
  * Windows 的環境變數不分大小寫，但 `{ ...process.env }` 展開出來的是系統寫的原字
  * （實測是 `Path`）。直接寫 `env.PATH = ...` 等於**另外開一個空的 `PATH`**：`env.PATH`
- * 讀出來是 `undefined`，原本那份 `Path` 一個字都沒動，子程序拿到兩個同名的變數，生效的
- * 是先進環境區塊的 `Path`——症狀就是 `EDITOR` 明明設對了，CLI 仍說
- * `editor "voiceink-edit.cmd" not found in PATH`，Ctrl+G 整個沒反應。
+ * 讀出來是 `undefined`，原本那份 `Path` 一個字都沒動，子程序於是拿到兩個同名的變數。
+ *
+ * **實測生效的是後寫進去的那個 `PATH`**：子 shell 的 `PATH` 只剩 `<editor-bridge>;`，
+ * 整條系統路徑連同尾端那個空項一起蓋掉。後果遠不只 Ctrl+G 沒反應——終端機裡 `node`、
+ * `python`、`System32` 全部找不到，Claude Code 每開一個工作階段就噴
+ * `SessionStart hook error: node: command not found`，連 `electron-builder` 都會因為
+ * `spawn powershell.exe ENOENT` 而建置失敗。
  *
  * @param {Record<string, string>} env
  * @param {string} folder
