@@ -191,6 +191,8 @@ let truncated = false
 let searchSort = 'rank'
 let editingPath = false
 let watching = false
+let marqueeDragging = false
+let marqueePaintMissed = false
 /** @type {ReturnType<typeof createListReorder> | null} */
 let placeReorder = null
 /** @type {(() => void) | null} */
@@ -794,6 +796,13 @@ function paintList() {
   const host = $('exList')
   const empty = $('exEmpty')
   if (!host) return
+  // 框選中不重畫：replaceChildren() 會把框連同反白一起洗掉（資料夾監看晚一步送事件
+  // 就會踩到），改成記一筆，放開滑鼠再補畫。
+  if (marqueeDragging) {
+    marqueePaintMissed = true
+    return
+  }
+  marqueePaintMissed = false
   // replaceChildren() 會把 scrollTop 清成 0，所以要先把位置記下來再重畫。
   const scrollTop = host.scrollTop
   const home = inHome() && !inSearch()
@@ -3188,6 +3197,7 @@ function onListMouseDown(e) {
       box = document.createElement('div')
       box.className = 'ex-marquee'
       host.appendChild(box)
+      marqueeDragging = true
     }
     const left = Math.min(startX, ev.clientX)
     const top = Math.min(startY, ev.clientY)
@@ -3211,7 +3221,12 @@ function onListMouseDown(e) {
   const onUp = () => {
     document.removeEventListener('mousemove', onMove)
     document.removeEventListener('mouseup', onUp)
-    if (!box) return
+    marqueeDragging = false
+    if (!box) {
+      // 框選期間擋掉的重畫（監看事件）要補回來，不然畫面會停在舊內容
+      if (marqueePaintMissed) paintList()
+      return
+    }
     box.remove()
     box = null
     anchor = ''

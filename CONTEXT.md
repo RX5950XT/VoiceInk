@@ -14,6 +14,19 @@ AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定�
 
 ## 架構
 
+### 檔案總管：監看事件會掉、框選被重畫洗掉（2026-09-22）
+
+- **重掛 watcher 會吃掉改動**：UI 每重讀一次目錄就再呼叫一次 `watchDirs()`，
+  `explorer/watch.js` 以前是「先全部 `stop()` 再重開」——重開之間的改動沒人看，
+  連還在 debounce（250ms）沒送出的事件也被 `clearTimeout` 吃掉，那個檔案就再也不會
+  出現在畫面上，只能手動 F5。改成同一個資料夾沿用既有 watcher（只換 `send`），
+  這次清單裡沒有的才關掉。`e2e-explorer-cdp.js` 的 [C8]／[F] 偶發變紅就是這個。
+- **框選期間不重畫清單**：`paintList()` 的 `replaceChildren()` 會把框（`.ex-marquee`）
+  連同反白一起洗掉，監看事件晚一步送到就會踩到（症狀：三列都反白但框不見了）。
+  `paintList()` 遇到框選中改成記一筆就回，放開滑鼠再補畫。
+- 測試：`test-explorer-watch.js`（重新 arm 不掉事件、舊資料夾要關掉）、
+  `e2e-explorer-cdp.js` 的 [C6]／[C8]／[F]（連跑三次全綠）。
+
 ### 檔案總管：欄寬可拖與分頁列（2026-09-21）
 
 - **三條把手**：`#exSidebarResizer`／`#exSecondResizer`／`#exDetailResizer`，共用
@@ -94,9 +107,6 @@ AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定�
   （`isComposing` 有些輸入法不送，所以連 `keyCode === 229` 一起擋）。
 - 測試：`test-explorer.js` 的「磁碟根目錄的檔案還原得回去」、
   `e2e-app-dialog-cdp.js` 的 [G1]／[G2]／[G3]。
-- **已知偶發**：`e2e-explorer-cdp.js` 的 [C8]「資料夾監看有在跑」會紅，改動前後都一樣
-  （`fs.watch` 在 Windows 上偶爾不送事件）；紅的時候腳本會把當下的清單與磁碟內容印出來。
-
 ### 終端機：選取文字選不起來、PATH 被送兩份（2026-09-21）
 
 - **「選取文字自動複製壞掉」其實是選不起來**：Claude Code v2.1 起會送 `?1000h`＋`?1006h`
