@@ -382,6 +382,7 @@ export function initFindWidget({
   })
 
   findInput.addEventListener('keydown', (event) => {
+    if (event.isComposing || event.keyCode === 229) return
     if (event.key === 'Enter') {
       event.preventDefault()
       event.shiftKey ? goToMatch(currentIndex - 1) : goToMatch(currentIndex + 1)
@@ -392,6 +393,7 @@ export function initFindWidget({
   })
 
   replaceInput?.addEventListener('keydown', (event) => {
+    if (event.isComposing || event.keyCode === 229) return
     if (event.key === 'Enter') {
       event.preventDefault()
       doReplace()

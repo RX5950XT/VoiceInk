@@ -39,10 +39,12 @@ test('正規化會移除非有限或無效額度視窗', () => {
     shared.createWindow('infinite', '', 'weekly', Infinity, 100, ''),
     shared.createWindow('zero-limit', '', 'weekly', 20, 0, ''),
     shared.createWindow('bad-kind', '', 'hourly', 20, 100, ''),
+    shared.createWindow('negative-used', '', 'weekly', -1, 100, ''),
+    shared.createWindow('over-limit', '', 'weekly', 101, 100, ''),
     shared.createWindow('valid', '', 'weekly', 20, 100, '2026-08-20T00:00:00Z')
   ]
   const normalized = shared.normalizeAccount(account)
-  assert.deepEqual(normalized.windows.map((window) => window.id), ['valid'])
+  assert.deepEqual(normalized.windows.map((window) => window.id), ['over-limit', 'valid'])
 })
 
 test('未知例外轉為不洩漏原訊息的公開錯誤', () => {

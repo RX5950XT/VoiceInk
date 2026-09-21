@@ -68,6 +68,7 @@ function build() {
   img.className = 'iv-img'
   img.alt = ''
   img.draggable = false
+  img.addEventListener('load', applyTransform)
   stage.appendChild(img)
 
   const prev = icon('‹')

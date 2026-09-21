@@ -4,7 +4,7 @@
  * 不是瀏覽器／系統內建那三支。
  *
  * 用法：node scripts/e2e-app-dialog-cdp.js
- * 自己開 vite（5173）與 electron，收尾只殺自己 spawn 的那兩棵。
+ * 使用打包版、隱藏視窗與獨立資料夾，收尾只殺自己 spawn 的程序樹。
  */
 const { spawn } = require('child_process')
 const path = require('path')
@@ -15,7 +15,9 @@ const http = require('http')
 
 const PORT = 9241
 const ROOT = path.join(__dirname, '..')
+const EXE = process.env.VOICEINK_EXE || path.join(ROOT, 'dist', 'win-unpacked', 'VoiceInk.exe')
 const USER_DATA_DIR = tempDir('voiceink-dialog-')
+fs.writeFileSync(path.join(USER_DATA_DIR, 'config.json'), JSON.stringify({ sysmonSensors: false, dictationEnabled: false }))
 const IS_WIN = process.platform === 'win32'
 
 const results = []
@@ -127,17 +129,12 @@ function checkNoNativeDialogs() {
 async function main() {
   checkNoNativeDialogs()
 
-  // 直接指到 .js 入口與 electron 執行檔：Node 20+ 不讓 spawn 直接跑 .cmd（EINVAL）
-  const vite = spawn(process.execPath, [path.join(ROOT, 'node_modules', 'vite', 'bin', 'vite.js')], {
-    cwd: ROOT, stdio: 'ignore', shell: false
-  })
   let electron = null
   let cdp = null
   try {
-    await waitHttp('http://localhost:5173', 60000)
     electron = spawn(
-      require('electron'),
-      ['.', `--remote-debugging-port=${PORT}`, `--user-data-dir=${USER_DATA_DIR}`],
+      EXE,
+      ['--hidden', '--disable-backgrounding-occluded-windows', `--remote-debugging-port=${PORT}`, `--user-data-dir=${USER_DATA_DIR}`],
       { cwd: ROOT, stdio: 'ignore', shell: false }
     )
     await waitHttp(`http://127.0.0.1:${PORT}/json/version`, 60000)
@@ -154,11 +151,8 @@ async function main() {
     cdp = new Cdp(page.webSocketDebuggerUrl)
     await cdp.connect()
     await cdp.send('Runtime.enable')
-    // 視窗被別的程式蓋住時 Chromium 會把計時器與事件派送節流到 ~19 秒
-    // （CLAUDE.md 的 `document.hidden` 那條），`dialog.close()` 的 close 事件
-    // 就慢到測不完。所以這支**會把視窗叫到最前面**。
+    // 只模擬頁面焦點，不把視窗帶到使用者面前。
     await cdp.send('Page.enable')
-    await cdp.send('Page.bringToFront')
     await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => {})
 
     await cdp.eval(`(async () => { window.__dlg = await import('./scripts/app-dialog.js') })()`)
@@ -210,6 +204,15 @@ async function main() {
     })()`)
     ok('[D1] 輸入框帶預設值並自動聚焦', primed.ready && primed.focused, JSON.stringify(primed))
 
+    const composing = await cdp.eval(`(() => {
+      const input = document.querySelector('dialog.app-dialog[open] input.input')
+      for (const props of [{ isComposing: true }, { isComposing: false, keyCode: 229 }]) {
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, ...props }))
+      }
+      return input.closest('dialog').open
+    })()`)
+    ok('[D-ime] 選字 Enter 不會關閉輸入框（Chromium 事件）', composing === true)
+
     await cdp.key('Enter', 'Enter', 13)
     const typed = await cdp.eval('window.__done')
     ok('[D2] Enter 送出並回傳輸入內容', typed === 'new.txt', String(typed))
@@ -242,7 +245,6 @@ async function main() {
   } finally {
     cdp?.close()
     stopTree(electron)
-    stopTree(vite)
     try { removeTree(USER_DATA_DIR) } catch { /* 佔用中就留著 */ }
   }
 

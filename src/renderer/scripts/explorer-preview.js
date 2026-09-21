@@ -124,6 +124,9 @@ async function loadMarkdown(item, readMarkdown, host, seq) {
   }
 }
 
+// pdfjs 6 的 PDFDocumentProxy 沒有 destroy()，要從 loadingTask 收。
+const destroyPdf = (doc) => Promise.resolve(doc?.loadingTask?.destroy?.()).catch(() => {})
+
 async function loadPdf(url, host, seq) {
   let doc = null
   try {
@@ -139,13 +142,15 @@ async function loadPdf(url, host, seq) {
       url, isEvalSupported: false, disableStream: true, disableAutoFetch: true
     }).promise
     if (seq !== generation || !ui) {
-      await doc.destroy()
+      await destroyPdf(doc)
       doc = null
       return
     }
     let pageNo = 1
     let renderTask = null
     let closed = false
+    let drawGeneration = 0
+    const isCurrent = () => !closed && seq === generation && Boolean(ui)
     const bar = document.createElement('div')
     bar.className = 'ex-preview-pdf-bar'
     const prev = document.createElement('button')
@@ -162,27 +167,41 @@ async function loadPdf(url, host, seq) {
     canvas.className = 'ex-preview-pdf-canvas'
     host.replaceChildren(bar, canvas)
     const draw = async () => {
-      if (closed || seq !== generation || !ui) return
-      const page = await doc.getPage(pageNo)
-      renderTask?.cancel()
-      const viewport = page.getViewport({ scale: 1.35 })
-      canvas.width = viewport.width
-      canvas.height = viewport.height
-      label.textContent = `第 ${pageNo} / ${doc.numPages} 頁`
-      prev.disabled = pageNo <= 1
-      next.disabled = pageNo >= doc.numPages
-      const ctx = canvas.getContext('2d')
-      if (!ctx) return
-      renderTask = page.render({ canvasContext: ctx, viewport })
-      await renderTask.promise.catch((error) => {
-        if (error?.name !== 'RenderingCancelledException') throw error
-      })
+      const drawId = ++drawGeneration
+      try {
+        if (!isCurrent()) return
+        const pageNumber = pageNo
+        label.textContent = `第 ${pageNumber} / ${doc.numPages} 頁`
+        prev.disabled = pageNumber <= 1
+        next.disabled = pageNumber >= doc.numPages
+        const page = await doc.getPage(pageNumber)
+        if (!isCurrent() || drawId !== drawGeneration) return
+        if (renderTask) {
+          renderTask.cancel()
+          await renderTask.promise.catch(error => {
+            if (error?.name !== 'RenderingCancelledException') throw error
+          })
+        }
+        if (!isCurrent() || drawId !== drawGeneration) return
+        const viewport = page.getViewport({ scale: 1.35 })
+        canvas.width = viewport.width
+        canvas.height = viewport.height
+        const ctx = canvas.getContext('2d')
+        if (!ctx) return
+        renderTask = page.render({ canvasContext: ctx, viewport })
+        await renderTask.promise
+      } catch (error) {
+        if (error?.name !== 'RenderingCancelledException' && isCurrent() && drawId === drawGeneration) {
+          clearRelease()
+          host.replaceChildren(hint('這份 PDF 打不開'))
+        }
+      }
     }
     const dispose = () => {
       if (closed) return
       closed = true
       renderTask?.cancel()
-      void doc.destroy()
+      void destroyPdf(doc)
       if (release === dispose) release = null
     }
     release = dispose
@@ -190,7 +209,7 @@ async function loadPdf(url, host, seq) {
     next.addEventListener('click', () => { if (pageNo < doc.numPages) { pageNo += 1; void draw() } })
     await draw()
   } catch {
-    if (doc) await doc.destroy().catch(() => {})
+    if (doc) await destroyPdf(doc)
     if (seq === generation && ui) host.replaceChildren(hint('這份 PDF 打不開'))
   }
 }

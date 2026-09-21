@@ -73,8 +73,8 @@ function stop() {
 function classify(rel) {
   const parts = rel.split(/[\\/]/)
   for (const part of parts) {
-    if (part === '.git') return { ignore: true, git: true }
-    if (files.SKIP_DIRS.has(part)) return { ignore: true, git: false }
+    if (part.toLowerCase() === '.git') return { ignore: true, git: true }
+    if (files.SKIP_DIRS.has(part.toLowerCase())) return { ignore: true, git: false }
   }
   return { ignore: false, git: false }
 }

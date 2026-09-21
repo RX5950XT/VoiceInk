@@ -164,6 +164,26 @@ function fileUrl(repoId, filePath) {
 }
 
 /**
+ * 只讀 response body 的前綴。HF 的 resolve endpoint 偶爾會忽略 Range 回 200；
+ * 這時不能用 arrayBuffer() 把整顆 GGUF（可能數 GB）先放進記憶體。
+ * @param {Response | object} response
+ * @param {number} maxBytes
+ * @returns {Promise<Buffer>}
+ */
+async function readPrefix(response, maxBytes) {
+  if (!response?.body) return Buffer.alloc(0)
+  const chunks = []
+  let total = 0
+  for await (const chunk of response.body) {
+    const part = Buffer.from(chunk.subarray(0, maxBytes - total))
+    chunks.push(part)
+    total += part.length
+    if (total >= maxBytes) break
+  }
+  return Buffer.concat(chunks, total)
+}
+
+/**
  * 抓檔案開頭一段（HTTP Range）給 `gguf.readInfoFromBuffer` 用：
  * **還沒下載就先知道跑不跑得動**，不必先花 5GB 頻寬。
  *
@@ -187,10 +207,11 @@ async function peekFile(repoId, filePath, options = {}) {
       throw new UsageError('HTTP_ERROR', `Hugging Face 暫時無法使用（HTTP ${Number(response?.status) || 0}）`,
         Number(response?.status) || 0)
     }
-    const buffer = Buffer.from(await response.arrayBuffer())
+    const buffer = await readPrefix(response, bytes)
     // 206 才有 Content-Range；上游不支援 Range 時會回 200 整包，這裡照樣只留前面那一段
     const range = String(response.headers?.get?.('content-range') || '')
-    const total = Number(range.split('/')[1]) || buffer.length
+    const total = Number(range.split('/')[1])
+      || (response.status === 200 ? Number(response.headers?.get?.('content-length')) : 0) || buffer.length
     return { buffer: buffer.subarray(0, bytes), totalBytes: total }
   } finally {
     clearTimeout(timer)

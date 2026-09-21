@@ -1020,6 +1020,7 @@ function startTabRename(id) {
   }
   input.addEventListener('keydown', (event) => {
     event.stopPropagation()
+    if (event.isComposing || event.keyCode === 229) return
     if (event.key === 'Enter') { event.preventDefault(); void finish(true) }
     else if (event.key === 'Escape') { event.preventDefault(); void finish(false) }
   })

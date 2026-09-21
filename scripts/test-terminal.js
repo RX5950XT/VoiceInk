@@ -352,6 +352,10 @@ console.log('\n[終端機桌布]')
 // 舊版宿主連 runtime 欄位都不回報，那正是最需要被認出來的那一種。
 console.log('\n[宿主版本]')
 {
+  const source = fs.readFileSync(path.join(ROOT, 'src/main/terminal/host-runtime.js'), 'utf8')
+  const context = { require, module: { exports: {} }, process: { env: {} } }
+  require('node:vm').runInNewContext(source + '\nthis.systemDir = SYSTEM32', context)
+  ok('沒有 SystemRoot 時仍使用 Windows 絕對路徑', context.systemDir === path.join('C:\\Windows', 'System32'))
   const { HostClient } = require(path.join(ROOT, 'src/main/terminal/host-client.js'))
   const want = 'runtime-aaaaaaaaaaaaaaaaaaaaaaaa'
   const client = new HostClient(tempDir('host-client-'), () => {})

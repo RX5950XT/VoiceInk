@@ -134,6 +134,23 @@ async function send(method, { inner, model, signal, options = {} }) {
   throw lastError
 }
 
+/** 逾時要拒絕讀取，不能把取消後的 EOF 當成正常完成。 */
+async function readSseChunk(reader, deadline, code) {
+  const waitMs = Math.max(0, deadline - Date.now())
+  let timer = null
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new UpstreamError(code))
+      void reader.cancel().catch(() => {})
+    }, waitMs)
+  })
+  try {
+    return await Promise.race([reader.read(), timeout])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 /**
  * 讀 SSE，逐格回呼。
  * @param {Response} response
@@ -147,18 +164,13 @@ async function pumpSse(response, onFrame) {
   const decoder = new TextDecoder()
   let buffer = ''
   let firstFrame = false
-
-  let timer = null
-  const arm = (ms) => {
-    if (timer) clearTimeout(timer)
-    timer = setTimeout(() => { void reader.cancel().catch(() => {}) }, ms)
-  }
-  arm(FIRST_TOKEN_TIMEOUT_MS)
+  const firstDeadline = Date.now() + FIRST_TOKEN_TIMEOUT_MS
 
   try {
     for (;;) {
-      const { done, value } = await reader.read()
-      if (!done) arm(firstFrame ? IDLE_TIMEOUT_MS : FIRST_TOKEN_TIMEOUT_MS)
+      const deadline = firstFrame ? Date.now() + IDLE_TIMEOUT_MS : firstDeadline
+      const code = firstFrame ? 'UPSTREAM_IDLE' : 'UPSTREAM_TIMEOUT'
+      const { done, value } = await readSseChunk(reader, deadline, code)
       buffer += done ? decoder.decode() + '\n' : decoder.decode(value, { stream: true })
 
       let index = buffer.indexOf('\n')
@@ -179,7 +191,6 @@ async function pumpSse(response, onFrame) {
       if (done) break
     }
   } finally {
-    if (timer) clearTimeout(timer)
     reader.releaseLock?.()
   }
 }

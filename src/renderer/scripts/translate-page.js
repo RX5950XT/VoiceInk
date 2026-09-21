@@ -100,6 +100,8 @@ let engineAcquired = false
 let audioEl = null
 let objectUrl = null
 let speakGen = 0
+/** @type {(() => void) | null} */
+let cancelPlayback = null
 /** @type {'input'|'output'|null} */
 let speakingPane = null
 
@@ -565,6 +567,7 @@ function updateSpeakOutputEnabled() {
 
 function stopSpeak() {
   speakGen++
+  cancelPlayback?.()
   speakingPane = null
   if (audioEl) {
     audioEl.pause()
@@ -669,7 +672,9 @@ async function toggleSpeak(pane) {
         const cleanup = () => {
           audioEl.removeEventListener('ended', onEnded)
           audioEl.removeEventListener('error', onError)
+          if (cancelPlayback === onEnded) cancelPlayback = null
         }
+        cancelPlayback = onEnded
         audioEl.addEventListener('ended', onEnded)
         audioEl.addEventListener('error', onError)
         audioEl.play().catch((err) => {

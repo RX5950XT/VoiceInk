@@ -99,13 +99,14 @@ async function fileRoundTrip() {
     fs.writeFileSync(path.join(tmp, 'sub', 'b.txt'), 'hello')
     fs.writeFileSync(path.join(tmp, 'bin.dat'), Buffer.from([1, 2, 0, 3]))
     fs.writeFileSync(path.join(tmp, 'pic.png'), PNG_1PX)
-    fs.mkdirSync(path.join(tmp, 'node_modules'))
+    fs.mkdirSync(path.join(tmp, 'Node_Modules', 'pkg'), { recursive: true })
 
     {
       const listed = await files.listDir(tmp, '')
       const names = listed.entries.map((e) => e.name)
       ok('列得到檔案與資料夾', names.includes('a.md') && names.includes('sub'))
       ok('node_modules 被跳過', !names.includes('node_modules'))
+      ok('大小寫不同的 node_modules 也被跳過', !names.includes('Node_Modules'))
       ok('資料夾排在前面', listed.entries[0].dir === true)
 
       const read = await files.readFile(tmp, 'a.md')
@@ -126,6 +127,15 @@ async function fileRoundTrip() {
       ok('大圖片不擋、也不讀內容', bigPng.tooLarge === false && bigPng.media === 'image' && bigPng.content === '')
       fs.writeFileSync(path.join(tmp, 'huge.txt'), Buffer.alloc(files.MAX_TEXT_BYTES + 1, 97))
       ok('超過 50MB 的文字檔仍然擋掉', (await files.readFile(tmp, 'huge.txt')).tooLarge === true)
+
+      const overUtf8 = '中'.repeat(Math.ceil(files.MAX_WRITE_CHARS / Buffer.byteLength('中', 'utf8')))
+      let overUtf8Code = ''
+      try {
+        await files.writeFile(tmp, 'utf8-limit.txt', overUtf8)
+      } catch (error) {
+        overUtf8Code = error.code
+      }
+      ok('存檔上限按 UTF-8 位元組計算', overUtf8Code === 'TOO_LARGE', overUtf8Code)
 
       // 圖片走 `media` 那條，不可以被 NUL byte 判成「二進位檔」（那樣點開等於什麼都沒有）
       const png = await files.readFile(tmp, 'pic.png')
@@ -555,6 +565,8 @@ async function watchClassify() {
   ok('node_modules 整段丟掉', watch.classify('node_modules/x/y.js').ignore === true
     && watch.classify('node_modules/x/y.js').git === false)
   ok('反斜線的路徑也認得', watch.classify('node_modules\\x\\y.js').ignore === true)
+  ok('大小寫不同的 node_modules 也整段丟掉', watch.classify('Node_Modules/x/y.js').ignore === true)
+  ok('大小寫不同的 Git 事件仍通知 Git 面板', watch.classify('.GIT/index').git === true)
   ok('名字裡有 .git 的資料夾不算', watch.classify('.github/workflows/a.yml').ignore === false)
 
   // 事件一直來時，純 trailing debounce 會永遠等不到安靜（npm install 就是這樣），
@@ -1069,17 +1081,17 @@ console.log('\n[R] 快速開檔的檔案清單 listFiles')
 {
   const dir = tempDir('vi-ws-qo-')
   fs.mkdirSync(path.join(dir, 'src'), { recursive: true })
-  fs.mkdirSync(path.join(dir, 'node_modules', 'pkg'), { recursive: true })
+  fs.mkdirSync(path.join(dir, 'Node_Modules', 'pkg'), { recursive: true })
   fs.mkdirSync(path.join(dir, '.git'), { recursive: true })
   fs.writeFileSync(path.join(dir, 'README.md'), '#')
   fs.writeFileSync(path.join(dir, 'src', 'a.js'), '1')
-  fs.writeFileSync(path.join(dir, 'node_modules', 'pkg', 'index.js'), '1')
+  fs.writeFileSync(path.join(dir, 'Node_Modules', 'pkg', 'index.js'), '1')
   fs.writeFileSync(path.join(dir, '.git', 'config'), '1')
 
   const result = await search.listFiles(dir)
   const rels = result.paths.slice().sort()
   ok('列得出專案內的檔案', rels.includes('README.md') && rels.includes('src/a.js'), rels.join(', '))
-  ok('跳過 node_modules 與 .git', rels.length === 2, rels.join(', '))
+  ok('跳過 node_modules 與 .git（含大小寫變體）', rels.length === 2, rels.join(', '))
   ok('路徑一律是正斜線的相對路徑', rels.every((rel) => !rel.includes('\\') && !path.isAbsolute(rel)))
   ok('沒有超過上限時 truncated 是 false', result.truncated === false)
   removeTree(dir)
@@ -1121,6 +1133,9 @@ console.log('\n[S] 拖曳搬檔 files.moveEntry')
 
   await denies('資料夾不能搬進自己底下', () => files.moveEntry(dir, 'src', 'src/lib'), 'BAD_PATH')
   ok('被擋下來之後 src 還在', fs.existsSync(path.join(dir, 'src', 'lib')))
+  if (process.platform === 'win32') {
+    await denies('大小寫不同也不能搬進自己底下', () => files.moveEntry(dir, 'src', 'SRC/lib'), 'BAD_PATH')
+  }
 
   await denies('不能搬專案資料夾本身', () => files.moveEntry(dir, '', ''), 'BAD_PATH')
   await denies('目的地不是資料夾就拒絕', () => files.moveEntry(dir, 'a.txt', 'docs/a.txt'), 'BAD_PATH')

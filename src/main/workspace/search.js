@@ -59,7 +59,7 @@ async function walk(root, dirFull, out, state) {
     if (out.length >= MAX_SCAN_FILES || Date.now() > state.deadline) return
     const full = path.join(dirFull, dirent.name)
     if (dirent.isDirectory()) {
-      if (files.SKIP_DIRS.has(dirent.name)) continue
+      if (files.SKIP_DIRS.has(dirent.name.toLowerCase())) continue
       await walk(root, full, out, state)
     } else if (dirent.isFile()) {
       out.push(full)

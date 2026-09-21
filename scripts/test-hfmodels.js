@@ -519,6 +519,27 @@ function fakeFetch(spec) {
 async function asyncSections() {
   const tmp2 = tempDir('voiceink-hfmodels-b-')
   try {
+    console.log('\n[G2] Hub Range 回應邊界')
+    {
+      const bytes = Buffer.alloc(64 * 1024, 0x41)
+      let arrayBufferCalled = false
+      const response = new Response(bytes, {
+        status: 200,
+        headers: { 'content-length': String(bytes.length) }
+      })
+      response.arrayBuffer = async () => {
+        arrayBufferCalled = true
+        throw new Error('不應把整個模型讀進記憶體')
+      }
+      const peeked = await hub.peekFile('owner/repo', 'model.gguf', {
+        bytes: 1024,
+        fetchImpl: async () => response
+      })
+      ok('Range 被忽略時只讀需要的檔頭', peeked.buffer.length === 1024 && arrayBufferCalled === false,
+        `${peeked.buffer.length} bytes`)
+      ok('Range 被忽略仍保留模型總大小', peeked.totalBytes === bytes.length)
+    }
+
     console.log('\n[H] 本機模型庫')
     {
       const root = path.join(tmp2, 'hf-models')

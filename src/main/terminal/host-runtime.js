@@ -19,7 +19,7 @@ function hostError(code = 'TERMINAL_HOST_ERROR') {
 const unpacked = (dir) => dir.replace(/app\.asar(?=[\\/])/, 'app.asar.unpacked')
 
 /** 系統工具一律指名 System32：PATH 上可能擺著 MSYS／Cygwin 的同名執行檔。 */
-const SYSTEM32 = path.join(process.env.SystemRoot || 'C:\Windows', 'System32')
+const SYSTEM32 = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32')
 
 /** 背景管道的通行證只給目前 Windows 使用者、SYSTEM 與管理員。 */
 function protectDirectory(dir) {

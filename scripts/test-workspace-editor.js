@@ -20,6 +20,13 @@ findInput.handlers.input()
 assert.equal(active, findInput, '輸入搜尋字串不可把焦點搶回編輯器')
 replaceAllBtn.handlers.click()
 assert.equal(textarea.value, 'x x x', '尋找與全部取代必須使用相同大小寫規則')
+for (const input of [findInput, replaceInput]) {
+  for (const key of ['Enter', 'Escape']) {
+    for (const props of [{ isComposing: true }, { keyCode: 229 }]) {
+      input.handlers.keydown({ key, ...props, preventDefault() { assert.fail('搜尋／取代不可攔截中文選字') } })
+    }
+  }
+}
 let dirty = false
 const keyContext = { event: { key: 'Enter', isComposing: true, preventDefault() { throw new Error('不可攔截中文選字') } },
   textarea, onDirty: () => { dirty = true } }

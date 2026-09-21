@@ -146,8 +146,15 @@ function finishRest() {
     ok('屬性一次問整層', attrsCs.includes('EnumerateFileSystemInfos'))
     ok('屬性上限 2000', attrsCs.includes('MaxEntries = 2000'))
     ok('讀不到的項目跳過', attrsCs.includes('沒權限或瞬間消失'))
-    ok('圖示與縮圖快取 key 分開', icons.includes("? 't' : 'i'"))
-    ok('只在方格檢視要縮圖', icons.includes('is-grid') && icons.includes('pdf') && icons.includes('docx'))
+    const iconContext = {}
+    vm.runInNewContext(icons.replace(/^export /gm, ''), iconContext)
+    const entry = { dataset: { path: 'C:\\photo.png' } }
+    ok('圖示與不同尺寸縮圖快取 key 分開',
+      new Set([iconContext.cacheKey(entry, false, 96), iconContext.cacheKey(entry, true, 96),
+        iconContext.cacheKey(entry, true, 256)]).size === 3)
+    ok('只在方格檢視要縮圖',
+      iconContext.wantThumb({ classList: { contains: () => true } }, entry)
+      && !iconContext.wantThumb({ classList: { contains: () => false } }, entry))
     ok('pending 縮圖會重試且不進快取', /pending === true/.test(icons) && /MAX_RETRY/.test(icons))
   }
 

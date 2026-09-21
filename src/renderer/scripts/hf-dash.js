@@ -11,6 +11,7 @@ const $ = (id) => document.getElementById(id)
 /** @type {ReturnType<typeof setTimeout> | null} */
 let timer = null
 let on = false
+let generation = 0
 
 function el(tag, cls, text) {
   const node = document.createElement(tag)
@@ -80,7 +81,7 @@ function renderLog(lines) {
   if (atBottom) pre.scrollTop = pre.scrollHeight
 }
 
-async function refresh() {
+async function refresh(seq) {
   let result
   try {
     result = await electronAPI.hfmodels.dashboard()
@@ -88,7 +89,7 @@ async function refresh() {
     return
   }
   const data = result?.ok ? result.data : null
-  if (!data) return
+  if (!data || !on || seq !== generation) return
 
   const hint = $('hfServerHint')
   if (hint) {
@@ -117,8 +118,9 @@ async function refresh() {
 function tick() {
   clearTimeout(timer)
   if (!on) return
-  refresh().finally(() => {
-    if (on) timer = setTimeout(tick, POLL_MS)
+  const seq = generation
+  refresh(seq).finally(() => {
+    if (on && seq === generation) timer = setTimeout(tick, POLL_MS)
   })
 }
 
@@ -130,6 +132,7 @@ export function startDash() {
 
 export function stopDash() {
   on = false
+  generation++
   clearTimeout(timer)
   timer = null
 }

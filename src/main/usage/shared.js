@@ -70,7 +70,7 @@ function normalizeWindow(raw) {
   if (!WINDOW_KIND_SET.has(raw.kind)) return null
   const used = Number(raw.used)
   const limit = Number(raw.limit)
-  if (!Number.isFinite(used) || !Number.isFinite(limit) || limit <= 0) return null
+  if (!Number.isFinite(used) || !Number.isFinite(limit) || limit <= 0 || used < 0) return null
   const resetRaw = safeString(raw.resetAt, '', 100)
   const resetAt = resetRaw && Number.isFinite(Date.parse(resetRaw)) ? resetRaw : ''
   const id = safeString(raw.id, '', 100).trim()

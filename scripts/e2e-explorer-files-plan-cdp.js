@@ -59,10 +59,12 @@ fs.writeFileSync(path.join(PREVIEW_DIR, 'README.md'), '# 預覽標題\n\n**粗�
 function minimalPdf() {
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
-    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Pages /Kids [3 0 R 6 0 R 7 0 R] /Count 3 >>',
     '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
     '<< /Length 44 >>\nstream\nBT /F1 12 Tf 20 100 Td (preview) Tj ET\nendstream',
-    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 220 200] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 240 200] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>'
   ]
   let text = '%PDF-1.4\n%\xE2\xE3\xCF\xD3\n'
   const offsets = [0]
@@ -455,6 +457,28 @@ async function main() {
     })()`), 30_000, '換到下一個檔')
     assert(!afterStep.markdownLeft, '換檔之後沒有殘留上一份 Markdown', json(afterStep))
     assert(afterStep.pdf || afterStep.image || afterStep.video, '下一個檔也有預覽內容', json(afterStep))
+
+    {
+      // 換檔會繞圈，一直按到自種的三頁 PDF 為止，不假設排序上剛好是下一份。
+      await waitFor(() => cdp.eval(`(() => {
+        const root = document.querySelector('.ex-preview-root')
+        if (!root) return null
+        if (root.querySelector('.ex-preview-pdf-canvas')) return true
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }))
+        return null
+      })()`), 30_000, '換到自種的三頁 PDF')
+      await waitFor(() => cdp.eval(`document.querySelector('.ex-preview-pdf-canvas')?.width === 270`), 15_000, 'PDF 第一頁完成')
+      await cdp.eval(`(() => {
+        const next = document.querySelector('.ex-preview-pdf-bar button:last-child')
+        next.click(); next.click()
+      })()`)
+      const lastPage = await waitFor(() => cdp.eval(`(() => {
+        const label = document.querySelector('.ex-preview-pdf-bar span')?.textContent
+        const width = document.querySelector('.ex-preview-pdf-canvas')?.width
+        return label === '第 3 / 3 頁' && width === 324 ? { label, width } : null
+      })()`), 15_000, 'PDF 連按翻到第三頁')
+      assert(lastPage.width === 324, '連按翻頁後畫布與頁碼都對應最新頁', json(lastPage))
+    }
 
     await cdp.eval(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))`)
     const closed = await waitFor(() => cdp.eval(`(() => {

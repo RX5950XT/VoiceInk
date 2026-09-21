@@ -837,7 +837,9 @@ async function copyEntry(fromPath, toDir, rawOptions) {
       next = uniqueDest(dir, path.basename(from))
     }
     if (options && (options.onProgress || options.onTotal)) {
-      return copyTreeWithProgress(from, next, options)
+      const copied = await copyTreeWithProgress(from, next, options)
+      invalidateListCache(dir)
+      return copied
     }
     try {
       await fsp.cp(from, next, { recursive: true, force: false, errorOnExist: true, verbatimSymlinks: true })

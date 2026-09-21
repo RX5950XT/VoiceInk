@@ -120,6 +120,7 @@ function ensureUi() {
  * @param {KeyboardEvent} event
  */
 function onKeydown(event) {
+  if (event.isComposing || event.keyCode === 229) return
   if (event.key === 'Escape') {
     event.preventDefault()
     close()

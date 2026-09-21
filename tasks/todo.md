@@ -1,3 +1,43 @@
+# 2026-09-21 — 全專案 bug 掃描與修復
+
+- [x] 盤點主要模組、既有測試與安全執行範圍
+- [x] 分模組追查，新增失敗回歸並最小修復已確認問題
+- [x] 跑跨模組回歸、打包與背景 CDP 驗收
+- [x] 記錄實際結果及未涵蓋邊界
+
+## Review
+
+修好的問題（每項都先有一支會失敗的回歸，再改）：
+
+- HF 儀表板離開再回來會重開舊輪詢（`hf-dash.js`）
+- 朗讀停止後仍留播放監聽與等待工作（`translate-page.js`）
+- PDF 快速翻頁被慢一步的舊頁蓋回（`explorer-preview.js`）
+- 關閉 PDF 預覽整段中斷：pdfjs 6 的 `PDFDocumentProxy` 沒有 `destroy()`，要走
+  `loadingTask.destroy()`；原本丟 TypeError，`closePreview` 半路斷掉、預覽關不掉
+- 中文選字按 Enter 誤送出：彈窗、路徑輸入、快速開檔、搜尋／取代、分頁改名、
+  工作區改名、側欄改名（`app-dialog.js`／`ws-*.js`／`workspace-page.js`／`chat-sidebar.js`）
+- 圖片預覽載入後顯示錯誤的縮放百分比（`image-viewer.js`）
+- 複製後清單沒刷新、中文大檔存檔上限按位元組算、Windows 路徑大小寫
+  （`workspace/files.js`／`search.js`／`watch.js`／`explorer/fs.js`）
+- AGY 串流逾時被當成正常結束（`agy/upstream.js`）
+- HF hub 讀 body 前綴在沒有 body 時會炸（`hfmodels/hub.js`）
+
+驗收（2026-09-21）：
+
+- `scripts/test-*.js` 80 支全過（`test-asar-lock` 要用 electron 跑，另計）
+- electron：`test-asar-lock` 8、`e2e-agy` 98、`e2e-chat` 195 全過
+- 打包版 CDP：`e2e-explorer-files-plan-cdp` 54、`e2e-app-dialog-cdp` 8、
+  `e2e-explorer-cdp`、`e2e-ccswitch-gateway` 40 全過
+
+未涵蓋：需要實體麥克風、GPU 感測器與真雲端憑證的路徑（ASR／sysmon／dictation）沒跑。
+
+地雷：
+
+- `node_modules/.bin` 會整個空掉，`vite`／`electron` 就找不到；`npm install` 重建連結即可。
+- `e2e-agy`／`e2e-chat` 印完結果不會真的退出，打包前要先清掉殘留的 electron，
+  否則 `npm install` 會 EBUSY 卡在 `electron/dist`。
+- `e2e-explorer-files-plan-cdp` 的預覽換檔會繞圈，不能假設「下一份」是哪個副檔名。
+
 # 2026-09-21 — 方格檢視縮放、大圖預覽、終端機貼截圖、Ctrl+G 的 PATH
 
 - [x] 方格檢視檔名直書：`.ex-row-name` 在 grid 下改直排，檔名限兩行 ＋ `title` 放完整檔名

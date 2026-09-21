@@ -219,7 +219,7 @@ async function listDir(root, relPath) {
   const entries = []
   let truncated = false
   for (const dirent of dirents) {
-    if (dirent.isDirectory() && SKIP_DIRS.has(dirent.name)) continue
+    if (dirent.isDirectory() && SKIP_DIRS.has(dirent.name.toLowerCase())) continue
     if (entries.length >= MAX_ENTRIES) {
       truncated = true
       break
@@ -314,7 +314,7 @@ function queueWrite(full, task) {
  */
 async function writeFile(root, relPath, content, expectedMtimeMs) {
   if (typeof content !== 'string') throw fail('BAD_CONTENT', '內容不合法')
-  if (content.length > MAX_WRITE_CHARS) throw fail('TOO_LARGE', '檔案太大，存不下')
+  if (Buffer.byteLength(content, 'utf8') > MAX_WRITE_CHARS) throw fail('TOO_LARGE', '檔案太大，存不下')
   const full = resolveIn(root, relPath)
   return queueWrite(full, async () => {
     let stat = null
@@ -450,7 +450,7 @@ async function moveEntry(root, fromRel, toRelDir) {
     throw fail('BAD_PATH', '目的地不存在')
   }
   if (!stat.isDirectory()) throw fail('BAD_PATH', '只能放進資料夾裡')
-  if (dir === from || dir.startsWith(from + path.sep)) {
+  if (isIntoSelf(from, dir)) {
     throw fail('BAD_PATH', '不能把資料夾搬進它自己底下')
   }
   const next = path.join(dir, path.basename(from))

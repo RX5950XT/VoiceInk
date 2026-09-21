@@ -369,6 +369,7 @@ function startRename(row, item) {
     }
   }
   input.addEventListener('keydown', (event) => {
+    if (event.isComposing || event.keyCode === 229) return
     if (event.key === 'Enter') { event.preventDefault(); void finish(true) }
     else if (event.key === 'Escape') { event.preventDefault(); void finish(false) }
   })

@@ -120,7 +120,7 @@ export async function askInput(title, opts = {}) {
       input.spellcheck = false
       // Enter 直接送出：這是單行輸入，多按一次滑鼠沒有意義
       input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
+        if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) {
           e.preventDefault()
           dialog.close(OK)
         }
