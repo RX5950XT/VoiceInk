@@ -16,6 +16,7 @@ for (const name of ['operationCancel', 'operationRetry', 'operationUndo', 'setOp
 assert.doesNotMatch(source, /\.innerHTML\s*=/)
 assert.match(style, /prefers-reduced-motion: reduce/)
 assert.match(style, /overflow-wrap: anywhere/)
+assert.match(style, /\.ex-ops-panel\[hidden\]\s*{\s*display:\s*none/)
 console.log('PASS: operation center renderer contract and accessible state styling')
 
 // 打包版是用 file:// 直接載原始 ES module，CSS 不是 JS module——

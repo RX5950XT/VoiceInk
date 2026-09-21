@@ -49,6 +49,8 @@
   text-align: center;
 }
 
+.ex-ops-panel[hidden] { display: none; }
+
 .ex-ops-panel {
   display: flex;
   flex-direction: column;
