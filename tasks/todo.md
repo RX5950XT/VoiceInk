@@ -461,3 +461,89 @@ Review：
   `test-explorer-operations.js` 與 `probe-explorer-operations-cross-volume.js` 保證
   （同一顆磁碟的搬移是 rename，一瞬間結束，按不到取消）。
 - 影音預覽只驗元素掛得起來與關閉後收乾淨，沒驗播放。
+
+---
+
+## 檔案總管：雙欄「根本沒法用」（2026-09-21）
+
+實測證實右欄只是一份唯讀清單：右鍵選單、鍵盤、拖放全部沒綁；上面那排指令列、
+狀態列、詳情欄、貼上、新增資料夾、側邊欄的位置／磁碟導覽，一律只對左欄生效。
+右欄能做的只有四顆跨欄搬移鈕。
+
+修法是引入**作用欄**（`activePane`）：點過哪一欄，既有那一整套就對那一欄生效，
+不另外複製一份右欄專用的流程。
+
+- 右欄補上右鍵選單、方向鍵／Enter／Backspace／Delete／F2、可拖出去、可拖進來。
+- `selectedEntries()`／`paintStatus()`／`paintCmdBar()`／`pasteHere()`／`newFolder()`／
+  `newFile()`／`openContextMenu()` 改吃作用欄的 cwd 與選取。
+- `refreshAfterMutate()` 雙欄時兩邊都重讀。
+- 作用欄加外框，看得出指令列現在在操作誰。
+
+順手修掉兩個既有 bug：
+1. `onSecondDoubleClick` 用 `.find()` 掃稀疏陣列——大資料夾未載入的頁是洞，
+   `find` 不跳洞，雙擊會 TypeError。改成先 `.filter(Boolean)`。
+2. `paintSecondPane()` 每次重畫都把「不在已載入列裡」的選取砍掉——大資料夾捲一下
+   選取就沒了（左欄沒這個動作）。整段拿掉，裁切交給 `loadSecond`。
+
+地雷：四顆跨欄鈕長在右欄裡，按下去 mousedown 會先把作用欄切成右欄，所以
+`copyBetweenPanes` 的來源不能用 `selectedEntries()`，要指名左欄／右欄。
+
+驗收：`node scripts/e2e-explorer-dual-cdp.js` 15 條全綠（跑原始碼時先起 vite，
+再用 `VOICEINK_EXE=node_modules/electron/dist/electron.exe`）。
+
+### 後續：把上面「未做」的那五件補完（同日）
+
+- **右欄分頁**：`secondTabs`／`secondActiveId`，每頁自己的路徑、歷史、選取、捲動、排序、
+  檢視、搜尋；整組再按左欄分頁存進 `paneStates`。中鍵點資料夾＝開右欄新分頁。
+- **麵包屑**：`#exSecondCrumbs`（帶 `data-path` 給測試看）＋點一下變路徑輸入框，
+  取代原本用對話框問路徑的作法。
+- **圖示檢視**：右欄自己的 `view`／`tile`，☰▦ 兩顆鈕＋Ctrl+滾輪，跟左欄共用
+  `explorer-zoom.js` 的級距；列也改成跟殼層要真圖示，不再只有 emoji。
+- **整機搜尋**：右欄搜尋框加「範圍」鈕，切到整機就走 UFFS（跟左欄共用篩選條件），
+  結果畫在右欄、顯示完整路徑。
+- **拖到資料夾列**：右欄的資料夾列各自是放置目標，停 0.7 秒會自己進去。
+
+過程中順手修掉：換資料夾沒把右欄捲動位置歸零，虛擬清單會停在上一個資料夾的位置、
+畫出一整片空白。
+
+地雷：
+1. 排序的原生 `select` 會被 `custom-select.js` 換成自訂下拉，`.ex-second-sort` 的寬度管不到，
+   要改 `.custom-select[data-select-id="exSecondSort"] .custom-select-trigger`——
+   不改的話它吃 `min-width: 180px`，右欄標頭會胖到 200px 高。
+2. 多一條右欄分頁列之後，測試裡的 `.ex-tab` 會同時選到兩邊，左欄的斷言要寫成
+   `#exTabStrip .ex-tab`。
+3. 三支 explorer e2e 現在都能跑原始碼（`VOICEINK_EXE` 指到 `electron.exe` ＋先起 vite），
+   並在連上 CDP 後把視埠固定成 1280×860；不固定的話詳情欄會被 900px 的 media query
+   整個收掉，用實體滑鼠座標的測試也會失準。
+
+驗收：`e2e-explorer-dual-cdp.js` 25 條、`e2e-explorer-files-plan-cdp.js` 53 條、
+`e2e-explorer-cdp.js` 102 條全綠。`e2e-explorer-cdp.js` 的 [C8] 資料夾監看偶發時序失敗，
+同一份程式碼重跑就過，不是這次改動造成的。
+
+### 再後續：右欄的指令列與篩選面板，外加回收筒還原與 Enter 確認（同日）
+
+- **右欄自己的指令列**：`#exSecondCmdBar` 長在右欄裡，跟 `#exCmdBar` 共用
+  `paintCmdBarInto(bar, which)`，選取與「貼上」可不可按都按那一欄算。動作本身仍看作用欄，
+  所以 `addCmd()` 的 click 先 `setActivePane(which)` 再跑——不先切的話，站在右欄時按
+  左欄的「貼上」會貼到右欄去。
+- **右欄自己的篩選面板**：`searchFilters(which)` 只差 id 前綴（`exSearch*`／
+  `exSecondSearch*`）。右欄那組 `<details>` 只在整機搜尋時顯示，切回「篩這個資料夾」
+  就收起來，免得把窄窄的右欄標頭擠爆（標頭還是 93px）。
+- **資源回收筒還原不了（真 bug）**：`recycle.restore()` 檢查父資料夾能不能寫，而磁碟
+  根目錄被 `isSystemLocked` 當成鎖住的位置，所以從 `D:\` 刪掉的東西一律 `PROTECTED`。
+  實測使用者的回收筒裡 4 筆全是 `D:\` 來的＝整個回收筒等於壞掉。改成只看目的地自己。
+  第二層：`mkdir('D:\', { recursive: true })` 吐 `EPERM`，所以父資料夾在就不要補。
+- **Enter ＝確定**：`app-dialog.js` 在 `<dialog>` 掛 capture 階段 keydown，Enter 一律
+  `close(OK)`。危險彈窗焦點仍停在「取消」，但 Enter 會確定（不 `preventDefault()` 的話
+  Enter 會先觸發焦點那顆鈕＝取消）。選字中的 Enter 照樣放行（`isComposing` 或
+  `keyCode === 229`）。
+- **Claude Code 的終端機**：`~/.claude/settings.json` 的 `"tui"` 從 `fullscreen` 改成
+  `default`，開起來就是一般新視窗而不是 Agent View。
+
+驗收：`test-explorer.js` 296 條、`e2e-app-dialog-cdp.js` 10 條、
+`e2e-explorer-dual-cdp.js` 35 條、`e2e-explorer-files-plan-cdp.js` 53 條、
+`e2e-explorer-cdp.js` 102 條全綠。
+
+地雷：`e2e-explorer-cdp.js` 的 [C8]「資料夾監看有在跑」偶發會紅。這次把改動前的版本
+（1bdb439）放回去跑，同樣會紅，所以不是這批改的；改完的版本連兩次 102 全綠。腳本現在
+會在紅的時候把當下的清單與磁碟內容印出來，下次不用再從零查。

@@ -195,23 +195,39 @@ const json = (value) => JSON.stringify(value)
 /** 丟進 querySelector 的屬性值要再包一層引號，中文與空白才不會把選擇器拆斷。 */
 const attr = (value) => JSON.stringify(JSON.stringify(value))
 
+/** 視窗寬度會影響版面（詳情欄在 900px 以下整個收掉），驗收前先固定成同一個尺寸。 */
+async function fitWindow(cdp) {
+  try {
+    await cdp.send('Emulation.setDeviceMetricsOverride', {
+      width: 1280, height: 860, deviceScaleFactor: 1, mobile: false
+    })
+    await sleep(500)
+  } catch {
+    // 沒有 Emulation domain 就照預設尺寸跑
+  }
+}
+
 /** 開一個連上打包版的 CDP session；重開 App 驗證狀態還原時會再叫一次。 */
 async function launch() {
+  // VOICEINK_EXE 指到 electron.exe 時是跑原始碼（要先起 vite），得補上 app 目錄。
+  const appArgs = /electron\.exe$/i.test(EXE) ? ['.'] : []
   const child = spawn(EXE, [
+    ...appArgs,
     '--hidden',
     `--inspect=127.0.0.1:${INSPECT_PORT}`,
     `--remote-debugging-port=${PORT}`,
     `--user-data-dir=${USER_DATA_DIR}`
-  ], { stdio: 'ignore' })
+  ], { cwd: path.join(__dirname, '..'), stdio: 'ignore' })
   await waitFor(async () => {
     try { return await getJson(`http://127.0.0.1:${PORT}/json/version`) } catch { return null }
   }, 60_000, 'CDP 起來')
   const target = await waitFor(async () => {
     const list = await getJson(`http://127.0.0.1:${PORT}/json/list`)
-    return list.find((t) => t.type === 'page' && /index\.html/.test(t.url))
+    return list.find((t) => t.type === 'page' && /(index\.html|5173)/.test(t.url))
   }, 30_000, '主視窗')
   const cdp = new Cdp(target.webSocketDebuggerUrl)
   await cdp.connect()
+  await fitWindow(cdp)
   await waitFor(
     () => cdp.eval(`document.readyState === 'complete' && typeof window.electronAPI?.explorer?.listDir === 'function'`),
     30_000,
@@ -225,7 +241,7 @@ async function launch() {
 }
 
 function api(cdp) {
-  const tabPath = () => cdp.eval(`document.querySelector('.ex-tab.is-active')?.dataset.path || ''`)
+  const tabPath = () => cdp.eval(`document.querySelector('#exTabStrip .ex-tab.is-active')?.dataset.path || ''`)
   const goto = async (dir) => {
     const deadline = Date.now() + 40_000
     while (Date.now() < deadline) {
@@ -370,9 +386,9 @@ async function main() {
     assert(anchored.id === marked.id, '選到的就是中段那一列', json([marked, anchored]))
     assert(anchored.top > 1000, '選完之後還停在中段', json(anchored))
     await cdp.eval(`document.getElementById('exTabAddBtn').click()`)
-    await waitFor(() => cdp.eval(`document.querySelectorAll('.ex-tab').length >= 2`), 15_000, '第二個分頁')
+    await waitFor(() => cdp.eval(`document.querySelectorAll('#exTabStrip .ex-tab').length >= 2`), 15_000, '第二個分頁')
     await cdp.eval(`(() => {
-      const tabs = [...document.querySelectorAll('.ex-tab')]
+      const tabs = [...document.querySelectorAll('#exTabStrip .ex-tab')]
       tabs[0].querySelector('.ex-tab-open').click()
     })()`)
     const back = await waitFor(() => cdp.eval(`(() => {
@@ -508,7 +524,7 @@ async function main() {
         hidden: pane.hidden,
         pressed: document.getElementById('exDualBtn').getAttribute('aria-pressed'),
         rows: list.querySelectorAll('.ex-row').length,
-        pathLabel: document.getElementById('exSecondPath')?.textContent || '',
+        pathLabel: document.getElementById('exSecondCrumbs')?.dataset.path || '',
         emptyHidden: document.getElementById('exSecondEmpty')?.hidden,
         actions: [...document.querySelectorAll('.ex-second-actions button')].map((b) => b.textContent.trim())
       }
@@ -526,7 +542,7 @@ async function main() {
     assert(dual.actions.length === 4, '跨欄的四顆操作鈕都在', json(dual.actions))
     assert(dual.rows > 0, '右欄也列得出檔案', json(dual))
 
-    const leftBefore = await cdp.eval(`document.querySelector('.ex-tab.is-active')?.dataset.path || ''`)
+    const leftBefore = await cdp.eval(`document.querySelector('#exTabStrip .ex-tab.is-active')?.dataset.path || ''`)
     assert(leftBefore === DUAL_DIR, '左欄停在自己的資料夾', json(leftBefore))
 
     // 右欄自己走到別的資料夾：左欄不能跟著動，跨欄搬檔才有意義。
@@ -539,11 +555,11 @@ async function main() {
       return true
     })()`), 20_000, '右欄走進 target-folder')
     const rightAt = await waitFor(async () => {
-      const label = await cdp.eval(`document.getElementById('exSecondPath')?.textContent || ''`)
+      const label = await cdp.eval(`document.getElementById('exSecondCrumbs')?.dataset.path || ''`)
       return String(label).toLowerCase() === TARGET_DIR.toLowerCase() ? label : null
     }, 20_000, '右欄停在 target-folder')
     assert(rightAt, '右欄自己切到另一個資料夾', json(rightAt))
-    assert(await cdp.eval(`document.querySelector('.ex-tab.is-active')?.dataset.path === ${json(DUAL_DIR)}`),
+    assert(await cdp.eval(`document.querySelector('#exTabStrip .ex-tab.is-active')?.dataset.path === ${json(DUAL_DIR)}`),
       '右欄換路徑時左欄沒被拖著走')
 
     assert(await ui.clickRow('dual-1.txt'), '左欄選得到檔案')
@@ -563,7 +579,7 @@ async function main() {
     assert(!fs.existsSync(path.join(DUAL_DIR, 'dual-1.txt')), '搬到右欄之後左欄不再有 dual-1.txt')
     assert(fs.existsSync(path.join(TARGET_DIR, 'dual-1.txt')) && fs.existsSync(path.join(TARGET_DIR, 'dual-2.txt')),
       '兩個檔真的落在右欄的資料夾')
-    assert(await cdp.eval(`document.querySelector('.ex-tab.is-active')?.dataset.path === ${json(DUAL_DIR)}`),
+    assert(await cdp.eval(`document.querySelector('#exTabStrip .ex-tab.is-active')?.dataset.path === ${json(DUAL_DIR)}`),
       '跨欄搬檔之後左欄還停在原地')
 
     await cdp.eval(`document.getElementById('exDualBtn').click()`)
@@ -600,8 +616,8 @@ async function main() {
 
     console.log('\n[6] 重開 App：分頁狀態還原得回來')
     const beforeRestart = await cdp.eval(`(() => ({
-      tabs: [...document.querySelectorAll('.ex-tab')].map((t) => t.dataset.path),
-      active: document.querySelector('.ex-tab.is-active')?.dataset.path || ''
+      tabs: [...document.querySelectorAll('#exTabStrip .ex-tab')].map((t) => t.dataset.path),
+      active: document.querySelector('#exTabStrip .ex-tab.is-active')?.dataset.path || ''
     }))()`)
     const renderErrors = cdp.errors.filter((text) => !/DevTools|Autofill/.test(text))
     assert(renderErrors.length === 0, 'renderer 沒有未處理的例外', json(renderErrors.slice(0, 3)))
@@ -614,8 +630,8 @@ async function main() {
     cdp = session.cdp
     ui = api(cdp)
     const afterRestart = await waitFor(() => cdp.eval(`(() => {
-      const tabs = [...document.querySelectorAll('.ex-tab')].map((t) => t.dataset.path)
-      return tabs.length ? { tabs, active: document.querySelector('.ex-tab.is-active')?.dataset.path || '' } : null
+      const tabs = [...document.querySelectorAll('#exTabStrip .ex-tab')].map((t) => t.dataset.path)
+      return tabs.length ? { tabs, active: document.querySelector('#exTabStrip .ex-tab.is-active')?.dataset.path || '' } : null
     })()`), 25_000, '重開之後的分頁')
     assert(afterRestart.tabs.length === beforeRestart.tabs.length,
       `重開之後分頁數一樣（${beforeRestart.tabs.length}）`, json([beforeRestart.tabs, afterRestart.tabs]))

@@ -390,6 +390,33 @@ console.log('\n[I] 預設刪除進資源回收筒，可還原；永久刪除是�
     ok('資源回收筒流程', false, `${error && error.code}: ${error && error.message}`)
   }
   try { removeTree(dir) } catch { /* 暫存 */ }
+
+  // 回歸：從磁碟根目錄刪掉的東西也要還原得回去。原本 restore 檢查的是「父資料夾能不能寫」，
+  // 而磁碟根目錄被當成鎖住的位置，所以 D:\ 底下刪掉的東西一律 PROTECTED，整個回收筒形同壞掉。
+  const driveRoot = path.parse(os.tmpdir()).root
+  const rootFile = path.join(driveRoot, `vi-ex-root-${Date.now()}.txt`)
+  let wrote = false
+  try {
+    fs.writeFileSync(rootFile, 'root')
+    wrote = true
+  } catch {
+    ok('磁碟根目錄的檔案還原得回去', true, '跳過：根目錄不可寫')
+  }
+  if (wrote) {
+    try {
+      await files.removeEntry(rootFile)
+      const bin = await files.listRecycle()
+      const hit = (bin.entries || []).find((e) => (
+        String(e.originalPath || e.path || '').toLowerCase() === rootFile.toLowerCase()
+      ))
+      if (!hit) throw Object.assign(new Error('沒進回收筒'), { code: 'NOT_FOUND' })
+      await files.restoreEntry(hit.recycleKey)
+      ok('磁碟根目錄的檔案還原得回去', fs.existsSync(rootFile))
+    } catch (error) {
+      ok('磁碟根目錄的檔案還原得回去', false, `${error && error.code}: ${error && error.message}`)
+    }
+    try { fs.rmSync(rootFile, { force: true }) } catch { /* 清掉自種的 */ }
+  }
 }
 
 console.log('\n[J] 複製貼進回收筒不刪來源；剪下才丟（走 index.paste）')

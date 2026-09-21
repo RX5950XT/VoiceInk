@@ -226,12 +226,30 @@ const secondPane = {
   search: '',
   sortBy: 'name',
   sortDesc: false,
+  view: 'list',
+  tile: DEFAULT_TILE,
+  /** 'filter' 只篩目前資料夾；'global' 走 UFFS 整機搜尋，結果放進 hits。 */
+  searchMode: 'filter',
+  hits: [],
+  searching: false,
+  searchSeq: 0,
   scrollTop: 0,
   scrollLeft: 0,
   loading: false,
   seq: 0
 }
+/** 右欄自己的分頁；`secondPane` 是目前這一頁的即時狀態。 */
+let secondTabs = []
+let secondActiveId = ''
+let secondTabSeq = 0
+let secondSearchTimer = 0
+let secondEditingPath = false
 let dualPane = false
+/**
+ * 作用欄：點過哪一欄，指令列／右鍵選單／詳情／貼上／新增／側欄導覽就對那一欄生效。
+ * 沒有這個概念的話右欄只是一份唯讀清單，上面那排按鈕永遠在操作左欄。
+ */
+let activePane = 'left'
 let virtualPaintTimer = 0
 let secondVirtualTimer = 0
 const paneStates = new Map()
@@ -286,6 +304,54 @@ function listed() {
   return inSearch() ? hits : entries
 }
 
+/** 右欄是不是作用中。單欄時永遠是左欄。 */
+function rightActive() {
+  return dualPane && activePane === 'right'
+}
+
+function activeCwd() {
+  return rightActive() ? secondPane.cwd : cwd
+}
+
+/** @param {'left' | 'right'} which */
+function paneCwd(which) {
+  return which === 'right' ? secondPane.cwd : cwd
+}
+
+function activeInHome() {
+  return paneInHome(activePane)
+}
+
+/** @param {'left' | 'right'} which */
+function paneInHome(which) {
+  return pathKey(paneCwd(which)) === THIS_PC
+}
+
+/** 右欄到不了資源回收筒，所以只有左欄要判斷。 */
+function activeInRecycle() {
+  return paneInRecycle(activePane)
+}
+
+/** @param {'left' | 'right'} which */
+function paneInRecycle(which) {
+  return which !== 'right' && inRecycle()
+}
+
+function setActivePane(which) {
+  const next = which === 'right' && dualPane ? 'right' : 'left'
+  if (next === activePane) return
+  activePane = next
+  paintActivePane()
+  paintStatus()
+  paintCmdBar()
+  void paintDetail()
+}
+
+function paintActivePane() {
+  $('exContent')?.classList.toggle('is-active-pane', dualPane && activePane === 'left')
+  $('exSecondPane')?.classList.toggle('is-active-pane', rightActive())
+}
+
 function bindOnce() {
   if (started) return
   started = true
@@ -302,6 +368,8 @@ function bindOnce() {
   $('exDualBtn')?.addEventListener('click', () => void toggleDualPane())
   $('exDetailToggleBtn')?.addEventListener('click', toggleDetailPane)
   $('exListHead')?.addEventListener('click', onSortClick)
+  $('exList')?.addEventListener('mousedown', () => setActivePane('left'), true)
+  $('exSecondPane')?.addEventListener('mousedown', () => setActivePane('right'), true)
   $('exList')?.addEventListener('mousedown', onListMouseDown)
   $('exList')?.addEventListener('click', onListClick)
   $('exList')?.addEventListener('contextmenu', onListContext)
@@ -320,9 +388,35 @@ function bindOnce() {
   $('exSecondBack')?.addEventListener('click', () => void secondHistory(-1))
   $('exSecondForward')?.addEventListener('click', () => void secondHistory(1))
   $('exSecondUp')?.addEventListener('click', () => void secondGoUp())
-  $('exSecondPath')?.addEventListener('click', () => void secondChoosePath())
+  $('exSecondTabAddBtn')?.addEventListener('click', () => void newSecondTab(secondPane.cwd))
+  $('exSecondPathBar')?.addEventListener('click', (e) => {
+    if (e.target.closest('.ex-crumb')) return
+    beginEditSecondPath()
+  })
+  $('exSecondPathInput')?.addEventListener('keydown', (e) => void onSecondPathKey(e))
+  $('exSecondPathInput')?.addEventListener('blur', () => {
+    if (secondEditingPath) endEditSecondPath()
+  })
+  $('exSecondScopeBtn')?.addEventListener('click', () => {
+    setSecondScope(secondPane.searchMode === 'global' ? 'filter' : 'global')
+  })
+  for (const name of ['Type', 'MinSize', 'MaxSize', 'From', 'To', 'Location']) {
+    $(`exSecondSearch${name}`)?.addEventListener('input', onSecondSearchFilterChange)
+  }
+  $('exSecondViewListBtn')?.addEventListener('click', () => setSecondView('list'))
+  $('exSecondViewGridBtn')?.addEventListener('click', () => setSecondView('grid'))
   $('exSecondSearch')?.addEventListener('input', (e) => {
     secondPane.search = String(e.target.value || '')
+    saveSecondPaneState()
+    if (secondPane.searchMode === 'global') scheduleSecondSearch()
+    else paintSecondPane()
+  })
+  $('exSecondSearch')?.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return
+    e.preventDefault()
+    secondPane.search = ''
+    secondPane.hits = []
+    secondPane.searchSeq += 1
     saveSecondPaneState()
     paintSecondPane()
   })
@@ -352,6 +446,13 @@ function bindOnce() {
   }, { passive: true })
   $('exSecondList')?.addEventListener('click', onSecondListClick)
   $('exSecondList')?.addEventListener('dblclick', (e) => void onSecondDoubleClick(e))
+  $('exSecondList')?.addEventListener('wheel', onSecondWheel, { passive: false })
+  $('exSecondList')?.addEventListener('contextmenu', onSecondContext)
+  $('exSecondList')?.addEventListener('keydown', onSecondKey)
+  const secondList = $('exSecondList')
+  if (secondList) {
+    bindDropTarget(secondList, () => secondPane.cwd, (event, dest) => void handleDrop(event, dest))
+  }
   $('exCopyToSecond')?.addEventListener('click', () => void copyBetweenPanes('left-to-right', 'copy'))
   $('exMoveToSecond')?.addEventListener('click', () => void copyBetweenPanes('left-to-right', 'move'))
   $('exCopyFromSecond')?.addEventListener('click', () => void copyBetweenPanes('right-to-left', 'copy'))
@@ -638,7 +739,9 @@ function paintSideList(host, items) {
     })
     btn.addEventListener('click', (e) => {
       if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) return
-      void (e.ctrlKey ? newTab(item.path) : navigate(item.path))
+      if (e.ctrlKey) void newTab(item.path)
+      else if (rightActive()) void secondNavigate(item.path)
+      else void navigate(item.path)
     })
     btn.addEventListener('contextmenu', (e) => {
       e.preventDefault()
@@ -732,17 +835,12 @@ function onListScroll() {
 }
 
 function secondRows() {
+  if (secondInSearch()) return secondPane.hits
   const query = secondPane.search.trim().toLocaleLowerCase()
   if (!query) return secondPane.entries
   return secondPane.entries.filter((entry) => (
     String(entry.name || '').toLocaleLowerCase().includes(query)
   ))
-}
-
-function secondPathLabel() {
-  if (pathKey(secondPane.cwd) === THIS_PC) return '本機'
-  if (pathKey(secondPane.cwd) === RECYCLE_CWD) return '資源回收筒'
-  return secondPane.cwd || '本機'
 }
 
 function paneStateKey(tabId = activeId) {
@@ -764,53 +862,310 @@ function rightPaneSnapshot(state = secondPane) {
   }
 }
 
+/** 一份右欄分頁的完整狀態。Set 與陣列都要複製，不然切分頁會互相汙染。 */
+function secondSnapshot(state = secondPane) {
+  return {
+    cwd: state.cwd,
+    history: [...state.history],
+    histIndex: state.histIndex,
+    entries: [...state.entries],
+    total: state.total,
+    loadedOffsets: new Set(state.loadedOffsets),
+    selected: new Set(state.selected),
+    anchor: state.anchor,
+    search: state.search,
+    searchMode: state.searchMode || 'filter',
+    hits: [...(state.hits || [])],
+    sortBy: state.sortBy,
+    sortDesc: state.sortDesc,
+    view: state.view || 'list',
+    tile: state.tile || DEFAULT_TILE,
+    scrollTop: state.scrollTop,
+    scrollLeft: state.scrollLeft || 0
+  }
+}
+
+function applySecondSnapshot(snapshot) {
+  Object.assign(secondPane, secondSnapshot(snapshot))
+  secondPane.pendingOffsets = new Set()
+  secondPane.searching = false
+  secondPane.seq += 1
+  secondPane.searchSeq += 1
+}
+
+function ensureSecondTabs() {
+  if (secondTabs.length) return
+  secondTabs = [{ id: `r${++secondTabSeq}`, ...secondSnapshot() }]
+  secondActiveId = secondTabs[0].id
+}
+
+function currentSecondTab() {
+  return secondTabs.find((t) => t.id === secondActiveId) || null
+}
+
+/** 把右欄現在的樣子寫回它自己那一格。 */
+function syncSecondTab() {
+  const tab = currentSecondTab()
+  if (!tab) return
+  Object.assign(tab, secondSnapshot())
+}
+
 function saveSecondPaneState() {
   // 雙欄沒開過就沒有右欄狀態可存；先存了預設值，下次按「雙欄」會還原成空的本機。
   if (!dualPane) return
-  const snapshot = rightPaneSnapshot()
+  ensureSecondTabs()
+  syncSecondTab()
   paneStates.set(paneStateKey(), {
-    cwd: secondPane.cwd,
-    history: [...secondPane.history],
-    histIndex: secondPane.histIndex,
-    entries: [...secondPane.entries],
-    total: secondPane.total,
-    loadedOffsets: new Set(secondPane.loadedOffsets),
-    selected: [...secondPane.selected],
-    anchor: secondPane.anchor,
-    search: secondPane.search,
-    sortBy: secondPane.sortBy,
-    sortDesc: secondPane.sortDesc,
-    scrollTop: secondPane.scrollTop,
-    scrollLeft: secondPane.scrollLeft
+    tabs: secondTabs.map((tab) => ({ id: tab.id, ...secondSnapshot(tab) })),
+    activeId: secondActiveId
   })
   const tab = currentTab()
   if (tab) {
     tab.state = {
       ...normalizeBrowseState(tab.state || tab),
-      rightPane: snapshot
+      rightPane: rightPaneSnapshot()
     }
   }
 }
 
 function restoreSecondPaneState() {
   const state = paneStates.get(paneStateKey())
-  if (!state) return false
-  secondPane.cwd = state.cwd
-  secondPane.history = [...state.history]
-  secondPane.histIndex = state.histIndex
-  secondPane.entries = [...state.entries]
-  secondPane.total = state.total
-  secondPane.loadedOffsets = new Set(state.loadedOffsets)
-  secondPane.selected = new Set(state.selected)
-  secondPane.anchor = state.anchor
-  secondPane.search = state.search
-  secondPane.sortBy = state.sortBy
-  secondPane.sortDesc = state.sortDesc
-  secondPane.scrollTop = state.scrollTop
-  secondPane.scrollLeft = state.scrollLeft || 0
-  secondPane.pendingOffsets = new Set()
-  secondPane.seq += 1
+  if (!state || !Array.isArray(state.tabs) || !state.tabs.length) return false
+  secondTabs = state.tabs.map((tab) => ({ id: tab.id, ...secondSnapshot(tab) }))
+  secondActiveId = state.activeId && secondTabs.some((t) => t.id === state.activeId)
+    ? state.activeId
+    : secondTabs[0].id
+  applySecondSnapshot(currentSecondTab() || secondTabs[0])
   return true
+}
+
+function paintSecondTabs() {
+  const host = $('exSecondTabStrip')
+  if (!host) return
+  ensureSecondTabs()
+  paintTabStrip({
+    host,
+    tabs: secondTabs,
+    activeId: secondActiveId,
+    titleOf: tabTitle,
+    controls: 'exSecondList',
+    onSelect: (id) => void switchSecondTab(id),
+    onClose: (id) => void closeSecondTab(id)
+  })
+}
+
+/** @param {string} [target] */
+async function newSecondTab(target) {
+  ensureSecondTabs()
+  syncSecondTab()
+  const next = target || THIS_PC
+  const tab = {
+    ...secondSnapshot(),
+    id: `r${++secondTabSeq}`,
+    cwd: next,
+    history: [next],
+    histIndex: 0,
+    entries: [],
+    total: 0,
+    loadedOffsets: new Set(),
+    selected: new Set(),
+    anchor: '',
+    search: '',
+    searchMode: 'filter',
+    hits: [],
+    scrollTop: 0,
+    scrollLeft: 0
+  }
+  secondTabs.push(tab)
+  secondActiveId = tab.id
+  applySecondSnapshot(tab)
+  paintSecondTabs()
+  paintSecondPane()
+  await loadSecond(next, { pushHistory: false })
+}
+
+async function switchSecondTab(id) {
+  if (id === secondActiveId) return
+  const tab = secondTabs.find((t) => t.id === id)
+  if (!tab) return
+  syncSecondTab()
+  secondActiveId = id
+  applySecondSnapshot(tab)
+  paintSecondTabs()
+  paintSecondPane()
+  saveSecondPaneState()
+  refreshExplorerWatches()
+}
+
+async function closeSecondTab(id) {
+  const i = secondTabs.findIndex((t) => t.id === id)
+  if (i < 0 || secondTabs.length <= 1) return
+  const wasActive = id === secondActiveId
+  secondTabs.splice(i, 1)
+  if (!wasActive) {
+    paintSecondTabs()
+    saveSecondPaneState()
+    return
+  }
+  secondActiveId = ''
+  await switchSecondTab(secondTabs[Math.min(i, secondTabs.length - 1)].id)
+}
+
+function secondInSearch() {
+  return secondPane.searchMode === 'global' && Boolean(secondPane.search.trim())
+}
+
+function paintSecondCrumbs() {
+  const host = $('exSecondCrumbs')
+  if (!host) return
+  host.dataset.path = secondPane.cwd || ''
+  if (secondEditingPath) return
+  host.replaceChildren()
+  crumbsOf(secondPane.cwd).forEach((part, i) => {
+    if (i > 0) {
+      const sep = document.createElement('span')
+      sep.className = 'ex-crumb-sep'
+      sep.textContent = '▸'
+      host.appendChild(sep)
+    }
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'ex-crumb'
+    btn.textContent = part.label
+    btn.title = part.path
+    btn.addEventListener('click', () => void secondNavigate(part.path))
+    host.appendChild(btn)
+  })
+}
+
+function beginEditSecondPath() {
+  const input = /** @type {HTMLInputElement | null} */ ($('exSecondPathInput'))
+  const crumbs = $('exSecondCrumbs')
+  if (!input || !crumbs) return
+  secondEditingPath = true
+  crumbs.hidden = true
+  input.hidden = false
+  input.value = pathKey(secondPane.cwd) === THIS_PC ? '本機' : secondPane.cwd
+  input.focus()
+  input.select()
+}
+
+function endEditSecondPath() {
+  const input = /** @type {HTMLInputElement | null} */ ($('exSecondPathInput'))
+  const crumbs = $('exSecondCrumbs')
+  secondEditingPath = false
+  if (input) input.hidden = true
+  if (crumbs) crumbs.hidden = false
+  paintSecondCrumbs()
+}
+
+async function onSecondPathKey(e) {
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    endEditSecondPath()
+    return
+  }
+  if (e.key !== 'Enter') return
+  e.preventDefault()
+  const raw = String(e.target.value || '').trim()
+  endEditSecondPath()
+  if (!raw) return
+  if (raw === '本機') {
+    await secondNavigate(THIS_PC)
+    return
+  }
+  try {
+    const resolved = await call(electronAPI.explorer.resolvePath(raw), '找不到這個路徑')
+    await secondNavigate(resolved.dir ? resolved.path : resolved.parent)
+  } catch {
+    // toast 已顯示
+  }
+}
+
+function setSecondView(next) {
+  secondPane.view = next === 'grid' ? 'grid' : 'list'
+  saveSecondPaneState()
+  paintSecondPane()
+}
+
+/** Ctrl+滾輪在右欄也是一級一級換大小，跟左欄共用 `explorer-zoom.js` 的級距。 */
+function onSecondWheel(e) {
+  if (!e.ctrlKey) return
+  e.preventDefault()
+  const next = nextZoomState({ view: secondPane.view, tile: secondPane.tile }, e.deltaY)
+  if (next.view === secondPane.view && next.tile === secondPane.tile) return
+  secondPane.view = next.view
+  secondPane.tile = next.tile
+  saveSecondPaneState()
+  paintSecondPane()
+}
+
+/** 右欄的篩選條件改了就重跑一次整機搜尋。篩目前資料夾用不到這些條件。 */
+function onSecondSearchFilterChange() {
+  if (secondPane.searchMode !== 'global') return
+  if (!secondPane.search.trim() || !uffs?.installed) return
+  scheduleSecondSearch()
+}
+
+function setSecondScope(mode) {
+  secondPane.searchMode = mode === 'global' ? 'global' : 'filter'
+  const input = /** @type {HTMLInputElement | null} */ ($('exSecondSearch'))
+  if (input) {
+    input.placeholder = secondPane.searchMode === 'global' ? '搜尋整機檔案…' : '篩選目前資料夾…'
+  }
+  secondPane.hits = []
+  secondPane.searchSeq += 1
+  saveSecondPaneState()
+  paintSecondPane()
+  if (secondPane.searchMode === 'global' && secondPane.search.trim()) scheduleSecondSearch()
+}
+
+function scheduleSecondSearch() {
+  if (secondSearchTimer) clearTimeout(secondSearchTimer)
+  const hint = $('exSecondSearchHint')
+  const query = secondPane.search.trim()
+  if (!query) {
+    secondPane.hits = []
+    secondPane.searchSeq += 1
+    if (hint) hint.textContent = ''
+    paintSecondPane()
+    return
+  }
+  if (!uffs || !uffs.installed) {
+    if (hint) hint.textContent = '尚未啟用'
+    return
+  }
+  secondSearchTimer = window.setTimeout(() => void runSecondSearch(query), SEARCH_DEBOUNCE_MS)
+}
+
+/** 右欄的整機搜尋跟左欄共用 UFFS，但吃自己那組篩選條件，結果畫在右欄。 */
+async function runSecondSearch(query) {
+  const seq = ++secondPane.searchSeq
+  secondPane.searching = true
+  paintStatus()
+  const hint = $('exSecondSearchHint')
+  try {
+    const data = await call(electronAPI.explorer.uffsSearch(query, searchFilters('right')), '搜尋失敗')
+    if (seq !== secondPane.searchSeq) return
+    if (data.warming) {
+      if (hint) hint.textContent = '索引中'
+      secondPane.hits = []
+    } else {
+      if (hint) hint.textContent = ''
+      secondPane.hits = data.hits || []
+    }
+  } catch {
+    if (seq !== secondPane.searchSeq) return
+    secondPane.hits = []
+  } finally {
+    if (seq === secondPane.searchSeq) {
+      secondPane.searching = false
+      secondPane.selected = new Set()
+      paintSecondPane()
+      paintStatus()
+      paintCmdBar()
+    }
+  }
 }
 
 function paintSecondPane() {
@@ -819,8 +1174,8 @@ function paintSecondPane() {
   if (!pane || !list) return
   pane.hidden = !dualPane
   if (!dualPane) return
-  const pathButton = $('exSecondPath')
-  if (pathButton) pathButton.textContent = secondPathLabel()
+  const searching = secondInSearch()
+  paintSecondCrumbs()
   const back = $('exSecondBack')
   const forward = $('exSecondForward')
   if (back) back.disabled = secondPane.histIndex <= 0 || secondPane.loading
@@ -829,15 +1184,42 @@ function paintSecondPane() {
   if (up) up.disabled = pathKey(secondPane.cwd) === THIS_PC || secondPane.loading
   const search = /** @type {HTMLInputElement | null} */ ($('exSecondSearch'))
   if (search && search.value !== secondPane.search) search.value = secondPane.search
+  const scope = $('exSecondScopeBtn')
+  if (scope) {
+    const global = secondPane.searchMode === 'global'
+    scope.textContent = global ? '🌐' : '📁'
+    scope.title = global ? '搜尋整機檔案' : '只篩這個資料夾'
+    scope.setAttribute('aria-label', `搜尋範圍：${scope.title}`)
+    scope.setAttribute('aria-pressed', global ? 'true' : 'false')
+  }
+  // 篩選面板只有整機搜尋用得到；篩目前資料夾時收起來，免得把窄窄的右欄標頭再擠爆。
+  const filters = /** @type {HTMLDetailsElement | null} */ ($('exSecondSearchFilters'))
+  if (filters) {
+    filters.hidden = secondPane.searchMode !== 'global'
+    if (filters.hidden) filters.open = false
+  }
   const sort = /** @type {HTMLSelectElement | null} */ ($('exSecondSort'))
-  if (sort && sort.value !== secondPane.sortBy) sort.value = secondPane.sortBy
+  if (sort) {
+    sort.value = secondPane.sortBy
+    sort.disabled = searching
+  }
   const sortDir = $('exSecondSortDir')
-  if (sortDir) sortDir.textContent = secondPane.sortDesc ? '↓' : '↑'
+  if (sortDir) {
+    sortDir.textContent = secondPane.sortDesc ? '↓' : '↑'
+    sortDir.disabled = searching
+  }
+  $('exSecondViewListBtn')?.setAttribute('aria-pressed', secondPane.view === 'list' ? 'true' : 'false')
+  $('exSecondViewGridBtn')?.setAttribute('aria-pressed', secondPane.view === 'grid' ? 'true' : 'false')
+  const grid = secondPane.view === 'grid'
+  list.classList.toggle('is-grid', grid)
+  list.style.setProperty('--ex-tile', `${secondPane.tile}px`)
+  list.dataset.tile = String(secondPane.tile)
   const scrollTop = secondPane.scrollTop
   const scrollLeft = secondPane.scrollLeft || 0
   list.replaceChildren()
   const rows = secondRows()
-  const virtual = rows.length > 250
+  // 方格檢視一格不是 34px 高，套清單的虛擬捲動會算歪；右欄的格子數有限，直接全畫。
+  const virtual = !grid && !searching && rows.length > 250
   const range = virtual ? visibleBrowseRange({
     total: rows.length,
     scrollTop,
@@ -863,14 +1245,14 @@ function paintSecondPane() {
   }
   const empty = $('exSecondEmpty')
   if (empty) {
-    empty.hidden = rows.length > 0
-    empty.textContent = secondPane.search ? '沒有符合的檔案' : '這個資料夾是空的'
+    empty.hidden = rows.length > 0 || secondPane.searching
+    empty.textContent = searching ? '沒有符合的檔案'
+      : secondPane.search ? '沒有符合的檔案' : '這個資料夾是空的'
   }
-  const selectedIds = new Set([...secondPane.selected])
-  secondPane.selected = new Set(rows.map((item) => item.path).filter((id) => selectedIds.has(id)))
   for (const row of list.querySelectorAll('.ex-row')) {
     row.classList.toggle('is-selected', secondPane.selected.has(row.dataset.path))
   }
+  paintFileIcons(list, (target) => electronAPI.explorer.fileIcon(target))
   list.scrollTop = scrollTop
   list.scrollLeft = scrollLeft
 }
@@ -886,6 +1268,7 @@ function refreshExplorerWatches() {
 }
 
 function secondRowEl(entry) {
+  const searching = secondInSearch()
   const row = document.createElement('div')
   row.className = 'ex-row'
   row.dataset.path = entry.path
@@ -893,16 +1276,23 @@ function secondRowEl(entry) {
   row.setAttribute('role', 'option')
   row.tabIndex = -1
   row.classList.toggle('is-selected', secondPane.selected.has(entry.path))
+  if (entry.hidden) row.classList.add('is-dim')
   const name = document.createElement('div')
   name.className = 'ex-row-name'
   const icon = document.createElement('span')
   icon.className = 'ex-row-icon'
   icon.textContent = iconFor(entry)
   icon.setAttribute('aria-hidden', 'true')
+  icon.classList.toggle('is-shortcut', entry.ext === 'lnk')
+  // 跟左欄一樣跟殼層要真的縮圖／類型圖示，方格檢視才不會只剩 emoji。
+  if (entry.path) {
+    icon.dataset.path = entry.path
+    icon.dataset.iconKey = `${entry.path}:${entry.mtimeMs || 0}:${entry.dir ? 'd' : 'f'}`
+  }
   const label = document.createElement('span')
   label.className = 'ex-row-label'
-  label.textContent = entry.name
-  label.title = entry.name
+  label.textContent = searching ? entry.path : entry.name
+  label.title = searching ? entry.path : entry.name
   name.append(icon, label)
   const size = document.createElement('div')
   size.className = 'ex-row-size'
@@ -911,11 +1301,98 @@ function secondRowEl(entry) {
   mtime.className = 'ex-row-mtime'
   mtime.textContent = formatTime(entry.mtimeMs)
   row.append(name, size, mtime)
+  row.draggable = !searching
+  row.addEventListener('dragstart', (e) => onSecondDragStart(e, entry))
+  row.addEventListener('auxclick', (e) => {
+    if (e.button === 1 && entry.dir) {
+      e.preventDefault()
+      void newSecondTab(entry.path)
+    }
+  })
+  if (entry.dir && !searching) {
+    bindDropTarget(row, () => entry.path, (event, dest) => void handleDrop(event, dest), (dest) => {
+      // 拖著檔案停在資料夾上就進去，才丟得到深層路徑
+      void secondNavigate(dest)
+    })
+  }
   return row
 }
 
+/** 右欄拖出去走跟左欄一樣的原生拖放，才拖得進別的程式。 */
+function onSecondDragStart(e, entry) {
+  setActivePane('right')
+  if (!secondPane.selected.has(entry.path)) {
+    secondPane.selected = new Set([entry.path])
+    secondPane.anchor = entry.path
+    paintSecondPane()
+  }
+  const items = [...secondPane.selected].filter(Boolean)
+  if (!items.length) return
+  e.preventDefault()
+  void electronAPI.explorer.startDrag(items)
+}
+
+function onSecondContext(e) {
+  setActivePane('right')
+  const row = e.target.closest('.ex-row')
+  if (row && row.dataset.path && !secondPane.selected.has(row.dataset.path)) {
+    secondPane.selected = new Set([row.dataset.path])
+    secondPane.anchor = row.dataset.path
+    paintSecondPane()
+  }
+  if (!row) {
+    secondPane.selected = new Set()
+    paintSecondPane()
+  }
+  e.preventDefault()
+  openContextMenu(e, selectedEntries(), secondPane.cwd)
+}
+
+function onSecondKey(e) {
+  if (e.ctrlKey || e.altKey || e.metaKey) return
+  const rows = secondRows().filter(Boolean)
+  const index = rows.findIndex((item) => secondPane.selected.has(item.path))
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault()
+    const next = rows[Math.max(0, Math.min(rows.length - 1, index + (e.key === 'ArrowDown' ? 1 : -1)))]
+    if (!next) return
+    secondPane.selected = new Set([next.path])
+    secondPane.anchor = next.path
+    paintSecondPane()
+    paintStatus()
+    paintCmdBar()
+    void paintDetail()
+    $('exSecondList')?.querySelector('.ex-row.is-selected')?.scrollIntoView({ block: 'nearest' })
+    return
+  }
+  if (e.key === 'Enter') {
+    e.preventDefault()
+    const entry = rows[index]
+    if (!entry) return
+    if (entry.dir) void secondNavigate(entry.path)
+    else void openEntry(entry)
+    return
+  }
+  if (e.key === 'Backspace') {
+    e.preventDefault()
+    void secondGoUp()
+    return
+  }
+  if (e.key === 'Delete') {
+    e.preventDefault()
+    const items = selectedEntries()
+    if (items.length) void deleteItems(items, { permanent: e.shiftKey })
+    return
+  }
+  if (e.key === 'F2') {
+    e.preventDefault()
+    const items = selectedEntries()
+    if (items.length === 1) void renameItem(items[0])
+  }
+}
+
 async function loadSecondVisiblePages() {
-  if (!dualPane || pathKey(secondPane.cwd) === THIS_PC || !secondPane.entries.length) return
+  if (!dualPane || secondInSearch() || pathKey(secondPane.cwd) === THIS_PC || !secondPane.entries.length) return
   const list = $('exSecondList')
   if (!list) return
   const range = visibleBrowseRange({
@@ -956,6 +1433,11 @@ async function loadSecondVisiblePages() {
 
 async function loadSecond(dirPath, opts = {}) {
   const seq = ++secondPane.seq
+  // 換資料夾就回到最上面，不然清單會停在上一個資料夾捲到的位置（虛擬清單還會整片空白）。
+  if (pathKey(dirPath) !== pathKey(secondPane.cwd)) {
+    secondPane.scrollTop = 0
+    secondPane.scrollLeft = 0
+  }
   secondPane.loading = true
   paintSecondPane()
   if (pathKey(dirPath) === THIS_PC) {
@@ -1004,12 +1486,18 @@ async function loadSecond(dirPath, opts = {}) {
     secondPane.histIndex = secondPane.history.length - 1
   }
   saveSecondPaneState()
+  paintSecondTabs()
   refreshExplorerWatches()
   return true
 }
 
 async function secondNavigate(dirPath) {
   if (!dualPane) return
+  if (secondInSearch()) {
+    secondPane.search = ''
+    secondPane.hits = []
+    secondPane.searchSeq += 1
+  }
   await loadSecond(dirPath)
 }
 
@@ -1036,17 +1524,6 @@ async function secondGoUp() {
   await secondNavigate(parentOf(secondPane.cwd) || THIS_PC)
 }
 
-async function secondChoosePath() {
-  const value = await askInput('右欄路徑', { value: secondPane.cwd === THIS_PC ? '本機' : secondPane.cwd })
-  if (!value) return
-  try {
-    const resolved = await call(electronAPI.explorer.resolvePath(value), '找不到這個路徑')
-    await secondNavigate(resolved.dir ? resolved.path : resolved.parent)
-  } catch {
-    // toast 已顯示
-  }
-}
-
 function onSecondListClick(event) {
   const row = event.target.closest('.ex-row')
   if (!row) return
@@ -1064,13 +1541,17 @@ function onSecondListClick(event) {
     secondPane.selected = new Set([id])
     secondPane.anchor = id
   }
+  setActivePane('right')
   paintSecondPane()
   saveSecondPaneState()
+  paintStatus()
+  paintCmdBar()
+  void paintDetail()
 }
 
 async function onSecondDoubleClick(event) {
   const row = event.target.closest('.ex-row')
-  const entry = secondRows().find((item) => item.path === row?.dataset.path)
+  const entry = secondRows().filter(Boolean).find((item) => item.path === row?.dataset.path)
   if (!entry) return
   if (entry.dir) {
     await secondNavigate(entry.path)
@@ -1086,9 +1567,10 @@ async function onSecondDoubleClick(event) {
 
 async function copyBetweenPanes(direction, mode) {
   const fromRight = direction === 'right-to-left'
+  // 這四顆鈕長在右欄裡，按下去會把作用欄切成右欄，所以來源要指名道姓，不能用 selectedEntries()。
   const items = fromRight
-    ? secondRows().filter((entry) => secondPane.selected.has(entry.path))
-    : selectedEntries()
+    ? secondRows().filter((entry) => entry && secondPane.selected.has(entry.path))
+    : listed().filter((entry) => selected.has(entryId(entry)))
   const target = fromRight ? cwd : secondPane.cwd
   if (!items.length || !target || pathKey(target) === THIS_PC) return
   try {
@@ -1120,21 +1602,31 @@ async function toggleDualPane() {
   if (!dualPane) {
     const pane = $('exSecondPane')
     if (pane) pane.hidden = true
+    activePane = 'left'
+    paintActivePane()
+    paintStatus()
+    paintCmdBar()
+    void paintDetail()
     refreshExplorerWatches()
     return
   }
-  const restored = paneStates.has(paneStateKey())
-  if (restored) {
-    restoreSecondPaneState()
-  } else {
+  const restored = restoreSecondPaneState()
+  if (!restored) {
     secondPane.cwd = inHome() ? (disks[0]?.path || THIS_PC) : cwd
     secondPane.history = [secondPane.cwd]
     secondPane.histIndex = 0
     secondPane.search = ''
+    secondPane.hits = []
+    secondPane.searchMode = 'filter'
     secondPane.selected = new Set()
+    secondTabs = []
+    secondActiveId = ''
+    ensureSecondTabs()
   }
+  paintSecondTabs()
   await loadSecond(secondPane.cwd, { pushHistory: false, keepSelection: restored })
   paintSecondPane()
+  paintActivePane()
   persistTabs()
   refreshExplorerWatches()
 }
@@ -1246,6 +1738,20 @@ function selectOnly(full) {
 function paintStatus() {
   const el = $('exStatusText')
   if (!el) return
+  if (rightActive()) {
+    const picked = selectedEntries()
+    const picks = picked.length ? ` · 已選取 ${picked.length} 個` : ''
+    if (secondInSearch()) {
+      el.textContent = secondPane.searching
+        ? '右欄：搜尋中…'
+        : `右欄：${secondPane.hits.length} 筆結果${picks}`
+      return
+    }
+    const total = secondPane.total || secondPane.entries.filter(Boolean).length
+    const dirs = secondPane.entries.filter((r) => r && r.dir).length
+    el.textContent = `右欄：${total} 個項目 · ${dirs} 個資料夾${picks}`
+    return
+  }
   const rows = listed()
   const extra = truncated ? '（已截斷）' : ''
   if (inHome() && !inSearch()) {
@@ -1268,7 +1774,9 @@ function paintStatus() {
   el.textContent = `${total} 個項目 · ${dirs} 個資料夾${extra}${picks}`
 }
 
-function selectedEntries() {
+/** @param {'left' | 'right'} [which] 不指名就看作用欄。 */
+function selectedEntries(which = activePane) {
+  if (which === 'right' && dualPane) return secondRows().filter((r) => r && secondPane.selected.has(r.path))
   const rows = listed()
   return rows.filter((r) => selected.has(entryId(r)))
 }
@@ -1293,37 +1801,57 @@ async function paintDetail() {
   })
 }
 
+/** 兩欄各有一條指令列，各自只管自己那一欄——不必先點對欄才按得對。 */
 function paintCmdBar() {
-  const bar = $('exCmdBar')
-  if (!bar) return
-  bar.replaceChildren()
-  const items = selectedEntries()
-  const has = items.length > 0
-  const one = items.length === 1
-  if (inRecycle()) {
-    addCmd(bar, '還原', () => void restoreItems(items), { disabled: !has })
-    addCmd(bar, '永久刪除', () => void deleteItems(items, { permanent: true }), { disabled: !has, danger: true })
-    addCmd(bar, '清空', () => void emptyBin())
-    return
-  }
-  addCmd(bar, '開啟', () => void openEntry(items[0]), { disabled: !one })
-  addCmd(bar, '顯示位置', () => void revealItems(items), { disabled: !has })
-  addCmd(bar, '複製路徑', () => copyPaths(items), { disabled: !has })
-  addCmd(bar, '複製', () => void clipboard(items, 'copy'), { disabled: !has })
-  addCmd(bar, '剪下', () => void clipboard(items, 'cut'), { disabled: !has })
-  addCmd(bar, '貼上', () => void pasteHere(), { disabled: inHome() })
-  addCmd(bar, '重新命名', () => void renameItem(items[0]), { disabled: !one })
-  addCmd(bar, '批次改名', () => void batchRenameItems(items), { disabled: items.length < 2 })
-  addCmd(bar, '刪除', () => void deleteItems(items), { disabled: !has, danger: true })
+  paintCmdBarInto($('exCmdBar'), 'left')
+  paintCmdBarInto($('exSecondCmdBar'), 'right')
 }
 
-function addCmd(bar, label, fn, opts = {}) {
+/**
+ * @param {HTMLElement | null} bar
+ * @param {'left' | 'right'} which
+ */
+function paintCmdBarInto(bar, which) {
+  if (!bar) return
+  bar.replaceChildren()
+  if (which === 'right' && !dualPane) return
+  const items = selectedEntries(which)
+  const has = items.length > 0
+  const one = items.length === 1
+  if (paneInRecycle(which)) {
+    addCmd(bar, which, '還原', () => void restoreItems(items), { disabled: !has })
+    addCmd(bar, which, '永久刪除', () => void deleteItems(items, { permanent: true }), { disabled: !has, danger: true })
+    addCmd(bar, which, '清空', () => void emptyBin())
+    return
+  }
+  addCmd(bar, which, '開啟', () => void openEntry(items[0]), { disabled: !one })
+  addCmd(bar, which, '顯示位置', () => void revealItems(items), { disabled: !has })
+  addCmd(bar, which, '複製路徑', () => copyPaths(items), { disabled: !has })
+  addCmd(bar, which, '複製', () => void clipboard(items, 'copy'), { disabled: !has })
+  addCmd(bar, which, '剪下', () => void clipboard(items, 'cut'), { disabled: !has })
+  addCmd(bar, which, '貼上', () => void pasteHere(), { disabled: paneInHome(which) })
+  addCmd(bar, which, '重新命名', () => void renameItem(items[0]), { disabled: !one })
+  addCmd(bar, which, '批次改名', () => void batchRenameItems(items), { disabled: items.length < 2 })
+  addCmd(bar, which, '刪除', () => void deleteItems(items), { disabled: !has, danger: true })
+}
+
+/**
+ * 動作本身（貼上、改名、刪除…）看的是作用欄，所以按鈕要先把作用欄切成自己這一欄，
+ * 再跑。`#exCmdBar` 長在兩欄外面，不先切的話它會拿右欄的 cwd 去貼上。
+ *
+ * @param {HTMLElement} bar
+ * @param {'left' | 'right'} which
+ */
+function addCmd(bar, which, label, fn, opts = {}) {
   const btn = document.createElement('button')
   btn.type = 'button'
   btn.className = opts.danger ? 'btn btn-danger btn-sm' : 'btn btn-secondary btn-sm'
   btn.textContent = label
   btn.disabled = Boolean(opts.disabled)
-  btn.addEventListener('click', fn)
+  btn.addEventListener('click', () => {
+    setActivePane(which)
+    fn()
+  })
   bar.appendChild(btn)
 }
 
@@ -1486,7 +2014,10 @@ async function switchTab(id) {
   histIndex = tab.histIndex
   cwd = tab.cwd
   applyTabState(tab)
-  restoreSecondPaneState()
+  if (restoreSecondPaneState()) {
+    paintSecondTabs()
+    paintSecondPane()
+  }
   entries = []
   selected = new Set(selected)
   endEditPath()
@@ -1799,25 +2330,30 @@ function clearSearch() {
   paintList()
 }
 
-function searchFilters() {
-  const number = (id) => {
-    const value = Number($(id)?.value)
+/**
+ * 兩欄各有一組篩選條件，差別只在 id 前綴。
+ * @param {'left' | 'right'} [which]
+ */
+function searchFilters(which = 'left') {
+  const at = (name) => $(which === 'right' ? `exSecondSearch${name}` : `exSearch${name}`)
+  const number = (name) => {
+    const value = Number(at(name)?.value)
     return Number.isFinite(value) && value >= 0 ? value : null
   }
-  const type = $('exSearchType')?.value
-  const date = (id, end = false) => {
-    const raw = String($(id)?.value || '')
+  const type = at('Type')?.value
+  const date = (name, end = false) => {
+    const raw = String(at(name)?.value || '')
     if (!raw) return null
     const value = Date.parse(`${raw}${end ? 'T23:59:59.999' : 'T00:00:00.000'}`)
     return Number.isFinite(value) ? value : null
   }
   return {
     type: ['file', 'folder', 'image', 'video', 'audio', 'document'].includes(type) ? type : 'all',
-    minSize: number('exSearchMinSize'),
-    maxSize: number('exSearchMaxSize'),
-    fromMs: date('exSearchFrom'),
-    toMs: date('exSearchTo', true),
-    location: String($('exSearchLocation')?.value || '').trim()
+    minSize: number('MinSize'),
+    maxSize: number('MaxSize'),
+    fromMs: date('From'),
+    toMs: date('To', true),
+    location: String(at('Location')?.value || '').trim()
   }
 }
 
@@ -1981,6 +2517,8 @@ async function clipboard(items, mode) {
 }
 
 async function refreshAfterMutate() {
+  // 雙欄時兩邊都要重讀：操作可能發生在右欄，或把檔案搬進另一欄。
+  if (dualPane) await loadSecond(secondPane.cwd, { pushHistory: false, keepSelection: true })
   if (inSearch()) {
     const input = /** @type {HTMLInputElement | null} */ ($('exSearch'))
     const q = input ? input.value.trim() : ''
@@ -1993,9 +2531,10 @@ async function refreshAfterMutate() {
 }
 
 async function pasteHere() {
-  if (!cwd || inHome()) return
+  const target = activeCwd()
+  if (!target || pathKey(target) === THIS_PC) return
   try {
-    const done = await call(electronAPI.explorer.paste(cwd), '貼上失敗')
+    const done = await call(electronAPI.explorer.paste(target), '貼上失敗')
     const landed = (done && done.paths) || []
     if (landed.length && lastClip.paths.length) {
       pushUndo(lastClip.mode === 'cut' ? '搬移' : '複製',
@@ -2008,8 +2547,8 @@ async function pasteHere() {
 }
 
 async function newFolder() {
-  if (inRecycle() || inHome()) return
-  const target = cwd
+  const target = activeCwd()
+  if (activeInRecycle() || pathKey(target) === THIS_PC) return
   const name = await askInput('新增資料夾', { placeholder: '資料夾名稱' })
   if (!name) return
   try {
@@ -2021,8 +2560,8 @@ async function newFolder() {
 }
 
 async function newFile() {
-  if (inRecycle() || inHome()) return
-  const target = cwd
+  const target = activeCwd()
+  if (activeInRecycle() || pathKey(target) === THIS_PC) return
   const name = await askInput('新增檔案', { placeholder: '檔案名稱' })
   if (!name) return
   try {
@@ -2258,13 +2797,13 @@ async function emptyBin() {
   }
 }
 
-function openContextMenu(e, items) {
+function openContextMenu(e, items, dir) {
   const request = ++contextMenuSeq
   const navigation = navSeq
   const at = { x: e.clientX, y: e.clientY }
-  const recycle = inRecycle()
+  const recycle = activeInRecycle()
   const extended = Boolean(e.shiftKey)
-  const folder = cwd
+  const folder = dir || activeCwd()
   void (async () => {
     let shellItems = []
     let token = 0
@@ -2308,9 +2847,9 @@ function openContextMenu(e, items) {
         openTab: () => void newTab(items[0].path),
         reveal: () => void revealItems(items),
         pin: () => void pinEntries(items),
-        pinHere: () => void pinPath(cwd, ''),
+        pinHere: () => void pinPath(folder, ''),
         openProject: () => void openInWorkspace(items[0]?.path),
-        openProjectHere: () => void openInWorkspace(cwd),
+        openProjectHere: () => void openInWorkspace(folder),
         cut: () => void clipboard(items, 'cut'),
         copy: () => void clipboard(items, 'copy'),
         paste: () => void pasteHere(),
@@ -2924,6 +3463,8 @@ export async function refreshExplorerPage() {
     else if (!job) await loadDir(cwd, { silent: true, keepSelection: true })
     if (dualPane && !job) {
       const restored = restoreSecondPaneState()
+      ensureSecondTabs()
+      paintSecondTabs()
       await loadSecond(secondPane.cwd, { pushHistory: false, keepSelection: restored })
       paintSecondPane()
       persistTabs()

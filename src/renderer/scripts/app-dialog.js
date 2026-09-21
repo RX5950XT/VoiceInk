@@ -65,6 +65,20 @@ function openDialog(opts, fillBody) {
   actions.appendChild(ok)
   dialog.appendChild(actions)
 
+  // Enter＝確定，不管焦點停在哪顆鈕（Windows 的對話框就是這樣）。危險操作的焦點仍留在
+  // 「取消」，滑鼠亂點不會刪到東西；capture + preventDefault 是為了蓋掉「Enter 觸發焦點那顆鈕」
+  // 的預設行為，不然焦點在取消時按 Enter 反而是取消。
+  // 注音／倉頡選字中的那顆 Enter 是拿來選字的，不能當成確定：`isComposing` 有些輸入法不送，
+  // 所以連 `keyCode === 229` 一起擋。
+  dialog.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return
+    if (e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return
+    const tag = /** @type {HTMLElement} */ (e.target).tagName
+    if (tag === 'TEXTAREA') return
+    e.preventDefault()
+    dialog.close(OK)
+  }, true)
+
   document.body.appendChild(dialog)
   const done = new Promise((resolve) => {
     dialog.addEventListener('close', () => {
@@ -118,13 +132,7 @@ export async function askInput(title, opts = {}) {
       input.placeholder = opts.placeholder || ''
       input.setAttribute('aria-label', title)
       input.spellcheck = false
-      // Enter 直接送出：這是單行輸入，多按一次滑鼠沒有意義
-      input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) {
-          e.preventDefault()
-          dialog.close(OK)
-        }
-      })
+      // Enter 直接送出，由 openDialog 那支 capture 監聽統一處理
       group.appendChild(input)
       body.appendChild(group)
     }

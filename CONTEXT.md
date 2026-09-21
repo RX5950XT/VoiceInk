@@ -14,6 +14,59 @@ AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定�
 
 ## 架構
 
+### 檔案總管：雙欄的「作用欄」（2026-09-21）
+
+- 雙欄不是兩套流程，是**一套流程＋一個作用欄**。`explorer-page.js` 的 `activePane`
+  記著使用者最後按的是哪一欄（`#exList` 與 `#exSecondPane` 各有一個 capture 階段的
+  mousedown）。`selectedEntries()`／`paintStatus()`／`paintCmdBar()`／`pasteHere()`／
+  `newFolder()`／`newFile()`／`openContextMenu()`／側欄位置與磁碟的導覽都讀
+  `activeCwd()` 與作用欄的選取，右欄不另外複製一份。
+- 右欄的右鍵選單、方向鍵／Enter／Backspace／Delete／F2、拖出去（原生拖放）與拖進來
+  （`bindDropTarget` 指到 `secondPane.cwd`）都綁在 `#exSecondList`。
+- **坑**：四顆跨欄鈕（複製／搬到左右欄）長在右欄裡，mousedown 會先把作用欄切成右欄，
+  所以 `copyBetweenPanes()` 的來源必須指名左欄／右欄，不能用 `selectedEntries()`。
+- **坑**：大資料夾分頁載入後 `secondPane.entries` 是稀疏陣列，未載入的頁是洞。
+  `filter`／`map` 會跳洞，`find` 不會——掃它之前一定要先 `.filter(Boolean)`。
+- 右欄有自己的分頁（`secondTabs`／`secondActiveId`），每一頁記自己的路徑、歷史、選取、
+  捲動、排序、檢視與搜尋。整組分頁再按「左欄分頁」存進 `paneStates`，所以左欄換分頁時
+  右欄跟著換成那一頁配的右欄分頁組。
+- 右欄的麵包屑、圖示檢視（Ctrl+滾輪同一組級距）、整機搜尋都直接重用左欄那幾個純函式，
+  不另外寫一套。
+- **兩欄各有一條指令列**：`#exCmdBar`（左）與 `#exSecondCmdBar`（右）由同一支
+  `paintCmdBarInto(bar, which)` 畫，選取、`貼上` 的可按與否都按那一欄算。動作本身仍然看
+  作用欄，所以 `addCmd()` 的 click 會先 `setActivePane(which)` 再跑——`#exCmdBar` 長在兩欄
+  外面，不先切的話它會拿右欄的 `cwd` 去貼上。
+- **兩欄各有一組搜尋篩選條件**：`searchFilters(which)` 只差 id 前綴
+  （`exSearch*` ／ `exSecondSearch*`）。右欄那組 `<details>` 只在整機搜尋時顯示，
+  切回「篩這個資料夾」就收起來（在 `paintSecondPane()` 裡從狀態畫，換分頁也對）。
+- 右欄標頭固定兩列（導覽＋麵包屑／搜尋＋檢視），窄到 220px 時只有工具那一列會再換行。
+  排序的原生 `select` 會被 `custom-select.js` 換成自訂下拉，寬度要對著
+  `.custom-select[data-select-id="exSecondSort"] .custom-select-trigger` 調，
+  不然它吃 `min-width: 180px`，標頭會胖到 200px 高。
+- 測試：`e2e-explorer-dual-cdp.js`（35 條，含單欄回歸與跨欄鈕的來源）。
+  三支 explorer e2e 都可以用 `VOICEINK_EXE=node_modules/electron/dist/electron.exe`
+  跑原始碼（要先起 vite），並在連上 CDP 後把視埠固定成 1280×860——不固定的話視窗寬度
+  會飄，詳情欄在 900px 以下整個收掉，實體滑鼠座標的測試也會跟著失準。
+
+### 檔案總管：回收筒還原與 Enter 確認（2026-09-21）
+
+- **從磁碟根目錄刪掉的東西本來一律還原不了**。`recycle.restore()` 檢查的是「父資料夾
+  能不能寫」（`assertCreatable(parent)`），而 `isSystemLocked` 把 `D:\` 這種磁碟根目錄
+  當成鎖住的位置，所以 `D:\` 底下刪掉的東西每一筆都吐 `PROTECTED`。還原是把東西放回
+  它原本待的地方、不是往新地方丟，所以改成只看目的地自己（`assertCreatable(destAbs)`）。
+  第二層是同一個原因：`mkdir('D:\', { recursive: true })` 在 Windows 上吐 `EPERM`，
+  所以父資料夾已經在就不要補。`assertCreatable` 對新增／貼上的語意沒動——磁碟根目錄
+  還是不能當新增目的地。
+- **Enter＝確定**：`app-dialog.js` 在 `<dialog>` 上掛 capture 階段的 keydown，
+  Enter 一律 `close(OK)`。危險彈窗的焦點仍然留在「取消」（滑鼠亂點不會刪到東西），
+  但 Enter 會確定——不 `preventDefault()` 的話 Enter 會先觸發焦點那顆鈕，變成取消。
+  `askInput` 原本自己那支 Enter 監聽因此拿掉了；注音／倉頡選字中的 Enter 要放行
+  （`isComposing` 有些輸入法不送，所以連 `keyCode === 229` 一起擋）。
+- 測試：`test-explorer.js` 的「磁碟根目錄的檔案還原得回去」、
+  `e2e-app-dialog-cdp.js` 的 [G1]／[G2]／[G3]。
+- **已知偶發**：`e2e-explorer-cdp.js` 的 [C8]「資料夾監看有在跑」會紅，改動前後都一樣
+  （`fs.watch` 在 Windows 上偶爾不送事件）；紅的時候腳本會把當下的清單與磁碟內容印出來。
+
 ### 檔案總管：方格檢視的縮放與大圖預覽（2026-09-21）
 
 - **方格檢視的檔名本來是直書的**：`.ex-row-name` 在清單檢視是「圖示 ＋ 檔名」橫向一列，

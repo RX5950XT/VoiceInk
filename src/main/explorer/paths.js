@@ -212,7 +212,8 @@ function resolveExisting(raw) {
 }
 
 /**
- * 磁碟根目錄與 `%SystemRoot%` 本身不准當新增／貼上／還原的目的地。
+ * 磁碟根目錄與 `%SystemRoot%` 本身不准當新增／貼上的目的地。
+ * 還原不看父資料夾、只看目的地自己（見 `recycle.restore`）。
  * 家目錄根層可以放子項（擋的是刪掉家目錄自己，見 `isProtected`）。
  * @param {string} full
  * @returns {boolean}

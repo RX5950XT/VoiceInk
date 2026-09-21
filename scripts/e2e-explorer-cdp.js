@@ -143,15 +143,18 @@ async function main() {
   let mainCdp = null
   // 與 workspace 探針相同，使用 Electron 的隱藏視窗擷取，避免 CDP 等不到畫格。
   const screenshot = () => mainCdp.eval(`process.mainModule.require('electron').BrowserWindow.getAllWindows()
-    .find(win => /index\\.html/.test(win.webContents.getURL())).webContents
+    .find(win => /(index\\.html|5173)/.test(win.webContents.getURL())).webContents
     .capturePage(undefined, { stayHidden: true, stayAwake: true }).then(image => image.toPNG().toString('base64'))`)
   try {
+    // VOICEINK_EXE 指到 electron.exe 時是跑原始碼（要先起 vite），得補上 app 目錄。
+    const appArgs = /electron[.]exe$/i.test(EXE) ? ['.'] : []
     child = spawn(EXE, [
+      ...appArgs,
       '--hidden',
       '--inspect=127.0.0.1:9282',
       `--remote-debugging-port=${PORT}`,
       `--user-data-dir=${USER_DATA_DIR}`
-    ], { stdio: 'ignore' })
+    ], { cwd: path.join(__dirname, '..'), stdio: 'ignore' })
     const version = await waitFor(async () => {
       try {
         return await getJson(`http://127.0.0.1:${PORT}/json/version`)
@@ -161,10 +164,19 @@ async function main() {
     }, 40_000, 'CDP 起來')
     const targets = await waitFor(async () => {
       const list = await getJson(`http://127.0.0.1:${PORT}/json/list`)
-      return list.find((t) => t.type === 'page' && /index\.html/.test(t.url))
+      return list.find((t) => t.type === 'page' && /(index\.html|5173)/.test(t.url))
     }, 20_000, '主視窗')
     cdp = new Cdp(targets.webSocketDebuggerUrl)
     await cdp.connect()
+    // 視窗尺寸會影響版面與實體滑鼠座標，驗收前先固定成同一個視埠。
+    try {
+      await cdp.send('Emulation.setDeviceMetricsOverride', {
+        width: 1280, height: 860, deviceScaleFactor: 1, mobile: false
+      })
+      await sleep(500)
+    } catch {
+      // 沒有 Emulation domain 就照預設尺寸跑
+    }
     const mainTarget = await waitFor(async () => {
       try { return (await getJson('http://127.0.0.1:9282/json/list'))[0] } catch { return null }
     }, 10_000, '主程序 inspector')
@@ -521,6 +533,20 @@ async function main() {
         const row = document.querySelector('#exList [data-id="undo-me.txt"]')
         return row && row.offsetHeight > 4 ? { path: row.dataset.path } : null
       })()`), 15_000, '新檔案出現在畫面上').catch(() => null)
+      // 這條偶發會紅（fs.watch 在 Windows 上偶爾不送事件），紅的時候把現場印出來，
+      // 才分得出是監看沒跑還是畫面沒更新。
+      if (!shown) {
+        const diag = await cdp.eval(`(() => ({
+          crumb: (document.getElementById('exCrumbs') || {}).dataset?.path || '',
+          rows: [...document.querySelectorAll('#exList .ex-row')].map((r) => r.dataset.id),
+          search: (document.getElementById('exSearch') || {}).value,
+          empty: (document.getElementById('exEmpty') || {}).hidden,
+          home: (document.getElementById('exHome') || {}).hidden,
+          status: (document.getElementById('exStatusText') || {}).textContent
+        }))()`)
+        console.log('DIAG', JSON.stringify(diag))
+        console.log('DIAG seed', JSON.stringify(fs.readdirSync(SEED_DIR)))
+      }
       assert(!!shown, '種的檔案列得出來（資料夾監看有在跑）', JSON.stringify(shown))
 
       const target = await cdp.eval(`(() => {
@@ -822,23 +848,23 @@ async function main() {
     await cdp.eval(`document.getElementById('exViewListBtn').click()`)
     const pageUrl = await cdp.eval('location.href')
     await cdp.eval(`[...document.querySelectorAll('#exList .ex-row')].find(r => r.dataset.name === ${JSON.stringify(linkName)}).dispatchEvent(new MouseEvent('dblclick', {bubbles:true}))`)
-    await waitFor(() => cdp.eval(`document.querySelector('.ex-tab.is-active').dataset.path === ${JSON.stringify(path.join(SEED_DIR, 'sub'))}`), 10_000, '捷徑在目前分頁開啟')
-    assert(await cdp.eval(`document.querySelectorAll('.ex-tab').length === 1`), '開啟捷徑沿用目前分頁')
+    await waitFor(() => cdp.eval(`document.querySelector('#exTabStrip .ex-tab.is-active').dataset.path === ${JSON.stringify(path.join(SEED_DIR, 'sub'))}`), 10_000, '捷徑在目前分頁開啟')
+    assert(await cdp.eval(`document.querySelectorAll('#exTabStrip .ex-tab').length === 1`), '開啟捷徑沿用目前分頁')
     const point = await cdp.eval(`(() => { const r = document.getElementById('exList').getBoundingClientRect(); return {x:r.x+40,y:r.y+40} })()`)
     for (const button of ['back', 'forward', 'back']) {
       await cdp.send('Input.dispatchMouseEvent', { type:'mousePressed', button, buttons:button === 'back' ? 8 : 16, clickCount:1, ...point })
       await cdp.send('Input.dispatchMouseEvent', { type:'mouseReleased', button, buttons:0, clickCount:1, ...point })
       const dest = button === 'back' ? SEED_DIR : path.join(SEED_DIR, 'sub')
-      await waitFor(() => cdp.eval(`document.querySelector('.ex-tab.is-active').dataset.path === ${JSON.stringify(dest)}`), 10_000, `滑鼠側鍵 ${button}`)
+      await waitFor(() => cdp.eval(`document.querySelector('#exTabStrip .ex-tab.is-active').dataset.path === ${JSON.stringify(dest)}`), 10_000, `滑鼠側鍵 ${button}`)
       assert(await cdp.eval('location.href') === pageUrl, `側鍵 ${button} 只改資料夾，不離開 App`)
     }
 
     console.log('\n[G] 分頁與本機首頁')
-    const firstId = await cdp.eval(`document.querySelector('.ex-tab.is-active').dataset.id`)
+    const firstId = await cdp.eval(`document.querySelector('#exTabStrip .ex-tab.is-active').dataset.id`)
     await cdp.eval(`document.getElementById('exTabAddBtn').click()`)
-    await waitFor(() => cdp.eval(`document.querySelectorAll('.ex-tab').length === 2 && document.getElementById('exHome').offsetHeight > 0`), 10_000, '新增分頁開首頁')
+    await waitFor(() => cdp.eval(`document.querySelectorAll('#exTabStrip .ex-tab').length === 2 && document.getElementById('exHome').offsetHeight > 0`), 10_000, '新增分頁開首頁')
     const homeUi = await cdp.eval(`({
-      path: document.querySelector('.ex-tab.is-active').dataset.path,
+      path: document.querySelector('#exTabStrip .ex-tab.is-active').dataset.path,
       listHidden: document.getElementById('exList').offsetHeight === 0,
       createHidden: document.getElementById('exNewFileBtn').offsetHeight === 0,
       detailHidden: document.getElementById('exDetail').offsetHeight === 0,
@@ -850,15 +876,15 @@ async function main() {
     const info = await cdp.eval(`window.electronAPI.explorer.driveInfo()`)
     assert(info.ok && info.data.some(d => d.total > 0 && d.free >= 0 && d.free <= d.total), '真實磁碟容量讀取成功')
     await waitFor(() => cdp.eval(`!!document.querySelector('.ex-home-bar-fill')`), 12_000, '磁碟容量條')
-    const homeId = await cdp.eval(`document.querySelector('.ex-tab.is-active').dataset.id`)
+    const homeId = await cdp.eval(`document.querySelector('#exTabStrip .ex-tab.is-active').dataset.id`)
     await cdp.eval(`document.querySelector('.ex-home-card').dispatchEvent(new MouseEvent('auxclick', {button: 1, bubbles: true, cancelable: true}))`)
-    await waitFor(() => cdp.eval(`document.querySelectorAll('.ex-tab').length === 3 && document.querySelector('.ex-tab.is-active').dataset.path !== 'thispc'`), 10_000, '首頁中鍵另開資料夾')
-    await cdp.eval(`document.querySelector('.ex-tab.is-active .ex-tab-close').click()`)
-    await waitFor(() => cdp.eval(`document.querySelectorAll('.ex-tab').length === 2 && document.getElementById('exHome').offsetHeight > 0`), 10_000, '關閉回首頁')
+    await waitFor(() => cdp.eval(`document.querySelectorAll('#exTabStrip .ex-tab').length === 3 && document.querySelector('#exTabStrip .ex-tab.is-active').dataset.path !== 'thispc'`), 10_000, '首頁中鍵另開資料夾')
+    await cdp.eval(`document.querySelector('#exTabStrip .ex-tab.is-active .ex-tab-close').click()`)
+    await waitFor(() => cdp.eval(`document.querySelectorAll('#exTabStrip .ex-tab').length === 2 && document.getElementById('exHome').offsetHeight > 0`), 10_000, '關閉回首頁')
     await cdp.eval(`document.querySelector('[data-id="${firstId}"] .ex-tab-open').click()`)
     await waitFor(() => cdp.eval(`document.getElementById('exList').offsetHeight > 0 && !!document.querySelector('#exList [data-id="hello.txt"]')`), 10_000, '原分頁仍在原位置')
     await cdp.eval(`document.querySelector('#exList [data-id="sub"]').dispatchEvent(new MouseEvent('dblclick', {bubbles: true}))`)
-    await waitFor(() => cdp.eval(`document.querySelector('.ex-tab.is-active').dataset.path.endsWith('sub')`), 10_000, '原分頁進子資料夾')
+    await waitFor(() => cdp.eval(`document.querySelector('#exTabStrip .ex-tab.is-active').dataset.path.endsWith('sub')`), 10_000, '原分頁進子資料夾')
     await cdp.eval(`document.querySelector('[data-id="${homeId}"] .ex-tab-open').click()`)
     await waitFor(() => cdp.eval(`document.getElementById('exHome').offsetHeight > 0`), 10_000, '切首頁')
     assert(await cdp.eval(`document.getElementById('exBackBtn').disabled`), '新分頁沒有混入原分頁歷史')
@@ -887,13 +913,13 @@ async function main() {
     assert(!(await cdp.eval(cardExists)), '移除釘選後首頁當場跟著更新')
 
     await cdp.eval(`document.querySelector('[data-id="${firstId}"] .ex-tab-open').click()`)
-    await waitFor(() => cdp.eval(`document.querySelector('.ex-tab.is-active').dataset.path.endsWith('sub') && !document.getElementById('exBackBtn').disabled`), 10_000, '歷史保留')
+    await waitFor(() => cdp.eval(`document.querySelector('#exTabStrip .ex-tab.is-active').dataset.path.endsWith('sub') && !document.getElementById('exBackBtn').disabled`), 10_000, '歷史保留')
     await cdp.eval(`document.getElementById('exBackBtn').click()`)
     await waitFor(() => cdp.eval(`!!document.querySelector('#exList [data-id="hello.txt"]')`), 10_000, '獨立上一頁')
     assert(await cdp.eval(`!document.getElementById('exForwardBtn').disabled`), '上一頁／下一頁可用')
     await cdp.eval(`document.querySelector('[data-page="chat"]').click()`)
     await cdp.eval(`document.querySelector('[data-page="explorer"]').click()`)
-    await waitFor(() => cdp.eval(`document.querySelectorAll('.ex-tab').length === 2 && document.getElementById('exList').offsetHeight > 0`), 10_000, '切回檔案頁保留分頁')
+    await waitFor(() => cdp.eval(`document.querySelectorAll('#exTabStrip .ex-tab').length === 2 && document.getElementById('exList').offsetHeight > 0`), 10_000, '切回檔案頁保留分頁')
     assert(await cdp.eval(`!document.getElementById('exForwardBtn').disabled`), '切換 App 頁面保留瀏覽歷史')
     await cdp.eval(`document.querySelector('[data-id="${homeId}"] .ex-tab-open').click()`)
     await waitFor(() => cdp.eval(`document.getElementById('exHome').offsetHeight > 0`), 10_000, '截圖首頁')
@@ -908,9 +934,9 @@ async function main() {
       assert(await cdp.eval(`document.getElementById('page-explorer').scrollWidth <= document.getElementById('page-explorer').clientWidth + 1`), `${name} 無水平溢出`)
     }
     await cdp.eval(`document.dispatchEvent(new KeyboardEvent('keydown', {key: 't', ctrlKey: true, bubbles: true, cancelable: true}))`)
-    await waitFor(() => cdp.eval(`document.querySelectorAll('.ex-tab').length === 3`), 10_000, 'Ctrl+T')
+    await waitFor(() => cdp.eval(`document.querySelectorAll('#exTabStrip .ex-tab').length === 3`), 10_000, 'Ctrl+T')
     await cdp.eval(`document.dispatchEvent(new KeyboardEvent('keydown', {key: 'w', ctrlKey: true, bubbles: true, cancelable: true}))`)
-    await waitFor(() => cdp.eval(`document.querySelectorAll('.ex-tab').length === 2`), 10_000, 'Ctrl+W')
+    await waitFor(() => cdp.eval(`document.querySelectorAll('#exTabStrip .ex-tab').length === 2`), 10_000, 'Ctrl+W')
     assert(true, 'Ctrl+T／Ctrl+W 新增與關閉')
     const bootHome = await cdp.eval(`(async () => { await window.electronAPI.explorer.saveState({lastPath: ''}); return window.electronAPI.explorer.bootstrap() })()`)
     assert(bootHome.ok && bootHome.data.lastPath === 'thispc', '未存路徑時預設本機首頁')

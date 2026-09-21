@@ -12,11 +12,12 @@
  *   activeId: string,
  *   titleOf: (cwd: string) => string,
  *   onSelect: (id: string) => void,
- *   onClose: (id: string) => void
+ *   onClose: (id: string) => void,
+ *   controls?: string
  * }} spec
  */
 export function paintTabStrip(spec) {
-  const { host, tabs, activeId, titleOf, onSelect, onClose } = spec
+  const { host, tabs, activeId, titleOf, onSelect, onClose, controls = 'exContent' } = spec
   const hadFocus = host.contains(document.activeElement)
   host.replaceChildren()
   const closable = tabs.length > 1
@@ -34,7 +35,7 @@ export function paintTabStrip(spec) {
     open.className = 'ex-tab-open'
     open.setAttribute('role', 'tab')
     open.setAttribute('aria-selected', String(active))
-    open.setAttribute('aria-controls', 'exContent')
+    open.setAttribute('aria-controls', controls)
     open.tabIndex = active ? 0 : -1
     open.textContent = titleOf(tab.cwd)
     open.title = tab.cwd
