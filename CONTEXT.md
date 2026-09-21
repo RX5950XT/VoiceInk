@@ -67,6 +67,22 @@ AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定�
 - **已知偶發**：`e2e-explorer-cdp.js` 的 [C8]「資料夾監看有在跑」會紅，改動前後都一樣
   （`fs.watch` 在 Windows 上偶爾不送事件）；紅的時候腳本會把當下的清單與磁碟內容印出來。
 
+### 終端機：選取文字選不起來、PATH 被送兩份（2026-09-21）
+
+- **「選取文字自動複製壞掉」其實是選不起來**：Claude Code v2.1 起會送 `?1000h`＋`?1006h`
+  開滑鼠回報，xterm 一進滑鼠模式就把左鍵交給 CLI，自己不做選取——拖曳連反白都沒有。
+  新增 `src/renderer/scripts/term-mouse.js`：用 `parser.registerCsiHandler` 把
+  9／1000／1002／1003 吞掉（同一串裡的非滑鼠模式原樣寫回去），模式根本開不起來，
+  選取／右鍵貼上／滾輪捲 scrollback 全照原路走。取捨：CLI 收不到滑鼠，Claude Code 的
+  點選單要改用鍵盤——這是使用者選的。回歸 `probe-terminal-mouse.js`（含對照組）。
+- **`prependPath` 只改第一個 path 鍵還不夠**：從 Git Bash／MSYS 啟動 App 時 `process.env`
+  同時有 `PATH` 與 `Path`，而 node-pty 是照物件的鍵逐一拼環境區塊（`child_process` 會先
+  去重、它不會），兩份一起送進去子程序拿到哪份看運氣。改成先把同名鍵收成一個。
+  回歸 `probe-terminal-editor.js` 的 [F2]。
+- 順帶查清楚的：v1.24.1 那版把整條 PATH 蓋成 `<editor-bridge>;`，從那種終端機起的
+  Claude Code 會一直噴 `node: command not found`——**已跑著的工作階段不會自己好**，
+  v1.24.2 之後新開的終端機才是乾淨的。
+
 ### 檔案總管：方格檢視的縮放與大圖預覽（2026-09-21）
 
 - **方格檢視的檔名本來是直書的**：`.ex-row-name` 在清單檢視是「圖示 ＋ 檔名」橫向一列，

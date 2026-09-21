@@ -4,6 +4,7 @@ import { registerTermLinks } from './term-links.js'
 import { askConfirm } from './app-dialog.js'
 import { splitForPty } from './term-write-chunks.js'
 import { bindImeCaret, syncImeCaret } from './term-ime.js'
+import { blockMouseReporting } from './term-mouse.js'
 import { applyAppearance, normalizeAppearance, DEFAULT_TERM_BG_OPACITY } from './term-themes.js'
 import {
   initWsTabs, showSurface, trackTerminal, paintTerminalTab, currentProjectId
@@ -444,6 +445,9 @@ function createPane(id) {
   const unicode11 = new Unicode11Addon()
   term.loadAddon(unicode11)
   term.unicode.activeVersion = '11'
+  // CLI 想開滑鼠回報就擋掉：開起來的話左鍵拖曳會被送給 CLI，連反白都不會出現
+  // ——使用者說的「選取文字自動複製壞掉」就是這個（見 `term-mouse.js`）。
+  blockMouseReporting(term)
   term.open(pane)
   const webgl = attachRenderer(term)
   registerTermLinks(term, id)

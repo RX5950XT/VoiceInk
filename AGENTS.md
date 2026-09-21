@@ -348,6 +348,17 @@ tag 要與 `package.json` 的 version 一致。
   設了 vim 那類真編輯器才放行，這時 `raiseChildWindow` 才需要出手抬窗。
   回歸 `probe-terminal-editor.js` 的 [F][H]。
 - **終端機連結**：`provideLinks` 收到的是**整份緩衝區的 1-based 列號**（不是畫面上第幾列），回去的 range 也是同一套；折行的一列要先往回接成整條邏輯行再掃，CLI 自己印的換行（沒 `isWrapped`）若前一列以斜線結尾或剛好滿列也要接。range 的 x 是 **cell 欄位**不是字元位移——CJK／emoji 一格佔兩欄，用 `offset % cols` 會把底線畫到前後無關的字上；有 `getCell` 就逐格對。掃描不要把前後黏著的中文、括號、等號吃進候選。路徑候選一律先問 main 存不存在再畫底線（不驗＝畫面上每個含斜線的字都變假連結），相對路徑以**即時 cwd（OSC 7，沒有就退回開檔目錄）** 為基準。點網址開內建瀏覽器；點路徑用 App 開（專案內編輯器／檔案樹，否則檔案頁），不要 `shell.showItemInFolder`。
+- **CLI 開的滑鼠回報要在 parser 擋掉，不然「選取文字自動複製」整個失效**：xterm 一收到
+  `CSI ? 1000 h`（或 9／1002／1003）就把左鍵交給應用程式，自己不再做選取——拖曳連反白都
+  不會出現。使用者回報的是「自動複製壞了」，其實是**根本選不起來**，複製那段程式碼一個字
+  都沒動。Claude Code v2.1 起會送 `?1000h` ＋ `?1006h`，於是它的分頁整個工作階段都選不了字。
+  修法是 `term-mouse.js` 用 `parser.registerCsiHandler({ prefix: '?', final: 'h'／'l' })`
+  把那幾個模式吞掉（混在同一串裡的非滑鼠模式要原樣寫回去，不可以整串丟掉）。
+  **不要改去攔 DOM 滑鼠事件或偽造 `shiftKey`**：xterm 的 Shift＋點擊是「延伸選取」，偽造
+  會連帶改掉那個語意；擋在 parser 則是模式根本沒開，選取／右鍵貼上／滾輪捲 scrollback 全部
+  照原本的路走。代價是 CLI 收不到滑鼠（Claude Code 的點選單要改用鍵盤），這是刻意的取捨。
+  回歸 `probe-terminal-mouse.js`——**一定要有沒掛的對照組**，不然「永遠是 none」是恆真；
+  拖曳本身不要模擬，離屏視窗沒畫過字，xterm 量不到字元尺寸，`getCoords()` 一律回 undefined。
 - **xterm 自己不碰剪貼簿，Ctrl+V 要我們自己接**：不接的話那顆鍵只會變成 `^V`（`\x16`）送進
   PTY，Claude Code 那類 CLI 不認，畫面上**什麼都不會發生**；語音輸入走的正是「寫剪貼簿 ＋
   模擬 Ctrl+V」，所以症狀是「文字在別的 App 都貼得進去，只有這個終端機貼不進來」。接在
@@ -574,7 +585,7 @@ tag 要與 `package.json` 的 version 一致。
 | 開發沙箱 | `probe-dev-sandbox.js`（**實測**沙箱讀得到你的模型與供應商，而你正在用的那份一個位元組都沒動；動 `dev-sandbox.js` 前後都要跑）|
 | 檔案總管 | `test-explorer.js`（路徑守衛＋自種暫存目錄）＋ `e2e-explorer-cdp.js`（暫存 user-data-dir，**不點第一列**）＋ `probe-explorer-uffs.js`（機器上真有 `uffs` 才打真搜尋）＋ `e2e-explorer-drag.js`（拖出去交給 OS 的內容，假 sender）＋ `test-explorer-shell.js`（殼層選單去重／sidecar 協定）＋ `probe-explorer-shell.js`（真 IContextMenu：7-Zip／WinRAR／傳送到、Drive 綠勾） |
 | 專案工作區 | `test-workspace.js`／`-nav`／`-ui`／`-state`／`-perf` ＋ `e2e-workspace-cdp.js`（暫存 user-data-dir ＋自種專案）；動 Monaco 前後跑 `probe-workspace-monaco.js`，動 PDF 前跑 `probe-workspace-pdf.js`；動編輯器／diff／預覽／專案切換前後跑 `probe-workspace-perf.js`（**打包版**開 1.4MB／4 萬行的檔，數 `createModel` 有沒有重做、量輸入法游標位置、驗專案隔離）；動大檔開關與記憶體前後跑 `probe-workspace-bigfile.js`（**打包版**量 1.4MB／4 萬行的開檔毫秒數、並排變更毫秒數，以及關掉之後堆積回不回得去、預覽的 iframe 有沒有被收掉） |
-| 終端機 | `test-terminal.js` ＋ `test-terminal-ui.js`（輸出合併、輸入法對位）＋ `probe-terminal-flicker.js`（**會叫到最前面**：DOM vs WebGL 量游標重建與 textarea 抖動）＋ `probe-terminal-upgrade.js`（**打包版**驗 WebGL／Unicode 11／字級／搜尋／分割／OSC 標題與 cwd）＋ `probe-terminal-ime.js`（**打包版**真的走一次 Chromium 輸入法組字）＋ `e2e-terminal.js`（真 ConPTY）＋ `e2e-terminal-cdp.js` ＋ `test-terminal-host.js`（獨立宿主）＋ `test-terminal-links.js` ＋ `probe-terminal-links.js`（真 xterm 座標，`npx electron`） ＋ `probe-terminal-editor.js`（Ctrl+G 的 $EDITOR 橋接：真的把那支 batch 跑起來，量它會不會卡住、送出與取消放不放得走） ＋ `probe-terminal-host-version.js`（唯讀：問這台機器上真的跑著的宿主是哪一份執行環境、還活著幾個 shell——「更新了卻沒生效」先跑這支）；動宿主或 `build.files`／`asarUnpack` 前後跑 `probe-terminal-restart.js`（**打包版**真的關 App、覆寫安裝檔再開回來）；管理員 `probe-terminal-admin.js`（免 UAC）／`probe-terminal-admin-elevate.js`（**跳一次 UAC**）；動 `foreground.js` 前後跑 `probe-terminal-foreground.js`（**會開／關記事本**，重現「記事本已經開著」再開第二次）；動配色或桌布前後跑 `probe-terminal-background.js`（**打包版**量桌布那一層畫不畫得出來、字有沒有被 opacity 一起壓掉、拿掉圖之後底色回不回得到不透明）|
+| 終端機 | `test-terminal.js` ＋ `test-terminal-ui.js`（輸出合併、輸入法對位）＋ `probe-terminal-flicker.js`（**會叫到最前面**：DOM vs WebGL 量游標重建與 textarea 抖動）＋ `probe-terminal-upgrade.js`（**打包版**驗 WebGL／Unicode 11／字級／搜尋／分割／OSC 標題與 cwd）＋ `probe-terminal-ime.js`（**打包版**真的走一次 Chromium 輸入法組字）＋ `e2e-terminal.js`（真 ConPTY）＋ `e2e-terminal-cdp.js` ＋ `test-terminal-host.js`（獨立宿主）＋ `test-terminal-links.js` ＋ `probe-terminal-links.js`（真 xterm 座標，`npx electron`） ＋ `probe-terminal-editor.js`（Ctrl+G 的 $EDITOR 橋接：真的把那支 batch 跑起來，量它會不會卡住、送出與取消放不放得走）＋ `probe-terminal-mouse.js`（`npx electron`：CLI 開的滑鼠回報有沒有被擋掉，含沒掛的對照組） ＋ `probe-terminal-host-version.js`（唯讀：問這台機器上真的跑著的宿主是哪一份執行環境、還活著幾個 shell——「更新了卻沒生效」先跑這支）；動宿主或 `build.files`／`asarUnpack` 前後跑 `probe-terminal-restart.js`（**打包版**真的關 App、覆寫安裝檔再開回來）；管理員 `probe-terminal-admin.js`（免 UAC）／`probe-terminal-admin-elevate.js`（**跳一次 UAC**）；動 `foreground.js` 前後跑 `probe-terminal-foreground.js`（**會開／關記事本**，重現「記事本已經開著」再開第二次）；動配色或桌布前後跑 `probe-terminal-background.js`（**打包版**量桌布那一層畫不畫得出來、字有沒有被 opacity 一起壓掉、拿掉圖之後底色回不回得到不透明）|
 | 聊天／Markdown | `e2e-chat.js`（mock SSE）＋ `e2e-chat-cdp.js` ＋ `test-markdown.js` |
 | HF模型 | `test-hfmodels.js` ＋ `probe-hf-router.js`（動 runtime 前跑）／`probe-hf-hub.js`／`probe-hf-detail.js`（打真 HF）＋ `e2e-hfmodels.js` ＋ `e2e-hf-cdp.js` |
 | CC代理／閘道 | `test-ccswitch.js` ＋ `e2e-ccswitch-cdp.js`；端點 `probe-ccswitch-endpoints.js`／模型 `probe-ccswitch-models.js`／Codex 參數 `probe-ccswitch-codex.js`；閘道 `test-ccswitch-gateway.js` ＋ `e2e-ccswitch-gateway.js` |
