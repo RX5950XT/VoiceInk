@@ -451,5 +451,34 @@ Review：
 驗收：`node scripts/e2e-explorer-dual-cdp.js` 15 條全綠（跑原始碼時先起 vite，
 再用 `VOICEINK_EXE=node_modules/electron/dist/electron.exe`）。
 
-未做：右欄沒有自己的分頁、麵包屑、圖示檢視與整機搜尋；右欄拖放只認整欄的目前
-資料夾，不認拖到某個資料夾列上面。
+### 後續：把上面「未做」的那五件補完（同日）
+
+- **右欄分頁**：`secondTabs`／`secondActiveId`，每頁自己的路徑、歷史、選取、捲動、排序、
+  檢視、搜尋；整組再按左欄分頁存進 `paneStates`。中鍵點資料夾＝開右欄新分頁。
+- **麵包屑**：`#exSecondCrumbs`（帶 `data-path` 給測試看）＋點一下變路徑輸入框，
+  取代原本用對話框問路徑的作法。
+- **圖示檢視**：右欄自己的 `view`／`tile`，☰▦ 兩顆鈕＋Ctrl+滾輪，跟左欄共用
+  `explorer-zoom.js` 的級距；列也改成跟殼層要真圖示，不再只有 emoji。
+- **整機搜尋**：右欄搜尋框加「範圍」鈕，切到整機就走 UFFS（跟左欄共用篩選條件），
+  結果畫在右欄、顯示完整路徑。
+- **拖到資料夾列**：右欄的資料夾列各自是放置目標，停 0.7 秒會自己進去。
+
+過程中順手修掉：換資料夾沒把右欄捲動位置歸零，虛擬清單會停在上一個資料夾的位置、
+畫出一整片空白。
+
+地雷：
+1. 排序的原生 `select` 會被 `custom-select.js` 換成自訂下拉，`.ex-second-sort` 的寬度管不到，
+   要改 `.custom-select[data-select-id="exSecondSort"] .custom-select-trigger`——
+   不改的話它吃 `min-width: 180px`，右欄標頭會胖到 200px 高。
+2. 多一條右欄分頁列之後，測試裡的 `.ex-tab` 會同時選到兩邊，左欄的斷言要寫成
+   `#exTabStrip .ex-tab`。
+3. 三支 explorer e2e 現在都能跑原始碼（`VOICEINK_EXE` 指到 `electron.exe` ＋先起 vite），
+   並在連上 CDP 後把視埠固定成 1280×860；不固定的話詳情欄會被 900px 的 media query
+   整個收掉，用實體滑鼠座標的測試也會失準。
+
+驗收：`e2e-explorer-dual-cdp.js` 25 條、`e2e-explorer-files-plan-cdp.js` 53 條、
+`e2e-explorer-cdp.js` 102 條全綠。`e2e-explorer-cdp.js` 的 [C8] 資料夾監看偶發時序失敗，
+同一份程式碼重跑就過，不是這次改動造成的。
+
+未做：右欄沒有自己的指令列（沿用上方那排跟著作用欄走的指令列）；右欄的整機搜尋沒有
+自己的篩選面板，共用左欄那一組條件。

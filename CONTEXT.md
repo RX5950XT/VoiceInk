@@ -27,7 +27,19 @@ AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定�
   所以 `copyBetweenPanes()` 的來源必須指名左欄／右欄，不能用 `selectedEntries()`。
 - **坑**：大資料夾分頁載入後 `secondPane.entries` 是稀疏陣列，未載入的頁是洞。
   `filter`／`map` 會跳洞，`find` 不會——掃它之前一定要先 `.filter(Boolean)`。
-- 測試：`e2e-explorer-dual-cdp.js`（15 條，含單欄回歸與跨欄鈕的來源）。
+- 右欄有自己的分頁（`secondTabs`／`secondActiveId`），每一頁記自己的路徑、歷史、選取、
+  捲動、排序、檢視與搜尋。整組分頁再按「左欄分頁」存進 `paneStates`，所以左欄換分頁時
+  右欄跟著換成那一頁配的右欄分頁組。
+- 右欄的麵包屑、圖示檢視（Ctrl+滾輪同一組級距）、整機搜尋（跟左欄共用 UFFS 與篩選條件，
+  結果畫在右欄）都直接重用左欄那幾個純函式，不另外寫一套。
+- 右欄標頭固定兩列（導覽＋麵包屑／搜尋＋檢視），窄到 220px 時只有工具那一列會再換行。
+  排序的原生 `select` 會被 `custom-select.js` 換成自訂下拉，寬度要對著
+  `.custom-select[data-select-id="exSecondSort"] .custom-select-trigger` 調，
+  不然它吃 `min-width: 180px`，標頭會胖到 200px 高。
+- 測試：`e2e-explorer-dual-cdp.js`（25 條，含單欄回歸與跨欄鈕的來源）。
+  三支 explorer e2e 都可以用 `VOICEINK_EXE=node_modules/electron/dist/electron.exe`
+  跑原始碼（要先起 vite），並在連上 CDP 後把視埠固定成 1280×860——不固定的話視窗寬度
+  會飄，詳情欄在 900px 以下整個收掉，實體滑鼠座標的測試也會跟著失準。
 
 ### 檔案總管：方格檢視的縮放與大圖預覽（2026-09-21）
 

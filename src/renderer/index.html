@@ -723,26 +723,44 @@
                   <p id="exEmpty" class="ex-empty" hidden>這個資料夾是空的</p>
                 </div>
                 <section class="ex-main ex-second-pane" id="exSecondPane" role="region" aria-label="右側檔案欄" hidden>
+                  <div class="ex-tabs ex-second-tabs">
+                    <div class="ex-tab-strip" id="exSecondTabStrip" role="tablist" aria-label="右欄分頁"></div>
+                    <button type="button" id="exSecondTabAddBtn" class="btn-icon ex-tab-add"
+                            title="新增右欄分頁" aria-label="新增右欄分頁">＋</button>
+                  </div>
                   <header class="ex-second-head">
-                    <div class="ex-second-nav">
-                      <button type="button" id="exSecondBack" class="btn-icon" title="上一頁" aria-label="右欄上一頁" disabled>←</button>
-                      <button type="button" id="exSecondForward" class="btn-icon" title="下一頁" aria-label="右欄下一頁" disabled>→</button>
-                      <button type="button" id="exSecondUp" class="btn-icon" title="上一層" aria-label="右欄上一層">↑</button>
+                    <div class="ex-second-row">
+                      <div class="ex-second-nav">
+                        <button type="button" id="exSecondBack" class="btn-icon" title="上一頁" aria-label="右欄上一頁" disabled>←</button>
+                        <button type="button" id="exSecondForward" class="btn-icon" title="下一頁" aria-label="右欄下一頁" disabled>→</button>
+                        <button type="button" id="exSecondUp" class="btn-icon" title="上一層" aria-label="右欄上一層">↑</button>
+                      </div>
+                      <div class="ex-pathbar ex-second-pathbar" id="exSecondPathBar" title="點一下可輸入路徑">
+                        <nav id="exSecondCrumbs" class="ex-crumbs" aria-label="右欄目前路徑"></nav>
+                        <input type="text" id="exSecondPathInput" class="ex-path-input" hidden
+                               spellcheck="false" autocomplete="off" aria-label="右欄路徑">
+                      </div>
                     </div>
-                    <button type="button" id="exSecondPath" class="ex-second-path" title="右欄路徑"></button>
-                    <input type="search" id="exSecondSearch" class="input" placeholder="篩選目前資料夾…" aria-label="右欄篩選" autocomplete="off">
-                    <select id="exSecondSort" class="select ex-second-sort" aria-label="右欄排序">
-                      <option value="name">名稱</option>
-                      <option value="date">修改時間</option>
-                      <option value="size">大小</option>
-                    </select>
-                    <button type="button" id="exSecondSortDir" class="btn-icon" title="右欄排序方向" aria-label="右欄排序方向">↑</button>
+                    <div class="ex-second-row ex-second-tools">
+                      <input type="search" id="exSecondSearch" class="input" placeholder="篩選目前資料夾…" aria-label="右欄搜尋" autocomplete="off">
+                      <span id="exSecondSearchHint" class="ex-search-hint" role="status"></span>
+                      <button type="button" id="exSecondScopeBtn" class="btn-icon ex-second-scope"
+                              aria-pressed="false" title="只篩這個資料夾" aria-label="搜尋範圍：只篩這個資料夾">📁</button>
+                      <select id="exSecondSort" class="select ex-second-sort" aria-label="右欄排序">
+                        <option value="name">名稱</option>
+                        <option value="date">修改時間</option>
+                        <option value="size">大小</option>
+                      </select>
+                      <button type="button" id="exSecondSortDir" class="btn-icon" title="右欄排序方向" aria-label="右欄排序方向">↑</button>
+                      <button type="button" id="exSecondViewListBtn" class="btn-icon" title="清單" aria-label="右欄清單檢視" aria-pressed="true">☰</button>
+                      <button type="button" id="exSecondViewGridBtn" class="btn-icon" title="圖示" aria-label="右欄圖示檢視" aria-pressed="false">▦</button>
+                    </div>
                   </header>
                   <div class="ex-second-actions" role="toolbar" aria-label="右欄操作">
-                    <button type="button" id="exCopyToSecond" class="btn btn-secondary btn-sm">複製到右欄</button>
-                    <button type="button" id="exMoveToSecond" class="btn btn-secondary btn-sm">搬到右欄</button>
-                    <button type="button" id="exCopyFromSecond" class="btn btn-secondary btn-sm">複製到左欄</button>
-                    <button type="button" id="exMoveFromSecond" class="btn btn-secondary btn-sm">搬到左欄</button>
+                    <button type="button" id="exCopyToSecond" class="btn btn-secondary btn-sm" title="複製到右欄" aria-label="複製到右欄">複製 →</button>
+                    <button type="button" id="exMoveToSecond" class="btn btn-secondary btn-sm" title="搬到右欄" aria-label="搬到右欄">搬移 →</button>
+                    <button type="button" id="exCopyFromSecond" class="btn btn-secondary btn-sm" title="複製到左欄" aria-label="複製到左欄">← 複製</button>
+                    <button type="button" id="exMoveFromSecond" class="btn btn-secondary btn-sm" title="搬到左欄" aria-label="搬到左欄">← 搬移</button>
                   </div>
                   <div id="exSecondList" class="ex-list ex-second-list" role="listbox" aria-label="右欄檔案清單" tabindex="0"></div>
                   <p id="exSecondEmpty" class="ex-empty" hidden>這個資料夾是空的</p>
