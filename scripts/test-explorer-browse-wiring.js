@@ -44,6 +44,8 @@ has(page, /syncTab\([\s\S]{0,600}selected/, '分頁狀態保存選取')
 has(page, /scrollTop/, '分頁狀態保存捲動')
 has(page, /searchFilters|fromMs|toMs/, '分頁狀態保存搜尋篩選')
 has(page, /navSeq/, '導航有 sequence guard')
+// 切資料夾還在飛的時候 cwd 還是舊的，監看事件拿舊 cwd 重讀會把切換蓋回去
+has(page, /navTarget/, '監看事件比的是要去的資料夾，不是舊 cwd')
 has(page, /searchSeq/, '搜尋有 sequence guard')
 
 // 雙欄不可共用一個永久 secondPane；必須依 tab/panel id 保存與還原。

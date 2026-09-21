@@ -9,6 +9,7 @@ const { tempDir, removeTree } = require('./lib/test-temp')
 
 const files = require('../src/main/explorer/fs')
 const operations = require('../src/main/explorer/operations')
+const recycle = require('../src/main/explorer/recycle')
 
 function digest(file) {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')
@@ -52,6 +53,22 @@ async function main() {
     })
     assert.equal(kept.items[0].status, 'completed')
     assert.equal(path.basename(kept.items[0].destination), 'large (2).bin')
+
+    // 同名時覆蓋：舊的那份先進回收筒（救得回來），新的放回原本的名字
+    const overwriteTarget = path.join(destinationDir, 'large.bin')
+    fs.writeFileSync(overwriteTarget, Buffer.alloc(16, 0x11))
+    const overwritten = await operations.run({
+      mode: 'copy',
+      destination: destinationDir,
+      sources: [source],
+      collision: 'overwrite'
+    })
+    assert.equal(overwritten.items[0].status, 'completed')
+    assert.equal(overwritten.items[0].destination, overwriteTarget)
+    assert.equal(digest(overwriteTarget), sourceHash, '覆蓋後留下的是新的那份')
+    const binned = (await recycle.list()).entries.filter((entry) => entry.originalPath === overwriteTarget)
+    assert.ok(binned.length >= 1, '被覆蓋掉的舊檔進了回收筒')
+    for (const entry of binned) await recycle.purge(entry.recycleKey)
 
     const cancelController = new AbortController()
     let cancelAtProgress = false

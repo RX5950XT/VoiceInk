@@ -6,6 +6,8 @@ const paths = require('./paths')
 const recycle = require('./recycle')
 
 let emit = () => {}
+/** 同名時：保留兩份／略過／覆蓋（覆蓋是把舊的丟進回收筒，不是真的刪掉） */
+const COLLISIONS = new Set(['rename', 'skip', 'overwrite'])
 let collisionPolicy = 'rename'
 let sequence = 0
 const active = new Map()
@@ -17,7 +19,8 @@ function configure(options) {
 }
 
 function setCollisionPolicy(raw) {
-  collisionPolicy = raw && raw.collision === 'skip' ? 'skip' : 'rename'
+  const wanted = raw && typeof raw.collision === 'string' ? raw.collision : ''
+  collisionPolicy = COLLISIONS.has(wanted) ? wanted : 'rename'
   return { collision: collisionPolicy }
 }
 
@@ -168,7 +171,7 @@ async function run(rawSpec) {
     id: operationId(),
     type: spec.type || 'file-operation',
     mode: spec.mode,
-    collision: spec.collision === 'skip' ? 'skip' : collisionPolicy,
+    collision: COLLISIONS.has(spec.collision) ? spec.collision : collisionPolicy,
     destination: spec.destination || '',
     items: makeItems(spec),
     status: 'running',

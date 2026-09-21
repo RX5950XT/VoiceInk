@@ -1,61 +1,52 @@
+/* 狀態列裡的一顆鈕（「搜尋就緒」左邊），面板往上開 */
 .ex-ops-host {
-  position: fixed;
-  right: 18px;
-  bottom: 18px;
-  z-index: 70;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 8px;
-  pointer-events: none;
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
   font-size: 12px;
-}
-
-.ex-ops-toggle,
-.ex-ops-panel {
-  pointer-events: auto;
 }
 
 .ex-ops-toggle {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 32px;
-  padding: 6px 10px;
-  border: 1px solid var(--glass-border-strong);
+  min-height: 22px;
+  padding: 2px 10px;
+  border: 1px solid var(--border-color);
   border-radius: var(--radius-pill);
-  background: var(--surface-glass-strong);
-  color: var(--text-primary);
+  background: transparent;
+  color: var(--text-secondary);
   font: inherit;
-  box-shadow: var(--shadow-sm);
   cursor: pointer;
 }
 
 .ex-ops-toggle:hover,
 .ex-ops-toggle:focus-visible {
   border-color: var(--accent-primary);
-  background: var(--surface-hover);
+  color: var(--text-primary);
 }
 
-.ex-ops-badge {
-  min-width: 17px;
-  height: 17px;
-  padding: 0 4px;
-  border-radius: var(--radius-pill);
-  background: var(--accent-primary);
-  color: var(--select-option-selected-text);
-  font-size: 11px;
-  line-height: 17px;
-  text-align: center;
+.ex-ops-toggle.is-running {
+  border-color: var(--accent-primary);
+  color: var(--text-primary);
+}
+
+.ex-ops-toggle.is-failed {
+  border-color: var(--danger);
+  color: var(--danger);
 }
 
 .ex-ops-panel[hidden] { display: none; }
 
 .ex-ops-panel {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 70;
   display: flex;
   flex-direction: column;
   width: min(380px, calc(100vw - 36px));
-  max-height: min(620px, calc(100vh - 96px));
+  max-height: min(620px, calc(100vh - 140px));
   overflow: hidden;
   border: 1px solid var(--glass-border-strong);
   border-radius: var(--radius-md);
@@ -157,7 +148,6 @@
 .ex-ops-actions { justify-content: flex-end; margin-top: 9px; }
 
 @media (max-width: 640px) {
-  .ex-ops-host { right: 10px; bottom: 10px; }
   .ex-ops-panel { width: calc(100vw - 20px); }
 }
 

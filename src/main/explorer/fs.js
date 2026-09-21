@@ -248,6 +248,32 @@ function uniqueDest(dir, basename) {
   return path.join(dir, name)
 }
 
+/**
+ * 目的地已經有同名的東西時怎麼辦。`skip` 略過，`overwrite` 先把舊的丟進回收筒再放新的
+ * （丟不進去才真的刪——NAS／非 NTFS 沒有回收筒），其餘一律保留兩份（`name (2).ext`）。
+ * 複製到同一個資料夾時「覆蓋」等於把來源自己刪掉，所以退回保留兩份。
+ * @param {string} dir
+ * @param {string} from
+ * @param {string} next
+ * @param {{ collision?: string } | null} options
+ * @returns {Promise<{ skipped: true } | { dest: string }>}
+ */
+async function resolveCollision(dir, from, next, options) {
+  if (!fs.existsSync(next)) return { dest: next }
+  const mode = options && options.collision
+  if (mode === 'skip') return { skipped: true }
+  if (mode === 'overwrite' && next.toLowerCase() !== String(from).toLowerCase()) {
+    paths.assertMutable(next)
+    try {
+      await recycle.trash(next)
+    } catch {
+      await paths.removeLinkOrTree(next)
+    }
+    return { dest: next }
+  }
+  return { dest: uniqueDest(dir, path.basename(from)) }
+}
+
 function cancelledError() {
   return paths.fail('CANCELLED', '操作已取消')
 }
@@ -767,10 +793,9 @@ async function moveEntry(fromPath, toDir, rawOptions) {
     let next = path.join(dir, path.basename(from))
     paths.resolveAbs(next)
     if (next.toLowerCase() === from.toLowerCase()) return { path: from }
-    if (fs.existsSync(next)) {
-      if (options && options.collision === 'skip') return { path: next, skipped: true }
-      next = uniqueDest(dir, path.basename(from))
-    }
+    const decided = await resolveCollision(dir, from, next, options)
+    if (decided.skipped) return { path: next, skipped: true }
+    next = decided.dest
     if (options && (options.onProgress || options.onTotal)) {
       const measured = await measureTree(from, options.signal)
       if (options.onTotal) options.onTotal(measured.complete ? measured.bytes : null)
@@ -832,10 +857,9 @@ async function copyEntry(fromPath, toDir, rawOptions) {
   return queueWrite(dir, async () => {
     let next = path.join(dir, path.basename(from))
     paths.resolveAbs(next)
-    if (fs.existsSync(next)) {
-      if (options && options.collision === 'skip') return { path: next, skipped: true }
-      next = uniqueDest(dir, path.basename(from))
-    }
+    const decided = await resolveCollision(dir, from, next, options)
+    if (decided.skipped) return { path: next, skipped: true }
+    next = decided.dest
     if (options && (options.onProgress || options.onTotal)) {
       const copied = await copyTreeWithProgress(from, next, options)
       invalidateListCache(dir)
