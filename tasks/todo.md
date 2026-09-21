@@ -421,3 +421,35 @@ Review：
   `test-explorer-operations.js` 與 `probe-explorer-operations-cross-volume.js` 保證
   （同一顆磁碟的搬移是 rename，一瞬間結束，按不到取消）。
 - 影音預覽只驗元素掛得起來與關閉後收乾淨，沒驗播放。
+
+---
+
+## 檔案總管：雙欄「根本沒法用」（2026-09-21）
+
+實測證實右欄只是一份唯讀清單：右鍵選單、鍵盤、拖放全部沒綁；上面那排指令列、
+狀態列、詳情欄、貼上、新增資料夾、側邊欄的位置／磁碟導覽，一律只對左欄生效。
+右欄能做的只有四顆跨欄搬移鈕。
+
+修法是引入**作用欄**（`activePane`）：點過哪一欄，既有那一整套就對那一欄生效，
+不另外複製一份右欄專用的流程。
+
+- 右欄補上右鍵選單、方向鍵／Enter／Backspace／Delete／F2、可拖出去、可拖進來。
+- `selectedEntries()`／`paintStatus()`／`paintCmdBar()`／`pasteHere()`／`newFolder()`／
+  `newFile()`／`openContextMenu()` 改吃作用欄的 cwd 與選取。
+- `refreshAfterMutate()` 雙欄時兩邊都重讀。
+- 作用欄加外框，看得出指令列現在在操作誰。
+
+順手修掉兩個既有 bug：
+1. `onSecondDoubleClick` 用 `.find()` 掃稀疏陣列——大資料夾未載入的頁是洞，
+   `find` 不跳洞，雙擊會 TypeError。改成先 `.filter(Boolean)`。
+2. `paintSecondPane()` 每次重畫都把「不在已載入列裡」的選取砍掉——大資料夾捲一下
+   選取就沒了（左欄沒這個動作）。整段拿掉，裁切交給 `loadSecond`。
+
+地雷：四顆跨欄鈕長在右欄裡，按下去 mousedown 會先把作用欄切成右欄，所以
+`copyBetweenPanes` 的來源不能用 `selectedEntries()`，要指名左欄／右欄。
+
+驗收：`node scripts/e2e-explorer-dual-cdp.js` 15 條全綠（跑原始碼時先起 vite，
+再用 `VOICEINK_EXE=node_modules/electron/dist/electron.exe`）。
+
+未做：右欄沒有自己的分頁、麵包屑、圖示檢視與整機搜尋；右欄拖放只認整欄的目前
+資料夾，不認拖到某個資料夾列上面。

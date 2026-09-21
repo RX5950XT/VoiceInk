@@ -232,6 +232,11 @@ const secondPane = {
   seq: 0
 }
 let dualPane = false
+/**
+ * 作用欄：點過哪一欄，指令列／右鍵選單／詳情／貼上／新增／側欄導覽就對那一欄生效。
+ * 沒有這個概念的話右欄只是一份唯讀清單，上面那排按鈕永遠在操作左欄。
+ */
+let activePane = 'left'
 let virtualPaintTimer = 0
 let secondVirtualTimer = 0
 const paneStates = new Map()
@@ -286,6 +291,39 @@ function listed() {
   return inSearch() ? hits : entries
 }
 
+/** 右欄是不是作用中。單欄時永遠是左欄。 */
+function rightActive() {
+  return dualPane && activePane === 'right'
+}
+
+function activeCwd() {
+  return rightActive() ? secondPane.cwd : cwd
+}
+
+function activeInHome() {
+  return pathKey(activeCwd()) === THIS_PC
+}
+
+/** 右欄到不了資源回收筒，所以只有左欄要判斷。 */
+function activeInRecycle() {
+  return !rightActive() && inRecycle()
+}
+
+function setActivePane(which) {
+  const next = which === 'right' && dualPane ? 'right' : 'left'
+  if (next === activePane) return
+  activePane = next
+  paintActivePane()
+  paintStatus()
+  paintCmdBar()
+  void paintDetail()
+}
+
+function paintActivePane() {
+  $('exContent')?.classList.toggle('is-active-pane', dualPane && activePane === 'left')
+  $('exSecondPane')?.classList.toggle('is-active-pane', rightActive())
+}
+
 function bindOnce() {
   if (started) return
   started = true
@@ -302,6 +340,8 @@ function bindOnce() {
   $('exDualBtn')?.addEventListener('click', () => void toggleDualPane())
   $('exDetailToggleBtn')?.addEventListener('click', toggleDetailPane)
   $('exListHead')?.addEventListener('click', onSortClick)
+  $('exList')?.addEventListener('mousedown', () => setActivePane('left'), true)
+  $('exSecondPane')?.addEventListener('mousedown', () => setActivePane('right'), true)
   $('exList')?.addEventListener('mousedown', onListMouseDown)
   $('exList')?.addEventListener('click', onListClick)
   $('exList')?.addEventListener('contextmenu', onListContext)
@@ -352,6 +392,12 @@ function bindOnce() {
   }, { passive: true })
   $('exSecondList')?.addEventListener('click', onSecondListClick)
   $('exSecondList')?.addEventListener('dblclick', (e) => void onSecondDoubleClick(e))
+  $('exSecondList')?.addEventListener('contextmenu', onSecondContext)
+  $('exSecondList')?.addEventListener('keydown', onSecondKey)
+  const secondList = $('exSecondList')
+  if (secondList) {
+    bindDropTarget(secondList, () => secondPane.cwd, (event, dest) => void handleDrop(event, dest))
+  }
   $('exCopyToSecond')?.addEventListener('click', () => void copyBetweenPanes('left-to-right', 'copy'))
   $('exMoveToSecond')?.addEventListener('click', () => void copyBetweenPanes('left-to-right', 'move'))
   $('exCopyFromSecond')?.addEventListener('click', () => void copyBetweenPanes('right-to-left', 'copy'))
@@ -637,7 +683,9 @@ function paintSideList(host, items) {
     })
     btn.addEventListener('click', (e) => {
       if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) return
-      void (e.ctrlKey ? newTab(item.path) : navigate(item.path))
+      if (e.ctrlKey) void newTab(item.path)
+      else if (rightActive()) void secondNavigate(item.path)
+      else void navigate(item.path)
     })
     btn.addEventListener('contextmenu', (e) => {
       e.preventDefault()
@@ -865,8 +913,6 @@ function paintSecondPane() {
     empty.hidden = rows.length > 0
     empty.textContent = secondPane.search ? '沒有符合的檔案' : '這個資料夾是空的'
   }
-  const selectedIds = new Set([...secondPane.selected])
-  secondPane.selected = new Set(rows.map((item) => item.path).filter((id) => selectedIds.has(id)))
   for (const row of list.querySelectorAll('.ex-row')) {
     row.classList.toggle('is-selected', secondPane.selected.has(row.dataset.path))
   }
@@ -910,7 +956,82 @@ function secondRowEl(entry) {
   mtime.className = 'ex-row-mtime'
   mtime.textContent = formatTime(entry.mtimeMs)
   row.append(name, size, mtime)
+  row.draggable = true
+  row.addEventListener('dragstart', (e) => onSecondDragStart(e, entry))
   return row
+}
+
+/** 右欄拖出去走跟左欄一樣的原生拖放，才拖得進別的程式。 */
+function onSecondDragStart(e, entry) {
+  setActivePane('right')
+  if (!secondPane.selected.has(entry.path)) {
+    secondPane.selected = new Set([entry.path])
+    secondPane.anchor = entry.path
+    paintSecondPane()
+  }
+  const items = [...secondPane.selected].filter(Boolean)
+  if (!items.length) return
+  e.preventDefault()
+  void electronAPI.explorer.startDrag(items)
+}
+
+function onSecondContext(e) {
+  setActivePane('right')
+  const row = e.target.closest('.ex-row')
+  if (row && row.dataset.path && !secondPane.selected.has(row.dataset.path)) {
+    secondPane.selected = new Set([row.dataset.path])
+    secondPane.anchor = row.dataset.path
+    paintSecondPane()
+  }
+  if (!row) {
+    secondPane.selected = new Set()
+    paintSecondPane()
+  }
+  e.preventDefault()
+  openContextMenu(e, selectedEntries(), secondPane.cwd)
+}
+
+function onSecondKey(e) {
+  if (e.ctrlKey || e.altKey || e.metaKey) return
+  const rows = secondRows().filter(Boolean)
+  const index = rows.findIndex((item) => secondPane.selected.has(item.path))
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault()
+    const next = rows[Math.max(0, Math.min(rows.length - 1, index + (e.key === 'ArrowDown' ? 1 : -1)))]
+    if (!next) return
+    secondPane.selected = new Set([next.path])
+    secondPane.anchor = next.path
+    paintSecondPane()
+    paintStatus()
+    paintCmdBar()
+    void paintDetail()
+    $('exSecondList')?.querySelector('.ex-row.is-selected')?.scrollIntoView({ block: 'nearest' })
+    return
+  }
+  if (e.key === 'Enter') {
+    e.preventDefault()
+    const entry = rows[index]
+    if (!entry) return
+    if (entry.dir) void secondNavigate(entry.path)
+    else void openEntry(entry)
+    return
+  }
+  if (e.key === 'Backspace') {
+    e.preventDefault()
+    void secondGoUp()
+    return
+  }
+  if (e.key === 'Delete') {
+    e.preventDefault()
+    const items = selectedEntries()
+    if (items.length) void deleteItems(items, { permanent: e.shiftKey })
+    return
+  }
+  if (e.key === 'F2') {
+    e.preventDefault()
+    const items = selectedEntries()
+    if (items.length === 1) void renameItem(items[0])
+  }
 }
 
 async function loadSecondVisiblePages() {
@@ -1063,13 +1184,17 @@ function onSecondListClick(event) {
     secondPane.selected = new Set([id])
     secondPane.anchor = id
   }
+  setActivePane('right')
   paintSecondPane()
   saveSecondPaneState()
+  paintStatus()
+  paintCmdBar()
+  void paintDetail()
 }
 
 async function onSecondDoubleClick(event) {
   const row = event.target.closest('.ex-row')
-  const entry = secondRows().find((item) => item.path === row?.dataset.path)
+  const entry = secondRows().filter(Boolean).find((item) => item.path === row?.dataset.path)
   if (!entry) return
   if (entry.dir) {
     await secondNavigate(entry.path)
@@ -1085,9 +1210,10 @@ async function onSecondDoubleClick(event) {
 
 async function copyBetweenPanes(direction, mode) {
   const fromRight = direction === 'right-to-left'
+  // 這四顆鈕長在右欄裡，按下去會把作用欄切成右欄，所以來源要指名道姓，不能用 selectedEntries()。
   const items = fromRight
-    ? secondRows().filter((entry) => secondPane.selected.has(entry.path))
-    : selectedEntries()
+    ? secondRows().filter((entry) => entry && secondPane.selected.has(entry.path))
+    : listed().filter((entry) => selected.has(entryId(entry)))
   const target = fromRight ? cwd : secondPane.cwd
   if (!items.length || !target || pathKey(target) === THIS_PC) return
   try {
@@ -1119,6 +1245,11 @@ async function toggleDualPane() {
   if (!dualPane) {
     const pane = $('exSecondPane')
     if (pane) pane.hidden = true
+    activePane = 'left'
+    paintActivePane()
+    paintStatus()
+    paintCmdBar()
+    void paintDetail()
     refreshExplorerWatches()
     return
   }
@@ -1134,6 +1265,7 @@ async function toggleDualPane() {
   }
   await loadSecond(secondPane.cwd, { pushHistory: false, keepSelection: restored })
   paintSecondPane()
+  paintActivePane()
   persistTabs()
   refreshExplorerWatches()
 }
@@ -1245,6 +1377,14 @@ function selectOnly(full) {
 function paintStatus() {
   const el = $('exStatusText')
   if (!el) return
+  if (rightActive()) {
+    const picked = selectedEntries()
+    const total = secondPane.total || secondPane.entries.filter(Boolean).length
+    const dirs = secondPane.entries.filter((r) => r && r.dir).length
+    const picks = picked.length ? ` · 已選取 ${picked.length} 個` : ''
+    el.textContent = `右欄：${total} 個項目 · ${dirs} 個資料夾${picks}`
+    return
+  }
   const rows = listed()
   const extra = truncated ? '（已截斷）' : ''
   if (inHome() && !inSearch()) {
@@ -1268,6 +1408,7 @@ function paintStatus() {
 }
 
 function selectedEntries() {
+  if (rightActive()) return secondRows().filter((r) => r && secondPane.selected.has(r.path))
   const rows = listed()
   return rows.filter((r) => selected.has(entryId(r)))
 }
@@ -1299,7 +1440,7 @@ function paintCmdBar() {
   const items = selectedEntries()
   const has = items.length > 0
   const one = items.length === 1
-  if (inRecycle()) {
+  if (activeInRecycle()) {
     addCmd(bar, '還原', () => void restoreItems(items), { disabled: !has })
     addCmd(bar, '永久刪除', () => void deleteItems(items, { permanent: true }), { disabled: !has, danger: true })
     addCmd(bar, '清空', () => void emptyBin())
@@ -1310,7 +1451,7 @@ function paintCmdBar() {
   addCmd(bar, '複製路徑', () => copyPaths(items), { disabled: !has })
   addCmd(bar, '複製', () => void clipboard(items, 'copy'), { disabled: !has })
   addCmd(bar, '剪下', () => void clipboard(items, 'cut'), { disabled: !has })
-  addCmd(bar, '貼上', () => void pasteHere(), { disabled: inHome() })
+  addCmd(bar, '貼上', () => void pasteHere(), { disabled: activeInHome() })
   addCmd(bar, '重新命名', () => void renameItem(items[0]), { disabled: !one })
   addCmd(bar, '批次改名', () => void batchRenameItems(items), { disabled: items.length < 2 })
   addCmd(bar, '刪除', () => void deleteItems(items), { disabled: !has, danger: true })
@@ -1980,6 +2121,8 @@ async function clipboard(items, mode) {
 }
 
 async function refreshAfterMutate() {
+  // 雙欄時兩邊都要重讀：操作可能發生在右欄，或把檔案搬進另一欄。
+  if (dualPane) await loadSecond(secondPane.cwd, { pushHistory: false, keepSelection: true })
   if (inSearch()) {
     const input = /** @type {HTMLInputElement | null} */ ($('exSearch'))
     const q = input ? input.value.trim() : ''
@@ -1992,9 +2135,10 @@ async function refreshAfterMutate() {
 }
 
 async function pasteHere() {
-  if (!cwd || inHome()) return
+  const target = activeCwd()
+  if (!target || pathKey(target) === THIS_PC) return
   try {
-    const done = await call(electronAPI.explorer.paste(cwd), '貼上失敗')
+    const done = await call(electronAPI.explorer.paste(target), '貼上失敗')
     const landed = (done && done.paths) || []
     if (landed.length && lastClip.paths.length) {
       pushUndo(lastClip.mode === 'cut' ? '搬移' : '複製',
@@ -2007,8 +2151,8 @@ async function pasteHere() {
 }
 
 async function newFolder() {
-  if (inRecycle() || inHome()) return
-  const target = cwd
+  const target = activeCwd()
+  if (activeInRecycle() || pathKey(target) === THIS_PC) return
   const name = await askInput('新增資料夾', { placeholder: '資料夾名稱' })
   if (!name) return
   try {
@@ -2020,8 +2164,8 @@ async function newFolder() {
 }
 
 async function newFile() {
-  if (inRecycle() || inHome()) return
-  const target = cwd
+  const target = activeCwd()
+  if (activeInRecycle() || pathKey(target) === THIS_PC) return
   const name = await askInput('新增檔案', { placeholder: '檔案名稱' })
   if (!name) return
   try {
@@ -2257,13 +2401,13 @@ async function emptyBin() {
   }
 }
 
-function openContextMenu(e, items) {
+function openContextMenu(e, items, dir) {
   const request = ++contextMenuSeq
   const navigation = navSeq
   const at = { x: e.clientX, y: e.clientY }
-  const recycle = inRecycle()
+  const recycle = activeInRecycle()
   const extended = Boolean(e.shiftKey)
-  const folder = cwd
+  const folder = dir || activeCwd()
   void (async () => {
     let shellItems = []
     let token = 0
@@ -2307,9 +2451,9 @@ function openContextMenu(e, items) {
         openTab: () => void newTab(items[0].path),
         reveal: () => void revealItems(items),
         pin: () => void pinEntries(items),
-        pinHere: () => void pinPath(cwd, ''),
+        pinHere: () => void pinPath(folder, ''),
         openProject: () => void openInWorkspace(items[0]?.path),
-        openProjectHere: () => void openInWorkspace(cwd),
+        openProjectHere: () => void openInWorkspace(folder),
         cut: () => void clipboard(items, 'cut'),
         copy: () => void clipboard(items, 'copy'),
         paste: () => void pasteHere(),

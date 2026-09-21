@@ -12345,6 +12345,12 @@ h6.md-h { font-size: 14px; }
 
 .ex-second-pane[hidden] { display: none; }
 
+/* 雙欄時要看得出指令列現在在操作哪一欄。 */
+.ex-main.is-active-pane {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 1px var(--accent-primary) inset, var(--shadow-sm);
+}
+
 .ex-second-head {
   display: flex;
   align-items: center;

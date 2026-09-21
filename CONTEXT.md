@@ -14,6 +14,21 @@ AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定�
 
 ## 架構
 
+### 檔案總管：雙欄的「作用欄」（2026-09-21）
+
+- 雙欄不是兩套流程，是**一套流程＋一個作用欄**。`explorer-page.js` 的 `activePane`
+  記著使用者最後按的是哪一欄（`#exList` 與 `#exSecondPane` 各有一個 capture 階段的
+  mousedown）。`selectedEntries()`／`paintStatus()`／`paintCmdBar()`／`pasteHere()`／
+  `newFolder()`／`newFile()`／`openContextMenu()`／側欄位置與磁碟的導覽都讀
+  `activeCwd()` 與作用欄的選取，右欄不另外複製一份。
+- 右欄的右鍵選單、方向鍵／Enter／Backspace／Delete／F2、拖出去（原生拖放）與拖進來
+  （`bindDropTarget` 指到 `secondPane.cwd`）都綁在 `#exSecondList`。
+- **坑**：四顆跨欄鈕（複製／搬到左右欄）長在右欄裡，mousedown 會先把作用欄切成右欄，
+  所以 `copyBetweenPanes()` 的來源必須指名左欄／右欄，不能用 `selectedEntries()`。
+- **坑**：大資料夾分頁載入後 `secondPane.entries` 是稀疏陣列，未載入的頁是洞。
+  `filter`／`map` 會跳洞，`find` 不會——掃它之前一定要先 `.filter(Boolean)`。
+- 測試：`e2e-explorer-dual-cdp.js`（15 條，含單欄回歸與跨欄鈕的來源）。
+
 ### 檔案總管：方格檢視的縮放與大圖預覽（2026-09-21）
 
 - **方格檢視的檔名本來是直書的**：`.ex-row-name` 在清單檢視是「圖示 ＋ 檔名」橫向一列，
