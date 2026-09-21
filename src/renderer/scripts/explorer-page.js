@@ -701,6 +701,8 @@ function paintSidebar(nextPlaces, nextDisks) {
   // 只重畫側欄的話，站在首頁時看到的是舊的那一份（要切走再切回來才會更新）。
   // 收在這裡而不是每個呼叫點各補一次：places 變動的六個地方都走這支。
   if (inHome() && !inSearch()) paintHome()
+  // 右欄那排磁碟鈕吃的是同一份 disks，收在這裡就不用在接上網路磁碟之後再補一次。
+  paintSecondDrives()
 }
 
 function paintSideList(host, items) {
@@ -1176,6 +1178,7 @@ function paintSecondPane() {
   if (!dualPane) return
   const searching = secondInSearch()
   paintSecondCrumbs()
+  paintSecondDrives()
   const back = $('exSecondBack')
   const forward = $('exSecondForward')
   if (back) back.disabled = secondPane.histIndex <= 0 || secondPane.loading
@@ -1246,8 +1249,10 @@ function paintSecondPane() {
   const empty = $('exSecondEmpty')
   if (empty) {
     empty.hidden = rows.length > 0 || secondPane.searching
-    empty.textContent = searching ? '沒有符合的檔案'
-      : secondPane.search ? '沒有符合的檔案' : '這個資料夾是空的'
+    empty.textContent = searching || secondPane.search ? '沒有符合的檔案'
+      // 右欄的「本機」不畫磁碟格（那是左欄首頁的事），改成指路給上面那排磁碟鈕。
+      : pathKey(secondPane.cwd) === THIS_PC ? '從上面那排選一顆磁碟。'
+        : '這個資料夾是空的'
   }
   for (const row of list.querySelectorAll('.ex-row')) {
     row.classList.toggle('is-selected', secondPane.selected.has(row.dataset.path))
@@ -1255,6 +1260,9 @@ function paintSecondPane() {
   paintFileIcons(list, (target) => electronAPI.explorer.fileIcon(target))
   list.scrollTop = scrollTop
   list.scrollLeft = scrollLeft
+  // 右欄的指令列吃右欄的選取，跟著右欄一起重畫。收在這裡是因為「剛開雙欄還沒點過右欄」
+  // 也會走到這，不然那條指令列要等使用者點一下右欄才長出來。
+  paintCmdBarInto($('exSecondCmdBar'), 'right')
 }
 
 function refreshExplorerWatches() {
@@ -1489,6 +1497,33 @@ async function loadSecond(dirPath, opts = {}) {
   paintSecondTabs()
   refreshExplorerWatches()
   return true
+}
+
+/**
+ * 右欄自己的磁碟鈕。側欄那排雖然也會送去作用欄，但得先點右欄才生效，開了雙欄的人
+ * 根本看不出來；這排就長在右欄裡，一下就換得了槽。
+ */
+function paintSecondDrives() {
+  const host = $('exSecondDrives')
+  if (!host) return
+  const here = pathKey(secondPane.cwd)
+  host.replaceChildren()
+  for (const disk of disks) {
+    const key = pathKey(disk.path)
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'btn-icon ex-second-drive'
+    btn.dataset.path = disk.path
+    btn.textContent = `${disk.letter}:`
+    btn.title = `右欄切到 ${disk.letter}:`
+    btn.setAttribute('aria-label', btn.title)
+    btn.setAttribute('aria-pressed', here === key || here.startsWith(`${key}\\`) ? 'true' : 'false')
+    btn.addEventListener('click', () => {
+      setActivePane('right')
+      void secondNavigate(disk.path)
+    })
+    host.appendChild(btn)
+  }
 }
 
 async function secondNavigate(dirPath) {

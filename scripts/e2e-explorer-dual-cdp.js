@@ -11,6 +11,7 @@
  *   5 大資料夾（未載入頁面是洞）捲到底雙擊不丟例外
  *   6 左欄單欄模式照舊，四顆跨欄鈕的來源不會被作用欄帶偏
  *   7 兩欄各有一條指令列與一組搜尋篩選條件，各算各的
+ *   8 右欄自己有一排磁碟鈕，換槽不必先點右欄再去側欄
  *
  * 只動自種的暫存資料夾，測完刪掉；收尾只 taskkill 自己的 pid。
  */
@@ -236,6 +237,9 @@ let child
   await cdp.eval(`document.getElementById('exDualBtn').click()`)
   await waitFor(() => cdp.eval(`document.querySelectorAll('#exSecondList .ex-row').length > 0`), 30_000, '右欄列出來')
   await sleep(1_000)
+  // 還沒點過右欄，右欄的指令列就該長出來了（以前要點一下才畫）
+  const freshBar = await cdp.eval(`[...document.querySelectorAll('#exSecondCmdBar button')].map((b) => b.textContent.trim())`)
+  assert(freshBar.length >= 9 && freshBar.includes('貼上'), '一開雙欄右欄指令列就在', json(freshBar))
   const picked = await cdp.eval(`(() => {
     const row = document.querySelector('#exSecondList .ex-row')
     row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
@@ -468,7 +472,44 @@ let child
   })()`)
   await sleep(600)
 
-  console.log('\n[8] 關雙欄回左欄')
+  console.log('\n[8] 右欄自己的磁碟鈕')
+  const drives = await cdp.eval(`[...document.querySelectorAll('#exSecondDrives .ex-second-drive')]
+    .map((b) => ({ label: b.textContent.trim(), path: b.dataset.path, on: b.getAttribute('aria-pressed') }))`)
+  assert(drives.length > 0, '右欄列得出磁碟', json(drives))
+  assert(drives.some((d) => d.on === 'true'), '目前那顆磁碟有標起來', json(drives))
+  // 挑一顆「不是現在這顆」的。優先挑專案所在那顆（一定是本機實體碟、列得出東西），
+  // 不然遇到對應出來的網路磁碟會逾時，測到的是網路不是這排鈕。
+  const repoDrive = `${__dirname[0].toUpperCase()}:`
+  const others = drives.filter((d) => d.on !== 'true')
+  const other = others.find((d) => d.label.toUpperCase() === repoDrive) || others[0]
+  if (other) {
+    const leftBefore = await cdp.eval(`(document.getElementById('exCrumbs') || {}).dataset.path || ''`)
+    await cdp.eval(`[...document.querySelectorAll('#exSecondDrives .ex-second-drive')]
+      .find((b) => b.dataset.path === ${json(other.path)}).click()`)
+    await waitFor(
+      () => cdp.eval(`((document.getElementById('exSecondCrumbs') || {}).dataset.path || '').toLowerCase() === ${json(other.path.toLowerCase())}`),
+      20_000,
+      '右欄換磁碟'
+    )
+    const after = await cdp.eval(`({
+      left: (document.getElementById('exCrumbs') || {}).dataset.path || '',
+      on: [...document.querySelectorAll('#exSecondDrives .ex-second-drive')].find((b) => b.getAttribute('aria-pressed') === 'true')?.dataset.path || '',
+      active: document.getElementById('exSecondPane').classList.contains('is-active-pane')
+    })`)
+    assert(after.left === leftBefore, '換右欄磁碟不會動到左欄', json({ leftBefore, after }))
+    assert(after.on.toLowerCase() === other.path.toLowerCase(), '換過去之後標記跟著換', json(after))
+    assert(after.active === true, '按磁碟鈕順便把作用欄切成右欄', json(after))
+  }
+  await cdp.eval(`document.getElementById('exSecondUp').click()`)
+  await sleep(1_500)
+  const atHome = await cdp.eval(`({
+    crumb: (document.getElementById('exSecondCrumbs') || {}).dataset.path || '',
+    empty: (document.getElementById('exSecondEmpty') || {}).textContent || '',
+    hidden: (document.getElementById('exSecondEmpty') || {}).hidden
+  })`)
+  assert(/選一顆磁碟/.test(atHome.empty) && atHome.hidden === false, '右欄在本機時會指路去磁碟鈕', json(atHome))
+
+  console.log('\n[9] 關雙欄回左欄')
   await cdp.eval(`document.getElementById('exDualBtn').click()`)
   await sleep(800)
   const off = await cdp.eval(`({

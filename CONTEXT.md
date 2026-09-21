@@ -39,11 +39,20 @@ AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定�
 - **兩欄各有一組搜尋篩選條件**：`searchFilters(which)` 只差 id 前綴
   （`exSearch*` ／ `exSecondSearch*`）。右欄那組 `<details>` 只在整機搜尋時顯示，
   切回「篩這個資料夾」就收起來（在 `paintSecondPane()` 裡從狀態畫，換分頁也對）。
+- **右欄自己有一排磁碟鈕**（`#exSecondDrives`，`paintSecondDrives()`）：側欄那排雖然也會
+  送去作用欄，但得先點右欄才生效，開了雙欄的人根本看不出來。這排長在右欄裡，按一下就換槽，
+  順便把作用欄切成右欄；目前那顆用 `aria-pressed` 標起來。資料來源跟側欄同一份 `disks`，
+  所以收在 `paintSidebar()` 末尾一起重畫。
+  版面上一定要壓 `max-width`——不壓的話四顆鈕會把 `flex-basis: 0` 的麵包屑擠成 0 寬，
+  路徑整個消失；麵包屑那邊也給了 `min-width: 78px` 當底線。
+- 右欄的「本機」不畫磁碟格（那是左欄首頁的事），空畫面改成指路去上面那排磁碟鈕。
+- **坑**：`#exSecondCmdBar` 要在 `paintSecondPane()` 裡畫。只靠 `setActivePane()` 畫的話，
+  剛開雙欄、還沒點過右欄之前那條指令列是空的。
 - 右欄標頭固定兩列（導覽＋麵包屑／搜尋＋檢視），窄到 220px 時只有工具那一列會再換行。
   排序的原生 `select` 會被 `custom-select.js` 換成自訂下拉，寬度要對著
   `.custom-select[data-select-id="exSecondSort"] .custom-select-trigger` 調，
   不然它吃 `min-width: 180px`，標頭會胖到 200px 高。
-- 測試：`e2e-explorer-dual-cdp.js`（35 條，含單欄回歸與跨欄鈕的來源）。
+- 測試：`e2e-explorer-dual-cdp.js`（42 條，含單欄回歸與跨欄鈕的來源）。
   三支 explorer e2e 都可以用 `VOICEINK_EXE=node_modules/electron/dist/electron.exe`
   跑原始碼（要先起 vite），並在連上 CDP 後把視埠固定成 1280×860——不固定的話視窗寬度
   會飄，詳情欄在 900px 以下整個收掉，實體滑鼠座標的測試也會跟著失準。

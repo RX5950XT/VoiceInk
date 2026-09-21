@@ -12380,7 +12380,8 @@ h6.md-h { font-size: 14px; }
 
 .ex-second-pathbar {
   flex: 1 1 0;
-  min-width: 0;
+  /* 留一條底線給路徑：`min-width: 0` 時它會被同一列的磁碟鈕擠到完全看不見。 */
+  min-width: 78px;
   min-height: 28px;
 }
 
@@ -12450,6 +12451,34 @@ h6.md-h { font-size: 14px; }
 
 .custom-select[data-select-id="exSecondSort"] .custom-select-trigger::after {
   right: 8px;
+}
+
+/* 右欄的磁碟鈕：跟導覽鈕同一列，窄欄時先擠這排（麵包屑才是要保住的），放不下就橫向捲。
+   一定要壓 max-width：不壓的話四顆鈕會把 `flex-basis: 0` 的麵包屑整個擠成 0 寬，路徑就消失了。 */
+.ex-second-drives {
+  display: flex;
+  gap: 2px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 38%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.ex-second-drives::-webkit-scrollbar { display: none; }
+
+.ex-second-drive {
+  flex: 0 0 auto;
+  min-width: 28px;
+  padding-inline: 5px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.ex-second-drive[aria-pressed="true"] {
+  border-color: var(--accent-primary);
+  background: var(--accent-soft);
+  color: var(--text-primary);
 }
 
 /* 右欄自己的指令列：跟左欄那條長一樣，只是窄欄放不下時換行而不是橫向捲。 */
