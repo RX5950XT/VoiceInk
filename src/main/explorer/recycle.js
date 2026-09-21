@@ -332,11 +332,16 @@ async function restore(recycleKey) {
   if (!meta) throw paths.fail('NOT_FOUND', '找不到這個檔案')
   const destAbs = paths.resolveAbs(meta.originalPath)
   const parent = path.dirname(destAbs)
-  paths.assertCreatable(parent)
-  try {
-    await fsp.mkdir(parent, { recursive: true })
-  } catch {
-    throw paths.fail('RESTORE_FAILED', '還原失敗')
+  // 還原是把東西放回它原本待的地方，不是往新地方丟，所以只看目的地自己合不合法，不看父資料夾。
+  // 看父資料夾的話，從磁碟根目錄（D:\）刪掉的東西一律還原不了——parent 就是 D:\，被當成鎖住的位置。
+  paths.assertCreatable(destAbs)
+  // 原本的資料夾可能已經被刪掉，補回來。已經在的不能補——對磁碟根目錄 mkdir 會吐 EPERM。
+  if (!fs.existsSync(parent)) {
+    try {
+      await fsp.mkdir(parent, { recursive: true })
+    } catch {
+      throw paths.fail('RESTORE_FAILED', '還原失敗')
+    }
   }
   let dest = destAbs
   if (fs.existsSync(dest)) {

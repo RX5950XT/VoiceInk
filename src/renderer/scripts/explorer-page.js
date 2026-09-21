@@ -313,13 +313,28 @@ function activeCwd() {
   return rightActive() ? secondPane.cwd : cwd
 }
 
+/** @param {'left' | 'right'} which */
+function paneCwd(which) {
+  return which === 'right' ? secondPane.cwd : cwd
+}
+
 function activeInHome() {
-  return pathKey(activeCwd()) === THIS_PC
+  return paneInHome(activePane)
+}
+
+/** @param {'left' | 'right'} which */
+function paneInHome(which) {
+  return pathKey(paneCwd(which)) === THIS_PC
 }
 
 /** 右欄到不了資源回收筒，所以只有左欄要判斷。 */
 function activeInRecycle() {
-  return !rightActive() && inRecycle()
+  return paneInRecycle(activePane)
+}
+
+/** @param {'left' | 'right'} which */
+function paneInRecycle(which) {
+  return which !== 'right' && inRecycle()
 }
 
 function setActivePane(which) {
@@ -385,6 +400,9 @@ function bindOnce() {
   $('exSecondScopeBtn')?.addEventListener('click', () => {
     setSecondScope(secondPane.searchMode === 'global' ? 'filter' : 'global')
   })
+  for (const name of ['Type', 'MinSize', 'MaxSize', 'From', 'To', 'Location']) {
+    $(`exSecondSearch${name}`)?.addEventListener('input', onSecondSearchFilterChange)
+  }
   $('exSecondViewListBtn')?.addEventListener('click', () => setSecondView('list'))
   $('exSecondViewGridBtn')?.addEventListener('click', () => setSecondView('grid'))
   $('exSecondSearch')?.addEventListener('input', (e) => {
@@ -1081,6 +1099,13 @@ function onSecondWheel(e) {
   paintSecondPane()
 }
 
+/** 右欄的篩選條件改了就重跑一次整機搜尋。篩目前資料夾用不到這些條件。 */
+function onSecondSearchFilterChange() {
+  if (secondPane.searchMode !== 'global') return
+  if (!secondPane.search.trim() || !uffs?.installed) return
+  scheduleSecondSearch()
+}
+
 function setSecondScope(mode) {
   secondPane.searchMode = mode === 'global' ? 'global' : 'filter'
   const input = /** @type {HTMLInputElement | null} */ ($('exSecondSearch'))
@@ -1112,14 +1137,14 @@ function scheduleSecondSearch() {
   secondSearchTimer = window.setTimeout(() => void runSecondSearch(query), SEARCH_DEBOUNCE_MS)
 }
 
-/** 右欄的整機搜尋跟左欄共用 UFFS 與那組篩選條件，只是結果畫在右欄。 */
+/** 右欄的整機搜尋跟左欄共用 UFFS，但吃自己那組篩選條件，結果畫在右欄。 */
 async function runSecondSearch(query) {
   const seq = ++secondPane.searchSeq
   secondPane.searching = true
   paintStatus()
   const hint = $('exSecondSearchHint')
   try {
-    const data = await call(electronAPI.explorer.uffsSearch(query, searchFilters()), '搜尋失敗')
+    const data = await call(electronAPI.explorer.uffsSearch(query, searchFilters('right')), '搜尋失敗')
     if (seq !== secondPane.searchSeq) return
     if (data.warming) {
       if (hint) hint.textContent = '索引中'
@@ -1165,6 +1190,12 @@ function paintSecondPane() {
     scope.title = global ? '搜尋整機檔案' : '只篩這個資料夾'
     scope.setAttribute('aria-label', `搜尋範圍：${scope.title}`)
     scope.setAttribute('aria-pressed', global ? 'true' : 'false')
+  }
+  // 篩選面板只有整機搜尋用得到；篩目前資料夾時收起來，免得把窄窄的右欄標頭再擠爆。
+  const filters = /** @type {HTMLDetailsElement | null} */ ($('exSecondSearchFilters'))
+  if (filters) {
+    filters.hidden = secondPane.searchMode !== 'global'
+    if (filters.hidden) filters.open = false
   }
   const sort = /** @type {HTMLSelectElement | null} */ ($('exSecondSort'))
   if (sort) {
@@ -1742,8 +1773,9 @@ function paintStatus() {
   el.textContent = `${total} 個項目 · ${dirs} 個資料夾${extra}${picks}`
 }
 
-function selectedEntries() {
-  if (rightActive()) return secondRows().filter((r) => r && secondPane.selected.has(r.path))
+/** @param {'left' | 'right'} [which] 不指名就看作用欄。 */
+function selectedEntries(which = activePane) {
+  if (which === 'right' && dualPane) return secondRows().filter((r) => r && secondPane.selected.has(r.path))
   const rows = listed()
   return rows.filter((r) => selected.has(entryId(r)))
 }
@@ -1768,37 +1800,57 @@ async function paintDetail() {
   })
 }
 
+/** 兩欄各有一條指令列，各自只管自己那一欄——不必先點對欄才按得對。 */
 function paintCmdBar() {
-  const bar = $('exCmdBar')
-  if (!bar) return
-  bar.replaceChildren()
-  const items = selectedEntries()
-  const has = items.length > 0
-  const one = items.length === 1
-  if (activeInRecycle()) {
-    addCmd(bar, '還原', () => void restoreItems(items), { disabled: !has })
-    addCmd(bar, '永久刪除', () => void deleteItems(items, { permanent: true }), { disabled: !has, danger: true })
-    addCmd(bar, '清空', () => void emptyBin())
-    return
-  }
-  addCmd(bar, '開啟', () => void openEntry(items[0]), { disabled: !one })
-  addCmd(bar, '顯示位置', () => void revealItems(items), { disabled: !has })
-  addCmd(bar, '複製路徑', () => copyPaths(items), { disabled: !has })
-  addCmd(bar, '複製', () => void clipboard(items, 'copy'), { disabled: !has })
-  addCmd(bar, '剪下', () => void clipboard(items, 'cut'), { disabled: !has })
-  addCmd(bar, '貼上', () => void pasteHere(), { disabled: activeInHome() })
-  addCmd(bar, '重新命名', () => void renameItem(items[0]), { disabled: !one })
-  addCmd(bar, '批次改名', () => void batchRenameItems(items), { disabled: items.length < 2 })
-  addCmd(bar, '刪除', () => void deleteItems(items), { disabled: !has, danger: true })
+  paintCmdBarInto($('exCmdBar'), 'left')
+  paintCmdBarInto($('exSecondCmdBar'), 'right')
 }
 
-function addCmd(bar, label, fn, opts = {}) {
+/**
+ * @param {HTMLElement | null} bar
+ * @param {'left' | 'right'} which
+ */
+function paintCmdBarInto(bar, which) {
+  if (!bar) return
+  bar.replaceChildren()
+  if (which === 'right' && !dualPane) return
+  const items = selectedEntries(which)
+  const has = items.length > 0
+  const one = items.length === 1
+  if (paneInRecycle(which)) {
+    addCmd(bar, which, '還原', () => void restoreItems(items), { disabled: !has })
+    addCmd(bar, which, '永久刪除', () => void deleteItems(items, { permanent: true }), { disabled: !has, danger: true })
+    addCmd(bar, which, '清空', () => void emptyBin())
+    return
+  }
+  addCmd(bar, which, '開啟', () => void openEntry(items[0]), { disabled: !one })
+  addCmd(bar, which, '顯示位置', () => void revealItems(items), { disabled: !has })
+  addCmd(bar, which, '複製路徑', () => copyPaths(items), { disabled: !has })
+  addCmd(bar, which, '複製', () => void clipboard(items, 'copy'), { disabled: !has })
+  addCmd(bar, which, '剪下', () => void clipboard(items, 'cut'), { disabled: !has })
+  addCmd(bar, which, '貼上', () => void pasteHere(), { disabled: paneInHome(which) })
+  addCmd(bar, which, '重新命名', () => void renameItem(items[0]), { disabled: !one })
+  addCmd(bar, which, '批次改名', () => void batchRenameItems(items), { disabled: items.length < 2 })
+  addCmd(bar, which, '刪除', () => void deleteItems(items), { disabled: !has, danger: true })
+}
+
+/**
+ * 動作本身（貼上、改名、刪除…）看的是作用欄，所以按鈕要先把作用欄切成自己這一欄，
+ * 再跑。`#exCmdBar` 長在兩欄外面，不先切的話它會拿右欄的 cwd 去貼上。
+ *
+ * @param {HTMLElement} bar
+ * @param {'left' | 'right'} which
+ */
+function addCmd(bar, which, label, fn, opts = {}) {
   const btn = document.createElement('button')
   btn.type = 'button'
   btn.className = opts.danger ? 'btn btn-danger btn-sm' : 'btn btn-secondary btn-sm'
   btn.textContent = label
   btn.disabled = Boolean(opts.disabled)
-  btn.addEventListener('click', fn)
+  btn.addEventListener('click', () => {
+    setActivePane(which)
+    fn()
+  })
   bar.appendChild(btn)
 }
 
@@ -2277,25 +2329,30 @@ function clearSearch() {
   paintList()
 }
 
-function searchFilters() {
-  const number = (id) => {
-    const value = Number($(id)?.value)
+/**
+ * 兩欄各有一組篩選條件，差別只在 id 前綴。
+ * @param {'left' | 'right'} [which]
+ */
+function searchFilters(which = 'left') {
+  const at = (name) => $(which === 'right' ? `exSecondSearch${name}` : `exSearch${name}`)
+  const number = (name) => {
+    const value = Number(at(name)?.value)
     return Number.isFinite(value) && value >= 0 ? value : null
   }
-  const type = $('exSearchType')?.value
-  const date = (id, end = false) => {
-    const raw = String($(id)?.value || '')
+  const type = at('Type')?.value
+  const date = (name, end = false) => {
+    const raw = String(at(name)?.value || '')
     if (!raw) return null
     const value = Date.parse(`${raw}${end ? 'T23:59:59.999' : 'T00:00:00.000'}`)
     return Number.isFinite(value) ? value : null
   }
   return {
     type: ['file', 'folder', 'image', 'video', 'audio', 'document'].includes(type) ? type : 'all',
-    minSize: number('exSearchMinSize'),
-    maxSize: number('exSearchMaxSize'),
-    fromMs: date('exSearchFrom'),
-    toMs: date('exSearchTo', true),
-    location: String($('exSearchLocation')?.value || '').trim()
+    minSize: number('MinSize'),
+    maxSize: number('MaxSize'),
+    fromMs: date('From'),
+    toMs: date('To', true),
+    location: String(at('Location')?.value || '').trim()
   }
 }
 

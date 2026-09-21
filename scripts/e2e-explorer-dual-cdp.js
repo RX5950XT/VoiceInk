@@ -10,6 +10,7 @@
  *   4 側欄的位置／磁碟導覽送到作用欄
  *   5 大資料夾（未載入頁面是洞）捲到底雙擊不丟例外
  *   6 左欄單欄模式照舊，四顆跨欄鈕的來源不會被作用欄帶偏
+ *   7 兩欄各有一條指令列與一組搜尋篩選條件，各算各的
  *
  * 只動自種的暫存資料夾，測完刪掉；收尾只 taskkill 自己的 pid。
  */
@@ -416,11 +417,66 @@ let child
   const entered = await cdp.eval(`(document.getElementById('exSecondCrumbs') || {}).dataset.path || ''`)
   assert(entered.toLowerCase() === String(hover.path).toLowerCase(), '拖著停在資料夾上會進去', json({ entered, hover }))
 
-  console.log('\n[7] 關雙欄回左欄')
+  console.log('\n[7] 右欄自己的指令列與篩選面板')
+  await gotoSecond(cdp, RIGHT)
+  // 指令列：兩條各算各的選取。右欄選 R1、左欄不選，兩邊的「刪除」狀態就該相反。
+  await cdp.eval(`(() => {
+    const row = [...document.querySelectorAll('#exSecondList .ex-row')].find((r) => r.dataset.name === 'R1.txt')
+    row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    return true
+  })()`)
+  await sleep(600)
+  const bars = await cdp.eval(`(() => {
+    const read = (id) => [...document.querySelectorAll('#' + id + ' button')]
+      .map((b) => ({ label: b.textContent.trim(), off: b.disabled }))
+    return { right: read('exSecondCmdBar'), left: read('exCmdBar') }
+  })()`)
+  const cmd = (bar, label) => bar.find((b) => b.label === label)
+  assert(bars.right.length === bars.left.length && bars.right.length >= 9, '右欄有自己一整條指令列', json(bars.right.map((b) => b.label)))
+  assert(cmd(bars.right, '刪除') && !cmd(bars.right, '刪除').off, '右欄指令列吃右欄選取', json(bars.right))
+  assert(cmd(bars.left, '刪除') && cmd(bars.left, '刪除').off, '左欄指令列不吃右欄選取', json(bars.left))
+  // 按右欄的「刪除」要刪右欄的東西（Enter 確認）
+  await cdp.eval(`[...document.querySelectorAll('#exSecondCmdBar button')].find((b) => b.textContent.trim() === '刪除').click()`)
+  await waitFor(() => cdp.eval(`!!document.querySelector('dialog[open]')`), 8_000, '刪除確認')
+  await cdp.eval(`document.querySelector('dialog[open]').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))`)
+  await sleep(2_500)
+  assert(!fs.existsSync(path.join(RIGHT, 'R1.txt')), '右欄指令列刪的是右欄的檔案', json(fs.readdirSync(RIGHT)))
+  assert(fs.existsSync(path.join(LEFT, 'R1.txt')), '左欄那份沒被動到')
+  // 篩選面板：只有整機搜尋時出現，而且跟左欄各記各的
+  assert(await cdp.eval(`document.getElementById('exSecondSearchFilters').hidden === true`), '篩目前資料夾時右欄篩選面板收著')
+  await cdp.eval(`document.getElementById('exSecondScopeBtn').click()`)
+  await sleep(600)
+  const filters = await cdp.eval(`(() => {
+    document.getElementById('exSearchType').value = 'image'
+    document.getElementById('exSecondSearchType').value = 'video'
+    return {
+      hidden: document.getElementById('exSecondSearchFilters').hidden,
+      left: document.getElementById('exSearchType').value,
+      right: document.getElementById('exSecondSearchType').value,
+      head: Math.round(document.querySelector('.ex-second-head').getBoundingClientRect().height)
+    }
+  })()`)
+  assert(filters.hidden === false, '切整機就看得到右欄篩選面板', json(filters))
+  assert(filters.left === 'image' && filters.right === 'video', '兩欄的篩選條件各記各的', json(filters))
+  assert(filters.head <= 110, '多一顆篩選鈕標頭沒有變胖', json(filters))
+  await cdp.eval(`(() => {
+    document.getElementById('exSearchType').value = 'all'
+    document.getElementById('exSecondSearchType').value = 'all'
+    document.getElementById('exSecondScopeBtn').click()
+    return true
+  })()`)
+  await sleep(600)
+
+  console.log('\n[8] 關雙欄回左欄')
   await cdp.eval(`document.getElementById('exDualBtn').click()`)
   await sleep(800)
-  const off = await cdp.eval(`({ status: (document.getElementById('exStatusText') || {}).textContent || '' })`)
+  const off = await cdp.eval(`({
+    status: (document.getElementById('exStatusText') || {}).textContent || '',
+    rightBar: document.querySelectorAll('#exSecondCmdBar button').length
+  })`)
   assert(!/^右欄：/.test(off.status), '狀態列回左欄', json(off))
+  assert(off.rightBar === 0, '關掉雙欄右欄指令列也清空', json(off))
 
   console.log(`\n全部通過（${passed}）`)
   console.log('全程例外', json(cdp.errors))

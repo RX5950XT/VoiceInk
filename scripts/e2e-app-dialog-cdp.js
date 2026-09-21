@@ -239,6 +239,36 @@ async function main() {
       escaping.imgs === 0 && !escaping.pwned && escaping.text.includes('<img'),
       JSON.stringify(escaping)
     )
+
+    // ===== [G] Enter＝確定，連危險彈窗也一樣（焦點雖然停在「取消」）=====
+    const primedDanger = await cdp.eval(`(async () => {
+      window.__done = window.__dlg.askConfirm('確定要刪除嗎？', { confirmText: '刪除', danger: true })
+      await new Promise((r) => setTimeout(r, 50))
+      const d = document.querySelector('dialog.app-dialog[open]')
+      return { ready: Boolean(d), focus: document.activeElement?.textContent || '' }
+    })()`)
+    ok('[G1] 危險彈窗焦點仍在取消', primedDanger.ready && primedDanger.focus === '取消', JSON.stringify(primedDanger))
+    await cdp.key('Enter', 'Enter', 13)
+    await sleep(200)
+    const confirmedByEnter = await cdp.eval(`(async () => ({ value: await window.__done, left: document.querySelectorAll('dialog.app-dialog-compact').length }))()`)
+    ok('[G2] Enter 直接確定', confirmedByEnter.value === true && confirmedByEnter.left === 0, JSON.stringify(confirmedByEnter))
+
+    // ===== [G3] 注音選字中的 Enter 不算確定（isComposing／keyCode 229）=====
+    const ime = await cdp.eval(`(async () => {
+      window.__done = window.__dlg.askInput('新的名稱', { value: 'old.txt' })
+      await new Promise((r) => setTimeout(r, 50))
+      const input = document.querySelector('dialog.app-dialog[open] input.input')
+      input.value = '打到一半'
+      for (const init of [{ isComposing: true }, { keyCode: 229 }]) {
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, ...init }))
+      }
+      await new Promise((r) => setTimeout(r, 80))
+      const stillOpen = !!document.querySelector('dialog.app-dialog[open]')
+      document.querySelector('dialog.app-dialog[open] .btn-secondary')?.click()
+      await window.__done
+      return { stillOpen }
+    })()`)
+    ok('[G3] 選字中的 Enter 不會把彈窗關掉', ime.stillOpen === true, JSON.stringify(ime))
   } finally {
     cdp?.close()
     stopTree(electron)

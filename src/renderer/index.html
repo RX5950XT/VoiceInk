@@ -746,6 +746,27 @@
                       <span id="exSecondSearchHint" class="ex-search-hint" role="status"></span>
                       <button type="button" id="exSecondScopeBtn" class="btn-icon ex-second-scope"
                               aria-pressed="false" title="只篩這個資料夾" aria-label="搜尋範圍：只篩這個資料夾">📁</button>
+                      <details class="ex-search-filters ex-second-filters" id="exSecondSearchFilters" hidden>
+                        <summary>篩選</summary>
+                        <div class="ex-search-filter-popover">
+                          <label>類型
+                            <select id="exSecondSearchType" class="select">
+                              <option value="all">全部</option>
+                              <option value="file">檔案</option>
+                              <option value="folder">資料夾</option>
+                              <option value="image">圖片</option>
+                              <option value="video">影片</option>
+                              <option value="audio">音訊</option>
+                              <option value="document">文件</option>
+                            </select>
+                          </label>
+                          <label>最小大小（bytes）<input id="exSecondSearchMinSize" class="input" type="number" min="0" step="1"></label>
+                          <label>最大大小（bytes）<input id="exSecondSearchMaxSize" class="input" type="number" min="0" step="1"></label>
+                          <label>修改起日<input id="exSecondSearchFrom" class="input" type="date"></label>
+                          <label>修改迄日<input id="exSecondSearchTo" class="input" type="date"></label>
+                          <label>位置<input id="exSecondSearchLocation" class="input" type="text" spellcheck="false"></label>
+                        </div>
+                      </details>
                       <select id="exSecondSort" class="select ex-second-sort" aria-label="右欄排序">
                         <option value="name">名稱</option>
                         <option value="date">修改時間</option>
@@ -756,6 +777,7 @@
                       <button type="button" id="exSecondViewGridBtn" class="btn-icon" title="圖示" aria-label="右欄圖示檢視" aria-pressed="false">▦</button>
                     </div>
                   </header>
+                  <div class="ex-cmdbar ex-second-cmdbar" id="exSecondCmdBar" role="toolbar" aria-label="右欄檔案操作"></div>
                   <div class="ex-second-actions" role="toolbar" aria-label="右欄操作">
                     <button type="button" id="exCopyToSecond" class="btn btn-secondary btn-sm" title="複製到右欄" aria-label="複製到右欄">複製 →</button>
                     <button type="button" id="exMoveToSecond" class="btn btn-secondary btn-sm" title="搬到右欄" aria-label="搬到右欄">搬移 →</button>

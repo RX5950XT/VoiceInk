@@ -12452,6 +12452,22 @@ h6.md-h { font-size: 14px; }
   right: 8px;
 }
 
+/* 右欄自己的指令列：跟左欄那條長一樣，只是窄欄放不下時換行而不是橫向捲。 */
+.ex-second-cmdbar {
+  flex-wrap: wrap;
+  padding: 6px 8px;
+  overflow-x: visible;
+}
+
+/* 篩選面板貼著右欄右緣展開，別被標頭裁掉。 */
+.ex-second-filters .ex-search-filter-popover {
+  width: min(230px, calc(100% + 190px));
+}
+
+.ex-second-filters > summary {
+  padding: 5px 7px;
+}
+
 .ex-second-actions {
   display: flex;
   flex-wrap: wrap;

@@ -480,5 +480,30 @@ Review：
 `e2e-explorer-cdp.js` 102 條全綠。`e2e-explorer-cdp.js` 的 [C8] 資料夾監看偶發時序失敗，
 同一份程式碼重跑就過，不是這次改動造成的。
 
-未做：右欄沒有自己的指令列（沿用上方那排跟著作用欄走的指令列）；右欄的整機搜尋沒有
-自己的篩選面板，共用左欄那一組條件。
+### 再後續：右欄的指令列與篩選面板，外加回收筒還原與 Enter 確認（同日）
+
+- **右欄自己的指令列**：`#exSecondCmdBar` 長在右欄裡，跟 `#exCmdBar` 共用
+  `paintCmdBarInto(bar, which)`，選取與「貼上」可不可按都按那一欄算。動作本身仍看作用欄，
+  所以 `addCmd()` 的 click 先 `setActivePane(which)` 再跑——不先切的話，站在右欄時按
+  左欄的「貼上」會貼到右欄去。
+- **右欄自己的篩選面板**：`searchFilters(which)` 只差 id 前綴（`exSearch*`／
+  `exSecondSearch*`）。右欄那組 `<details>` 只在整機搜尋時顯示，切回「篩這個資料夾」
+  就收起來，免得把窄窄的右欄標頭擠爆（標頭還是 93px）。
+- **資源回收筒還原不了（真 bug）**：`recycle.restore()` 檢查父資料夾能不能寫，而磁碟
+  根目錄被 `isSystemLocked` 當成鎖住的位置，所以從 `D:\` 刪掉的東西一律 `PROTECTED`。
+  實測使用者的回收筒裡 4 筆全是 `D:\` 來的＝整個回收筒等於壞掉。改成只看目的地自己。
+  第二層：`mkdir('D:\', { recursive: true })` 吐 `EPERM`，所以父資料夾在就不要補。
+- **Enter ＝確定**：`app-dialog.js` 在 `<dialog>` 掛 capture 階段 keydown，Enter 一律
+  `close(OK)`。危險彈窗焦點仍停在「取消」，但 Enter 會確定（不 `preventDefault()` 的話
+  Enter 會先觸發焦點那顆鈕＝取消）。選字中的 Enter 照樣放行（`isComposing` 或
+  `keyCode === 229`）。
+- **Claude Code 的終端機**：`~/.claude/settings.json` 的 `"tui"` 從 `fullscreen` 改成
+  `default`，開起來就是一般新視窗而不是 Agent View。
+
+驗收：`test-explorer.js` 296 條、`e2e-app-dialog-cdp.js` 10 條、
+`e2e-explorer-dual-cdp.js` 35 條、`e2e-explorer-files-plan-cdp.js` 53 條、
+`e2e-explorer-cdp.js` 102 條全綠。
+
+地雷：`e2e-explorer-cdp.js` 的 [C8]「資料夾監看有在跑」偶發會紅。這次把改動前的版本
+（1bdb439）放回去跑，同樣會紅，所以不是這批改的；改完的版本連兩次 102 全綠。腳本現在
+會在紅的時候把當下的清單與磁碟內容印出來，下次不用再從零查。

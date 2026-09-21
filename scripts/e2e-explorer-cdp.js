@@ -533,6 +533,20 @@ async function main() {
         const row = document.querySelector('#exList [data-id="undo-me.txt"]')
         return row && row.offsetHeight > 4 ? { path: row.dataset.path } : null
       })()`), 15_000, '新檔案出現在畫面上').catch(() => null)
+      // 這條偶發會紅（fs.watch 在 Windows 上偶爾不送事件），紅的時候把現場印出來，
+      // 才分得出是監看沒跑還是畫面沒更新。
+      if (!shown) {
+        const diag = await cdp.eval(`(() => ({
+          crumb: (document.getElementById('exCrumbs') || {}).dataset?.path || '',
+          rows: [...document.querySelectorAll('#exList .ex-row')].map((r) => r.dataset.id),
+          search: (document.getElementById('exSearch') || {}).value,
+          empty: (document.getElementById('exEmpty') || {}).hidden,
+          home: (document.getElementById('exHome') || {}).hidden,
+          status: (document.getElementById('exStatusText') || {}).textContent
+        }))()`)
+        console.log('DIAG', JSON.stringify(diag))
+        console.log('DIAG seed', JSON.stringify(fs.readdirSync(SEED_DIR)))
+      }
       assert(!!shown, '種的檔案列得出來（資料夾監看有在跑）', JSON.stringify(shown))
 
       const target = await cdp.eval(`(() => {
