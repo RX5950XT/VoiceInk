@@ -21,6 +21,7 @@ const recycle = require('./recycle')
 const places = require('./places')
 const shellExt = require('./shell')
 const size = require('./size')
+const operations = require('./operations')
 
 /** @type {(channel: string, payload: any) => void} */
 let emit = () => {}
@@ -33,7 +34,10 @@ let clip = { mode: 'copy', paths: [] }
  */
 function configure(opts) {
   if (opts && opts.userDataPath) uffs.configure(opts.userDataPath)
-  if (opts && typeof opts.send === 'function') emit = opts.send
+  if (opts && typeof opts.send === 'function') {
+    emit = opts.send
+    operations.configure({ emit })
+  }
 }
 
 function defaultPlaces() {
@@ -73,10 +77,13 @@ const listDrives = () => drives.listDrives()
 const driveInfo = () => drives.driveInfo()
 const listDir = (dirPath, opts) => {
   // 「本機」是虛擬位置，沒有檔案清單（renderer 自己畫首頁）。
-  if (drives.isThisPc(dirPath)) return { path: drives.THIS_PC, entries: [], truncated: false }
+  if (drives.isThisPc(dirPath)) {
+    return { path: drives.THIS_PC, entries: [], offset: 0, limit: 0, total: 0, hasMore: false, truncated: false }
+  }
   return recycle.isRecyclePath(dirPath) ? files.listRecycle(opts) : files.listDir(dirPath, opts)
 }
 const preview = (filePath) => files.preview(filePath)
+const readMarkdown = (filePath) => files.readMarkdown(filePath)
 
 /**
  * 大預覽要用的網址。**不回 data: URI**：那會把整個檔案 base64 過一次 IPC，
@@ -258,7 +265,7 @@ const emptyRecycle = () => files.emptyRecycle()
 const copyEntry = (fromPath, toDir) => files.copyEntry(fromPath, toDir)
 const moveEntry = (fromPath, toDir) => files.moveEntry(fromPath, toDir)
 const uffsStatus = () => uffs.status()
-const uffsSearch = (pattern) => uffs.search(pattern)
+const uffsSearch = (pattern, filters) => uffs.search(pattern, filters)
 const uffsCancel = () => {
   uffs.cancelSearch()
   return true
@@ -437,23 +444,21 @@ function setClipboard(items, mode) {
  * @param {unknown} toDir
  */
 async function paste(toDir) {
-  let clipboard = clip
+  const clipboard = clip
   if (!clipboard.paths.length) throw paths.fail('EMPTY', '剪貼簿是空的')
   const trashed = recycle.isRecyclePath(toDir)
   if (trashed && clipboard.mode !== 'cut') throw paths.fail('BAD_PATH', '不能複製進資源回收筒')
-  const dest = trashed ? toDir : paths.resolveExisting(toDir)
-  const pending = clipboard.paths.slice()
-  const out = []
-  for (const src of pending) {
-    const result = trashed ? await files.removeEntry(src)
-      : clipboard.mode === 'cut' ? await files.moveEntry(src, dest) : await files.copyEntry(src, dest)
-    out.push(result.path)
-    if (clipboard.mode === 'cut' && clip === clipboard) {
-      clip = { ...clipboard, paths: clipboard.paths.filter((item) => item !== src) }
-      clipboard = clip
-    }
+  const destination = trashed ? toDir : paths.resolveExisting(toDir)
+  const result = await operations.run({
+    mode: trashed ? 'trash' : clipboard.mode === 'cut' ? 'move' : 'copy',
+    destination,
+    sources: clipboard.paths
+  })
+  if (clipboard.mode === 'cut' && clip === clipboard) {
+    const completed = new Set(result.items.filter((item) => item.status === 'completed').map((item) => item.source))
+    clip = { ...clipboard, paths: clipboard.paths.filter((item) => !completed.has(item)) }
   }
-  return trashed ? { paths: out, trashed: true } : { paths: out }
+  return operationResult(result, { trashed })
 }
 
 /**
@@ -467,26 +472,60 @@ async function dropEntries(items, toDir, mode) {
   const slice = items.slice(0, 50)
   if (recycle.isRecyclePath(toDir)) {
     if (mode === 'copy') throw paths.fail('BAD_PATH', '不能複製進資源回收筒')
-    const out = []
-    for (const src of slice) out.push((await files.removeEntry(src)).path)
-    return { paths: out, trashed: true }
+    return operationResult(await operations.run({ mode: 'trash', destination: toDir, sources: slice }), { trashed: true })
   }
   const dest = paths.resolveExisting(toDir)
-  const copy = mode === 'copy'
-  const out = []
-  for (const src of slice) {
-    const result = copy ? await files.copyEntry(src, dest) : await files.moveEntry(src, dest)
-    out.push(result.path)
-  }
-  return { paths: out }
+  return operationResult(await operations.run({
+    mode: mode === 'copy' ? 'copy' : 'move',
+    destination: dest,
+    sources: slice
+  }))
 }
+
+function operationResult(result, extra = {}) {
+  if (result && (result.status === 'failed' || result.status === 'partial')) {
+    const error = result.errorObject || paths.fail('OPERATION_PARTIAL', '部分檔案操作失敗')
+    error.operationId = result.id
+    throw error
+  }
+  return {
+    ...extra,
+    paths: result && Array.isArray(result.paths) ? result.paths : [],
+    operationId: result && result.id,
+    status: result && result.status,
+    items: result && result.items ? result.items : []
+  }
+}
+
+const operationCancel = (id) => operations.cancel(id)
+const operationRetry = (id) => operations.retry(id)
+const operationUndo = (id) => operations.undo(id)
+const operationState = () => operations.getState()
+const setOperationPolicy = (opts) => operations.setCollisionPolicy(opts)
 
 /**
  * @param {unknown} dirPath
  */
 function watchDir(dirPath) {
   if (recycle.isRecyclePath(dirPath)) return { watching: false, path: recycle.RECYCLE_CWD }
-  return watch.start(dirPath, (payload) => emit('explorer:changed', payload))
+  return watch.start(dirPath, (payload) => {
+    files.invalidateListCache(payload.path)
+    emit('explorer:changed', payload)
+  })
+}
+
+function watchDirs(dirPaths) {
+  const list = Array.isArray(dirPaths) ? dirPaths : []
+  const specs = list
+    .filter((dirPath) => !recycle.isRecyclePath(dirPath) && !drives.isThisPc(dirPath))
+    .map((dirPath) => ({
+      path: dirPath,
+      send: (payload) => {
+        files.invalidateListCache(payload.path)
+        emit('explorer:changed', payload)
+      }
+    }))
+  return watch.startMany(specs)
 }
 
 function unwatch() {
@@ -510,6 +549,7 @@ module.exports = {
   driveInfo,
   listDir,
   preview,
+  readMarkdown,
   mediaUrl,
   inspect,
   createEntry,
@@ -531,7 +571,13 @@ module.exports = {
   setClipboard,
   paste,
   dropEntries,
+  operationCancel,
+  operationRetry,
+  operationUndo,
+  operationState,
+  setOperationPolicy,
   watchDir,
+  watchDirs,
   unwatch,
   uffsStatus,
   uffsSearch,

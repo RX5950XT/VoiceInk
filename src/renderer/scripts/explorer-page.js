@@ -13,7 +13,18 @@ import { paintHomePane } from './explorer-home.js'
 import { paintTabStrip } from './explorer-tabs.js'
 import { clearFileIconWork, paintFileIcons } from './explorer-icons.js'
 import { openImageViewer, imageViewerOpen } from './image-viewer.js'
-import { nextZoomState, TILE_SIZES, DEFAULT_TILE } from './explorer-zoom.js'
+import { openPreview as openFilePreview, closePreview as closeFilePreview, previewKind, previewOpen } from './explorer-preview.js'
+import { mountExplorerOperations } from './explorer-operations.js'
+import { nextZoomState } from './explorer-zoom.js'
+import {
+  BROWSE_PAGE_SIZE as BROWSE_PAGE_SIZE_IMPORT,
+  normalizeBrowseState as normalizeBrowseStateImport,
+  normalizeBrowseTab as normalizeBrowseTabImport,
+  mergeBrowsePage as mergeBrowsePageImport,
+  visibleBrowseRange as visibleBrowseRangeImport,
+  pageOffsetsForRange as pageOffsetsForRangeImport,
+  selectBrowseRange as selectBrowseRangeImport
+} from './explorer-browse.js'
 import {
   RECYCLE_CWD,
   pathKey,
@@ -29,6 +40,118 @@ import {
 const SEARCH_DEBOUNCE_MS = 180
 /** 虛擬位置：Windows 那樣的「本機」首頁（跟 recyclebin 同一種，不是真路徑）。 */
 const THIS_PC = 'thispc'
+const TILE_SIZES = [48, 64, 96, 128, 180, 256]
+const DEFAULT_TILE = 96
+const BROWSE_PAGE_SIZE = typeof BROWSE_PAGE_SIZE_IMPORT === 'number' ? BROWSE_PAGE_SIZE_IMPORT : 500
+
+function normalizeBrowseState(raw = {}) {
+  if (typeof normalizeBrowseStateImport === 'function') return normalizeBrowseStateImport(raw)
+  const value = raw && typeof raw === 'object' ? raw : {}
+  return {
+    view: value.view === 'grid' ? 'grid' : 'list',
+    tile: Number(value.tile) || DEFAULT_TILE,
+    sort: ['date', 'size'].includes(value.sort) ? value.sort : 'name',
+    sortDesc: value.sortDesc === true,
+    showHidden: value.showHidden === true,
+    search: String(value.search || '').trim(),
+    searchSort: value.searchSort || 'rank',
+    searchFilters: value.searchFilters || {},
+    selected: Array.isArray(value.selected) ? value.selected : [],
+    anchor: String(value.anchor || ''),
+    cursor: String(value.cursor || ''),
+    scrollTop: Number(value.scrollTop) || 0,
+    scrollLeft: Number(value.scrollLeft) || 0
+  }
+}
+
+function normalizeBrowseTab(raw = {}, fallbackId = 't1') {
+  const value = raw && typeof raw === 'object' ? raw : {}
+  const stateValue = value.state && typeof value.state === 'object' ? value.state : value
+  const rightRaw = value.rightPane || stateValue.rightPane
+  if (typeof normalizeBrowseTabImport === 'function') {
+    const normalized = normalizeBrowseTabImport(raw, fallbackId)
+    return {
+      ...normalized,
+      state: rightRaw
+        ? { ...normalized.state, rightPane: normalizeRightPaneState(rightRaw) }
+        : normalized.state
+    }
+  }
+  return {
+    id: value.id || fallbackId,
+    cwd: value.cwd || THIS_PC,
+    history: Array.isArray(value.history) && value.history.length ? value.history : [value.cwd || THIS_PC],
+    histIndex: Number(value.histIndex) || 0,
+    state: {
+      ...normalizeBrowseState(stateValue),
+      ...(rightRaw ? { rightPane: normalizeRightPaneState(rightRaw) } : {})
+    }
+  }
+}
+
+function mergeBrowsePage(current, page, fallbackOffset = 0) {
+  if (typeof mergeBrowsePageImport === 'function') return mergeBrowsePageImport(current, page, fallbackOffset)
+  const value = page && typeof page === 'object' ? page : {}
+  const offset = Number(value.offset) || fallbackOffset
+  const source = Array.isArray(current) ? current.slice() : []
+  const list = Array.isArray(value.entries) ? value.entries : []
+  const total = Math.max(source.length, offset + list.length, Number(value.total) || 0)
+  source.length = total
+  list.forEach((entry, index) => { source[offset + index] = entry })
+  return { entries: source, total, loaded: list.length }
+}
+
+function visibleBrowseRange(options = {}) {
+  if (typeof visibleBrowseRangeImport === 'function') return visibleBrowseRangeImport(options)
+  const total = Math.max(0, Number(options.total) || 0)
+  const rowHeight = Number(options.rowHeight) || 34
+  const start = Math.max(0, Math.floor((Number(options.scrollTop) || 0) / rowHeight) - 12)
+  const end = Math.min(total, Math.ceil(((Number(options.scrollTop) || 0) + (Number(options.viewportHeight) || 600)) / rowHeight) + 12)
+  return { start, end, before: start * rowHeight, after: Math.max(0, total - end) * rowHeight }
+}
+
+function pageOffsetsForRange(start, end, pageSize = BROWSE_PAGE_SIZE) {
+  if (typeof pageOffsetsForRangeImport === 'function') return pageOffsetsForRangeImport(start, end, pageSize)
+  const first = Math.floor(Math.max(0, Number(start) || 0) / pageSize) * pageSize
+  const last = Math.max(first, Math.ceil(Math.max(0, Number(end) || 0) / pageSize) * pageSize)
+  const out = []
+  for (let offset = first; offset < last; offset += pageSize) out.push(offset)
+  return out
+}
+
+function selectBrowseRange(rows, anchorId, targetId, selected = [], additive = false) {
+  if (typeof selectBrowseRangeImport === 'function') {
+    return selectBrowseRangeImport(rows, anchorId, targetId, selected, additive)
+  }
+  const list = (Array.isArray(rows) ? rows : []).filter(Boolean)
+  const ids = list.map((entry) => entry.recycleKey || entry.path || entry.name)
+  const first = ids.indexOf(anchorId)
+  const last = ids.indexOf(targetId)
+  if (first < 0 || last < 0) return [...new Set(selected)]
+  const next = new Set(additive ? selected : [])
+  for (const id of ids.slice(Math.min(first, last), Math.max(first, last) + 1)) next.add(id)
+  return [...next]
+}
+
+function normalizeRightPaneState(raw) {
+  const value = raw && typeof raw === 'object' ? raw : {}
+  const history = Array.isArray(value.history) && value.history.length
+    ? value.history.filter((item) => typeof item === 'string' && item).slice(0, 64)
+    : [value.cwd || THIS_PC]
+  const cwd = typeof value.cwd === 'string' && value.cwd ? value.cwd : THIS_PC
+  return {
+    cwd,
+    history,
+    histIndex: Math.max(0, Math.min(history.length - 1, Number(value.histIndex) | 0)),
+    search: String(value.search || '').trim().slice(0, 200),
+    sortBy: value.sortBy === 'date' || value.sortBy === 'size' ? value.sortBy : 'name',
+    sortDesc: value.sortDesc === true,
+    selected: Array.isArray(value.selected) ? value.selected.filter(Boolean).slice(0, 10000) : [],
+    anchor: String(value.anchor || ''),
+    scrollTop: Math.max(0, Number(value.scrollTop) || 0),
+    scrollLeft: Math.max(0, Number(value.scrollLeft) || 0)
+  }
+}
 const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'svg'])
 
 let started = false
@@ -52,6 +175,9 @@ let cursor = ''
 let lastClip = { mode: 'copy', paths: [] }
 /** @type {Array<{ name: string, path: string, dir: boolean, size: number, mtimeMs: number, ext?: string }>} */
 let entries = []
+let directoryTotal = 0
+let loadedOffsets = new Set()
+let pageRequestSeq = 0
 /** @type {Array<{ name: string, path: string, dir: boolean, size: number, mtimeMs: number }>} */
 let hits = []
 let searching = false
@@ -70,6 +196,8 @@ let placeReorder = null
 let unsubChanged = null
 /** @type {(() => void) | null} */
 let unsubProgress = null
+/** @type {(() => void) | null} */
+let disposeOperations = null
 /** @type {object | null} */
 let uffs = null
 let ensuring = false
@@ -84,6 +212,31 @@ let diskInfo = []
 let tabs = []
 let activeId = ''
 let tabSeq = 0
+/** 右欄是獨立狀態；左欄沿用上面的既有單欄流程。 */
+const secondPane = {
+  cwd: THIS_PC,
+  history: [THIS_PC],
+  histIndex: 0,
+  entries: [],
+  total: 0,
+  loadedOffsets: new Set(),
+  pendingOffsets: new Set(),
+  selected: new Set(),
+  anchor: '',
+  search: '',
+  sortBy: 'name',
+  sortDesc: false,
+  scrollTop: 0,
+  scrollLeft: 0,
+  loading: false,
+  seq: 0
+}
+let dualPane = false
+let virtualPaintTimer = 0
+let secondVirtualTimer = 0
+const paneStates = new Map()
+let restoreSearch = ''
+let restoreScrollTop = 0
 
 const $ = (id) => document.getElementById(id)
 
@@ -136,6 +289,7 @@ function listed() {
 function bindOnce() {
   if (started) return
   started = true
+  disposeOperations = mountExplorerOperations({ root: $('page-explorer'), api: electronAPI.explorer })
   $('exTabAddBtn')?.addEventListener('click', () => void newTab())
   $('exBackBtn')?.addEventListener('click', () => goHistory(-1))
   $('exForwardBtn')?.addEventListener('click', () => goHistory(1))
@@ -145,6 +299,8 @@ function bindOnce() {
   $('exEmptyBinBtn')?.addEventListener('click', () => void emptyBin())
   $('exViewListBtn')?.addEventListener('click', () => setView('list'))
   $('exViewGridBtn')?.addEventListener('click', () => setView('grid'))
+  $('exDualBtn')?.addEventListener('click', () => void toggleDualPane())
+  $('exDetailToggleBtn')?.addEventListener('click', toggleDetailPane)
   $('exListHead')?.addEventListener('click', onSortClick)
   $('exList')?.addEventListener('mousedown', onListMouseDown)
   $('exList')?.addEventListener('click', onListClick)
@@ -155,7 +311,51 @@ function bindOnce() {
   // Ctrl+滾輪換圖示大小。`passive: false` 不能省——預設的 wheel 監聽是被動的，
   // `preventDefault()` 會被忽略，畫面就變成整頁縮放（側欄跟著一起縮）。
   $('exList')?.addEventListener('wheel', onListWheel, { passive: false })
+  $('exList')?.addEventListener('scroll', onListScroll, { passive: true })
   $('exSearch')?.addEventListener('input', onSearchInput)
+  for (const id of ['exSearchType', 'exSearchMinSize', 'exSearchMaxSize', 'exSearchFrom', 'exSearchTo', 'exSearchLocation']) {
+    $(id)?.addEventListener('input', onSearchFilterChange)
+    $(id)?.addEventListener('change', onSearchFilterChange)
+  }
+  $('exSecondBack')?.addEventListener('click', () => void secondHistory(-1))
+  $('exSecondForward')?.addEventListener('click', () => void secondHistory(1))
+  $('exSecondUp')?.addEventListener('click', () => void secondGoUp())
+  $('exSecondPath')?.addEventListener('click', () => void secondChoosePath())
+  $('exSecondSearch')?.addEventListener('input', (e) => {
+    secondPane.search = String(e.target.value || '')
+    saveSecondPaneState()
+    paintSecondPane()
+  })
+  $('exSecondSort')?.addEventListener('change', (e) => {
+    secondPane.sortBy = e.target.value === 'date' || e.target.value === 'size' ? e.target.value : 'name'
+    saveSecondPaneState()
+    void loadSecond(secondPane.cwd, { pushHistory: false })
+  })
+  $('exSecondSortDir')?.addEventListener('click', () => {
+    secondPane.sortDesc = !secondPane.sortDesc
+    saveSecondPaneState()
+    void loadSecond(secondPane.cwd, { pushHistory: false })
+  })
+  $('exSecondList')?.addEventListener('scroll', () => {
+    const list = $('exSecondList')
+    if (list) {
+      secondPane.scrollTop = list.scrollTop
+      secondPane.scrollLeft = list.scrollLeft
+    }
+    saveSecondPaneState()
+    if (!secondVirtualTimer && secondPane.entries.length > 250) {
+      secondVirtualTimer = window.setTimeout(() => {
+        secondVirtualTimer = 0
+        void loadSecondVisiblePages()
+      }, 40)
+    }
+  }, { passive: true })
+  $('exSecondList')?.addEventListener('click', onSecondListClick)
+  $('exSecondList')?.addEventListener('dblclick', (e) => void onSecondDoubleClick(e))
+  $('exCopyToSecond')?.addEventListener('click', () => void copyBetweenPanes('left-to-right', 'copy'))
+  $('exMoveToSecond')?.addEventListener('click', () => void copyBetweenPanes('left-to-right', 'move'))
+  $('exCopyFromSecond')?.addEventListener('click', () => void copyBetweenPanes('right-to-left', 'copy'))
+  $('exMoveFromSecond')?.addEventListener('click', () => void copyBetweenPanes('right-to-left', 'move'))
   $('exSearch')?.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       e.preventDefault()
@@ -185,8 +385,9 @@ function bindOnce() {
   document.addEventListener('keydown', onPageKey)
   for (const type of ['mousedown', 'mouseup', 'auxclick']) document.addEventListener(type, onSideButton, true)
   unsubChanged = electronAPI.explorer.onChanged((payload) => {
-    if (!payload || payload.path !== cwd || inSearch()) return
-    void loadDir(cwd, { silent: true, keepSelection: true })
+    if (!payload) return
+    if (payload.path === cwd && !inSearch()) void loadDir(cwd, { silent: true, keepSelection: true })
+    if (dualPane && payload.path === secondPane.cwd) void loadSecond(secondPane.cwd, { pushHistory: false, keepSelection: true })
   })
   unsubProgress = electronAPI.explorer.onUffsProgress((info) => {
     if (!info) return
@@ -320,6 +521,8 @@ function setView(next) {
   applyTile()
   paintSortHead()
   void electronAPI.explorer.saveState({ view })
+  syncTab()
+  persistTabs()
 }
 
 /**
@@ -450,6 +653,8 @@ function paintList() {
   const host = $('exList')
   const empty = $('exEmpty')
   if (!host) return
+  // replaceChildren() 會把 scrollTop 清成 0，所以要先把位置記下來再重畫。
+  const scrollTop = host.scrollTop
   const home = inHome() && !inSearch()
   paintSortHead()
   $('exDetail')?.classList.toggle('is-home', home)
@@ -473,14 +678,464 @@ function paintList() {
     empty.hidden = rows.length > 0
     empty.textContent = inSearch() ? '沒有符合的檔案' : inRecycle() ? '資源回收筒是空的' : '這個資料夾是空的'
   }
-  for (const entry of rows) {
-    host.appendChild(rowEl(entry))
+  const canVirtualize = !inSearch() && rows.length > 250
+  if (canVirtualize) {
+    const range = visibleBrowseRange({
+      total: rows.length,
+      scrollTop,
+      viewportHeight: host.clientHeight || 600,
+      rowHeight: 34,
+      overscan: 14
+    })
+    const before = document.createElement('div')
+    before.className = 'ex-virtual-spacer'
+    before.style.height = `${range.before}px`
+    host.appendChild(before)
+    for (let i = range.start; i < range.end; i += 1) {
+      const entry = rows[i]
+      if (entry) host.appendChild(rowEl(entry))
+    }
+    const after = document.createElement('div')
+    after.className = 'ex-virtual-spacer'
+    after.style.height = `${range.after}px`
+    host.appendChild(after)
+    host.scrollTop = scrollTop
+  } else {
+    for (const entry of rows) host.appendChild(rowEl(entry))
   }
   paintFileIcons(host, (target) => electronAPI.explorer.fileIcon(target))
   paintStatus()
   paintCmdBar()
   paintDetail()
   focusSelectedRow()
+}
+
+function toggleDetailPane() {
+  const detail = $('exDetail')
+  const button = $('exDetailToggleBtn')
+  if (!detail || !button) return
+  const collapsed = detail.classList.toggle('is-collapsed')
+  button.setAttribute('aria-pressed', collapsed ? 'false' : 'true')
+  button.textContent = collapsed ? '顯示詳情' : '收合詳情'
+}
+
+function onListScroll() {
+  const host = $('exList')
+  if (!host || inSearch() || entries.length <= 250 || virtualPaintTimer) return
+  syncTab()
+  persistTabs()
+  virtualPaintTimer = window.setTimeout(() => {
+    virtualPaintTimer = 0
+    void loadVisiblePages()
+  }, 40)
+}
+
+function secondRows() {
+  const query = secondPane.search.trim().toLocaleLowerCase()
+  if (!query) return secondPane.entries
+  return secondPane.entries.filter((entry) => (
+    String(entry.name || '').toLocaleLowerCase().includes(query)
+  ))
+}
+
+function secondPathLabel() {
+  if (pathKey(secondPane.cwd) === THIS_PC) return '本機'
+  if (pathKey(secondPane.cwd) === RECYCLE_CWD) return '資源回收筒'
+  return secondPane.cwd || '本機'
+}
+
+function paneStateKey(tabId = activeId) {
+  return `${tabId || 'default'}:right`
+}
+
+function rightPaneSnapshot(state = secondPane) {
+  return {
+    cwd: state.cwd,
+    history: [...state.history],
+    histIndex: state.histIndex,
+    selected: [...state.selected],
+    anchor: state.anchor,
+    search: state.search,
+    sortBy: state.sortBy,
+    sortDesc: state.sortDesc,
+    scrollTop: state.scrollTop,
+    scrollLeft: state.scrollLeft || 0
+  }
+}
+
+function saveSecondPaneState() {
+  // 雙欄沒開過就沒有右欄狀態可存；先存了預設值，下次按「雙欄」會還原成空的本機。
+  if (!dualPane) return
+  const snapshot = rightPaneSnapshot()
+  paneStates.set(paneStateKey(), {
+    cwd: secondPane.cwd,
+    history: [...secondPane.history],
+    histIndex: secondPane.histIndex,
+    entries: [...secondPane.entries],
+    total: secondPane.total,
+    loadedOffsets: new Set(secondPane.loadedOffsets),
+    selected: [...secondPane.selected],
+    anchor: secondPane.anchor,
+    search: secondPane.search,
+    sortBy: secondPane.sortBy,
+    sortDesc: secondPane.sortDesc,
+    scrollTop: secondPane.scrollTop,
+    scrollLeft: secondPane.scrollLeft
+  })
+  const tab = currentTab()
+  if (tab) {
+    tab.state = {
+      ...normalizeBrowseState(tab.state || tab),
+      rightPane: snapshot
+    }
+  }
+}
+
+function restoreSecondPaneState() {
+  const state = paneStates.get(paneStateKey())
+  if (!state) return false
+  secondPane.cwd = state.cwd
+  secondPane.history = [...state.history]
+  secondPane.histIndex = state.histIndex
+  secondPane.entries = [...state.entries]
+  secondPane.total = state.total
+  secondPane.loadedOffsets = new Set(state.loadedOffsets)
+  secondPane.selected = new Set(state.selected)
+  secondPane.anchor = state.anchor
+  secondPane.search = state.search
+  secondPane.sortBy = state.sortBy
+  secondPane.sortDesc = state.sortDesc
+  secondPane.scrollTop = state.scrollTop
+  secondPane.scrollLeft = state.scrollLeft || 0
+  secondPane.pendingOffsets = new Set()
+  secondPane.seq += 1
+  return true
+}
+
+function paintSecondPane() {
+  const pane = $('exSecondPane')
+  const list = $('exSecondList')
+  if (!pane || !list) return
+  pane.hidden = !dualPane
+  if (!dualPane) return
+  const pathButton = $('exSecondPath')
+  if (pathButton) pathButton.textContent = secondPathLabel()
+  const back = $('exSecondBack')
+  const forward = $('exSecondForward')
+  if (back) back.disabled = secondPane.histIndex <= 0 || secondPane.loading
+  if (forward) forward.disabled = secondPane.histIndex >= secondPane.history.length - 1 || secondPane.loading
+  const up = $('exSecondUp')
+  if (up) up.disabled = pathKey(secondPane.cwd) === THIS_PC || secondPane.loading
+  const search = /** @type {HTMLInputElement | null} */ ($('exSecondSearch'))
+  if (search && search.value !== secondPane.search) search.value = secondPane.search
+  const sort = /** @type {HTMLSelectElement | null} */ ($('exSecondSort'))
+  if (sort && sort.value !== secondPane.sortBy) sort.value = secondPane.sortBy
+  const sortDir = $('exSecondSortDir')
+  if (sortDir) sortDir.textContent = secondPane.sortDesc ? '↓' : '↑'
+  const scrollTop = secondPane.scrollTop
+  const scrollLeft = secondPane.scrollLeft || 0
+  list.replaceChildren()
+  const rows = secondRows()
+  const virtual = rows.length > 250
+  const range = virtual ? visibleBrowseRange({
+    total: rows.length,
+    scrollTop,
+    viewportHeight: list.clientHeight || 500,
+    rowHeight: 34,
+    overscan: 14
+  }) : { start: 0, end: rows.length, before: 0, after: 0 }
+  if (virtual) {
+    const before = document.createElement('div')
+    before.className = 'ex-virtual-spacer'
+    before.style.height = `${range.before}px`
+    list.appendChild(before)
+  }
+  for (let i = range.start; i < range.end; i += 1) {
+    const entry = rows[i]
+    if (entry) list.appendChild(secondRowEl(entry))
+  }
+  if (virtual) {
+    const after = document.createElement('div')
+    after.className = 'ex-virtual-spacer'
+    after.style.height = `${range.after}px`
+    list.appendChild(after)
+  }
+  const empty = $('exSecondEmpty')
+  if (empty) {
+    empty.hidden = rows.length > 0
+    empty.textContent = secondPane.search ? '沒有符合的檔案' : '這個資料夾是空的'
+  }
+  const selectedIds = new Set([...secondPane.selected])
+  secondPane.selected = new Set(rows.map((item) => item.path).filter((id) => selectedIds.has(id)))
+  for (const row of list.querySelectorAll('.ex-row')) {
+    row.classList.toggle('is-selected', secondPane.selected.has(row.dataset.path))
+  }
+  list.scrollTop = scrollTop
+  list.scrollLeft = scrollLeft
+}
+
+function refreshExplorerWatches() {
+  const dirs = [cwd]
+  if (dualPane && secondPane.cwd && pathKey(secondPane.cwd) !== THIS_PC) dirs.push(secondPane.cwd)
+  if (typeof electronAPI.explorer.watchDirs === 'function') {
+    void electronAPI.explorer.watchDirs(dirs)
+  } else if (cwd && !inHome() && !inRecycle()) {
+    void electronAPI.explorer.watch(cwd)
+  }
+}
+
+function secondRowEl(entry) {
+  const row = document.createElement('div')
+  row.className = 'ex-row'
+  row.dataset.path = entry.path
+  row.dataset.name = entry.name
+  row.setAttribute('role', 'option')
+  row.tabIndex = -1
+  row.classList.toggle('is-selected', secondPane.selected.has(entry.path))
+  const name = document.createElement('div')
+  name.className = 'ex-row-name'
+  const icon = document.createElement('span')
+  icon.className = 'ex-row-icon'
+  icon.textContent = iconFor(entry)
+  icon.setAttribute('aria-hidden', 'true')
+  const label = document.createElement('span')
+  label.className = 'ex-row-label'
+  label.textContent = entry.name
+  label.title = entry.name
+  name.append(icon, label)
+  const size = document.createElement('div')
+  size.className = 'ex-row-size'
+  size.textContent = entry.dir ? '—' : formatSize(entry.size)
+  const mtime = document.createElement('div')
+  mtime.className = 'ex-row-mtime'
+  mtime.textContent = formatTime(entry.mtimeMs)
+  row.append(name, size, mtime)
+  return row
+}
+
+async function loadSecondVisiblePages() {
+  if (!dualPane || pathKey(secondPane.cwd) === THIS_PC || !secondPane.entries.length) return
+  const list = $('exSecondList')
+  if (!list) return
+  const range = visibleBrowseRange({
+    total: secondPane.total || secondPane.entries.length,
+    scrollTop: list.scrollTop,
+    viewportHeight: list.clientHeight || 500,
+    rowHeight: 34,
+    overscan: 18
+  })
+  const offsets = pageOffsetsForRange(range.start, range.end, BROWSE_PAGE_SIZE)
+  const pending = offsets.filter((offset) => !secondPane.loadedOffsets.has(offset)
+    && !secondPane.pendingOffsets.has(offset))
+  if (!pending.length) return
+  pending.forEach((offset) => secondPane.pendingOffsets.add(offset))
+  const seq = secondPane.seq
+  await Promise.all(pending.map(async (offset) => {
+    try {
+      const data = await listDirectoryPage(secondPane.cwd, {
+        sort: secondPane.sortBy,
+        desc: secondPane.sortDesc,
+        showHidden
+      }, offset)
+      if (seq !== secondPane.seq || pathKey(data.path) !== pathKey(secondPane.cwd)) return
+      secondPane.entries = mergeBrowsePage(secondPane.entries, data, offset).entries
+      secondPane.total = Math.max(secondPane.total, Number(data.total) || secondPane.entries.length)
+      secondPane.loadedOffsets.add(offset)
+    } catch {
+      // 下一次捲動可以重試
+    } finally {
+      secondPane.pendingOffsets.delete(offset)
+    }
+  }))
+  if (seq === secondPane.seq) {
+    saveSecondPaneState()
+    paintSecondPane()
+  }
+}
+
+async function loadSecond(dirPath, opts = {}) {
+  const seq = ++secondPane.seq
+  secondPane.loading = true
+  paintSecondPane()
+  if (pathKey(dirPath) === THIS_PC) {
+    secondPane.cwd = THIS_PC
+    secondPane.entries = []
+    secondPane.total = 0
+    secondPane.loadedOffsets = new Set()
+    secondPane.pendingOffsets = new Set()
+  } else {
+    let data
+    try {
+      data = await listDirectoryPage(dirPath, {
+        sort: secondPane.sortBy,
+        desc: secondPane.sortDesc,
+        showHidden
+      }, 0)
+    } catch {
+      data = null
+    }
+    if (seq !== secondPane.seq) return false
+    if (!data) {
+      showToast('右欄讀不到這個資料夾', 'error')
+      secondPane.loading = false
+      paintSecondPane()
+      return false
+    }
+    secondPane.cwd = data.path
+    secondPane.entries = mergeBrowsePage([], data, 0).entries
+    secondPane.total = Number(data.total) || secondPane.entries.filter(Boolean).length
+    secondPane.loadedOffsets = new Set([Number(data.offset) || 0])
+    secondPane.pendingOffsets = new Set()
+  }
+  if (!opts.keepSelection) {
+    secondPane.selected = new Set()
+    secondPane.anchor = ''
+  } else {
+    const live = new Set(secondPane.entries.map((entry) => entry.path))
+    secondPane.selected = new Set([...secondPane.selected].filter((id) => live.has(id)))
+    if (secondPane.anchor && !live.has(secondPane.anchor)) secondPane.anchor = ''
+  }
+  secondPane.loading = false
+  paintSecondPane()
+  if (opts.pushHistory !== false) {
+    secondPane.history = secondPane.history.slice(0, secondPane.histIndex + 1)
+    if (pathKey(secondPane.history.at(-1)) !== pathKey(secondPane.cwd)) secondPane.history.push(secondPane.cwd)
+    secondPane.histIndex = secondPane.history.length - 1
+  }
+  saveSecondPaneState()
+  refreshExplorerWatches()
+  return true
+}
+
+async function secondNavigate(dirPath) {
+  if (!dualPane) return
+  await loadSecond(dirPath)
+}
+
+async function secondHistory(delta) {
+  const next = secondPane.histIndex + delta
+  if (next < 0 || next >= secondPane.history.length) return
+  secondPane.histIndex = next
+  await loadSecond(secondPane.history[next], { pushHistory: false })
+}
+
+async function secondGoUp() {
+  if (!secondPane.cwd || pathKey(secondPane.cwd) === THIS_PC) return
+  if (/^[A-Za-z]:\\?$/.test(secondPane.cwd)) {
+    await secondNavigate(THIS_PC)
+    return
+  }
+  if (secondPane.cwd.startsWith('\\\\')) {
+    const parts = secondPane.cwd.replace(/\\+$/, '').replace(/^\\\\/, '').split('\\').filter(Boolean)
+    if (parts.length <= 2) {
+      await secondNavigate(THIS_PC)
+      return
+    }
+  }
+  await secondNavigate(parentOf(secondPane.cwd) || THIS_PC)
+}
+
+async function secondChoosePath() {
+  const value = await askInput('右欄路徑', { value: secondPane.cwd === THIS_PC ? '本機' : secondPane.cwd })
+  if (!value) return
+  try {
+    const resolved = await call(electronAPI.explorer.resolvePath(value), '找不到這個路徑')
+    await secondNavigate(resolved.dir ? resolved.path : resolved.parent)
+  } catch {
+    // toast 已顯示
+  }
+}
+
+function onSecondListClick(event) {
+  const row = event.target.closest('.ex-row')
+  if (!row) return
+  const id = row.dataset.path
+  if (!id) return
+  if (event.shiftKey && secondPane.anchor) {
+    secondPane.selected = new Set(selectBrowseRange(
+      secondRows(), secondPane.anchor, id, [...secondPane.selected], false
+    ))
+  } else if (event.ctrlKey || event.metaKey) {
+    if (secondPane.selected.has(id)) secondPane.selected.delete(id)
+    else secondPane.selected.add(id)
+    secondPane.anchor = id
+  } else {
+    secondPane.selected = new Set([id])
+    secondPane.anchor = id
+  }
+  paintSecondPane()
+  saveSecondPaneState()
+}
+
+async function onSecondDoubleClick(event) {
+  const row = event.target.closest('.ex-row')
+  const entry = secondRows().find((item) => item.path === row?.dataset.path)
+  if (!entry) return
+  if (entry.dir) {
+    await secondNavigate(entry.path)
+    return
+  }
+  try {
+    const result = await call(electronAPI.explorer.openPath(entry.path), '打不開')
+    if (result?.dir) await secondNavigate(result.path)
+  } catch {
+    // toast 已顯示
+  }
+}
+
+async function copyBetweenPanes(direction, mode) {
+  const fromRight = direction === 'right-to-left'
+  const items = fromRight
+    ? secondRows().filter((entry) => secondPane.selected.has(entry.path))
+    : selectedEntries()
+  const target = fromRight ? cwd : secondPane.cwd
+  if (!items.length || !target || pathKey(target) === THIS_PC) return
+  try {
+    const done = await call(
+      electronAPI.explorer.dropEntries(items.map((item) => item.path), target, mode),
+      mode === 'copy' ? '複製失敗' : '搬移失敗'
+    )
+    if (done?.paths?.length) showToast(mode === 'copy' ? `已複製 ${done.paths.length} 個項目` : `已搬移 ${done.paths.length} 個項目`)
+    if (fromRight) {
+      await loadSecond(secondPane.cwd, { pushHistory: false })
+      await loadDir(cwd, { silent: true, keepSelection: true })
+    } else {
+      await refreshAfterMutate()
+      await loadSecond(secondPane.cwd, { pushHistory: false })
+    }
+  } catch {
+    // toast 已顯示
+  }
+}
+
+async function toggleDualPane() {
+  if (dualPane) {
+    saveSecondPaneState()
+    persistTabs()
+  }
+  dualPane = !dualPane
+  const button = $('exDualBtn')
+  if (button) button.setAttribute('aria-pressed', dualPane ? 'true' : 'false')
+  if (!dualPane) {
+    const pane = $('exSecondPane')
+    if (pane) pane.hidden = true
+    refreshExplorerWatches()
+    return
+  }
+  const restored = paneStates.has(paneStateKey())
+  if (restored) {
+    restoreSecondPaneState()
+  } else {
+    secondPane.cwd = inHome() ? (disks[0]?.path || THIS_PC) : cwd
+    secondPane.history = [secondPane.cwd]
+    secondPane.histIndex = 0
+    secondPane.search = ''
+    secondPane.selected = new Set()
+  }
+  await loadSecond(secondPane.cwd, { pushHistory: false, keepSelection: restored })
+  paintSecondPane()
+  persistTabs()
+  refreshExplorerWatches()
 }
 
 function focusSelectedRow() {
@@ -565,13 +1220,7 @@ function onRowClick(entry, e) {
   const rows = listed()
   const id = entryId(entry)
   if (e.shiftKey && anchor) {
-    const i1 = rows.findIndex((r) => entryId(r) === anchor)
-    const i2 = rows.findIndex((r) => entryId(r) === id)
-    if (i1 >= 0 && i2 >= 0) {
-      const lo = Math.min(i1, i2)
-      const hi = Math.max(i1, i2)
-      selected = new Set(rows.slice(lo, hi + 1).map((r) => entryId(r)))
-    }
+    selected = new Set(selectBrowseRange(rows, anchor, id, selected, e.ctrlKey || e.metaKey))
   } else if (e.ctrlKey || e.metaKey) {
     if (selected.has(id)) selected.delete(id)
     else selected.add(id)
@@ -585,6 +1234,8 @@ function onRowClick(entry, e) {
   paintList()
   const row = $('exList')?.querySelector('.ex-row.is-selected')
   if (row && typeof row.focus === 'function') row.focus({ preventScroll: true })
+  syncTab()
+  persistTabs()
 }
 
 function selectOnly(full) {
@@ -612,7 +1263,8 @@ function paintStatus() {
     ? `，${formatSize(picked.reduce((n, p) => n + (Number(p.size) || 0), 0))}`
     : ''
   const picks = picked.length ? ` · 已選取 ${picked.length} 個${bytes}` : ''
-  el.textContent = `${rows.length} 個項目 · ${dirs} 個資料夾${extra}${picks}`
+  const total = directoryTotal || rows.filter(Boolean).length
+  el.textContent = `${total} 個項目 · ${dirs} 個資料夾${extra}${picks}`
 }
 
 function selectedEntries() {
@@ -636,7 +1288,7 @@ async function paintDetail() {
     formatSize,
     formatTime,
     // 側欄那張小預覽點下去＝開大預覽（游標也會變成放大鏡）
-    onPreviewClick: isImage(items[0]) ? () => openPreview(items[0]) : null
+    onPreviewClick: isPreviewable(items[0]) ? () => openPreview(items[0]) : null
   })
 }
 
@@ -660,6 +1312,7 @@ function paintCmdBar() {
   addCmd(bar, '剪下', () => void clipboard(items, 'cut'), { disabled: !has })
   addCmd(bar, '貼上', () => void pasteHere(), { disabled: inHome() })
   addCmd(bar, '重新命名', () => void renameItem(items[0]), { disabled: !one })
+  addCmd(bar, '批次改名', () => void batchRenameItems(items), { disabled: items.length < 2 })
   addCmd(bar, '刪除', () => void deleteItems(items), { disabled: !has, danger: true })
 }
 
@@ -688,6 +1341,85 @@ function syncTab() {
   tab.cwd = cwd
   tab.history = history
   tab.histIndex = histIndex
+  tab.state = normalizeBrowseState({
+    view,
+    tile,
+    sort: sortBy,
+    sortDesc,
+    showHidden,
+    search: $('exSearch')?.value || '',
+    searchSort,
+    searchFilters: searchFilters(),
+    selected: [...selected],
+    anchor,
+    cursor,
+    scrollTop: $('exList')?.scrollTop || 0,
+    scrollLeft: $('exList')?.scrollLeft || 0
+  })
+}
+
+function persistTabs() {
+  if (!tabs.length || !activeId) return
+  syncTab()
+  if (dualPane) saveSecondPaneState()
+  void electronAPI.explorer.saveState({
+    tabs: tabs.map((tab) => ({
+      id: tab.id,
+      cwd: tab.cwd,
+      history: tab.history,
+      histIndex: tab.histIndex,
+      state: tab.state || {}
+    })),
+    activeTabId: activeId,
+    lastPath: cwd,
+    view,
+    tile,
+    sort: sortBy,
+    sortDesc,
+    showHidden,
+    dualPane
+  })
+}
+
+function applyTabState(tab) {
+  const raw = tab?.state || tab || {}
+  const state = normalizeBrowseState(raw)
+  view = state.view
+  tile = state.tile
+  sortBy = state.sort
+  sortDesc = state.sortDesc
+  showHidden = state.showHidden
+  searchSort = state.searchSort
+  selected = new Set(state.selected)
+  anchor = state.anchor
+  cursor = state.cursor
+  restoreSearch = state.search
+  restoreScrollTop = state.scrollTop
+  const type = /** @type {HTMLSelectElement | null} */ ($('exSearchType'))
+  if (type) type.value = state.searchFilters?.type || 'all'
+  for (const [id, value] of [
+    ['exSearchMinSize', state.searchFilters?.minSize],
+    ['exSearchMaxSize', state.searchFilters?.maxSize],
+    ['exSearchFrom', state.searchFilters?.fromMs ? new Date(state.searchFilters.fromMs).toISOString().slice(0, 10) : ''],
+    ['exSearchTo', state.searchFilters?.toMs ? new Date(state.searchFilters.toMs).toISOString().slice(0, 10) : ''],
+    ['exSearchLocation', state.searchFilters?.location || '']
+  ]) {
+    const input = $(id)
+    if (input) input.value = value == null ? '' : String(value)
+  }
+  const rightRaw = raw.rightPane || tab?.rightPane
+  if (rightRaw) {
+    const right = normalizeRightPaneState(rightRaw)
+    paneStates.set(paneStateKey(), {
+      ...right,
+      entries: [],
+      total: 0,
+      loadedOffsets: new Set(),
+      pendingOffsets: new Set(),
+      loading: false,
+      seq: 0
+    })
+  }
 }
 
 function tabTitle(target) {
@@ -717,7 +1449,14 @@ function paintTabs() {
  */
 async function newTab(target) {
   syncTab()
-  const tab = { id: `t${++tabSeq}`, cwd: target || THIS_PC, history: [target || THIS_PC], histIndex: 0 }
+  saveSecondPaneState()
+  const tab = normalizeBrowseTab({
+    id: `t${++tabSeq}`,
+    cwd: target || THIS_PC,
+    history: [target || THIS_PC],
+    histIndex: 0,
+    state: { view, tile, sort: sortBy, sortDesc, showHidden }
+  }, `t${tabSeq}`)
   tabs.push(tab)
   activeId = tab.id
   history = tab.history
@@ -725,6 +1464,9 @@ async function newTab(target) {
   cwd = tab.cwd
   entries = []
   selected = new Set()
+  anchor = ''
+  restoreSearch = ''
+  restoreScrollTop = 0
   endEditPath()
   clearSearchInput()
   paintTabs()
@@ -737,17 +1479,22 @@ async function switchTab(id) {
   const tab = tabs.find((t) => t.id === id)
   if (!tab) return
   syncTab()
+  saveSecondPaneState()
   activeId = id
   history = tab.history
   histIndex = tab.histIndex
   cwd = tab.cwd
+  applyTabState(tab)
+  restoreSecondPaneState()
   entries = []
-  selected = new Set()
+  selected = new Set(selected)
   endEditPath()
   clearSearchInput()
+  restoreSearch = normalizeBrowseState(tab.state || {}).search
   paintTabs()
   paintList()
-  await loadDir(tab.cwd, { silent: true })
+  // 這裡不能讓 loadDir 清掉剛從 tab 還原回來的選取。
+  await loadDir(tab.cwd, { silent: true, keepSelection: true })
 }
 
 async function closeTab(id) {
@@ -755,8 +1502,10 @@ async function closeTab(id) {
   if (i < 0 || tabs.length <= 1) return
   const wasActive = id === activeId
   tabs.splice(i, 1)
+  paneStates.delete(paneStateKey(id))
   if (!wasActive) {
     paintTabs()
+    persistTabs()
     return
   }
   activeId = ''
@@ -768,6 +1517,9 @@ async function loadHome(opts = {}) {
   const seq = ++navSeq
   cwd = THIS_PC
   entries = []
+  directoryTotal = 0
+  loadedOffsets = new Set()
+  pageRequestSeq += 1
   truncated = false
   selected = new Set()
   anchor = ''
@@ -791,6 +1543,7 @@ async function loadHome(opts = {}) {
   }).catch(() => {
     if (seq === navSeq) showToast('讀不到磁碟容量', 'error')
   })
+  if (dualPane) refreshExplorerWatches()
   return true
 }
 
@@ -811,28 +1564,78 @@ function paintHome() {
   })
 }
 
+/** @param {string} dirPath @param {object} options @param {number} offset */
+async function listDirectoryPage(dirPath, options, offset = 0) {
+  // 舊入口契約：listDir(dirPath, { sort: sortBy, desc: sortDesc, showHidden })；分頁只在同一組選項上加 offset。
+  return call(
+    electronAPI.explorer.listDir(dirPath, { ...options, offset, limit: BROWSE_PAGE_SIZE }),
+    '讀不到這個資料夾'
+  )
+}
+
+async function loadVisiblePages() {
+  if (inHome() || inSearch() || !entries.length) return
+  const host = $('exList')
+  if (!host) return
+  const range = visibleBrowseRange({
+    total: directoryTotal || entries.length,
+    scrollTop: host.scrollTop,
+    viewportHeight: host.clientHeight || 600,
+    rowHeight: view === 'grid' ? Math.max(112, tile + 32) : 34,
+    overscan: 18
+  })
+  const offsets = pageOffsetsForRange(range.start, range.end, BROWSE_PAGE_SIZE)
+  const requestSeq = pageRequestSeq
+  const pending = offsets.filter((offset) => !loadedOffsets.has(offset))
+  // 捲到的那幾頁已經在手上時也要重畫：虛擬清單只畫可見範圍，
+  // 不重畫就會一直停在最初那幾列，後面全是空白。
+  if (!pending.length) {
+    paintList()
+    return
+  }
+  await Promise.all(pending.map(async (offset) => {
+    try {
+      const data = await listDirectoryPage(cwd, { sort: sortBy, desc: sortDesc, showHidden }, offset)
+      if (requestSeq !== pageRequestSeq || pathKey(data.path) !== pathKey(cwd)) return
+      entries = mergeBrowsePage(entries, data, offset).entries
+      loadedOffsets.add(offset)
+      directoryTotal = Math.max(directoryTotal, Number(data.total) || entries.length)
+    } catch {
+      // 該頁失敗時保留已畫出的內容，下一次捲動可重試。
+    }
+  }))
+  if (requestSeq === pageRequestSeq) {
+    truncated = loadedOffsets.size * BROWSE_PAGE_SIZE < directoryTotal
+    paintList()
+  }
+}
+
 async function loadDir(dirPath, opts = {}) {
   if (pathKey(dirPath) === THIS_PC) return loadHome(opts)
   const seq = ++navSeq
-  let result
+  let data
+  pageRequestSeq += 1
+  loadedOffsets = new Set()
   try {
-    result = await electronAPI.explorer.listDir(dirPath, { sort: sortBy, desc: sortDesc, showHidden })
+    data = await listDirectoryPage(dirPath, { sort: sortBy, desc: sortDesc, showHidden }, 0)
   } catch {
-    result = null
+    data = null
   }
   if (seq !== navSeq) return false
-  if (!result?.ok) {
-    showToast(result?.error?.message || '讀不到這個資料夾', 'error')
+  if (!data) {
+    showToast('讀不到這個資料夾', 'error')
     return false
   }
-  const data = result.data
   cwd = data.path
-  entries = data.entries || []
-  truncated = Boolean(data.truncated)
+  entries = mergeBrowsePage([], data, 0).entries
+  directoryTotal = Number(data.total) || entries.filter(Boolean).length
+  loadedOffsets = new Set([Number(data.offset) || 0])
+  truncated = Boolean(data.hasMore || data.truncated)
   if (!opts.keepSelection) {
     selected = new Set()
     anchor = ''
-  } else {
+  } else if (!truncated) {
+    // 分頁載入時清單裡只有已經載到的那幾頁；還沒載到的不能當成「這個檔不見了」。
     const live = new Set(listed().map((row) => entryId(row)))
     selected = new Set([...selected].filter((id) => live.has(id)))
     if (anchor && !live.has(anchor)) anchor = ''
@@ -842,14 +1645,31 @@ async function loadDir(dirPath, opts = {}) {
   paintSidebar(places, disks)
   paintSortHead()
   paintList()
+  // 一律照 tab 記下的位置擺：新資料夾就是 0，還原的分頁就是原本捲到的地方。
+  // paintList() 現在會保留重畫前的捲動位置，這裡不補 0 的話會沿用上一個資料夾的位置。
+  const listHost = $('exList')
+  if (listHost) listHost.scrollTop = restoreScrollTop
+  if (restoreSearch) {
+    const input = /** @type {HTMLInputElement | null} */ ($('exSearch'))
+    if (input) input.value = restoreSearch
+    const query = restoreSearch
+    restoreSearch = ''
+    if (query && uffs?.installed) void runSearch(query)
+  }
+  restoreScrollTop = 0
   paintRecycleChrome()
   syncTab()
+  persistTabs()
   paintTabs()
-  void electronAPI.explorer.watch(cwd).then((watch) => {
-    if (seq === navSeq) watching = Boolean(watch?.ok && watch.data?.watching)
-  }).catch(() => {
-    if (seq === navSeq) watching = false
-  })
+  if (dualPane && typeof electronAPI.explorer.watchDirs === 'function') {
+    refreshExplorerWatches()
+  } else {
+    void electronAPI.explorer.watch(cwd).then((watch) => {
+      if (seq === navSeq) watching = Boolean(watch?.ok && watch.data?.watching)
+    }).catch(() => {
+      if (seq === navSeq) watching = false
+    })
+  }
   if (!opts.silent) void electronAPI.explorer.saveState({ lastPath: cwd, sort: sortBy, sortDesc })
   return true
 }
@@ -978,10 +1798,43 @@ function clearSearch() {
   paintList()
 }
 
+function searchFilters() {
+  const number = (id) => {
+    const value = Number($(id)?.value)
+    return Number.isFinite(value) && value >= 0 ? value : null
+  }
+  const type = $('exSearchType')?.value
+  const date = (id, end = false) => {
+    const raw = String($(id)?.value || '')
+    if (!raw) return null
+    const value = Date.parse(`${raw}${end ? 'T23:59:59.999' : 'T00:00:00.000'}`)
+    return Number.isFinite(value) ? value : null
+  }
+  return {
+    type: ['file', 'folder', 'image', 'video', 'audio', 'document'].includes(type) ? type : 'all',
+    minSize: number('exSearchMinSize'),
+    maxSize: number('exSearchMaxSize'),
+    fromMs: date('exSearchFrom'),
+    toMs: date('exSearchTo', true),
+    location: String($('exSearchLocation')?.value || '').trim()
+  }
+}
+
+function onSearchFilterChange() {
+  syncTab()
+  persistTabs()
+  const query = /** @type {HTMLInputElement | null} */ ($('exSearch'))?.value.trim()
+  if (!query || !uffs?.installed) return
+  if (searchTimer) clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => void runSearch(query), SEARCH_DEBOUNCE_MS)
+}
+
 function onSearchInput() {
   searchSeq++
   const input = /** @type {HTMLInputElement | null} */ ($('exSearch'))
   const q = input ? input.value.trim() : ''
+  syncTab()
+  persistTabs()
   if (searchTimer) clearTimeout(searchTimer)
   if (!q) {
     void electronAPI.explorer.uffsCancel()
@@ -1010,7 +1863,7 @@ async function runSearch(q) {
   searching = true
   paintStatus()
   try {
-    const data = await call(electronAPI.explorer.uffsSearch(q), '搜尋失敗')
+    const data = await call(electronAPI.explorer.uffsSearch(q, searchFilters()), '搜尋失敗')
     if (seq !== searchSeq) return
     if (data.warming) {
       $('exSearchHint') && ($('exSearchHint').textContent = '索引中')
@@ -1043,21 +1896,36 @@ function isImage(entry) {
   return IMAGE_EXT.has(ext)
 }
 
+function isPreviewable(entry) {
+  return Boolean(previewKind(entry) || isImage(entry))
+}
+
 /**
  * 開大預覽。←／→ 走的是**目前這個資料夾裡的圖片**，跟檔案總管一樣。
  * @param {{ path: string, name: string }} entry
  */
 function openPreview(entry) {
-  if (!isImage(entry) || inRecycle()) return false
-  const images = listed().filter((item) => isImage(item)).map((item) => ({
+  if (!isPreviewable(entry) || inRecycle()) return false
+  const candidates = listed().filter(isPreviewable).map((item) => ({
     path: item.path,
-    name: item.name
+    name: item.name,
+    ext: item.ext,
+    dir: item.dir
   }))
-  const at = Math.max(0, images.findIndex((item) => item.path === entry.path))
-  return openImageViewer({
-    items: images.length ? images : [{ path: entry.path, name: entry.name }],
-    index: at,
-    mediaUrl: (filePath) => electronAPI.explorer.mediaUrl(filePath)
+  const list = candidates.length ? candidates : [entry]
+  if (isImage(entry)) {
+    const images = list.filter(isImage).map((item) => ({ path: item.path, name: item.name }))
+    return openImageViewer({
+      items: images.length ? images : [{ path: entry.path, name: entry.name }],
+      index: Math.max(0, images.findIndex((item) => item.path === entry.path)),
+      mediaUrl: (filePath) => electronAPI.explorer.mediaUrl(filePath)
+    })
+  }
+  return openFilePreview({
+    item: entry,
+    list,
+    mediaUrl: (filePath) => electronAPI.explorer.mediaUrl(filePath),
+    readMarkdown: (filePath) => electronAPI.explorer.readMarkdown(filePath)
   })
 }
 
@@ -1180,6 +2048,166 @@ async function renameItem(item) {
   }
 }
 
+function batchRenameItems(items) {
+  if (!Array.isArray(items) || items.length < 2 || inRecycle()) return
+  const dialog = document.createElement('dialog')
+  dialog.className = 'app-dialog ex-batch-dialog'
+  const title = document.createElement('h2')
+  title.textContent = `批次重新命名（${items.length} 個）`
+  const fields = document.createElement('div')
+  fields.className = 'ex-batch-fields'
+  const makeField = (labelText, value, type = 'text') => {
+    const label = document.createElement('label')
+    label.className = 'field'
+    const caption = document.createElement('span')
+    caption.textContent = labelText
+    const input = document.createElement('input')
+    input.className = 'input'
+    input.type = type
+    input.value = value
+    label.append(caption, input)
+    fields.appendChild(label)
+    return input
+  }
+  const prefix = makeField('前綴', '')
+  const suffix = makeField('後綴', '')
+  const replaceFrom = makeField('取代文字', '')
+  const replaceTo = makeField('換成', '')
+  const start = makeField('流水號起始（可留空）', '', 'number')
+  const width = makeField('流水號位數', '2', 'number')
+  const preview = document.createElement('div')
+  preview.className = 'ex-batch-preview'
+  const status = document.createElement('p')
+  status.className = 'ex-batch-status'
+  const actions = document.createElement('div')
+  actions.className = 'app-dialog-actions'
+  const cancel = document.createElement('button')
+  cancel.type = 'button'
+  cancel.className = 'btn btn-secondary'
+  cancel.textContent = '取消'
+  const apply = document.createElement('button')
+  apply.type = 'button'
+  apply.className = 'btn btn-primary'
+  apply.textContent = '套用'
+  actions.append(cancel, apply)
+  dialog.append(title, fields, preview, status, actions)
+  document.body.appendChild(dialog)
+
+  const nameFor = (item, i) => {
+    const ext = item.ext ? `.${item.ext}` : ''
+    const base = ext && item.name.endsWith(ext) ? item.name.slice(0, -ext.length) : item.name
+    const changed = replaceFrom.value ? base.split(replaceFrom.value).join(replaceTo.value) : base
+    const serial = start.value === '' ? '' : String(Number(start.value) + i).padStart(Math.max(1, Number(width.value) || 1), '0')
+    return `${prefix.value}${changed}${suffix.value}${serial ? `-${serial}` : ''}${ext}`
+  }
+  const collect = () => {
+    const names = items.map(nameFor)
+    preview.replaceChildren()
+    const table = document.createElement('div')
+    table.className = 'ex-batch-table'
+    const outside = new Set(entries.filter((entry) => !items.some((item) => entry.path === item.path)).map((entry) => entry.name.toLowerCase()))
+    const selectedNames = new Map(items.map((item) => [item.name.toLowerCase(), item.path]))
+    const seen = new Set()
+    let invalid = false
+    names.forEach((name, i) => {
+      const row = document.createElement('div')
+      row.className = 'ex-batch-row'
+      const from = document.createElement('span')
+      from.textContent = items[i].name
+      const arrow = document.createElement('span')
+      arrow.textContent = '→'
+      const to = document.createElement('span')
+      to.textContent = name
+      const bad = !name || /[<>:"/\\|?*]/.test(name) || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i.test(name)
+        || seen.has(name.toLowerCase()) || outside.has(name.toLowerCase())
+        || (selectedNames.has(name.toLowerCase()) && selectedNames.get(name.toLowerCase()) !== items[i].path)
+      if (bad) {
+        row.classList.add('is-invalid')
+        invalid = true
+      }
+      row.append(from, arrow, to)
+      table.appendChild(row)
+      seen.add(name.toLowerCase())
+    })
+    preview.appendChild(table)
+    status.textContent = invalid ? '有重複或不合法的名稱，請先修正。' : '送出前會逐筆檢查；撞名不會覆蓋。'
+    status.classList.toggle('is-error', invalid)
+    apply.disabled = invalid || names.every((name, i) => name === items[i].name)
+    return { names, invalid }
+  }
+  for (const input of [prefix, suffix, replaceFrom, replaceTo, start, width]) input.addEventListener('input', collect)
+  cancel.addEventListener('click', () => { dialog.close(); dialog.remove() })
+  apply.addEventListener('click', () => {
+    const plan = collect()
+    if (!plan.invalid) {
+      dialog.close()
+      dialog.remove()
+      void runBatchRename(items, plan.names)
+    }
+  })
+  dialog.addEventListener('cancel', () => dialog.remove(), { once: true })
+  dialog.showModal()
+  collect()
+}
+
+async function runBatchRename(items, names) {
+  const results = []
+  for (let i = 0; i < items.length; i += 1) {
+    const item = items[i]
+    try {
+      const done = await call(electronAPI.explorer.renameEntry(item.path, names[i]), '改名失敗')
+      results.push({ oldPath: item.path, oldName: item.name, newPath: done.path, newName: names[i], ok: true })
+    } catch (error) {
+      results.push({ oldPath: item.path, oldName: item.name, newName: names[i], ok: false, error: error.message })
+    }
+  }
+  const successful = results.filter((result) => result.ok)
+  const revert = async () => {
+    for (const result of successful.slice().reverse()) {
+      await call(electronAPI.explorer.renameEntry(result.newPath, result.oldName), '復原失敗')
+    }
+    await refreshAfterMutate()
+    showToast('已復原批次改名')
+  }
+  await refreshAfterMutate()
+  showBatchRenameResult(results, successful.length ? revert : null)
+}
+
+function showBatchRenameResult(results, revert) {
+  const dialog = document.createElement('dialog')
+  dialog.className = 'app-dialog ex-batch-dialog'
+  const title = document.createElement('h2')
+  title.textContent = '批次改名結果'
+  const list = document.createElement('div')
+  list.className = 'ex-batch-result'
+  for (const result of results) {
+    const row = document.createElement('p')
+    row.className = result.ok ? 'is-ok' : 'is-error'
+    row.textContent = result.ok ? `✓ ${result.oldName} → ${result.newName}` : `✕ ${result.oldName}：${result.error || '失敗'}`
+    list.appendChild(row)
+  }
+  const actions = document.createElement('div')
+  actions.className = 'app-dialog-actions'
+  if (revert) {
+    const undo = document.createElement('button')
+    undo.type = 'button'
+    undo.className = 'btn btn-secondary'
+    undo.textContent = '復原成功項目'
+    undo.addEventListener('click', () => void revert().then(() => { dialog.close(); dialog.remove() }))
+    actions.appendChild(undo)
+  }
+  const close = document.createElement('button')
+  close.type = 'button'
+  close.className = 'btn btn-primary'
+  close.textContent = '關閉'
+  close.addEventListener('click', () => { dialog.close(); dialog.remove() })
+  actions.appendChild(close)
+  dialog.append(title, list, actions)
+  document.body.appendChild(dialog)
+  dialog.addEventListener('cancel', () => dialog.remove(), { once: true })
+  dialog.showModal()
+}
+
 async function deleteItems(items, opts = {}) {
   if (!items.length) return
   const permanent = Boolean(opts.permanent) || inRecycle()
@@ -1275,7 +2303,7 @@ function openContextMenu(e, items) {
         purge: () => void deleteItems(items, { permanent: true }),
         empty: () => void emptyBin(),
         open: () => void openEntry(items[0]),
-        preview: isImage(items[0]) ? () => openPreview(items[0]) : null,
+        preview: isPreviewable(items[0]) ? () => openPreview(items[0]) : null,
         openTab: () => void newTab(items[0].path),
         reveal: () => void revealItems(items),
         pin: () => void pinEntries(items),
@@ -1289,6 +2317,7 @@ function openContextMenu(e, items) {
         copyName: () => copyNames(items),
         shortcut: () => void makeShortcut(items),
         rename: () => void renameItem(items[0]),
+        batchRename: () => void batchRenameItems(items),
         remove: () => void deleteItems(items),
         newFolder: () => void newFolder(),
         newFile: () => void newFile(),
@@ -1685,7 +2714,7 @@ function onSideButton(e) {
 function onPageKey(e) {
   if (!$('page-explorer')?.classList.contains('active')) return
   // 大預覽開著時，方向鍵／Esc／空白鍵都是它的（見 image-viewer.js）
-  if (imageViewerOpen()) return
+  if (imageViewerOpen() || previewOpen()) return
   if (document.querySelector('.ws-menu, dialog[open]')) return
   const key = e.key.toLowerCase()
   if (e.ctrlKey && ['t', 'w', 'tab'].includes(key)) {
@@ -1724,7 +2753,7 @@ function onPageKey(e) {
   if (e.key === ' ') {
     if (tag === 'BUTTON' || tag === 'A' || tag === 'SELECT') return
     const picked = selectedEntries()
-    if (picked.length === 1 && isImage(picked[0])) {
+    if (picked.length === 1 && isPreviewable(picked[0])) {
       e.preventDefault()
       openPreview(picked[0])
       return
@@ -1869,12 +2898,35 @@ export async function refreshExplorerPage() {
     sortBy = boot.sort === 'date' || boot.sort === 'size' ? boot.sort : 'name'
     sortDesc = boot.sortDesc === true
     showHidden = boot.showHidden === true
+    dualPane = boot.dualPane === true
     places = boot.places || []
     disks = boot.drives || []
+    if (!tabs.length && Array.isArray(boot.tabs) && boot.tabs.length) {
+      tabs = boot.tabs.map((tab, index) => normalizeBrowseTab(tab, `t${index + 1}`))
+      const ids = new Set(tabs.map((tab) => tab.id))
+      activeId = ids.has(boot.activeTabId) ? boot.activeTabId : tabs[0].id
+      tabSeq = tabs.reduce((max, tab) => {
+        const value = /^t(\d+)$/.exec(tab.id)
+        return Math.max(max, value ? Number(value[1]) : 0)
+      }, 0)
+      const active = currentTab()
+      if (active) {
+        history = active.history
+        histIndex = active.histIndex
+        cwd = active.cwd
+        applyTabState(active)
+      }
+    }
     setView(view)
     paintSidebar(places, disks)
     if (!tabs.length) await newTab(boot.lastPath || THIS_PC)
     else if (!job) await loadDir(cwd, { silent: true, keepSelection: true })
+    if (dualPane && !job) {
+      const restored = restoreSecondPaneState()
+      await loadSecond(secondPane.cwd, { pushHistory: false, keepSelection: restored })
+      paintSecondPane()
+      persistTabs()
+    }
   } catch {
     // toast 已顯示
   }
@@ -1889,6 +2941,7 @@ export function cooldownExplorerPage() {
   if (searchTimer) clearTimeout(searchTimer)
   void electronAPI.explorer.uffsCancel()
   void electronAPI.explorer.unwatch()
+  closeFilePreview()
   watching = false
 }
 
@@ -1896,6 +2949,8 @@ export function disposeExplorerPage() {
   cooldownExplorerPage()
   if (unsubChanged) unsubChanged()
   if (unsubProgress) unsubProgress()
+  if (disposeOperations) disposeOperations()
   unsubChanged = null
   unsubProgress = null
+  disposeOperations = null
 }

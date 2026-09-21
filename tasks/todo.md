@@ -379,3 +379,45 @@ Review：
   `test-explorer.js` 295/0、`test-workspace.js` 271/0、
   打包 asar 217 支 src 一致、打包版檔案總管 CDP 90/0、
   打包版工作區 CDP 183/0
+# 2026-09-21 — 參考 Files 完成檔案總管五批改進
+
+- [x] 第1批：操作中心（進度、逐筆結果、取消、撞名策略、復原）
+- [x] 第2批：分頁瀏覽狀態持久化（選取、捲動、搜尋、排序，含重開還原）
+- [x] 第3批：大型資料夾分批載入／虛擬清單，搜尋加類型・大小・日期・位置篩選
+- [x] 第4批：Markdown／PDF／影音預覽，空白鍵開、換檔不殘留、關閉釋放、詳情欄收合
+- [x] 第5批：雙欄左右獨立狀態與跨欄複製／搬移；批次改名前後預覽與撞名檢查
+- [x] 共用接線：`explorer-page.js`、`index.html`、`main.css`、preload／IPC 契約
+- [x] 驗收修掉的 5 個真 bug（見下方 Review）
+- [x] 回歸：27 支單元測試 0 失敗、`e2e-explorer-cdp.js` 全過、
+      `e2e-workspace-cdp.js` 184/0、`test-asar-lock.js` 8/0（`npx electron`）
+- [x] packaged CDP：`e2e-explorer-files-plan-cdp.js` 重寫成真的驗五批，53 項全過
+
+Review：
+
+子代理交付時單元測試全綠，但**打包版的檔案頁整頁載不起來**，而他們留下的
+「五批打包版回歸」其實是 `e2e-explorer-cdp.js` 的複製品（章節清單 diff 完全相同，
+只是多種 2,200 個檔案），沒有一條碰到新功能。那支腳本已重寫成真的走五批的
+使用者動作，驗收過程另外挖出 4 個只在真畫面才現形的 bug：
+
+1. **`explorer-operations.js:1` 的 `import '../styles/explorer-operations.css'`**
+   ——打包版用 `file://` 直接載原始 ES module，CSS 不是 JS module，
+   `explorer-page.js` 整條 import 鏈 `Failed to fetch`，檔案頁完全空白。
+   改掛 `index.html` 的 `<link>`；守門加在 `test-explorer-operations-ui.js`
+   （掃 `src/renderer/scripts/*.js` 不准 import 非 JS）。
+2. **`loadVisiblePages()` 在「要顯示的頁都已載入」時 return 而不重畫**
+   ——2,600 筆的資料夾往下捲，DOM 永遠停在最前面 29 列，後面整片空白。
+   守門加在 `test-explorer-browse-wiring.js`。
+3. **`paintList()` 在 `replaceChildren()` 之後才讀 `scrollTop`**（已被歸零）
+   ——虛擬清單每次重畫彈回頂端。改成重畫前先記；`loadDir` 結尾改成無條件把
+   `scrollTop` 設回分頁記的值，避免沿用上一個資料夾的位置。
+4. **`switchTab` 沒帶 `keepSelection`**——切回分頁選取被清空，正是第 2 批要修的事；
+   同時把「拿只載了第一頁的清單去裁選取」改成沒載完就不裁。
+5. **`saveSecondPaneState()` 在雙欄沒開時也存**——把預設的「本機」寫進 `paneStates`，
+   下次按「雙欄」還原成空的本機而不是目前資料夾。開頭補 `if (!dualPane) return`。
+
+驗收邊界（未做，如實列出）：
+- 真 NAS 的複製／搬移／取消沒測（只有本機與 C:→D: 跨磁碟 probe）。
+- 打包版的取消驗的是「按得下去＋收在終局狀態＋檔案不壞」；真正的取消語意由
+  `test-explorer-operations.js` 與 `probe-explorer-operations-cross-volume.js` 保證
+  （同一顆磁碟的搬移是 rename，一瞬間結束，按不到取消）。
+- 影音預覽只驗元素掛得起來與關閉後收乾淨，沒驗播放。
