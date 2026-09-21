@@ -394,12 +394,20 @@ function shellEnvironment(editor, editorDir) {
  * `SessionStart hook error: node: command not found`，連 `electron-builder` 都會因為
  * `spawn powershell.exe ENOENT` 而建置失敗。
  *
+ * 所以這裡**先把同名不同大小寫的鍵收成一個**再寫回去。只改第一個、留著其他的，等於還是
+ * 送兩份進子程序（`PATH=<接好的>` 與 `Path=<原本的>`），生效的是哪一個看運氣——Ctrl+G
+ * 找不到橋接只是其中一種結果。這不是假想情況：從 Git Bash／MSYS 啟動 App 時，
+ * `process.env` 同時有 `PATH` 與 `Path`。基底挑第一個**非空**的（空字串那份沒有資訊，
+ * 不可以把有值的那份蓋掉）。
+ *
  * @param {Record<string, string>} env
  * @param {string} folder
  */
 function prependPath(env, folder) {
-  const key = Object.keys(env).find((name) => name.toLowerCase() === 'path') || 'PATH'
-  const current = env[key] || ''
+  const keys = Object.keys(env).filter((name) => name.toLowerCase() === 'path')
+  const key = keys[0] || 'PATH'
+  const current = keys.map((name) => env[name]).find(Boolean) || ''
+  for (const name of keys.slice(1)) delete env[name]
   env[key] = current ? `${folder}${path.delimiter}${current}` : folder
 }
 
@@ -530,5 +538,9 @@ module.exports = {
   // 測試用
   trimBuffer,
   _live: live,
-  _clampDim: clampDim
+  _clampDim: clampDim,
+  // 測試用：同時有 `PATH` 與 `Path` 的環境只能從外面餵進來——Node 在 Windows 上
+  // 讀寫 `process.env` 不分大小寫，`child_process` 也會在 spawn 前自己去重，
+  // 所以那種環境在同一支程序裡造不出來，只能直接測這支純函式。
+  _prependPath: prependPath
 }

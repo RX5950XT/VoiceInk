@@ -368,7 +368,12 @@ tag 要與 `package.json` 的 version 一致。
   Ctrl+G 的 `editor-bridge` 就是這樣整整幾版都沒接上 PATH，症狀是 AGY 回
   `editor "voiceink-edit.cmd" not found in PATH`，而測試因為讀的是同一個假鍵所以全綠。
   斷言要寫成「不分大小寫只有一個 path 鍵，而且原本的 PATH 還在後面」。
-  回歸 `probe-terminal-editor.js` 的 [F][H]。
+  **只改「找到的第一個」還不夠，要把同名不同大小寫的鍵收成一個**：從 Git Bash／MSYS 啟動
+  App 時 `process.env` 同時有 `PATH` 與 `Path`，而 `node-pty` 是照物件的鍵逐一拼成環境區塊的
+  （不像 `child_process` 會先去重），兩份一起送進去，子程序拿到哪一份看運氣。也因為
+  `child_process` 會去重、Node 在 Windows 上讀寫 `process.env` 又不分大小寫，這種環境
+  **在同一支程序裡造不出來也 spawn 不出來**，只能直接測 `_prependPath` 那支純函式。
+  回歸 `probe-terminal-editor.js` 的 [F][F2][H]。
 - **Shift+Enter 送的是 `\x1b\r` 不是 CSI u**：`\x1b[13;2u` 要終端機與 CLI 先協商 kitty keyboard
   protocol，xterm.js 不宣告支援、CLI 也就不會啟用，那串序列會被當成一般字元——使用者看到的是
   輸入框裡直接冒出 `[13;2u`。`ESC`＋`CR` 是 Claude Code `/terminal-setup` 綁的同一個東西。

@@ -14,6 +14,7 @@
  *  [D] 沒存過就關掉也要放它走，而且一個位元組都不准動
  *  [E] 上一輪留下來的請求不開分頁，但一樣要放走
  *  [F] `EDITOR=notepad`（＝CLI 的預設值）不算「使用者挑過編輯器」，橋接照樣接手
+ *  [F2] 環境裡同時有 `PATH` 與 `Path` 時收成一個鍵（不然子程序拿到兩份，生效的看運氣）
  *
  * 用法：node scripts/probe-terminal-editor.js
  */
@@ -155,6 +156,22 @@ async function main() {
     }
   }
   ok('[F] EDITOR／VISUAL 是 notepad 時橋接照樣接手，真的編輯器則放行')
+
+  // ── 環境裡本來就有兩個大小寫不同的 PATH 鍵 ──
+  // 上面那段只量得到「這支測試剛好跑在什麼 shell 底下」有幾個鍵。從 Git Bash／MSYS 啟動
+  // App 時 `process.env` 同時有 `PATH` 與 `Path`，而 `node-pty` 是照物件的鍵一個一個拼成
+  // 環境區塊的（不像 `child_process` 會先去重），兩份一起送進去，子程序拿到哪一個看運氣。
+  const { _prependPath } = require('../src/main/terminal/pty')
+  const twoKeys = { PATH: `C:${path.sep}upper`, Path: `C:${path.sep}mixed` }
+  _prependPath(twoKeys, folder)
+  assert.deepEqual(Object.keys(twoKeys).filter((key) => key.toLowerCase() === 'path'), ['PATH'],
+    `PATH 只能剩一個鍵，現在是 ${Object.keys(twoKeys).join('／')}`)
+  assert.equal(twoKeys.PATH, `${folder}${path.delimiter}C:${path.sep}upper`, '要接在第一個非空的那份前面')
+  // 第一個鍵是空的就不可以拿它當基底，不然整條 PATH 一起沒了
+  const emptyFirst = { PATH: '', Path: `C:${path.sep}mixed` }
+  _prependPath(emptyFirst, folder)
+  assert.equal(emptyFirst.PATH, `${folder}${path.delimiter}C:${path.sep}mixed`, '空字串那份不可以把有值的蓋掉')
+  ok('[F2] 環境裡同時有 PATH 與 Path 時收成一個鍵，不送兩份給子程序')
 
   // ── AGY／Gemini CLI：`command.split(' ')` 再 spawn(..., { shell: true }) ──
   events.length = 0
