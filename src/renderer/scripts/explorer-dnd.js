@@ -208,6 +208,7 @@ export function showExplorerMenu(at, spec) {
     menu.push({ sep: true })
   }
   if (items.length === 1) menu.push({ label: '重新命名', onSelect: act.rename })
+  if (items.length > 1 && act.batchRename) menu.push({ label: '批次重新命名', onSelect: act.batchRename })
   if (items.length) menu.push({ label: '刪除', danger: true, onSelect: act.remove })
   if (!items.length) {
     menu.push({ label: '新增資料夾', onSelect: act.newFolder })

@@ -13,26 +13,19 @@ const paths = require('./paths')
 const DEBOUNCE_MS = 250
 const MAX_WAIT_MS = 1000
 
-/** @type {{ dir: string, watcher: fs.FSWatcher } | null} */
-let active = null
-/** @type {NodeJS.Timeout | null} */
-let timer = null
-let pending = false
-let firstAt = 0
+/** @type {Map<string, { dir: string, watcher: fs.FSWatcher, timer: NodeJS.Timeout | null, pending: boolean, firstAt: number }>} */
+let active = new Map()
 
 function stop() {
-  if (timer) {
-    clearTimeout(timer)
-    timer = null
+  for (const item of active.values()) {
+    if (item.timer) clearTimeout(item.timer)
+    try {
+      item.watcher.close()
+    } catch {
+      // 已經掛掉
+    }
   }
-  pending = false
-  if (!active) return
-  try {
-    active.watcher.close()
-  } catch {
-    // 已經掛掉
-  }
-  active = null
+  active = new Map()
 }
 
 /**
@@ -42,32 +35,55 @@ function stop() {
  */
 function start(dirPath, send) {
   const full = paths.resolveAbs(dirPath)
-  if (active && active.dir.toLowerCase() === full.toLowerCase()) {
-    return { watching: true, path: full }
-  }
-  stop()
-  let watcher
-  try {
-    watcher = fs.watch(full, { persistent: false })
-  } catch {
-    return { watching: false, path: full }
-  }
-  const flush = () => {
-    timer = null
-    if (!pending) return
-    pending = false
-    send({ path: full })
-  }
-  watcher.on('error', () => stop())
-  watcher.on('change', () => {
-    pending = true
-    if (!timer) firstAt = Date.now()
-    else clearTimeout(timer)
-    const wait = Math.min(DEBOUNCE_MS, Math.max(0, firstAt + MAX_WAIT_MS - Date.now()))
-    timer = setTimeout(flush, wait)
-  })
-  active = { dir: full, watcher }
-  return { watching: true, path: full }
+  return startMany([{ path: full, send }])[0] || { watching: false, path: full }
 }
 
-module.exports = { DEBOUNCE_MS, start, stop }
+/**
+ * 同時監看左右欄可見資料夾。舊的 start() 仍保留單欄語意。
+ * @param {Array<{ path: string, send: (payload: { path: string }) => void }>} list
+ */
+function startMany(list) {
+  stop()
+  const out = []
+  const seen = new Set()
+  for (const item of Array.isArray(list) ? list : []) {
+    const full = paths.resolveAbs(item.path)
+    const key = full.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    if (typeof item.send !== 'function') {
+      out.push({ watching: false, path: full })
+      continue
+    }
+    let watcher
+    try {
+      watcher = fs.watch(full, { persistent: false })
+    } catch {
+      out.push({ watching: false, path: full })
+      continue
+    }
+    const state = { dir: full, watcher, timer: null, pending: false, firstAt: 0 }
+    const flush = () => {
+      state.timer = null
+      if (!state.pending) return
+      state.pending = false
+      item.send({ path: full })
+    }
+    watcher.on('error', () => {
+      if (state.timer) clearTimeout(state.timer)
+      active.delete(key)
+    })
+    watcher.on('change', () => {
+      state.pending = true
+      if (!state.timer) state.firstAt = Date.now()
+      else clearTimeout(state.timer)
+      const wait = Math.min(DEBOUNCE_MS, Math.max(0, state.firstAt + MAX_WAIT_MS - Date.now()))
+      state.timer = setTimeout(flush, wait)
+    })
+    active.set(key, state)
+    out.push({ watching: true, path: full })
+  }
+  return out
+}
+
+module.exports = { DEBOUNCE_MS, start, startMany, stop }

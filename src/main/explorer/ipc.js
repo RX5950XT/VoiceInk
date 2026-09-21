@@ -32,6 +32,7 @@ function registerExplorerIpc({ ipcMain, service, isMainSender }) {
     invoke(event, () => service.listDir(dirPath, opts))
   ))
   ipcMain.handle('explorer:preview', (event, filePath) => invoke(event, () => service.preview(filePath)))
+  ipcMain.handle('explorer:readMarkdown', (event, filePath) => invoke(event, () => service.readMarkdown(filePath)))
   // 大預覽的來源網址（`vi-media://` 協定，邊讀邊送，不受 data: URI 的 2MB 上限）
   ipcMain.handle('explorer:mediaUrl', (event, filePath) => invoke(event, () => service.mediaUrl(filePath)))
   ipcMain.handle('explorer:inspect', (event, filePath) => invoke(event, () => service.inspect(filePath)))
@@ -72,10 +73,20 @@ function registerExplorerIpc({ ipcMain, service, isMainSender }) {
   ipcMain.handle('explorer:dropEntries', (event, items, toDir, mode) => (
     invoke(event, () => service.dropEntries(items, toDir, mode))
   ))
+  ipcMain.handle('explorer:operationCancel', (event, id) => invoke(event, () => service.operationCancel(id)))
+  ipcMain.handle('explorer:operationRetry', (event, id) => invoke(event, () => service.operationRetry(id)))
+  ipcMain.handle('explorer:operationUndo', (event, id) => invoke(event, () => service.operationUndo(id)))
+  ipcMain.handle('explorer:operationState', (event) => invoke(event, () => service.operationState()))
+  ipcMain.handle('explorer:setOperationPolicy', (event, opts) => (
+    invoke(event, () => service.setOperationPolicy(opts))
+  ))
   ipcMain.handle('explorer:watch', (event, dirPath) => invoke(event, () => service.watchDir(dirPath)))
+  ipcMain.handle('explorer:watchDirs', (event, dirPaths) => invoke(event, () => service.watchDirs(dirPaths)))
   ipcMain.handle('explorer:unwatch', (event) => invoke(event, () => service.unwatch()))
   ipcMain.handle('explorer:uffsStatus', (event) => invoke(event, () => service.uffsStatus()))
-  ipcMain.handle('explorer:uffsSearch', (event, pattern) => invoke(event, () => service.uffsSearch(pattern)))
+  ipcMain.handle('explorer:uffsSearch', (event, pattern, filters) => (
+    invoke(event, () => service.uffsSearch(pattern, filters))
+  ))
   ipcMain.handle('explorer:uffsCancel', (event) => invoke(event, () => service.uffsCancel()))
   ipcMain.handle('explorer:uffsInstall', (event) => invoke(event, () => service.uffsInstall()))
   ipcMain.handle('explorer:uffsCancelInstall', (event) => invoke(event, () => service.uffsCancelInstall()))

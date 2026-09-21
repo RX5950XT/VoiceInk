@@ -13,6 +13,7 @@
     <title>VoiceInk</title>
     <link rel="stylesheet" href="./styles/themes.css" />
     <link rel="stylesheet" href="./styles/main.css" />
+    <link rel="stylesheet" href="./styles/explorer-operations.css" />
   </head>
   <body>
     <div id="app" class="app-container">
@@ -669,12 +670,35 @@
                          aria-label="搜尋整機檔案" autocomplete="off" spellcheck="false">
                   <span id="exSearchHint" class="ex-search-hint" role="status"></span>
                 </div>
+                <details class="ex-search-filters" id="exSearchFilters">
+                  <summary>篩選</summary>
+                  <div class="ex-search-filter-popover">
+                    <label>類型
+                      <select id="exSearchType" class="select">
+                        <option value="all">全部</option>
+                        <option value="file">檔案</option>
+                        <option value="folder">資料夾</option>
+                        <option value="image">圖片</option>
+                        <option value="video">影片</option>
+                        <option value="audio">音訊</option>
+                        <option value="document">文件</option>
+                      </select>
+                    </label>
+                    <label>最小大小（bytes）<input id="exSearchMinSize" class="input" type="number" min="0" step="1"></label>
+                    <label>最大大小（bytes）<input id="exSearchMaxSize" class="input" type="number" min="0" step="1"></label>
+                    <label>修改起日<input id="exSearchFrom" class="input" type="date"></label>
+                    <label>修改迄日<input id="exSearchTo" class="input" type="date"></label>
+                    <label>位置<input id="exSearchLocation" class="input" type="text" spellcheck="false"></label>
+                  </div>
+                </details>
                 <div class="ex-toolbar-actions">
                   <button type="button" id="exNewFolderBtn" class="btn btn-secondary btn-sm">新增資料夾</button>
                   <button type="button" id="exNewFileBtn" class="btn btn-secondary btn-sm">新增檔案</button>
                   <button type="button" id="exEmptyBinBtn" class="btn btn-secondary btn-sm" hidden>清空資源回收筒</button>
                   <button type="button" id="exViewListBtn" class="btn-icon" title="清單" aria-label="清單檢視" aria-pressed="true">☰</button>
                   <button type="button" id="exViewGridBtn" class="btn-icon" title="圖示" aria-label="圖示檢視" aria-pressed="false">▦</button>
+                  <button type="button" id="exDualBtn" class="btn btn-secondary btn-sm" aria-pressed="false">雙欄</button>
+                  <button type="button" id="exDetailToggleBtn" class="btn btn-secondary btn-sm" aria-pressed="true">收合詳情</button>
                 </div>
               </header>
               <div class="ex-cmdbar" id="exCmdBar" role="toolbar" aria-label="檔案操作"></div>
@@ -698,6 +722,31 @@
                   <div id="exHome" class="ex-home" aria-label="本機" hidden></div>
                   <p id="exEmpty" class="ex-empty" hidden>這個資料夾是空的</p>
                 </div>
+                <section class="ex-main ex-second-pane" id="exSecondPane" role="region" aria-label="右側檔案欄" hidden>
+                  <header class="ex-second-head">
+                    <div class="ex-second-nav">
+                      <button type="button" id="exSecondBack" class="btn-icon" title="上一頁" aria-label="右欄上一頁" disabled>←</button>
+                      <button type="button" id="exSecondForward" class="btn-icon" title="下一頁" aria-label="右欄下一頁" disabled>→</button>
+                      <button type="button" id="exSecondUp" class="btn-icon" title="上一層" aria-label="右欄上一層">↑</button>
+                    </div>
+                    <button type="button" id="exSecondPath" class="ex-second-path" title="右欄路徑"></button>
+                    <input type="search" id="exSecondSearch" class="input" placeholder="篩選目前資料夾…" aria-label="右欄篩選" autocomplete="off">
+                    <select id="exSecondSort" class="select ex-second-sort" aria-label="右欄排序">
+                      <option value="name">名稱</option>
+                      <option value="date">修改時間</option>
+                      <option value="size">大小</option>
+                    </select>
+                    <button type="button" id="exSecondSortDir" class="btn-icon" title="右欄排序方向" aria-label="右欄排序方向">↑</button>
+                  </header>
+                  <div class="ex-second-actions" role="toolbar" aria-label="右欄操作">
+                    <button type="button" id="exCopyToSecond" class="btn btn-secondary btn-sm">複製到右欄</button>
+                    <button type="button" id="exMoveToSecond" class="btn btn-secondary btn-sm">搬到右欄</button>
+                    <button type="button" id="exCopyFromSecond" class="btn btn-secondary btn-sm">複製到左欄</button>
+                    <button type="button" id="exMoveFromSecond" class="btn btn-secondary btn-sm">搬到左欄</button>
+                  </div>
+                  <div id="exSecondList" class="ex-list ex-second-list" role="listbox" aria-label="右欄檔案清單" tabindex="0"></div>
+                  <p id="exSecondEmpty" class="ex-empty" hidden>這個資料夾是空的</p>
+                </section>
                 <aside class="ex-detail" id="exDetail" aria-live="polite">
                   <p class="setting-hint">選一個項目看詳情。</p>
                 </aside>

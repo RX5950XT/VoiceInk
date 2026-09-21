@@ -11,13 +11,18 @@ const paths = require('./paths')
 const recycle = require('./recycle')
 
 const MAX_ENTRIES = 2000
-/** 為排序去 stat 的硬上限；超過就先砍再排。本機 10000 筆約 0.8s，20000 會超過 1.5s。 */
+/** 舊版相容的單頁上限；完整目錄由 offset/limit 分頁，不再截斷排序來源。 */
 const MAX_STAT = 10000
+const MAX_PAGE_SIZE = 2000
+const DEFAULT_PAGE_SIZE = MAX_ENTRIES
+const LIST_CACHE_TTL_MS = 1500
 /** sidecar 屬性查詢的上限：拿不到就退回 isHiddenName，不可拖慢 listDir。 */
 const ATTRS_TIMEOUT_MS = 200
 const STAT_CONCURRENCY = 64
 const MAX_READ_BYTES = 2 * 1024 * 1024
 const MAX_TEXT_BYTES = 8 * 1024
+const MAX_MARKDOWN_BYTES = 4 * 1024 * 1024
+const COPY_CHUNK_BYTES = 1024 * 1024
 const SORT_KEYS = new Set(['name', 'date', 'size'])
 const HIDDEN_NAMES = new Set([
   '.git',
@@ -48,6 +53,8 @@ const IMAGE_MIME = {
 
 /** @type {Map<string, Promise<any>>} */
 const writeChains = new Map()
+/** @type {Map<string, { createdAt: number, entries: object[], sorted: Map<string, object[]> }>} */
+const listCache = new Map()
 
 /**
  * @template T
@@ -241,6 +248,97 @@ function uniqueDest(dir, basename) {
   return path.join(dir, name)
 }
 
+function cancelledError() {
+  return paths.fail('CANCELLED', '操作已取消')
+}
+
+function checkCancelled(signal) {
+  if (signal && signal.aborted) throw cancelledError()
+}
+
+/**
+ * 不追 junction／symlink，量出能可靠取得的檔案大小。
+ * @param {string} full
+ * @param {AbortSignal|undefined} signal
+ * @returns {Promise<{ bytes: number, complete: boolean }>}
+ */
+async function measureTree(full, signal) {
+  checkCancelled(signal)
+  let st
+  try { st = await fsp.lstat(full) } catch { return { bytes: 0, complete: false } }
+  if (st.isSymbolicLink()) return { bytes: 0, complete: true }
+  if (!st.isDirectory()) return { bytes: Number(st.size) || 0, complete: true }
+  let names
+  try { names = await fsp.readdir(full) } catch { return { bytes: 0, complete: false } }
+  let bytes = 0
+  let complete = true
+  for (const name of names) {
+    checkCancelled(signal)
+    const child = await measureTree(path.join(full, name), signal)
+    bytes += child.bytes
+    complete = complete && child.complete
+  }
+  return { bytes, complete }
+}
+
+/**
+ * 逐檔複製，目的地先用 wx 建立；中斷或失敗由上層移除半成品。
+ * @param {string} from
+ * @param {string} to
+ * @param {{ signal?: AbortSignal, bytes: number, onProgress?: (bytes: number) => void }} ctx
+ */
+async function copyNode(from, to, ctx) {
+  checkCancelled(ctx.signal)
+  const st = await fsp.lstat(from)
+  if (st.isSymbolicLink()) {
+    const link = await fsp.readlink(from)
+    let target
+    try { target = await fsp.stat(from) } catch { target = null }
+    await fsp.symlink(link, to, target && target.isDirectory() ? 'junction' : 'file')
+    return
+  }
+  if (st.isDirectory()) {
+    await fsp.mkdir(to)
+    const names = await fsp.readdir(from)
+    for (const name of names) await copyNode(path.join(from, name), path.join(to, name), ctx)
+    return
+  }
+  const input = await fsp.open(from, 'r')
+  const output = await fsp.open(to, 'wx', st.mode & 0o777)
+  const buffer = Buffer.allocUnsafe(COPY_CHUNK_BYTES)
+  try {
+    while (true) {
+      checkCancelled(ctx.signal)
+      const read = await input.read(buffer, 0, buffer.length, null)
+      if (!read.bytesRead) break
+      await output.write(buffer, 0, read.bytesRead, null)
+      ctx.bytes += read.bytesRead
+      if (ctx.onProgress) ctx.onProgress(ctx.bytes)
+    }
+  } finally {
+    await input.close()
+    await output.close()
+  }
+}
+
+/**
+ * @param {string} from
+ * @param {string} to
+ * @param {{ signal?: AbortSignal, onProgress?: (bytes: number) => void, onTotal?: (total: number|null) => void }} opts
+ */
+async function copyTreeWithProgress(from, to, opts) {
+  const measured = await measureTree(from, opts.signal)
+  if (opts.onTotal) opts.onTotal(measured.complete ? measured.bytes : null)
+  const ctx = { signal: opts.signal, bytes: 0, onProgress: opts.onProgress }
+  try {
+    await copyNode(from, to, ctx)
+  } catch (error) {
+    try { await paths.removeLinkOrTree(to) } catch { /* 半成品可能尚未建立 */ }
+    throw error
+  }
+  return { path: to, bytes: ctx.bytes, totalBytes: measured.complete ? measured.bytes : null }
+}
+
 /**
  * @param {Promise<T>} promise
  * @param {number} ms
@@ -260,9 +358,26 @@ function withTimeout(promise, ms) {
   })
 }
 
-async function listDir(dirPath, rawOpts) {
-  const full = paths.resolveAbs(dirPath)
-  const opts = sanitizeSort(rawOpts)
+function pageOptions(raw) {
+  const value = raw && typeof raw === 'object' ? raw : {}
+  const offset = Number.isFinite(Number(value.offset))
+    ? Math.max(0, Math.floor(Number(value.offset)))
+    : 0
+  const requested = value.limit ?? value.pageSize
+  const limit = Number.isFinite(Number(requested))
+    ? Math.max(1, Math.min(MAX_PAGE_SIZE, Math.floor(Number(requested))))
+    : DEFAULT_PAGE_SIZE
+  return { offset, limit }
+}
+
+function listCacheKey(full, opts) {
+  return `${full.toLowerCase()}|${opts.showHidden ? '1' : '0'}`
+}
+
+async function readDirectoryEntries(full, opts) {
+  const key = listCacheKey(full, opts)
+  const current = listCache.get(key)
+  if (current && Date.now() - current.createdAt < LIST_CACHE_TTL_MS) return current
   let dirents
   try {
     const read = fsp.readdir(full, { withFileTypes: true })
@@ -276,16 +391,51 @@ async function listDir(dirPath, rawOpts) {
     return { dirent: d, hidden: Boolean(attr && attr.hidden) || isHiddenName(d.name) }
   })
   const visible = opts.showHidden ? flagged : flagged.filter((item) => !item.hidden)
-  const overStat = visible.length > MAX_STAT
-  const toStat = overStat ? visible.slice(0, MAX_ENTRIES) : visible
-  const entries = await mapLimit(toStat, STAT_CONCURRENCY, (item) => (
+  const entries = await mapLimit(visible, STAT_CONCURRENCY, (item) => (
     statEntry(item.dirent, path.join(full, item.dirent.name), item.hidden)
   ))
-  const sorted = sortEntries(entries, opts)
+  const next = { createdAt: Date.now(), entries, sorted: new Map() }
+  listCache.set(key, next)
+  return next
+}
+
+async function listDir(dirPath, rawOpts) {
+  const full = paths.resolveAbs(dirPath)
+  const opts = sanitizeSort(rawOpts)
+  const page = pageOptions(rawOpts)
+  const source = await readDirectoryEntries(full, opts)
+  const sortKey = `${opts.by}:${opts.desc ? '1' : '0'}`
+  let sorted = source.sorted.get(sortKey)
+  if (!sorted) {
+    sorted = sortEntries(source.entries, opts)
+    source.sorted.set(sortKey, sorted)
+  }
+  const total = sorted.length
+  const entries = sorted.slice(page.offset, page.offset + page.limit)
+  const hasMore = page.offset + entries.length < total
   return {
     path: full,
-    entries: overStat ? sorted : sorted.slice(0, MAX_ENTRIES),
-    truncated: visible.length > MAX_ENTRIES
+    entries,
+    offset: page.offset,
+    limit: page.limit,
+    total,
+    hasMore,
+    nextOffset: hasMore ? page.offset + entries.length : null,
+    // 舊 caller 仍用 truncated 判斷「畫面還沒拿完」；現在它代表尚有下一頁。
+    truncated: hasMore
+  }
+}
+
+/** @param {unknown} dirPath */
+function invalidateListCache(dirPath) {
+  if (typeof dirPath !== 'string' || !dirPath) {
+    listCache.clear()
+    return
+  }
+  let full
+  try { full = paths.resolveAbs(dirPath).toLowerCase() } catch { return }
+  for (const key of listCache.keys()) {
+    if (key.startsWith(`${full}|`)) listCache.delete(key)
   }
 }
 
@@ -294,7 +444,22 @@ async function listDir(dirPath, rawOpts) {
  */
 async function listRecycle(rawOpts) {
   const listed = await recycle.list()
-  return { ...listed, entries: sortEntries(listed.entries, sanitizeSort(rawOpts)) }
+  const opts = sanitizeSort(rawOpts)
+  const page = pageOptions(rawOpts)
+  const sorted = sortEntries(listed.entries, opts)
+  const entries = sorted.slice(page.offset, page.offset + page.limit)
+  const total = sorted.length
+  const hasMore = page.offset + entries.length < total
+  return {
+    ...listed,
+    entries,
+    offset: page.offset,
+    limit: page.limit,
+    total,
+    hasMore,
+    nextOffset: hasMore ? page.offset + entries.length : null,
+    truncated: Boolean(listed.truncated) || hasMore
+  }
 }
 
 /**
@@ -489,6 +654,25 @@ async function preview(filePath) {
 }
 
 /**
+ * 讀 Markdown 預覽用的文字。只接受 Markdown 副檔名並限制大小，避免把任意
+ * 二進位檔或大型檔案送進 renderer。
+ * @param {unknown} filePath
+ */
+async function readMarkdown(filePath) {
+  const full = paths.resolveExisting(filePath)
+  const ext = path.extname(full).slice(1).toLowerCase()
+  if (!['md', 'markdown', 'mdown', 'mkd'].includes(ext)) {
+    throw paths.fail('NOT_MARKDOWN', '這不是 Markdown 檔案')
+  }
+  let stat
+  try { stat = await fsp.stat(full) } catch { throw paths.fail('READ_FAILED', '讀不到這個檔案') }
+  if (!stat.isFile()) throw paths.fail('NOT_A_FILE', '這不是一個檔案')
+  if (stat.size > MAX_MARKDOWN_BYTES) throw paths.fail('TOO_LARGE', 'Markdown 檔案太大')
+  const text = (await fsp.readFile(full)).toString('utf8')
+  return { path: full, text, size: stat.size, mtimeMs: Number(stat.mtimeMs) || 0 }
+}
+
+/**
  * @param {unknown} dirPath
  * @param {unknown} rawName
  * @param {boolean} dir
@@ -507,6 +691,7 @@ async function createEntry(dirPath, rawName, dir) {
   } catch {
     throw paths.fail('CREATE_FAILED', dir ? '建不了資料夾' : '建不了檔案')
   }
+  invalidateListCache(parent)
   return { path: full, dir: Boolean(dir) }
 }
 
@@ -529,6 +714,7 @@ async function renameEntry(target, rawName) {
   } catch {
     throw paths.fail('RENAME_FAILED', '改名失敗')
   }
+  invalidateListCache(path.dirname(full))
   return { path: next }
 }
 
@@ -549,6 +735,7 @@ async function removeEntry(target, rawOpts) {
     if (error && error.code === 'DELETE_FAILED') throw error
     throw paths.fail('DELETE_FAILED', '刪不掉')
   }
+  invalidateListCache(path.dirname(full))
   return { path: full, permanent }
 }
 
@@ -560,7 +747,7 @@ const emptyRecycle = () => recycle.empty()
  * @param {unknown} fromPath
  * @param {unknown} toDir
  */
-async function moveEntry(fromPath, toDir) {
+async function moveEntry(fromPath, toDir, rawOptions) {
   const from = paths.resolveExisting(fromPath)
   paths.assertMutable(from)
   const dir = paths.resolveExisting(toDir)
@@ -575,13 +762,40 @@ async function moveEntry(fromPath, toDir) {
   if (isIntoSelf(from, dir)) {
     throw paths.fail('BAD_PATH', '不能把資料夾搬進它自己底下')
   }
+  const options = rawOptions && typeof rawOptions === 'object' ? rawOptions : null
   return queueWrite(dir, async () => {
     let next = path.join(dir, path.basename(from))
     paths.resolveAbs(next)
     if (next.toLowerCase() === from.toLowerCase()) return { path: from }
-    if (fs.existsSync(next)) next = uniqueDest(dir, path.basename(from))
+    if (fs.existsSync(next)) {
+      if (options && options.collision === 'skip') return { path: next, skipped: true }
+      next = uniqueDest(dir, path.basename(from))
+    }
+    if (options && (options.onProgress || options.onTotal)) {
+      const measured = await measureTree(from, options.signal)
+      if (options.onTotal) options.onTotal(measured.complete ? measured.bytes : null)
+      checkCancelled(options.signal)
+      try {
+        await fsp.rename(from, next)
+        invalidateListCache()
+        return { path: next, bytes: 0, totalBytes: measured.complete ? measured.bytes : null }
+      } catch {
+        try {
+          const copied = await copyTreeWithProgress(from, next, options)
+          checkCancelled(options.signal)
+          await paths.removeLinkOrTree(from)
+          invalidateListCache()
+          return { path: next, ...copied }
+        } catch (error) {
+          throw error && error.code === 'CANCELLED'
+            ? error
+            : paths.fail('MOVE_FAILED', '搬不過去')
+        }
+      }
+    }
     try {
       await fsp.rename(from, next)
+      invalidateListCache()
       return { path: next }
     } catch {
       try {
@@ -590,6 +804,7 @@ async function moveEntry(fromPath, toDir) {
       } catch {
         throw paths.fail('MOVE_FAILED', '搬不過去')
       }
+      invalidateListCache()
       return { path: next }
     }
   })
@@ -599,7 +814,7 @@ async function moveEntry(fromPath, toDir) {
  * @param {unknown} fromPath
  * @param {unknown} toDir
  */
-async function copyEntry(fromPath, toDir) {
+async function copyEntry(fromPath, toDir, rawOptions) {
   const from = paths.resolveExisting(fromPath)
   const dir = paths.resolveExisting(toDir)
   paths.assertCreatable(dir)
@@ -613,15 +828,23 @@ async function copyEntry(fromPath, toDir) {
   if (isIntoSelf(from, dir)) {
     throw paths.fail('BAD_PATH', '不能把資料夾搬進它自己底下')
   }
+  const options = rawOptions && typeof rawOptions === 'object' ? rawOptions : null
   return queueWrite(dir, async () => {
     let next = path.join(dir, path.basename(from))
     paths.resolveAbs(next)
-    if (fs.existsSync(next)) next = uniqueDest(dir, path.basename(from))
+    if (fs.existsSync(next)) {
+      if (options && options.collision === 'skip') return { path: next, skipped: true }
+      next = uniqueDest(dir, path.basename(from))
+    }
+    if (options && (options.onProgress || options.onTotal)) {
+      return copyTreeWithProgress(from, next, options)
+    }
     try {
       await fsp.cp(from, next, { recursive: true, force: false, errorOnExist: true, verbatimSymlinks: true })
     } catch {
       throw paths.fail('COPY_FAILED', '複製失敗')
     }
+    invalidateListCache(dir)
     return { path: next }
   })
 }
@@ -629,17 +852,24 @@ async function copyEntry(fromPath, toDir) {
 module.exports = {
   MAX_ENTRIES,
   MAX_STAT,
+  MAX_PAGE_SIZE,
+  DEFAULT_PAGE_SIZE,
   ATTRS_TIMEOUT_MS,
   MAX_READ_BYTES,
+  MAX_MARKDOWN_BYTES,
+  COPY_CHUNK_BYTES,
   IMAGE_MIME,
   SORT_KEYS,
   isHiddenName,
   sanitizeSort,
   sortEntries,
   uniqueDest,
+  invalidateListCache,
+  measureTree,
   listDir,
   listRecycle,
   preview,
+  readMarkdown,
   inspect,
   parseLnkTarget,
   createEntry,

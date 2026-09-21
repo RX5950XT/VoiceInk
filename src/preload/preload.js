@@ -674,6 +674,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     driveInfo: () => ipcRenderer.invoke('explorer:driveInfo'),
     listDir: (dirPath, opts) => ipcRenderer.invoke('explorer:listDir', dirPath, opts),
     preview: (filePath) => ipcRenderer.invoke('explorer:preview', filePath),
+    readMarkdown: (filePath) => ipcRenderer.invoke('explorer:readMarkdown', filePath),
     /** 大預覽的來源網址（`vi-media://`）。側欄小預覽才用 `inspect` 的 data: URI（卡 2MB）。 */
     mediaUrl: (filePath) => ipcRenderer.invoke('explorer:mediaUrl', filePath),
     inspect: (filePath) => ipcRenderer.invoke('explorer:inspect', filePath),
@@ -698,10 +699,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setClipboard: (items, mode) => ipcRenderer.invoke('explorer:setClipboard', items, mode),
     paste: (toDir) => ipcRenderer.invoke('explorer:paste', toDir),
     dropEntries: (items, toDir, mode) => ipcRenderer.invoke('explorer:dropEntries', items, toDir, mode),
+    operationCancel: (id) => ipcRenderer.invoke('explorer:operationCancel', id),
+    operationRetry: (id) => ipcRenderer.invoke('explorer:operationRetry', id),
+    operationUndo: (id) => ipcRenderer.invoke('explorer:operationUndo', id),
+    operationState: () => ipcRenderer.invoke('explorer:operationState'),
+    setOperationPolicy: (opts) => ipcRenderer.invoke('explorer:setOperationPolicy', opts),
     watch: (dirPath) => ipcRenderer.invoke('explorer:watch', dirPath),
+    watchDirs: (dirPaths) => ipcRenderer.invoke('explorer:watchDirs', dirPaths),
     unwatch: () => ipcRenderer.invoke('explorer:unwatch'),
     uffsStatus: () => ipcRenderer.invoke('explorer:uffsStatus'),
-    uffsSearch: (pattern) => ipcRenderer.invoke('explorer:uffsSearch', pattern),
+    /** @param {string} pattern @param {object} [filters] 類型／日期／大小／位置篩選，由 main 驗證 */
+    uffsSearch: (pattern, filters) => ipcRenderer.invoke('explorer:uffsSearch', pattern, filters || {}),
     uffsCancel: () => ipcRenderer.invoke('explorer:uffsCancel'),
     uffsInstall: () => ipcRenderer.invoke('explorer:uffsInstall'),
     uffsCancelInstall: () => ipcRenderer.invoke('explorer:uffsCancelInstall'),
@@ -723,6 +731,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       const handler = (_event, payload) => callback(payload)
       ipcRenderer.on('explorer:folderSizeProgress', handler)
       return () => ipcRenderer.removeListener('explorer:folderSizeProgress', handler)
+    },
+    onOperation: (callback) => {
+      const handler = (_event, payload) => callback(payload)
+      ipcRenderer.on('explorer:operation', handler)
+      return () => ipcRenderer.removeListener('explorer:operation', handler)
     }
   }
 })

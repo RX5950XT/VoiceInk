@@ -15,9 +15,12 @@ const crypto = require('crypto')
 const { spawn } = require('child_process')
 const { pipeline } = require('stream/promises')
 const { fail, realOf } = require('./paths')
+const { sanitizeSearchFilters, matchesSearchFilters } = require('./search-filter')
 
 const MAX_PATTERN = 200
 const SEARCH_LIMIT = 200
+/** UFFS 先多取幾筆，篩選後才截給 UI，避免篩選器把前 200 筆吃掉。 */
+const SEARCH_SCAN_LIMIT = 2000
 const SEARCH_TIMEOUT_MS = 90_000
 const STATUS_TIMEOUT_MS = 8_000
 const MAX_STDOUT = 8 * 1024 * 1024
@@ -298,7 +301,47 @@ function sanitizeHit(row) {
     ? written === row.modified ? written / 10000 - 11644473600000 : 0 // UFFS modified 是 Windows FILETIME。
     : written ? Date.parse(String(written)) || 0 : 0
   const mtimeMs = Number.isFinite(parsedTime) && parsedTime > 0 && parsedTime <= 8640000000000000 ? parsedTime : 0
-  return { name, path: abs, dir, size, mtimeMs }
+  const ext = dir ? '' : path.extname(name).slice(1).toLowerCase()
+  return { name, path: abs, dir, size, mtimeMs, ext }
+}
+
+function dateFilterArg(value) {
+  const ms = Number(value)
+  if (!Number.isFinite(ms) || ms <= 0) return ''
+  const date = new Date(ms)
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString()
+}
+
+/**
+ * 先讓 UFFS 在 MFT 端縮小結果，再用 matchesSearchFilters 做最後防線。
+ * 未支援原生的 `other` 類型仍由本地分類，整個流程沒有自行走訪磁碟。
+ * @param {object} rawFilters
+ * @returns {string[]}
+ */
+function searchFilterArgs(rawFilters) {
+  const filters = sanitizeSearchFilters(rawFilters)
+  const args = []
+  if (filters.type === 'file') args.push('--files-only')
+  else if (filters.type === 'folder') args.push('--dirs-only')
+  else {
+    const nativeType = {
+      image: 'picture',
+      video: 'video',
+      audio: 'audio',
+      document: 'document',
+      archive: 'archive',
+      code: 'code'
+    }[filters.type]
+    if (nativeType) args.push('--type', nativeType)
+  }
+  if (filters.minSize !== null) args.push('--min-size', String(filters.minSize))
+  if (filters.maxSize !== null) args.push('--max-size', String(filters.maxSize))
+  const newer = dateFilterArg(filters.fromMs)
+  if (newer) args.push('--newer', newer)
+  const older = dateFilterArg(filters.toMs)
+  if (older) args.push('--older', older)
+  if (filters.location) args.push('--in-path', `*${filters.location}*`)
+  return args
 }
 
 /**
@@ -338,10 +381,12 @@ async function status() {
 
 /**
  * @param {unknown} raw
+ * @param {unknown} rawFilters
  * @returns {Promise<{ hits: object[], truncated: boolean, warming: boolean }>}
  */
-async function search(raw) {
+async function search(raw, rawFilters) {
   const pattern = sanitizePattern(raw)
+  const filters = sanitizeSearchFilters(rawFilters)
   const exe = findUffs()
   if (!exe) throw fail('UFFS_MISSING', '尚未安裝快速搜尋')
   cancelSearch()
@@ -358,11 +403,12 @@ async function search(raw) {
   const args = [
     query,
     '--format', 'json',
-    '--limit', String(SEARCH_LIMIT),
+    '--limit', String(SEARCH_SCAN_LIMIT),
     '--columns', 'path,name,size,written,type',
     '--hide-system',
     '--hide-ads'
   ]
+  args.push(...searchFilterArgs(filters))
   const result = await new Promise((resolve, reject) => {
     let child
     try {
@@ -415,10 +461,15 @@ async function search(raw) {
   const hits = []
   for (const row of rows) {
     const hit = sanitizeHit(row)
-    if (hit) hits.push(hit)
+    if (hit && matchesSearchFilters(hit, filters)) hits.push(hit)
     if (hits.length >= SEARCH_LIMIT) break
   }
-  return { hits: require('./rank').rankHits(pattern, hits), truncated: rows.length >= SEARCH_LIMIT, warming: false }
+  return {
+    hits: require('./rank').rankHits(pattern, hits),
+    truncated: rows.length >= SEARCH_SCAN_LIMIT || hits.length >= SEARCH_LIMIT,
+    warming: false,
+    filters
+  }
 }
 
 function psQuote(value) {
@@ -596,6 +647,7 @@ async function runEnsure(opts) {
 module.exports = {
   MAX_PATTERN,
   SEARCH_LIMIT,
+  SEARCH_SCAN_LIMIT,
   MAX_ZIP_BYTES,
   sanitizePattern,
   configure,
@@ -614,6 +666,7 @@ module.exports = {
   parseStatusJson,
   classifySearchError,
   sanitizeHit,
+  searchFilterArgs,
   checksumFor,
   verifyZipHash
 }

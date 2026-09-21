@@ -209,6 +209,14 @@ function previewEl(item, info, onPreviewClick) {
   cap.className = 'ex-detail-preview-cap'
   cap.textContent = (info && info.shortcutTarget) || item.name
   box.appendChild(cap)
+  if (typeof onPreviewClick === 'function') {
+    const open = document.createElement('button')
+    open.type = 'button'
+    open.className = 'btn btn-secondary btn-sm ex-detail-preview-open'
+    open.textContent = '開啟預覽'
+    open.addEventListener('click', onPreviewClick)
+    box.appendChild(open)
+  }
   return box
 }
 
