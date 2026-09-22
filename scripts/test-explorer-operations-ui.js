@@ -19,6 +19,18 @@ assert.match(style, /overflow-wrap: anywhere/)
 assert.match(style, /\.ex-ops-panel\[hidden\]\s*{\s*display:\s*none/)
 console.log('PASS: operation center renderer contract and accessible state styling')
 
+// 操作中心長在最下面那條狀態列裡，面板往上開；同名時有三種處理
+const page = fs.readFileSync(path.join(root, 'src/renderer/scripts/explorer-page.js'), 'utf8')
+const markup = fs.readFileSync(path.join(root, 'src/renderer/index.html'), 'utf8')
+assert.match(markup, /<footer class="ex-status" id="exStatus">/)
+assert.match(page, /mountExplorerOperations\(\{[^)]*\$\('exStatus'\)/)
+assert.match(style, /\.ex-ops-panel\s*{[^}]*bottom:\s*calc\(100% \+ 8px\)/)
+assert.doesNotMatch(style, /position:\s*fixed/)
+for (const value of ['rename', 'overwrite', 'skip']) {
+  assert.match(source, new RegExp(`['"]${value}['"]`), `同名處理少了 ${value}`)
+}
+console.log('PASS: 操作中心收在狀態列，同名時可保留兩份／覆蓋／略過')
+
 // 打包版是用 file:// 直接載原始 ES module，CSS 不是 JS module——
 // renderer 的 JS 只要 `import './x.css'`，整條 import 鏈都會 Failed to fetch。
 // 樣式一律掛在 index.html 的 <link>。

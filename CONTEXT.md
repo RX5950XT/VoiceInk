@@ -14,6 +14,39 @@ AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定�
 
 ## 架構
 
+### 檔案總管：操作中心收進狀態列、同名可覆蓋（2026-09-22）
+
+- **操作中心不再浮在右下角**：改掛在最下面那條狀態列（`#exStatus`，「搜尋就緒」左邊），
+  平常只是一顆鈕，字就是現況：閒著寫「檔案操作」、跑的時候寫「複製中 42%」、
+  收尾寫「複製完成」；面板改成往上開（`bottom: calc(100% + 8px)`）。
+  **開始操作不再自動彈面板**（以前一開始就把面板打開，擋在清單右下角），
+  只有收在 `failed`／`partial` 才自己跳出來。卡片也精簡了：跑完就不再留那行位元組數。
+- **同名時多了「覆蓋」**：`operations.js` 的 collision 從 `rename`／`skip` 變三種，
+  `fs.js` 收斂成一支 `resolveCollision()`（copy/move 共用）。覆蓋是**先把目的地那份
+  丟進資源回收筒**再放新的（丟不進去才真的刪，NAS／非 NTFS 沒有回收筒），
+  救得回來；複製到同一個資料夾時覆蓋等於刪掉來源，一律退回保留兩份。
+- **切資料夾會被監看事件彈回去**：切換還在飛的時候 `cwd` 還停在舊資料夾，
+  `onChanged` 拿舊 `cwd` 重讀 → 後完成的那個蓋掉切換，畫面就彈回原本的資料夾
+  （`e2e-explorer-cdp.js` 的 [C9] 偶發變紅是這個，不是拖放壞了）。改成比對
+  `navTarget`（最後一次「要去」的資料夾）。
+- 測試：`test-explorer-operations.js`（覆蓋後留下新的那份、舊的進回收筒）、
+  `test-explorer-operations-ui.js`（長在狀態列、三種同名處理）、
+  `test-explorer-browse-wiring.js`（`navTarget` 守衛）、
+  `e2e-explorer-files-plan-cdp.js` 的 [1]。
+
+### 檔案總管：監看事件會掉、框選被重畫洗掉（2026-09-22）
+
+- **重掛 watcher 會吃掉改動**：UI 每重讀一次目錄就再呼叫一次 `watchDirs()`，
+  `explorer/watch.js` 以前是「先全部 `stop()` 再重開」——重開之間的改動沒人看，
+  連還在 debounce（250ms）沒送出的事件也被 `clearTimeout` 吃掉，那個檔案就再也不會
+  出現在畫面上，只能手動 F5。改成同一個資料夾沿用既有 watcher（只換 `send`），
+  這次清單裡沒有的才關掉。`e2e-explorer-cdp.js` 的 [C8]／[F] 偶發變紅就是這個。
+- **框選期間不重畫清單**：`paintList()` 的 `replaceChildren()` 會把框（`.ex-marquee`）
+  連同反白一起洗掉，監看事件晚一步送到就會踩到（症狀：三列都反白但框不見了）。
+  `paintList()` 遇到框選中改成記一筆就回，放開滑鼠再補畫。
+- 測試：`test-explorer-watch.js`（重新 arm 不掉事件、舊資料夾要關掉）、
+  `e2e-explorer-cdp.js` 的 [C6]／[C8]／[F]（連跑三次全綠）。
+
 ### 檔案總管：欄寬可拖與分頁列（2026-09-21）
 
 - **三條把手**：`#exSidebarResizer`／`#exSecondResizer`／`#exDetailResizer`，共用
@@ -94,9 +127,6 @@ AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定�
   （`isComposing` 有些輸入法不送，所以連 `keyCode === 229` 一起擋）。
 - 測試：`test-explorer.js` 的「磁碟根目錄的檔案還原得回去」、
   `e2e-app-dialog-cdp.js` 的 [G1]／[G2]／[G3]。
-- **已知偶發**：`e2e-explorer-cdp.js` 的 [C8]「資料夾監看有在跑」會紅，改動前後都一樣
-  （`fs.watch` 在 Windows 上偶爾不送事件）；紅的時候腳本會把當下的清單與磁碟內容印出來。
-
 ### 終端機：選取文字選不起來、PATH 被送兩份（2026-09-21）
 
 - **「選取文字自動複製壞掉」其實是選不起來**：Claude Code v2.1 起會送 `?1000h`＋`?1006h`

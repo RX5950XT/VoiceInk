@@ -184,6 +184,11 @@ let hits = []
 let searching = false
 let searchSeq = 0
 let navSeq = 0
+/**
+ * 最後一次「要去」的資料夾。切換還在飛的時候 `cwd` 還停在舊的那個，資料夾監看這時候
+ * 送事件進來，拿舊 `cwd` 重讀就會把剛開始的切換蓋回去（畫面彈回原本的資料夾）。
+ */
+let navTarget = ''
 let contextMenuSeq = 0
 /** @type {ReturnType<typeof setTimeout> | 0} */
 let searchTimer = 0
@@ -191,6 +196,8 @@ let truncated = false
 let searchSort = 'rank'
 let editingPath = false
 let watching = false
+let marqueeDragging = false
+let marqueePaintMissed = false
 /** @type {ReturnType<typeof createListReorder> | null} */
 let placeReorder = null
 /** @type {(() => void) | null} */
@@ -390,7 +397,12 @@ function bindOnce() {
   if (started) return
   started = true
   initExplorerResizers()
-  disposeOperations = mountExplorerOperations({ root: $('page-explorer'), api: electronAPI.explorer })
+  // 長在最下面那條狀態列裡（「搜尋就緒」左邊），不再是浮在右下角的方塊
+  disposeOperations = mountExplorerOperations({
+    root: $('exStatus') || $('page-explorer'),
+    before: $('exUffsChip'),
+    api: electronAPI.explorer
+  })
   $('exTabAddBtn')?.addEventListener('click', () => void newTab())
   $('exBackBtn')?.addEventListener('click', () => goHistory(-1))
   $('exForwardBtn')?.addEventListener('click', () => goHistory(1))
@@ -522,7 +534,11 @@ function bindOnce() {
   for (const type of ['mousedown', 'mouseup', 'auxclick']) document.addEventListener(type, onSideButton, true)
   unsubChanged = electronAPI.explorer.onChanged((payload) => {
     if (!payload) return
-    if (payload.path === cwd && !inSearch()) void loadDir(cwd, { silent: true, keepSelection: true })
+    // 比的是「要去的資料夾」不是 cwd：正在切換的時候拿舊 cwd 重讀會把切換蓋回去
+    const here = navTarget || cwd
+    if (pathKey(payload.path) === pathKey(here) && !inSearch()) {
+      void loadDir(here, { silent: true, keepSelection: true })
+    }
     if (dualPane && payload.path === secondPane.cwd) void loadSecond(secondPane.cwd, { pushHistory: false, keepSelection: true })
   })
   unsubProgress = electronAPI.explorer.onUffsProgress((info) => {
@@ -794,6 +810,13 @@ function paintList() {
   const host = $('exList')
   const empty = $('exEmpty')
   if (!host) return
+  // 框選中不重畫：replaceChildren() 會把框連同反白一起洗掉（資料夾監看晚一步送事件
+  // 就會踩到），改成記一筆，放開滑鼠再補畫。
+  if (marqueeDragging) {
+    marqueePaintMissed = true
+    return
+  }
+  marqueePaintMissed = false
   // replaceChildren() 會把 scrollTop 清成 0，所以要先把位置記下來再重畫。
   const scrollTop = host.scrollTop
   const home = inHome() && !inSearch()
@@ -2243,6 +2266,7 @@ async function loadVisiblePages() {
 }
 
 async function loadDir(dirPath, opts = {}) {
+  navTarget = String(dirPath || '')
   if (pathKey(dirPath) === THIS_PC) return loadHome(opts)
   const seq = ++navSeq
   let data
@@ -2255,10 +2279,12 @@ async function loadDir(dirPath, opts = {}) {
   }
   if (seq !== navSeq) return false
   if (!data) {
+    navTarget = cwd
     showToast('讀不到這個資料夾', 'error')
     return false
   }
   cwd = data.path
+  navTarget = cwd
   entries = mergeBrowsePage([], data, 0).entries
   directoryTotal = Number(data.total) || entries.filter(Boolean).length
   loadedOffsets = new Set([Number(data.offset) || 0])
@@ -3188,6 +3214,7 @@ function onListMouseDown(e) {
       box = document.createElement('div')
       box.className = 'ex-marquee'
       host.appendChild(box)
+      marqueeDragging = true
     }
     const left = Math.min(startX, ev.clientX)
     const top = Math.min(startY, ev.clientY)
@@ -3211,7 +3238,12 @@ function onListMouseDown(e) {
   const onUp = () => {
     document.removeEventListener('mousemove', onMove)
     document.removeEventListener('mouseup', onUp)
-    if (!box) return
+    marqueeDragging = false
+    if (!box) {
+      // 框選期間擋掉的重畫（監看事件）要補回來，不然畫面會停在舊內容
+      if (marqueePaintMissed) paintList()
+      return
+    }
     box.remove()
     box = null
     anchor = ''

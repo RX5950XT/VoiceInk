@@ -492,8 +492,8 @@ async function main() {
         const s = getComputedStyle(el)
         return { w: el.offsetWidth, h: el.offsetHeight, bg: s.backgroundColor, border: s.borderTopWidth }
       })()`), 5_000, '框畫出來').catch(() => null)
-      // 這條偶發會紅（資料夾監看晚一步送事件，重畫清單會把框一起洗掉，
-      // 症狀是 selected 有值但 marquees 是 0）。紅的時候把現場印出來。
+      // 這條以前偶發會紅：資料夾監看晚一步送事件，重畫清單把框一起洗掉（selected 有值
+      // 但 marquees 是 0）。已改成框選期間不重畫；再紅就把現場印出來。
       if (!marquee) {
         console.log('DIAG geo', JSON.stringify(geo))
         console.log('DIAG', JSON.stringify(await cdp.eval(`(() => {
@@ -553,8 +553,9 @@ async function main() {
         const row = document.querySelector('#exList [data-id="undo-me.txt"]')
         return row && row.offsetHeight > 4 ? { path: row.dataset.path } : null
       })()`), 15_000, '新檔案出現在畫面上').catch(() => null)
-      // 這條偶發會紅（fs.watch 在 Windows 上偶爾不送事件），紅的時候把現場印出來，
-      // 才分得出是監看沒跑還是畫面沒更新。
+      // 這條以前偶發會紅：每次重讀目錄都會重掛 watcher，剛好卡在那一下的改動連同
+      // 還在 debounce 的事件一起被丟掉。watch.js 已改成沿用既有 watcher；
+      // 再紅就把現場印出來，才分得出是監看沒跑還是畫面沒更新。
       if (!shown) {
         const diag = await cdp.eval(`(() => ({
           crumb: (document.getElementById('exCrumbs') || {}).dataset?.path || '',
