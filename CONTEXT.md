@@ -9,10 +9,19 @@ VoiceInk：Windows Electron AI 工作台。Vanilla JS + Vite（無前端框架�
 目前版本 **v1.25.0**（檔案總管雙欄右欄變成真的能用、操作中心收進狀態列且同名時可覆蓋、
 資料夾監看不再漏事件；前版終端機 PATH 不再被 Ctrl+G 橋接蓋掉；再前檢查更新改走鏡像）。
 
-nav 十頁：聊天（預設，**專案工作區與終端機都在同一頁**）｜Telegram（官方網頁版 `web.telegram.org/a` 放進 `<webview>`，可並排多開最多 4 格、共用 `persist:telegram`，每格頂端細列 ✕ 關／最右格 ＋ 再開，每格停的聊天室存 store `telegramPanes`（不用 localStorage：結束走 `app.exit()` 會掉最後幾秒的寫入）；`telegram-page.js`，第一次點才建）｜檔案｜CC代理（`data-page` 仍是 `ccswitch`）｜
+nav 十頁：聊天（預設，**專案工作區與終端機都在同一頁**）｜Telegram（官方網頁版 `web.telegram.org/a` 放進 `<webview>`，可並排多開最多 4 格（沒存過開 2 格；每格卡 600px，Web A 一律手機版版面）、共用 `persist:telegram`，每格頂端細列 ✕ 關／最右格 ＋ 再開，每格停的聊天室存 store `telegramPanes`（不用 localStorage：結束走 `app.exit()` 會掉最後幾秒的寫入）；`telegram-page.js`，第一次點才建）｜檔案｜CC代理（`data-page` 仍是 `ccswitch`）｜
 AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定。額度不再是一頁：收成工作區主區最下面那條，用量統計在 CC代理。
 
 ## 架構
+
+### 導覽列換真圖示、可拖曳排序；Telegram 一律手機版（2026-09-23）
+
+- **導覽列圖示**：emoji 全換成 SVG（`ws-tool-icons.js` 的 `toolIcon`）。Telegram／Hugging Face 用 simple-icons 原廠輪廓，
+  CC代理／AGY反代沿用既有的 `claude`／`agy`，其餘是 lucide 24×24 描邊。`index.html` 只放 `data-icon`，`initNavigation()` 塞 SVG。
+- **導覽列拖曳排序**：沿用 `list-reorder.js`（`axis: 'x'`，Alt+←→ 也能搬），順序存 localStorage `navOrder`；
+  放開那一下的 click 用 `navSuppressClickUntil` 擋掉，不會順便切頁。
+- **Telegram 手機版**：Web A 寬度 ≤ 600px 才切手機版版面，`.telegram-pane` 加 `max-width: 600px`、整排置中；
+  沒存過格子時預設開兩格。
 
 ### 額度詳情精簡、Claude 不再 429、Codex 重置直接用；工作區搜尋改放大鏡（2026-09-23）
 

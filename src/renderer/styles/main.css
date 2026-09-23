@@ -250,7 +250,28 @@ body.is-maximized .win-btn#winMax {
 }
 
 .nav-tab .nav-icon {
-  font-size: 16px;
+  display: flex;
+}
+
+.nav-tab .nav-icon .ws-tool-icon {
+  width: 17px;
+  height: 17px;
+  /* lucide 是 24×24 畫布，2 在 17px 上約 1.4px，跟其他 16px 圖示的 1.5 描邊一樣粗 */
+  stroke-width: 2;
+}
+
+/* 拖曳排序（list-reorder.js）：拖的那顆半透明，其他顆不要 hover 閃 */
+.header-nav.is-reordering {
+  cursor: grabbing;
+}
+
+.header-nav.is-reordering .nav-tab {
+  pointer-events: none;
+  transition: none;
+}
+
+.nav-tab.is-dragging {
+  opacity: 0.55;
 }
 
 /* 十個分頁的完整文字要約 1440px 才排得下；再窄就只留目前這頁的字，
@@ -11189,14 +11210,17 @@ h6.md-h { font-size: 14px; }
 .telegram-frame {
   flex: 1;
   display: flex;
+  justify-content: center;
   gap: 6px;
   min-width: 0;
   min-height: 0;
   padding: 6px;
 }
 
+/* Web A 在寬度 ≤ 600px 才切手機版版面；卡住上限，格數少、畫面寬也一律是手機版 */
 .telegram-pane {
   flex: 1;
+  max-width: 600px;
   display: flex;
   flex-direction: column;
   min-width: 0;

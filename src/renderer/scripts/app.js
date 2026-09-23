@@ -13,6 +13,8 @@ import { DEFAULT_ASR_API_URL, DEFAULT_ASR_MODEL } from './api.js'
 import { initResizer } from './pane-resize.js'
 import { initCustomSelects, syncCustomSelects } from './custom-select.js'
 import { askConfirm } from './app-dialog.js'
+import { toolIcon } from './ws-tool-icons.js'
+import { createListReorder } from './list-reorder.js'
 import { TERM_THEMES, DEFAULT_TERM_THEME, DEFAULT_TERM_BG_OPACITY, MIN_TERM_BG_OPACITY } from './term-themes.js'
 
 /** @type {typeof import('./live-caption.js') | null} */
@@ -517,10 +519,11 @@ let latestModels = {}
 // ===== 初始化 =====
 document.addEventListener('DOMContentLoaded', async () => {
   initCustomSelects()
+  // 導覽列的圖示與順序要在第一次畫面前就位，不等主題讀完
+  initNavigation()
   await initTheme()
   initWindowControls()
   bindSettingsControls()
-  initNavigation()
   initSidebarResize()
   initSidebarModes()
   initChatPage()
@@ -781,10 +784,57 @@ function initWindowControls() {
 
 // ===== 分頁導航 =====
 
+const NAV_ORDER_KEY = 'navOrder'
+/** 拖完放開的那一下也會觸發 click，不能順便切頁 */
+let navSuppressClickUntil = 0
+
+const navReorder = createListReorder({
+  getList: () => document.querySelector('.header-nav'),
+  itemSelector: '.nav-tab',
+  ignoreSelector: 'input',
+  axis: 'x',
+  onCommit: () => {
+    navSuppressClickUntil = performance.now() + 250
+    const order = [...document.querySelectorAll('.header-nav .nav-tab')].map((el) => el.dataset.page)
+    try {
+      localStorage.setItem(NAV_ORDER_KEY, JSON.stringify(order))
+    } catch {
+      // 沒有 storage 就只是這次有效
+    }
+  }
+})
+
+/** 照上次拖好的順序排；存檔裡不認得的頁略過，新加的頁留在原本位置之後 */
+function applyNavOrder() {
+  let saved = []
+  try {
+    saved = JSON.parse(localStorage.getItem(NAV_ORDER_KEY) || '[]')
+  } catch {
+    saved = []
+  }
+  if (!Array.isArray(saved)) return
+  const nav = document.querySelector('.header-nav')
+  const byPage = new Map([...navItems].map((el) => [el.dataset.page, el]))
+  for (const page of saved.reverse()) {
+    const el = typeof page === 'string' ? byPage.get(page) : undefined
+    if (el) nav.prepend(el)
+  }
+}
+
 function initNavigation() {
   navItems.forEach(item => {
-    item.addEventListener('click', () => switchPage(item.dataset.page))
+    item.dataset.id = item.dataset.page
+    const slot = item.querySelector('.nav-icon[data-icon]')
+    const icon = slot && toolIcon(slot.dataset.icon)
+    if (icon) slot.appendChild(icon)
+    item.addEventListener('click', () => {
+      if (performance.now() < navSuppressClickUntil) return
+      switchPage(item.dataset.page)
+    })
+    item.addEventListener('pointerdown', navReorder.onPointerDown)
+    item.addEventListener('keydown', navReorder.onKeydown)
   })
+  applyNavOrder()
 }
 
 /**

@@ -6,7 +6,8 @@ import { electronAPI } from './app.js'
  * 每一格都用同一個 `persist:telegram`：Web A 本來就支援同帳號多分頁，
  * 所以登入一次、每一格都是登入狀態。每格頂端一條細列：✕ 關掉這格，
  * 最右邊那格多一顆 ＋ 往右再開一格。每格停在哪個聊天室（網址的 #hash）
- * 存進設定 `telegramPanes`，下次打開接著原本那幾格。
+ * 存進設定 `telegramPanes`，下次打開接著原本那幾格；沒存過就開兩格。
+ * 每格寬度卡在 600px（CSS），Web A 一律是手機版版面。
  */
 
 const HOME_URL = 'https://web.telegram.org/a/'
@@ -28,7 +29,7 @@ async function loadSaved() {
   } catch (error) {
     console.error('[telegram] 讀不到上次的格子:', error)
   }
-  return [HOME_URL]
+  return [HOME_URL, HOME_URL]
 }
 
 function frame() {
