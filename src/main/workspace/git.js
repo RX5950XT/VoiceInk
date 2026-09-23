@@ -490,8 +490,32 @@ async function discard(projectId, relPath) {
 async function pull(projectId) {
   const cwd = await rootOf(projectId)
   const res = await run(cwd, ['pull', '--ff-only'])
-  if (res.code !== 0) throw fail('PULL_FAILED', '拉取失敗（可能需要先處理本機變更，細節看終端機）')
+  if (res.code !== 0) throw fail('PULL_FAILED', pullFailMessage(res.stderr))
   return { pulled: true }
+}
+
+/**
+ * 把 pull 的 stderr 對到我們自己寫死的句子（stderr 本身不外送）。
+ * 最常見的是分支合併後遠端被刪掉：本機還追著它，每次拉都失敗。
+ * @param {string} stderr
+ * @returns {string}
+ */
+function pullFailMessage(stderr) {
+  const text = String(stderr || '')
+  if (/no such ref was fetched|couldn't find remote ref/i.test(text)) {
+    return '遠端已經沒有這個分支（可能合併後被刪了），請切回主分支再拉取'
+  }
+  if (/no tracking information/i.test(text)) return '這個分支沒有對應的遠端分支，無法拉取'
+  if (/would be overwritten|commit your changes or stash/i.test(text)) {
+    return '本機有未提交的變更會被覆蓋，請先提交或捨棄再拉取'
+  }
+  if (/not possible to fast-forward|diverg/i.test(text)) {
+    return '本機與遠端各有新的提交，無法直接快轉，請在終端機處理合併'
+  }
+  if (/could not read from remote|unable to access|authentication failed|could not resolve host/i.test(text)) {
+    return '連不上遠端（網路或權限問題）'
+  }
+  return '拉取失敗（細節請在終端機執行 git pull 查看）'
 }
 
 /**
@@ -772,5 +796,6 @@ module.exports = {
   commit,
   push,
   pull,
+  pullFailMessage,
   diff
 }

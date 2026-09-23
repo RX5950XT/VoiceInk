@@ -657,6 +657,13 @@ async function main() {
     // 上游還沒設定時 git 不會印 branch.ab，那時候不能憑空給數字
     const noUpstream = git.parseStatus(['# branch.head main', ''].join(NUL))
     ok('沒有上游時 ahead/behind 是 0', noUpstream.ahead === 0 && noUpstream.behind === 0)
+
+    // 分支合併後遠端被刪：實際的 stderr，要講出原因而不是泛稱「本機變更」
+    const gone = git.pullFailMessage("Your configuration specifies to merge with the ref 'refs/heads/feat/x'\nfrom the remote, but no such ref was fetched.\n")
+    ok('pull：遠端分支被刪', /遠端已經沒有這個分支/.test(gone), gone)
+    ok('pull：本機變更', /未提交/.test(git.pullFailMessage('error: Your local changes to the following files would be overwritten by merge:')))
+    ok('pull：分岔', /快轉/.test(git.pullFailMessage('fatal: Not possible to fast-forward, aborting.')))
+    ok('pull：不外送 stderr', !git.pullFailMessage('fatal: https://tok@x.com secret').includes('secret'))
   }
 
   // ===== [D] agent 恢復指令 =====
