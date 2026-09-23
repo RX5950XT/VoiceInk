@@ -42,6 +42,7 @@
 - **相容舊 App 的庫要拷走再寫**（跟還在跑的程式搶同一顆 SQLite 會把兩邊都寫壞）；外掛把埠寫死時只能重試，換埠等於外掛整組失效。
 - **額度／端點要先對真實回應再命名視窗**（Ollama 現行是 `limits.monthly`、Command Code 的月額度是剩餘值）。
 
+- **發版前拿新 asar 跟「上一版安裝版」逐檔比對，不要只看 exit 0**：`node_modules` 用 junction 接進 worktree，electron-builder 照樣 exit 0，卻少打 128 個套件（asar 501MB → 127MB）；這份 checkout 也沒有 `resources/` 與 `ffmpeg.exe`（`ffmpeg-static` 的下載腳本沒跑過）。套件數、檔案差異、原生程式四支都對上才上傳。
 - **畫面卡但所有 renderer 都沒有長任務時，去 GPU 程序找**：主視窗等的是 GPU 主執行緒把圖塊畫完（藏起來的 webview／iframe 會丟圖塊，`display:none` 與 `visibility:hidden` 都一樣）。先抓整個 App 的 trace 看誰在忙，再決定藏法。
 - **「卡頓」先問「是做得慢，還是每次都重做」**：大檔案的成本幾乎都在後者——每次切分頁重建 model、重算差異、重解 base64、重組整欄行號。找的是**重複的 O(輸入大小)**，不是熱點函式。
 - **要比「內容有沒有變」時，不要為了比對而把內容再取出來一次**（`model.getValue()` 是複製整份檔案）：把「上次放進去的那份」的**參考**留著比就好，字串不可變，存參考不佔記憶體。
