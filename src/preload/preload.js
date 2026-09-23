@@ -565,6 +565,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }
   },
 
+  // ===== 錄音機的錄音檔／即時字幕的逐字稿 =====
+  // 回傳一律 { ok, data } / { ok, error }；檔名與 id 由 main 驗樣式，組不出別的路徑
+  sttArchive: {
+    recordings: () => ipcRenderer.invoke('sttArchive:recordings'),
+    /** @param {string} name @param {Uint8Array} bytes */
+    appendRecording: (name, bytes) => ipcRenderer.invoke('sttArchive:appendRecording', name, bytes),
+    readRecording: (name) => ipcRenderer.invoke('sttArchive:readRecording', name),
+    deleteRecording: (name) => ipcRenderer.invoke('sttArchive:deleteRecording', name),
+    openRecordings: () => ipcRenderer.invoke('sttArchive:openRecordings'),
+    transcripts: () => ipcRenderer.invoke('sttArchive:transcripts'),
+    /** @param {string} id @param {{ key: string, source: string, translation: string }} entry */
+    appendTranscript: (id, entry) => ipcRenderer.invoke('sttArchive:appendTranscript', id, entry),
+    readTranscript: (id) => ipcRenderer.invoke('sttArchive:readTranscript', id),
+    deleteTranscript: (id) => ipcRenderer.invoke('sttArchive:deleteTranscript', id)
+  },
+
   // ===== 語音輸入（全域右 Alt）=====
   // 熱鍵、ASR 模型、整理用的供應商與剪貼簿都在 main；這裡只送得出錄好的 PCM 與字典字串。
   dictation: {

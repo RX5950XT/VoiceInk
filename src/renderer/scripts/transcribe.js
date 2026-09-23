@@ -39,7 +39,7 @@ let unsubFileProgress = null
 /**
  * 支援的音訊格式
  */
-const SUPPORTED_FORMATS = ['mp3', 'wav', 'm4a', 'flac', 'ogg', 'aac', 'wma', 'aiff', 'aif']
+const SUPPORTED_FORMATS = ['mp3', 'wav', 'm4a', 'flac', 'ogg', 'aac', 'wma', 'aiff', 'aif', 'webm']
 
 /** 原始檔案上限（與 main file-transcribe 對齊；保證 ≥100MB） */
 const MAX_FILE_BYTES = 200 * 1024 * 1024
@@ -119,7 +119,8 @@ function setupDragAndDrop() {
 
   dropZone.addEventListener('click', (e) => {
     if (e.target === dropZone || e.target.closest('.drop-zone-content')) {
-      if (!e.target.closest('button')) {
+      // 錄音下拉（原生 select 與自訂 listbox）點下去不是要開檔案對話框
+      if (!e.target.closest('button, select, .custom-select')) {
         fileInput.click()
       }
     }
@@ -142,6 +143,46 @@ function setupFileSelection() {
   })
 
   clearFileBtn.addEventListener('click', clearFile)
+
+  const pick = /** @type {HTMLSelectElement|null} */ (document.getElementById('recordingPick'))
+  pick?.addEventListener('change', () => {
+    const rec = recordingOptions.find((r) => r.name === pick.value)
+    pick.value = ''
+    if (rec) useRecording(rec)
+  })
+}
+
+/** @type {{ name: string, path: string, size: number, startedAt: number }[]} */
+let recordingOptions = []
+
+/**
+ * 錄音機錄好的檔直接當成這一頁的檔案（main 端轉錄只要絕對路徑）
+ * @param {{ name: string, path: string, size: number }} rec
+ */
+export function useRecording(rec) {
+  if (isTranscribing) {
+    showToast('正在轉錄，等這份跑完再換檔', 'error')
+    return
+  }
+  handleFileSelect({ name: rec.name, size: rec.size, path: rec.path })
+}
+
+/**
+ * 重讀「或選一段錄音」下拉（切到檔案轉錄時呼叫）
+ */
+export async function refreshRecordingPick() {
+  const pick = document.getElementById('recordingPick')
+  const group = document.getElementById('recordingPickGroup')
+  if (!pick || !group || !electronAPI.sttArchive) return
+  const res = await electronAPI.sttArchive.recordings()
+  if (!res?.ok) console.warn('[檔案轉錄] 讀不到錄音清單:', res?.error?.message)
+  recordingOptions = res?.ok ? res.data : []
+  const opts = [new Option('或選一段錄音…', '')]
+  for (const r of recordingOptions.slice(0, 30)) {
+    opts.push(new Option(`${new Date(r.startedAt).toLocaleString()}（${formatFileSize(r.size)}）`, r.name))
+  }
+  pick.replaceChildren(...opts)
+  group.hidden = recordingOptions.length === 0
 }
 
 /**
@@ -157,7 +198,7 @@ function handleFileDrop(e) {
 
 /**
  * 處理選擇的檔案
- * @param {File} file
+ * @param {File | { name: string, size: number, path: string }} file 錄音機的檔不是 File，只帶絕對路徑
  */
 function handleFileSelect(file) {
   const extension = file.name.split('.').pop().toLowerCase()
@@ -231,6 +272,7 @@ function setupTranscription() {
  */
 function resolveLocalPath(file) {
   if (!file) return ''
+  if (!(file instanceof File)) return typeof file.path === 'string' ? file.path : ''
   if (typeof electronAPI.getPathForFile === 'function') {
     const p = electronAPI.getPathForFile(file)
     if (p) return p

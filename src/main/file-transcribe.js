@@ -29,7 +29,7 @@ const CHUNK_SAMPLES = CHUNK_SECONDS * SAMPLE_RATE
 const BYTES_PER_SAMPLE = 4
 const CHUNK_BYTES = CHUNK_SAMPLES * BYTES_PER_SAMPLE
 
-const SUPPORTED_EXT = new Set(['mp3', 'wav', 'm4a', 'flac', 'ogg', 'aac', 'wma', 'aiff', 'aif'])
+const SUPPORTED_EXT = new Set(['mp3', 'wav', 'm4a', 'flac', 'ogg', 'aac', 'wma', 'aiff', 'aif', 'webm'])
 
 /** @type {{ kill: () => void, gen: number } | null} */
 let activeJob = null

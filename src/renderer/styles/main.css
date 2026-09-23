@@ -10452,6 +10452,95 @@ h6.md-h { font-size: 14px; }
   }
 }
 
+/* ===== 錄音機／字幕紀錄（語音轉文字頁）=====
+   面板外觀沿用 .dict-hero／.dict-panel／.dict-record，這裡只補版面 */
+
+.rec-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.rec-controls {
+  margin: 0 0 10px;
+}
+
+.rec-timer {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.rec-list {
+  max-height: 460px;
+}
+
+.rec-item .dict-record-head {
+  flex-wrap: wrap;
+}
+
+.rec-item-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.rec-item-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* 常駐不做 hover-only（hover 才出現的操作等於沒有） */
+.rec-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.rec-audio {
+  width: 100%;
+  margin-top: 8px;
+}
+
+.recording-pick {
+  display: flex;
+  justify-content: center;
+  margin-top: 12px;
+}
+
+.recording-pick[hidden] {
+  display: none;
+}
+
+.recording-pick .custom-select {
+  min-width: 260px;
+}
+
+.live-history {
+  width: 100%;
+  max-width: 520px;
+  margin: 16px auto 0;
+}
+
+.live-history-body {
+  display: flex;
+  flex-direction: column;
+  max-height: 360px;
+  margin-top: 10px;
+  padding-top: 10px;
+  overflow-y: auto;
+  border-top: 1px solid var(--border-light);
+}
+
+.live-history-tr {
+  margin: 0 0 8px;
+}
+
 /* ===== HF模型頁 =====
    頂層面板（.hf-card／.hf-model／.hf-panel）的 glass 外觀掛在前面的
    「Token Anxiety surface mapping」共用規則上，這裡只寫版面。

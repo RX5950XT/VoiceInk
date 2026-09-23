@@ -6,7 +6,7 @@
 ## 專案概況
 
 VoiceInk：Windows Electron AI 工作台。Vanilla JS + Vite（無前端框架），Electron 43.4.1 ＋ Node.js 22。
-目前版本 **v1.28.1**（Telegram 切回來不再卡；再前 v1.25.0：檔案總管雙欄右欄變成真的能用、操作中心收進狀態列且同名時可覆蓋、
+目前版本 **v1.29.0**（語音轉文字頁多了錄音機、即時字幕留逐字稿紀錄；前版 v1.28.1 Telegram 切回來不再卡；再前 v1.25.0：檔案總管雙欄右欄變成真的能用、操作中心收進狀態列且同名時可覆蓋、
 資料夾監看不再漏事件；前版終端機 PATH 不再被 Ctrl+G 橋接蓋掉；再前檢查更新改走鏡像）。
 
 nav 十頁：聊天（預設，**專案工作區與終端機都在同一頁**）｜Telegram（官方網頁版 `web.telegram.org/a` 放進 `<webview>`，可並排多開最多 4 格（沒存過開 2 格；每格卡 600px，Web A 一律手機版版面）、共用 `persist:telegram`，每格頂端細列 ✕ 關／最右格 ＋ 再開，每格停的聊天室存 store `telegramPanes`（不用 localStorage：結束走 `app.exit()` 會掉最後幾秒的寫入）；`telegram-page.js`，第一次點才建）｜檔案｜CC代理（`data-page` 仍是 `ccswitch`）｜
@@ -22,6 +22,13 @@ AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定�
 - **`windowsPty`**：xterm 補上 `{ backend: 'conpty', buildNumber }`（組建號由 `service.js` 的 `catalog` 給，
   不放 `pty.js` 免得宿主被判成舊版）。終端機拉高時 xterm 不再把 scrollback 拉回畫面、跟 ConPTY 對不上。
 - 測試：`probe-terminal-mouse.js` 13 條（新增 5 條滾輪，修之前 3 紅）。
+
+### 錄音機與即時字幕紀錄（2026-09-23）
+
+- 語音轉文字頁多一個「錄音機」子分頁（檔案轉錄｜錄音機｜即時字幕｜語音輸入）：`recorder.js` 用 MediaRecorder（opus 64kbps）每秒一塊送 `sttArchive:appendRecording`，可播放／刪除／開資料夾；「轉錄」直接切到檔案轉錄並帶入檔案。檔案轉錄也多了「或選一段錄音」下拉，並收 `.webm`（main 的 ffmpeg 解得開）。
+- 即時字幕每次 upsert 都 append 一行到 `live-transcripts/live-<開始時間>.jsonl`；子分頁下方「字幕紀錄」列每一場（`live-history.js`），可查看／複製／下載 txt／刪除。
+- main 端全在 `src/main/stt-archive.js`（含 IPC）；錄音上限 200MB＝檔案轉錄上限。
+
 
 ### Telegram 切回來不再卡（2026-09-23）
 
@@ -382,6 +389,7 @@ scripts/ 測試與探針（指令表見 CLAUDE.md「驗證方式」），dev-san
 | `workspaces.json` | 專案清單（`{ id, name, path }`＋`tabsState`） | `workspace:*` |
 | `explorer.json` | 檔案總管上次路徑／檢視模式 | `explorer:*` |
 | `dictations.json` | 語音輸入紀錄與個人字典 | `dictation:*` |
+| `recordings/rec-*.webm` ／ `live-transcripts/live-*.jsonl` | 錄音機的錄音／即時字幕每一場的逐字稿 | `sttArchive:*` |
 | `usage.json` ／ `code-usage.json` | 七家額度快取／每小時用量桶＋掃描游標 | `usage:*`／`codeusage:*` |
 | `agy-logs.db` | AGY 流量日誌（node:sqlite） | `agy:*` |
 | `claude-backup/` | `~/.claude/settings.json` 寫入前的備份 | ccswitch |

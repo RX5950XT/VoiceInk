@@ -134,10 +134,13 @@ async function loadHfPage() {
  * @param {'file'|'live'} subtab
  */
 async function activateSttSubtab(subtab) {
-  await loadTranscribePage()
+  const transcribe = await loadTranscribePage()
+  if (subtab === 'file') transcribe.refreshRecordingPick()
+  if (subtab === 'recorder') import('./recorder.js').then((m) => m.refreshRecorderPage())
   if (subtab === 'live') {
     const live = await loadLiveCaption()
     live.prewarmEngine()
+    import('./live-history.js').then((m) => m.refreshLiveHistory())
   } else {
     liveCaption?.cooldownEngine()
   }

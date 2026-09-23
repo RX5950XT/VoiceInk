@@ -18,6 +18,7 @@ import {
   resolveTranslateModelKey
 } from './app.js'
 import { readScope, parseAsrValue, parseLlmValue, resolveScopedCloud } from './model-picker.js'
+import { newTranscriptId, logTranscript, refreshLiveHistory } from './live-history.js'
 
 // ===== DOM 元素 =====
 let liveLanguage
@@ -70,6 +71,8 @@ const MAX_BATCH_CHARS = 120
 const MAX_TRANSLATE_QUEUE = 5
 
 let targetLanguage = 'zh-TW'
+/** 這一場字幕寫進紀錄用的 id；沒在擷取時是空字串（晚到的結果不寫） */
+let transcriptId = ''
 
 let sessionEpoch = 0
 let batchSeq = 0
@@ -277,6 +280,7 @@ async function startCapture() {
       isCapturing = true
       consecutiveFailures = 0
       resetTranslateState()
+      transcriptId = newTranscriptId()
       setError(null)
       updateUI()
 
@@ -566,6 +570,7 @@ function upsertSubtitle(id, source, translation) {
     translation,
     action: 'upsert'
   })
+  logTranscript(transcriptId, id, source, translation)
 }
 
 function pushPair(source, translation) {
@@ -619,6 +624,7 @@ function needsTranslation(text, targetLang) {
  */
 async function stopCapture({ closeWindow = true } = {}) {
   isCapturing = false
+  transcriptId = ''
   resetTranslateState()
   pendingUtterances = []
   await stopPcmCapture()
@@ -648,6 +654,7 @@ async function stopCapture({ closeWindow = true } = {}) {
     await electronAPI.subtitle.close()
   }
   updateUI()
+  refreshLiveHistory()
 }
 
 function updateUI() {

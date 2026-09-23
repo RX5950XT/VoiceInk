@@ -1606,12 +1606,15 @@
           <section id="page-stt" class="page">
             <div class="page-header">
               <h1>語音轉文字</h1>
-              <p class="page-desc">轉錄音訊檔案、擷取系統音訊做即時字幕，或用右 Alt 語音輸入</p>
+              <p class="page-desc">轉錄音訊檔案、用麥克風錄音、擷取系統音訊做即時字幕，或用右 Alt 語音輸入</p>
             </div>
 
             <div class="subtabs" id="sttSubtabs" role="tablist" aria-label="語音轉文字模式">
               <button type="button" class="subtab active" data-subtab="file" role="tab" aria-selected="true">
                 檔案轉錄
+              </button>
+              <button type="button" class="subtab" data-subtab="recorder" role="tab" aria-selected="false">
+                錄音機
               </button>
               <button type="button" class="subtab" data-subtab="live" role="tab" aria-selected="false">
                 即時字幕
@@ -1642,15 +1645,18 @@
               <div class="drop-zone-content">
                 <span class="drop-icon">📂</span>
                 <p class="drop-text">拖放音訊檔案到這裡</p>
-                <p class="drop-hint">支援 MP3, WAV, M4A, FLAC, OGG, AAC</p>
+                <p class="drop-hint">支援 MP3, WAV, M4A, FLAC, OGG, AAC, WEBM</p>
                 <button id="selectFileBtn" class="btn btn-secondary">
                   或點擊選擇檔案
                 </button>
+                <div class="recording-pick" id="recordingPickGroup" hidden>
+                  <select id="recordingPick" class="select" aria-label="選一段錄音機錄好的檔案來轉錄"></select>
+                </div>
               </div>
               <input
                 type="file"
                 id="fileInput"
-                accept=".mp3,.wav,.m4a,.flac,.ogg,.aac,.wma,.aiff"
+                accept=".mp3,.wav,.m4a,.flac,.ogg,.aac,.wma,.aiff,.webm"
                 hidden
               />
             </div>
@@ -1721,6 +1727,45 @@
             </div>
             </div>
 
+            <!-- 錄音機：麥克風錄成 webm，錄好的可以直接丟給檔案轉錄 -->
+            <div class="subtab-panel" id="stt-recorder" data-subtab="recorder" role="tabpanel">
+            <div class="rec-content">
+              <div class="dict-hero">
+                <div class="dict-hero-main">
+                  <div class="live-controls rec-controls">
+                    <button id="recStartBtn" type="button" class="btn btn-primary btn-large">
+                      <span class="btn-icon">⏺️</span>
+                      <span>開始錄音</span>
+                    </button>
+                    <button id="recStopBtn" type="button" class="btn btn-danger btn-large hidden">
+                      <span class="btn-icon">⏹️</span>
+                      <span>停止錄音</span>
+                    </button>
+                  </div>
+                  <p class="setting-hint">錄音邊錄邊存，停止後可以播放或直接轉錄。</p>
+                </div>
+                <div class="dict-state">
+                  <div id="recStatus" class="live-status rec-status" role="status" aria-live="polite">
+                    <span class="status-dot"></span>
+                    <span class="status-text">未錄音</span>
+                    <span id="recTimer" class="rec-timer">00:00</span>
+                  </div>
+                  <div class="level-meter" title="麥克風音量">
+                    <div id="recLevel" class="level-fill"></div>
+                  </div>
+                </div>
+              </div>
+
+              <section class="dict-panel">
+                <div class="dict-panel-head">
+                  <h3>錄音檔</h3>
+                  <button type="button" id="recOpenFolderBtn" class="btn btn-secondary btn-sm">開啟資料夾</button>
+                </div>
+                <div id="recList" class="dict-records rec-list"></div>
+              </section>
+            </div>
+            </div>
+
             <!-- 即時字幕 -->
             <div class="subtab-panel" id="stt-live" data-subtab="live" role="tabpanel">
             <div class="live-content">
@@ -1782,6 +1827,14 @@
               </div>
               <p id="liveError" class="live-error hidden" role="alert"></p>
             </div>
+
+            <!-- 過去每一場字幕的逐字稿（開始字幕就自動記） -->
+            <section class="dict-panel live-history">
+              <div class="dict-panel-head">
+                <h3>字幕紀錄</h3>
+              </div>
+              <div id="liveHistoryList" class="dict-records rec-list"></div>
+            </section>
             </div>
 
             <!-- 語音輸入：全域右 Alt 講話，整理完直接貼到游標所在的程式 -->

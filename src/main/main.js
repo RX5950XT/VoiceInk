@@ -52,6 +52,7 @@ const { registerHfModelsIpc } = require('./hfmodels/ipc')
 const { registerCcSwitchIpc } = require('./ccswitch/ipc')
 const { registerCodeUsageIpc } = require('./codeusage/ipc')
 const { registerDictationIpc } = require('./dictation/ipc')
+const sttArchive = require('./stt-archive')
 const { registerScreentimeIpc } = require('./screentime/ipc')
 const { registerExplorerIpc } = require('./explorer/ipc')
 const dictationHud = require('./dictation/hud')
@@ -2065,6 +2066,14 @@ registerDictationIpc({
     removeDictionary: async (...args) => (await loadDictation()).removeDictionary(...args)
   },
   isMainSender: assertMainWindowSender
+})
+
+// 錄音機的錄音檔與即時字幕的逐字稿（語音轉文字頁）
+sttArchive.configure({ userDataPath: app.getPath('userData') })
+sttArchive.registerSttArchiveIpc({
+  ipcMain,
+  isMainSender: assertMainWindowSender,
+  openPath: (dir) => shell.openPath(dir)
 })
 
 // ===== 本機 token 用量統計 =====

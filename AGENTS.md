@@ -23,6 +23,7 @@ nav：聊天（預設，**工作區與終端機同一頁**）｜Telegram（官�
 | 額度／用量統計 | 額度＝七家官方端點（`usage.json`），畫在工作區主區最下面那條（`quota-bar.js`，看得到時每分鐘自動同步）；用量統計＝掃五家 CLI 本機記錄算 token／花費（`code-usage.json`），在 CC代理的子分頁；兩件事 |
 | AGY 反代 | Antigravity 憑證 → OpenAI／Anthropic 端點；只綁 127.0.0.1＋強制金鑰 |
 | ASR／翻譯／TTS | 本地 sherpa（CPU）／llama-server（GPU）或雲端；翻譯 local（LinguaForge）／cloud；TTS 走 Edge TTS |
+| 錄音機／字幕紀錄 | 語音轉文字頁的「錄音機」子分頁：麥克風 → webm 每秒 append 進 `recordings/`，可直接丟給檔案轉錄；即時字幕每句 append 進 `live-transcripts/*.jsonl`（`src/main/stt-archive.js`）|
 | 語音輸入 | 全域右 Alt（原生 sidecar 吞鍵）→ 錄音 → ASR → 個人字典 → LLM 整理 → 剪貼簿＋Ctrl+V，底部浮藥丸 |
 | 常駐／更新 | 關窗縮系統匣（`closeToTray`）；`updater.js` ＝ electron-updater ＋ GitHub Releases 的 `latest.yml`（安裝檔經鏡像下載） |
 | 視覺 | Token Anxiety Aurora glass；深／淺共用 12px surface、blur；RWD 900／640px；本機字體 |
@@ -498,6 +499,7 @@ tag 要與 `package.json` 的 version 一致。
 - HUD 必須 `focusable: false` ＋ `showInactive()`；視窗尺寸固定（`resizable: false` 會讓 `setBounds` 被靜默忽略），透明大框要 `pointer-events: none`；啟用時就 `hud.warm()`（副作用是多一個 CDP target）。
 - 即時字幕：`AudioContext(16000)` ＋ `ScriptProcessorNode` 直取 PCM（勿改回 MediaRecorder）；靜音與非語言片段要在訊號層擋掉；失敗時別把原文冒充譯文寫進 history；字幕視窗 `transparent: false` 是刻意的；顯示模式由字幕彈窗獨佔；`subtitleWindowBounds` 讀寫兩邊都要 sanitize；OS 關掉要補發 `subtitle:closed`。
 - 引擎 owner 是 `live|file|translate` 布林（不可改計數）；長 await 之後與 `finally` 裡都要重檢 session 狀態。
+- **錄音與字幕紀錄一律邊錄邊 append，不在 renderer 累積整段**（當掉最多少一秒／一句）；檔名只收 `rec-<13 位毫秒>.webm`／`live-<13 位毫秒>`，renderer 組不出別的路徑。字幕同一個 key 會 upsert 很多次，讀的時候**最後一行為準**；main 用同步 append（同檔兩次非同步 append 在 Windows 不保證順序）。錄音機不 acquire 引擎。
 
 ### CC 代理與轉換閘道
 
@@ -620,6 +622,7 @@ tag 要與 `package.json` 的 version 一致。
 | 使用時長 | `test-screentime.js` ＋ `e2e-screentime-cdp.js`（**不關使用者的 Tai**）|
 | 語音輸入 | `test-dictation.js` ＋ `e2e-dictation.js`（insert 是 stub）＋ `e2e-dictation-cdp.js`；動整理 prompt 前後跑 `probe-dictation-cleanup.js`（**打使用者設定裡那顆雲端整理模型**：錯字有沒有修、條列有沒有換行、長篇有沒有分段；userData 指到暫存，不碰真字典）；熱鍵 `probe-dictation-hook.js`／`probe-uiohook.js`／`probe-dictation-latency.js`／`probe-dictation-live.js`（**會搶焦點**）|
 | ASR／即時字幕 | `e2e-llama-asr.js`／`e2e-asr-threads.js`／`e2e-stt-cdp.js`／`probe-cloud-asr.js`（真金鑰打真上游）；`test-vad.js` ＋ `e2e-live-pipeline.js` ＋ `e2e-live-cdp.js` |
+| 錄音機／字幕紀錄 | `test-stt-archive.js`（檔名守衛、append 順序、最後一行為準）＋ `e2e-recorder-cdp.js`（**打包版**＋Chromium 假麥克風：錄、ffmpeg 驗 opus、播放、丟給檔案轉錄、字幕紀錄展開／刪除）|
 | 翻譯 | `probe-prompt-path.js`（prompt 逐 token）＋ `verify-chat-wrapper-fix.js` ＋ `probe-packed-local-llm.js`（動 `build.files` 前後）＋ `probe-translate-lang.js` |
 | 彈窗 | `e2e-app-dialog-cdp.js`（自己開 vite ＋ electron，**會叫到最前面**：驗確認／輸入／告知三種都是 `app-dialog` 且套到玻璃樣式、Esc 與取消回得對、節點會收掉）|
 | 跨模組 | `test-taskbar-identity.js`（工作列身分與圖示）＋ `probe-taskbar-icon.js`（量安裝好的捷徑解析得到 App 圖示；動 `build/installer.nsh` 前後跑）／`test-error-hygiene.js`（錯誤衛生）／`test-ipc-invoke.js`（IPC 外殼）／`e2e-tray-cdp.js`（常駐）／`test-updater.js` ＋ `e2e-update-cdp.js`（會連 GitHub）＋ `probe-updater-diff.js`（唯讀：拿最近兩版真 blockmap 重算差分划不划算）＋ `probe-updater-mirrors.js`（唯讀：量官方 vs 鏡像的實際 KB/s）／`e2e-visual-cdp.js`（七頁 × 主題 × 三尺寸）／`e2e-ux-tweaks-cdp.js`（**會叫到最前面**）／`e2e-cdp-smoke.js`／`test-temp-hygiene.js`（腳本不撒暫存、沒有遞迴 rmSync）＋ `test-safe-rm.js`（junction 不被穿過，另可用 Electron 內建 Node 24 跑）＋ `test-asar-lock.js`（`npx electron`：列資料夾不鎖 `app.asar`）|

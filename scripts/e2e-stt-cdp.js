@@ -153,8 +153,8 @@ async function main() {
       noOldSections: !document.getElementById('page-transcribe') && !document.getElementById('page-live')
     }))()`)
     ok(
-      '檔案轉錄／即時字幕／語音輸入合併成一頁的子分頁',
-      JSON.stringify(layout?.subtabs) === JSON.stringify(['file', 'live', 'dictation']) &&
+      '檔案轉錄／錄音機／即時字幕／語音輸入合併成一頁的子分頁',
+      JSON.stringify(layout?.subtabs) === JSON.stringify(['file', 'recorder', 'live', 'dictation']) &&
         layout.activePanel === 'stt-file' && layout.activeCount === 1 &&
         layout.hasDropZone && layout.hasLiveBtn && layout.hasDictation &&
         layout.noOldNav && layout.noOldSections,
