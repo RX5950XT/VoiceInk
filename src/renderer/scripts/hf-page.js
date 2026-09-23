@@ -36,8 +36,6 @@ let selectedRepo = ''
 const progress = new Map()
 /** 參數彈窗現在在編哪一顆 */
 let editing = null
-/** 正在自動調參的模型 id（進度事件要知道往哪一張卡寫） */
-let autoTuneTarget = ''
 /** @type {Array<object>} */
 let libraryRows = []
 /** 可安裝的執行環境（`hardware()` 回的那份） */
@@ -513,9 +511,7 @@ async function runAutoTune(id, button) {
   const label = button.textContent
   button.disabled = true
   button.textContent = '調參中…'
-  autoTuneTarget = id
   const result = await call(electronAPI.hfmodels.autoTune(id))
-  autoTuneTarget = ''
   button.disabled = false
   button.textContent = label || '自動調參'
   if (!result) return

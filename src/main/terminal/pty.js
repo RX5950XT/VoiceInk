@@ -537,7 +537,6 @@ module.exports = {
   killAll,
   // 測試用
   trimBuffer,
-  _live: live,
   _clampDim: clampDim,
   // 測試用：同時有 `PATH` 與 `Path` 的環境只能從外面餵進來——Node 在 Windows 上
   // 讀寫 `process.env` 不分大小寫，`child_process` 也會在 spawn 前自己去重，

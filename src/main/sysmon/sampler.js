@@ -3,8 +3,9 @@
 /**
  * VoiceInk — 系統監控取樣器的生命週期。
  *
- * probe.ps1 是**常駐**的 PowerShell 子程序：冷啟動要 ~190ms，每輪取樣 ~310ms，
- * 每輪都重開等於一半時間在付啟動費。所以開一次、之後用 stdin 送 `tick <seq>` 驅動。
+ * 取樣器是**常駐**子程序：`voiceink-probe.exe sysmon`（Rust，native/voiceink-probe），
+ * 沒建置時退回 probe.ps1（PowerShell 冷啟動 ~190ms、每輪 ~310ms、常駐 ~180MB）。
+ * 兩者同一套協定：開一次、之後用 stdin 送 `tick <seq>` 驅動。
  *
  * 背壓：上一輪還沒回來就跳過這一輪（`inFlight`）。少了這個，機器忙的時候指令會在
  * stdin 排隊，畫面顯示的是好幾秒前的資料，而且排愈久愈落後。
@@ -14,10 +15,17 @@ const { spawn } = require('child_process')
 const path = require('path')
 const os = require('os')
 const metrics = require('./metrics')
+const { probeCommand } = require('../native-probe')
 
 /** 取樣間隔白名單。renderer 只送 key，毫秒數由 main 決定。 */
 const INTERVALS = Object.freeze({ fast: 1000, normal: 2000, slow: 5000 })
 const DEFAULT_INTERVAL_KEY = 'normal'
+/**
+ * 沒人在看（離開系統監控頁、視窗縮起來）時的間隔。程序照樣常駐——重開要付冷啟動、
+ * 第一輪 CPU% 全 0——只是不再每 2 秒掃一次 430 個程序（實測整個 App 背景 CPU 的大宗）。
+ * 進頁時 start() 會把間隔拉回來，差值拿這一輪當基準照樣算得出來。
+ */
+const IDLE_INTERVAL_MS = 30_000
 /** 一輪 ~310ms，逾時給到 8 秒純粹是防它真的卡死 */
 const TICK_TIMEOUT_MS = 8000
 const STATIC_TIMEOUT_MS = 45_000
@@ -34,11 +42,6 @@ function resolveProbePath(baseDir = __dirname) {
   const script = path.join(baseDir, 'probe.ps1')
   const asarSegment = `${path.sep}app.asar${path.sep}`
   return script.replace(asarSegment, `${path.sep}app.asar.unpacked${path.sep}`)
-}
-
-function powershellPath() {
-  const windowsRoot = process.env.SystemRoot || 'C:\\Windows'
-  return path.join(windowsRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
 }
 
 /**
@@ -226,12 +229,9 @@ function createSampler(deps = {}) {
 
     let proc
     try {
-      proc = spawnFn(powershellPath(), [
-        '-NoProfile',
-        '-NonInteractive',
-        '-ExecutionPolicy', 'Bypass',
-        '-File', resolveProbePath()
-      ], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+      // 有 voiceink-probe.exe 就用它（同一套協定），沒建置才退回 PowerShell
+      const cmd = probeCommand('sysmon', resolveProbePath())
+      proc = spawnFn(cmd.file, cmd.args, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
     } catch {
       onError({ code: 'SYSMON_SPAWN_FAILED', message: '無法啟動系統監控取樣器' })
       scheduleRestart()
@@ -308,6 +308,11 @@ function createSampler(deps = {}) {
       running = true
       restartDelay = RESTART_BASE_MS
       launch()
+    },
+    /** 放慢到背景間隔；沒在跑就什麼都不做（不會因此把取樣器叫起來） */
+    idle() {
+      intervalMs = IDLE_INTERVAL_MS
+      if (running) scheduleNextTick()
     },
     stop() {
       running = false

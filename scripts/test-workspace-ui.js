@@ -88,8 +88,7 @@ for (const selector of [
   'ws-ai-card', 'ws-ai-card-title', 'ws-ai-meta-grid', 'ws-ai-meta-item',
   'ws-ai-meta-label', 'ws-ai-meta-value', 'ws-ai-sub-title', 'ws-ai-files-list',
   'ws-ai-file-pill', 'ws-ai-tools-grid', 'ws-ai-tool-badge', 'ws-ai-tool-name',
-  'ws-ai-tool-count', 'ws-ai-prompts-timeline', 'ws-ai-prompt-item',
-  'ws-ai-prompt-idx', 'ws-ai-prompt-text',
+  'ws-ai-tool-count',
   // 這一輪新增的：可收合的工具細節、對話內容、審閱意見、對話歸屬
   'ws-ai-fold', 'ws-ai-fold-head', 'ws-ai-fold-body', 'ws-ai-note',
   'ws-ai-turns', 'ws-ai-turn', 'ws-ai-turn-role', 'ws-ai-turn-text',

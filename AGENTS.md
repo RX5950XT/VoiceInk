@@ -9,7 +9,7 @@
 Windows Electron AI 工作台：聊天＋終端機＋專案工作區＋本機 LLM＋Claude Code 工作台＋系統監控＋
 額度與用量統計＋AGY 反代＋語音轉文字＋翻譯與 TTS。Vanilla JS + Vite（無框架），Electron 43.4.1 ＋ Node 22。
 
-nav：聊天（預設，**工作區與終端機同一頁**）｜檔案｜CC代理｜AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定（九頁；額度收成工作區底下那條、用量統計在 CC代理）。
+nav：聊天（預設，**工作區與終端機同一頁**）｜Telegram（官方網頁版 `<webview>`，`persist:telegram`）｜檔案｜CC代理｜AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定（十頁；額度收成工作區底下那條、用量統計在 CC代理）。
 
 | 模組 | 一句話 |
 |---|---|
@@ -39,9 +39,10 @@ npm run electron:build   # 完整打包：NSIS 安裝檔＋ win-unpacked → dis
 npm run build:sensors    # 系統監控提權感測器 sidecar（需 .NET 8 SDK）→ resources/sensors/
 npm run build:hook       # 語音輸入原生熱鍵 sidecar（需 .NET 8 SDK）→ resources/hook/
 npm run build:shell      # 檔案總管殼層 sidecar（需 .NET 8 SDK）→ resources/shell/
+npm run build:probe      # 系統監控取樣＋使用時長觀測（Rust，需 cargo）→ resources/probe/
 ```
 
-`resources/sensors/`、`resources/hook/`、`resources/shell/` 不進版控（沒建置也打得起來，只是那兩個功能降級；shell 沒建＝右鍵少 7-Zip／WinRAR、沒有 Drive 綠勾）。
+`resources/sensors/`、`resources/hook/`、`resources/shell/`、`resources/probe/` 不進版控（沒建置也打得起來，只是那兩個功能降級；shell 沒建＝右鍵少 7-Zip／WinRAR、沒有 Drive 綠勾；probe 沒建＝退回兩支 PowerShell，常駐多吃約 250MB）。
 打包前先關掉 `dist/win-unpacked/VoiceInk.exe`。使用者同時在用電腦時，桌面 QA 只能用 CDP 背景操作。
 
 ### 發行流程（五步一整條，漏一步舊版永遠檢查不到更新，且**不會報錯**）
@@ -536,6 +537,9 @@ tag 要與 `package.json` 的 version 一致。
   refresh token 還是我們送出去那顆才寫）＋原子替換、其他欄位原樣保留。端點 `platform.claude.com/v1/oauth/token`、JSON body、client_id 都是從
   已安裝的 CLI 讀出來的；CLI 大改版時先跑 `probe-claude-refresh.js --force`（會真的續一次）。還沒到期卻 401 也要強制續一次再打。
   回歸 `test-claude-auth.js`。Codex 的 token 十天才過期，仍維持只讀。
+- **Claude 額度 API 的限流是看 User-Agent 分的**：`claude-code/…` 穩定 200，Node 預設的 `node`、`VoiceInk/…` 或任何別的名字打兩三下就一直 429（`retry-after: 0`，實測 2026-09-23）。`claude.js` 照 CLI 報 `claude-code/<版本>`（看前綴，舊版本號也過）。`fetchJson` 對 429 **不重試**，並把那個端點冷卻 2→4→…→30 分鐘（成功就清掉）；冷卻中直接回 `RATE_LIMITED` 不出門。soft cache 要連 `planName` 一起沿用（失敗那一輪的方案名是預設值）。
+- **Codex 重置次數**：`/wham/usage` 的 `rate_limit_reset_credits.available_count` > 0 才多打 `/wham/rate-limit-reset-credits` 拿到期時間。**兌換不直接打 HTTP**（consume 的 body 沒有文件，猜錯的代價是使用者的次數），走官方 `codex app-server`（stdio JSONL：`initialize` → `initialized` → `account/rateLimitResetCredit/consume` `{ creditId, idempotencyKey }`，schema 用 `codex app-server generate-json-schema` 產）。main 只收快取清單裡有的 creditId。**測試絕對不能真的兌換**（使用者的次數），`test-usage.js` 用假的 child。Claude、Grok 的 CLI 裡查不到同類 API。
+- Grok 的方案：billing 不回名字，access token 的 `tier` 是數字；**只有 1＝SuperGrok 有證據**（Grok CLI 自己的 log：`jwt_claim: "supergrok"`），其他數字照舊 `Tier N`，不要用猜的補表。
 - 訂閱方案來源全在本機登入檔不在額度 API；`seven_day_opus` 非 Max 回 **null 不是 0**；Command Code 的額度在 `billing/credits` 不是 `usage/summary`；OpenCode 的 403 ＝沒訂閱（要用 `disconnected`）；**Ollama 的 `usage` 是 0～1 的比例**且上游不給重置時間（不可自己算一個假的）。
 
 ### 系統監控／風扇／效能調整
@@ -544,10 +548,12 @@ tag 要與 `package.json` 的 version 一致。
 - **GPU engine 的配對 key 必須含 LUID＋引擎索引**（少一個會配錯實例，出現 7995% 假使用率）；uint64 累計計數器會繞回（`COUNTER_WRAP` 以上不做差值）。**不顯示 `Idle`（pid 0）**。
 - **nvidia-smi 的看門狗要從 spawn 那一刻就武裝**：只在「收到第一行讀數」之後才設的話，卡在啟動（一行都沒吐）就永遠等不到重開；子程序 `close`／`error` 時要把它收掉，不然重啟計時與看門狗會疊在一起。回歸 `test-sysmon-gpu-lifecycle.js`。
 - **NVMe 的 S.M.A.R.T. 不必提權**，但開實體磁碟時 `dwDesiredAccess` **一定要給 0**；`Data Units Read/Written` 的單位是 1000 × 512 bytes；`0 K` 是「感測器不存在」。
+- **取樣器與使用時長觀測優先用 `voiceink-probe.exe`（Rust，`native/voiceink-probe`）**，找不到才退回 `probe.ps1`／`observer.ps1`（`src/main/native-probe.js`）。兩邊**協定與每一列的格式完全一樣**（`metrics.js` 不知道對面換了人），所以改任何一邊都要跑 `probe-native-probe-parity.js`（static 逐列比對、tick／detail／observer 對欄位）。實測常駐 261MB → 4.4MB、背景 CPU 6.2% → 0.1%、開著頁面 7.0% → 1.1%。程序清單改走 `NtQuerySystemInformation`（名稱不帶 `#1` 後綴，metrics 本來就剝）、網路走 `GetAdaptersAddresses`＋`GetIfEntry2`；記憶體／磁碟／GPU **仍走 `Win32_PerfRawData_*`**。ps1 與它們的 `asarUnpack` 要留著當退路。
 - `probe.ps1` 要有 UTF-8 BOM ＋ `AutoFlush`；**probe 裡不可以相信 `$env:*`**（被 spawn 的子程序沒有）；static 框裡不准查 `Win32_Tpm`（未提權卡 5.2 秒）；網路卡走 `Win32_NetworkAdapter` 不用 `Get-NetAdapter`。
 - **資料列一律往後加欄位、解析端逐格取值**（不要插在中間）；SMBIOS 佔位字串統一在 `metrics.clean()` 清掉；groups 的 rows 值不能給空字串（整列會塌成 0 高）。
 - 感測器 sidecar：只有它提權（不是整個 App）、版本鎖 `0.9.7-pre728`、斷線／卡住**一直重拉**（指數退避，經 `ensureSensors`；讀數穩定 60s 才把間隔歸零）；**自動啟用只能放在進系統監控頁時**（開機那條只走排程工作）；PawnIO 由 App 代裝但要驗 Authenticode（不釘 SHA-256），靜默安裝參數是 `-install -silent`；殭屍 sidecar 要用 `Invoke-CimMethod ... Terminate` 才殺得掉。
 - **probe.ps1 與 nvidia-smi 開機就常駐**：離開系統監控頁與縮到系統匣都不要 `stop()`（每次重開會付冷啟動＋第一輪 CPU% 全 0）；壓力測試才要離頁收掉。進頁 `start()` 要把 lastFeed 立刻再送一次。
+  **沒人看時改走 `idle()`（30 秒一輪）**：每 2 秒掃 430 個程序是整個 App 背景 CPU 的大宗（實測 5.65% → 0.52% 單核）。開機那次用 `start(key, { background: true })`，頁面已先叫起來就不動它（兩邊誰先到不一定）；nvidia-smi 不跟著放慢（改間隔＝重開）。量測 `probe-sysmon-idle-cpu.js`。
 - **風扇的手動 PWM 是留在晶片裡的**，新程序 `SetDefault()` 救不回來（只有重開機）：所以下限 `minPwm` ≥20、sidecar 5 秒看門狗、`before-quit` 要 await 得到、`dirty` 存 store。
 - **雙向管道一定要 `PipeOptions.Asynchronous`**（同步讀會把同步寫整個擋住，症狀是只收到第一框且完全不報錯）。
 - 開機接管只能走排程工作（無觸發程序、`RunLevel Highest`、`ExecutionTimeLimit 0`），管道名走交接檔；**只在打包版提供安裝**（開發版執行檔可寫＝免 UAC 後門）。

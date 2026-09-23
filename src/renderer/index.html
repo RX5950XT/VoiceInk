@@ -32,6 +32,10 @@
             <span class="nav-icon">💬</span>
             <span class="nav-text">聊天</span>
           </button>
+          <button class="nav-tab" data-page="telegram" title="Telegram" aria-label="Telegram">
+            <span class="nav-icon">✈️</span>
+            <span class="nav-text">Telegram</span>
+          </button>
           <button class="nav-tab" data-page="explorer" title="檔案" aria-label="檔案">
             <span class="nav-icon">📁</span>
             <span class="nav-text">檔案</span>
@@ -530,16 +534,14 @@
                     <button type="button" id="wsFilesRevealBtn" class="btn-icon" title="在檔案總管開啟" aria-label="在檔案總管開啟這個專案">
                       🗁
                     </button>
+                    <button type="button" id="wsFilesSearchBtn" class="btn-icon" title="在專案裡搜尋" aria-label="在專案裡搜尋" aria-pressed="false">
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <circle cx="10.5" cy="10.5" r="6" />
+                        <path d="M15 15l5 5" />
+                      </svg>
+                    </button>
                     <button type="button" id="wsFilesRefreshBtn" class="btn-icon" title="重新整理" aria-label="重新整理檔案樹">
                       ⟳
-                    </button>
-                  </div>
-                  <div class="ws-files-switch" role="tablist" aria-label="檔案或搜尋">
-                    <button type="button" class="ws-files-mode active" data-view="tree" aria-selected="true">
-                      檔案
-                    </button>
-                    <button type="button" class="ws-files-mode" data-view="search" aria-selected="false">
-                      搜尋
                     </button>
                   </div>
                   <div class="ws-tree" id="wsTree" aria-label="檔案總管"></div>
@@ -657,6 +659,11 @@
           </section>
 
           <!-- 整機檔案總管：瀏覽本機資料夾 + UFFS 檔名搜尋 -->
+          <!-- Telegram：官方網頁版塞進 <webview>，可並排多開（同一個 partition＝掃碼登入一次）；第一次點進來才建 -->
+          <section id="page-telegram" class="page">
+            <div id="telegramFrame" class="telegram-frame"></div>
+          </section>
+
           <section id="page-explorer" class="page">
             <div class="ex-shell">
               <div class="ex-tabs">

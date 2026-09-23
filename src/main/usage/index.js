@@ -5,14 +5,17 @@ const { syncAntigravity, mergeExpectedWindows } = require('./antigravity')
 const { syncClaude } = require('./claude')
 const { syncCommandCode } = require('./commandcode')
 const { syncCodex } = require('./codex')
-const { CACHE_TTL_MS, MAX_DIAGNOSTICS, PROVIDER_IDS } = require('./constants')
+const { consumeCodexReset } = require('./codex-reset')
+const { APP_VERSION, CACHE_TTL_MS, MAX_DIAGNOSTICS, PROVIDER_IDS } = require('./constants')
 const { syncGrok } = require('./grok')
 const { syncOllama } = require('./ollama')
 const { syncOpenCode } = require('./opencode')
 const {
   createBaseAccount,
   normalizeAccount,
-  publicError
+  publicError,
+  resetRateLimitsForTests,
+  UsageError
 } = require('./shared')
 const usageStore = require('./store')
 
@@ -67,6 +70,9 @@ function mergeAccountState(currentRaw, previousRaw, nowMs = Date.now()) {
 
   if (canUseSoftCache && cacheIsFresh) {
     current.windows = previous.windows.map((window) => ({ ...window }))
+    if (previous.resetCredits && !current.resetCredits) current.resetCredits = previous.resetCredits
+    // 失敗那一輪的 planName 是預設值（方案名來自成功的回應或登入檔），跟著舊資料一起沿用
+    current.planName = previous.planName
     current.lastUpdated = previous.lastUpdated
     current.accuracy = 'estimated'
     current.notes = appendCacheNote(current.notes)
@@ -167,12 +173,36 @@ async function saveSettings(raw) {
   }))
 }
 
+/**
+ * 用掉一次 Codex 重置，再同步一次讓面板拿到歸零後的額度與剩下的次數。
+ * creditId 來自 renderer：只收目前快取清單裡真的有的那幾張（不讓外面塞任意 id 進 CLI）。
+ * @param {unknown} creditId
+ */
+async function redeemCodexReset(creditId) {
+  const invalid = new UsageError('INVALID_CREDIT', '這張重置已經不在清單裡，請先同步')
+  if (typeof creditId !== 'string' || !creditId) throw invalid
+  const codex = (await usageStore.loadState()).accounts.find((account) => account.provider === 'codex')
+  const known = codex?.resetCredits?.credits || []
+  if (!known.some((credit) => credit.id === creditId)) {
+    throw invalid
+  }
+  const outcome = await consumeCodexReset(creditId, { version: APP_VERSION })
+  let state = null
+  try {
+    state = await sync()
+  } catch {
+    // 重置本身已經成功或失敗了；同步不到只是面板晚一點才更新
+  }
+  return { outcome, state }
+}
+
 async function getDiagnostics() {
   return (await usageStore.loadState()).diagnostics
 }
 
 function resetForTests() {
   syncInFlight = null
+  resetRateLimitsForTests()
   usageStore.resetStoreForTests()
 }
 
@@ -182,6 +212,7 @@ module.exports = {
   load,
   mergeAccountState,
   publicError,
+  redeemCodexReset,
   resetForTests,
   saveSettings,
   sync

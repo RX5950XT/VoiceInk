@@ -16,7 +16,6 @@ import { createChatSidebar } from './chat-sidebar.js'
 import { openParamsDialog, countParams } from './chat-params-panel.js'
 
 const DEFAULT_CHAT_API_URL = 'https://openrouter.ai/api/v1'
-const DEFAULT_CHAT_MODEL = 'google/gemini-3-flash-preview'
 /** 與 main 的 chat.MAX_PROVIDERS 對齊；這裡只是提早擋下、真正的上限在 main */
 const MAX_PROVIDERS = 10
 const MAX_PROVIDER_MODELS = 30

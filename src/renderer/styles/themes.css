@@ -143,19 +143,3 @@ option:disabled {
 body {
   transition: color 180ms ease, background-color 180ms ease;
 }
-
-.icon-sun {
-  display: none;
-}
-
-.icon-moon {
-  display: inline;
-}
-
-[data-theme="light"] .icon-sun {
-  display: inline;
-}
-
-[data-theme="light"] .icon-moon {
-  display: none;
-}

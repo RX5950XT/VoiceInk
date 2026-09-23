@@ -11,8 +11,6 @@ const paths = require('./paths')
 const recycle = require('./recycle')
 
 const MAX_ENTRIES = 2000
-/** 舊版相容的單頁上限；完整目錄由 offset/limit 分頁，不再截斷排序來源。 */
-const MAX_STAT = 10000
 const MAX_PAGE_SIZE = 2000
 const DEFAULT_PAGE_SIZE = MAX_ENTRIES
 const LIST_CACHE_TTL_MS = 1500
@@ -877,7 +875,6 @@ async function copyEntry(fromPath, toDir, rawOptions) {
 
 module.exports = {
   MAX_ENTRIES,
-  MAX_STAT,
   MAX_PAGE_SIZE,
   DEFAULT_PAGE_SIZE,
   ATTRS_TIMEOUT_MS,

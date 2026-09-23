@@ -479,7 +479,8 @@ function bindCurve(svg, channel, readout) {
     save()
     event.preventDefault()
     // 移動後 DOM 被重畫，焦點要跟著回到同一個點上
-    /** @type {SVGElement|null} */ (svg.querySelector(`.fan-point[data-index="${index}"]`))?.focus()
+    const moved = /** @type {SVGElement|null} */ (svg.querySelector(`.fan-point[data-index="${index}"]`))
+    moved?.focus()
   })
 }
 

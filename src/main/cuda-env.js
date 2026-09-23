@@ -359,10 +359,6 @@ async function openCudaDownloadPage() {
   return true
 }
 
-function isInstalling() {
-  return installing
-}
-
 /**
  * 將 CUDA bin 前置到 process.env.PATH（給 llama-addon 載入 cudart/cublas）
  * @returns {string[]} 新加入的目錄
@@ -402,7 +398,6 @@ module.exports = {
   detectVulkan,
   installCudaEnv,
   openCudaDownloadPage,
-  isInstalling,
   hasWinget,
   prependCudaBinToPath,
   listCudaInstallRoots

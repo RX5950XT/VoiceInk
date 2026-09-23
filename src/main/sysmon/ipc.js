@@ -24,6 +24,7 @@ function registerSysmonIpc({ ipcMain, service, isMainSender }) {
     invoke(event, () => service.start(intervalKey))
   ))
   ipcMain.handle('sysmon:stop', (event) => invoke(event, () => service.stop()))
+  ipcMain.handle('sysmon:idle', (event) => invoke(event, () => service.idle()))
   ipcMain.handle('sysmon:inventory', (event) => invoke(event, () => service.inventory()))
   ipcMain.handle('sysmon:detail', (event, pid) => invoke(event, () => service.detail(pid)))
   ipcMain.handle('sysmon:kill', (event, pid, force) => (

@@ -413,22 +413,6 @@ function diagonalInch(sizeCm) {
   return String(Math.round(Math.hypot(w, h) / 2.54))
 }
 
-/**
- * 顯示介面卡清單。虛擬顯示卡（Meta／向日葵之類）也是真的裝在系統上的裝置，
- * 一樣列出來——只是它們沒有 VRAM／解析度，那幾格自然會空著。
- * @param {any[]} gpus
- * @returns {Array<[string, string]>}
- */
-function gpuCardRows(gpus) {
-  return gpus.map((g) => [g.name, [
-    g.vram ? fmtBytes(g.vram) : '',
-    g.processor && g.processor !== g.name ? g.processor : '',
-    g.driver ? `驅動 ${g.driver}` : '',
-    g.driverDate || '',
-    g.width ? `${g.width} × ${g.height} @ ${g.refreshHz} Hz` : ''
-  ].filter(Boolean).join(' · ') || DASH])
-}
-
 /** 千分位。SMART 的次數／指令數動輒十億，沒有分隔看不出量級 */
 function fmtNum(n) {
   return Number(n || 0).toLocaleString('zh-TW')
@@ -2653,6 +2637,13 @@ export function initSysmonPage() {
 
   $('sysmonSensorsBtn')?.addEventListener('click', () => enableSensors())
 
+  // 縮到系統匣／被完全遮住時 onSample 本來就不畫，取樣也跟著放慢
+  document.addEventListener('visibilitychange', () => {
+    if (!state.active) return
+    if (document.hidden) electronAPI.sysmon.idle()
+    else electronAPI.sysmon.start(state.intervalKey)
+  })
+
   $('sysmonCpuThreads')?.addEventListener('input', (e) => {
     const out = $('sysmonCpuThreadsOut')
     if (out) out.textContent = e.target.value
@@ -2676,7 +2667,6 @@ export function initSysmonPage() {
     if (res?.ok) {
       btn.classList.add('hidden')
       showSensorNote(res.data.sensors)
-      if (state.subtab === 'hardware') renderSpecs()
       return
     }
     btn.disabled = false
@@ -2837,4 +2827,6 @@ export function cooldownSysmonPage() {
   // 壓力測試跑在 main，離開分頁不主動收的話它會在背景一直燒到 5 分鐘上限
   electronAPI.sysmon.cpuStress(false, 1)
   electronAPI.sysmon.memStress(false, 1)
+  // 取樣器不收（重開要付冷啟動），只放慢；回來時 refreshSysmonPage 的 start() 會拉回原間隔
+  electronAPI.sysmon.idle()
 }

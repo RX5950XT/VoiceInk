@@ -330,9 +330,11 @@ async function insertAtCaret(text) {
     if (document.execCommand('insertText', false, text)) return true
   } catch { /* 有些元素不吃，往下走手動那條 */ }
   if (typeof el.setRangeText !== 'function') return false
-  const start = /** @type {any} */ (el).selectionStart ?? String(el.value || '').length
-  const end = /** @type {any} */ (el).selectionEnd ?? start
-  /** @type {any} */ (el).setRangeText(text, start, end, 'end')
+  // 型別轉換先存進變數：行首是 `(` 會跟上一行接成 `start(el)`（見 AGENTS.md）
+  const field = /** @type {any} */ (el)
+  const start = field.selectionStart ?? String(field.value || '').length
+  const end = field.selectionEnd ?? start
+  field.setRangeText(text, start, end, 'end')
   el.dispatchEvent(new Event('input', { bubbles: true }))
   return true
 }

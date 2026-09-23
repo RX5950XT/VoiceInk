@@ -12,7 +12,7 @@ const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-
 const USER_DATA_DIR = tempDir('voiceink-e2e-visual-')
 fs.writeFileSync(path.join(USER_DATA_DIR, 'config.json'), JSON.stringify({ sysmonSensors: false }))
 fs.writeFileSync(path.join(USER_DATA_DIR, 'explorer.json'), JSON.stringify({ uffsAuto: false }))
-const PAGES = ['chat', 'explorer', 'ccswitch', 'agy', 'stt', 'translate', 'sysmon', 'hfmodels', 'settings']
+const PAGES = ['chat', 'telegram', 'explorer', 'ccswitch', 'agy', 'stt', 'translate', 'sysmon', 'hfmodels', 'settings']
 const VIEWPORTS = [
   { width: 1440, height: 1000 },
   { width: 900, height: 900 },
@@ -30,6 +30,7 @@ const SIGNATURES = {
   stt: ['.drop-zone', '.result-panel'],
   translate: ['.translate-pane', '.translate-banner'],
   settings: ['.settings-card', '.settings-nav', '.settings-save-bar']
+  // telegram：整片 webview、沒有卡片，只驗不會水平溢出
 }
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -138,7 +139,7 @@ function assertSurface(page, theme, viewport, result) {
   if (result.overflow) {
     throw new Error(`${page}/${theme}/${viewport.width}: document 水平溢出 ${JSON.stringify(result.offenders)}`)
   }
-  if (!result.items.length) throw new Error(`${page}/${theme}/${viewport.width}: 找不到 visual signature`)
+  if (!result.items.length && SIGNATURES[page]) throw new Error(`${page}/${theme}/${viewport.width}: 找不到 visual signature`)
   for (const item of result.items) {
     if (item.radius !== '12px') {
       throw new Error(`${page}/${theme}/${viewport.width}: ${item.selector} radius=${item.radius}`)
@@ -205,7 +206,7 @@ async function main() {
           await sleep(80)
           const result = await cdp.eval(`(() => {
             const host = document.getElementById(${JSON.stringify(`page-${page}`)})
-            const selectors = ${JSON.stringify(SIGNATURES[page])}
+            const selectors = ${JSON.stringify(SIGNATURES[page] || [])}
             return {
               active: host.classList.contains('active'),
               overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,

@@ -67,6 +67,11 @@ native/explorer-shell/bin/
 native/explorer-shell/obj/
 resources/shell/
 
+# 系統監控取樣＋使用時長觀測（Rust，取代兩支常駐 PowerShell）
+# 打包前跑 `npm run build:probe` 產生；沒建置會退回 PowerShell
+native/voiceink-probe/target/
+resources/probe/
+
 # 指示器外觀檢查的截圖（scripts/probe-dictation-hud.js）
 .tmp-hud/
 

@@ -120,7 +120,7 @@ export function askConfirm(title, opts = {}) {
  */
 export async function askInput(title, opts = {}) {
   let input
-  const { dialog, done } = openDialog(
+  const { done } = openDialog(
     { title, desc: opts.desc, confirmText: opts.confirmText || '確定', cancelText: '取消' },
     (body) => {
       const group = document.createElement('div')

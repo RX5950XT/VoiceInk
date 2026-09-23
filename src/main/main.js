@@ -177,6 +177,9 @@ const STORE_ALLOWLIST = new Set([
   'theme',
   'closeToTray',
   'autoUpdate',
+  // Telegram 頁多開的每一格停在哪（網址），renderer 那邊不存 localStorage：
+  // 結束走 app.exit()，localStorage 最後幾秒的寫入會掉
+  'telegramPanes',
   'subtitleFontScale',
   'subtitleOpacity',
   'subtitleWindowBounds',
@@ -1278,6 +1281,12 @@ ipcMain.handle('store:set', async (event, key, value) => {
     store.set(key, sanitizeSubtitleBounds(value))
     return true
   }
+  if (key === 'telegramPanes') {
+    const list = Array.isArray(value) ? value : []
+    store.set(key, list.filter((url) => typeof url === 'string' && url.length <= 2048
+      && url.startsWith('https://web.telegram.org/a/')).slice(0, 4))
+    return true
+  }
   store.set(key, value)
   return true
 })
@@ -1701,6 +1710,7 @@ registerUsageIpc({
     sync: (...args) => loadUsage().sync(...args),
     saveSettings: (...args) => loadUsage().saveSettings(...args),
     getDiagnostics: (...args) => loadUsage().getDiagnostics(...args),
+    redeemCodexReset: (...args) => loadUsage().redeemCodexReset(...args),
     publicError: (error) => loadUsage().publicError(error)
   },
   isMainSender: assertMainWindowSender
@@ -1949,6 +1959,7 @@ registerSysmonIpc({
     status: (...args) => loadSysmon().status(...args),
     start: (...args) => loadSysmon().start(...args),
     stop: (...args) => loadSysmon().stop(...args),
+    idle: (...args) => loadSysmon().idle(...args),
     inventory: (...args) => loadSysmon().inventory(...args),
     detail: (...args) => loadSysmon().detail(...args),
     killProcess: (...args) => loadSysmon().killProcess(...args),
@@ -2135,7 +2146,7 @@ app.whenReady().then(() => {
         console.error('[screentime] start failed:', err?.message || err)
       }
       const sysmon = loadSysmon()
-      try { sysmon.start(store?.get('sysmonInterval')) } catch (err) {
+      try { sysmon.start(store?.get('sysmonInterval'), { background: true }) } catch (err) {
         console.error('[sysmon] sampler start failed:', err?.message || err)
       }
       const fansOn = store?.get('fanControl')?.enabled === true

@@ -15,7 +15,7 @@
  */
 
 const { clipboard } = require('electron')
-const { sanitizeInsertText, MAX_INSERT_CHARS } = require('./text')
+const { sanitizeInsertText } = require('./text')
 
 /** UiohookKey.Ctrl / UiohookKey.V / UiohookKey.Shift / UiohookKey.Insert */
 const CTRL = 29

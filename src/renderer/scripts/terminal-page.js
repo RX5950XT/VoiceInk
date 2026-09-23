@@ -33,7 +33,6 @@ import { WebglAddon } from '../../../node_modules/@xterm/addon-webgl/lib/addon-w
 
 let initialized = false
 let hostEl = null
-let emptyEl = null
 let errorEl = null
 let dialogEl = null
 let shellSelect = null
@@ -1033,7 +1032,6 @@ export function initTerminalPage() {
   initWsTabs()
 
   hostEl = document.getElementById('termHost')
-  emptyEl = document.getElementById('termEmpty')
   errorEl = document.getElementById('termError')
   dialogEl = document.getElementById('termNewDialog')
   shellSelect = document.getElementById('termShellSelect')

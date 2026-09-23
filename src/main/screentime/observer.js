@@ -1,22 +1,18 @@
 'use strict'
 
 /**
- * 前景視窗觀測：常駐 PowerShell 每秒吐一列 JSON。
- * 打包後 .ps1 在 asar 裡，powershell.exe 執行不了，路徑要換成 app.asar.unpacked。
+ * 前景視窗觀測：常駐子程序每秒吐一列 JSON。優先用 voiceink-probe.exe（Rust），
+ * 沒建置才退回 PowerShell；打包後 .ps1 在 asar 裡，powershell.exe 執行不了，路徑要換成 app.asar.unpacked。
  */
 
 const { spawn } = require('child_process')
 const path = require('path')
+const { probeCommand } = require('../native-probe')
 
 function resolveScript(baseDir = __dirname) {
   const script = path.join(baseDir, 'observer.ps1')
   const asarSegment = `${path.sep}app.asar${path.sep}`
   return script.replace(asarSegment, `${path.sep}app.asar.unpacked${path.sep}`)
-}
-
-function powershellPath() {
-  const root = process.env.SystemRoot || 'C:\\Windows'
-  return path.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
 }
 
 /**
@@ -33,10 +29,8 @@ function createObserver(deps = {}) {
     if (child) return
     buf = ''
     try {
-      child = spawnFn(powershellPath(), [
-        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-        '-File', resolveScript()
-      ], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+      const cmd = probeCommand('observer', resolveScript())
+      child = spawnFn(cmd.file, cmd.args, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
     } catch {
       child = null
       return

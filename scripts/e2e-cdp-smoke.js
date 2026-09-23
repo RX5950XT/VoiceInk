@@ -200,7 +200,7 @@ async function main() {
     ok(
       'nine-tab order + quota bar under the terminal + stats under CC',
       JSON.stringify(usageUi?.order) === JSON.stringify([
-        'chat', 'explorer', 'ccswitch', 'agy', 'stt', 'translate', 'sysmon', 'hfmodels', 'settings'
+        'chat', 'telegram', 'explorer', 'ccswitch', 'agy', 'stt', 'translate', 'sysmon', 'hfmodels', 'settings'
       ]) &&
         usageUi.hasApi &&
         usageUi.noUsagePage &&

@@ -224,7 +224,7 @@ async function handleCompletion(req, res, adapter) {
 async function handleCountTokens(req, res) {
   try {
     const body = JSON.parse(await readBody(req))
-    const { model, mapped } = resolveModel(body.model)
+    const { mapped } = resolveModel(body.model)
     const inner = anthropic.toGeminiRequest(body, mapped)
     const total = await upstream.countTokens({ inner, model: mapped, options: upstreamOptions })
     sendJson(res, 200, { input_tokens: total })

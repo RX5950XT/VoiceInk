@@ -35,7 +35,27 @@ function planTypeFrom(auth) {
   return nested.slice(0, 60)
 }
 
-function applyCodexUsage(raw, auth, nowMs) {
+/**
+ * 重置次數。`usage` 只給 `available_count`；有次數時再用明細（`/wham/rate-limit-reset-credits`）補到期時間。
+ * 明細拿不到就只留次數（`credits: []`），面板照樣顯示「還有幾次」。
+ * @param {object} usage `/wham/usage` 回應
+ * @param {object | null} list `/wham/rate-limit-reset-credits` 回應
+ */
+function parseResetCredits(usage, list) {
+  const available = Number(usage?.rate_limit_reset_credits?.available_count)
+  if (!Number.isInteger(available) || available < 0) return null
+  const rows = Array.isArray(list?.credits) ? list.credits : []
+  const credits = rows
+    .filter((row) => row?.status === 'available' && typeof row.id === 'string' && row.id)
+    .map((row) => ({
+      id: row.id,
+      title: typeof row.title === 'string' ? row.title : '',
+      expiresAt: typeof row.expires_at === 'string' ? row.expires_at : ''
+    }))
+  return { available, credits }
+}
+
+function applyCodexUsage(raw, auth, nowMs, resetList = null) {
   const account = createBaseAccount('codex', nowMs)
   account.status = 'available'
   account.accuracy = 'official'
@@ -60,6 +80,8 @@ function applyCodexUsage(raw, auth, nowMs) {
     account.status = 'connected'
     account.notes = 'ChatGPT API 已連線，但沒有回傳額度視窗。'
   }
+  const resetCredits = parseResetCredits(raw, resetList)
+  if (resetCredits) account.resetCredits = resetCredits
   return normalizeAccount(account)
 }
 
@@ -82,15 +104,21 @@ async function syncCodex({ homeDir, nowMs = Date.now(), fetchImpl, log = () => {
   }
 
   try {
-    const usage = await fetchJson(ENDPOINTS.codex, {
-      fetchImpl,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/json'
-      }
-    })
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/json'
+    }
+    const usage = await fetchJson(ENDPOINTS.codex, { fetchImpl, headers })
     log(`codex: API OK windows=${Number(!!usage?.rate_limit?.primary_window) + Number(!!usage?.rate_limit?.secondary_window)}`)
-    return applyCodexUsage(usage, auth, nowMs)
+    let resetList = null
+    if (Number(usage?.rate_limit_reset_credits?.available_count) > 0) {
+      try {
+        resetList = await fetchJson(ENDPOINTS.codexResetCredits, { fetchImpl, headers, retries: 1 })
+      } catch (error) {
+        log(`codex: reset credits failed ${error.status ? `HTTP ${error.status}` : error.code || 'unknown'}`)
+      }
+    }
+    return applyCodexUsage(usage, auth, nowMs, resetList)
   } catch (error) {
     log(`codex: API failed ${error.status ? `HTTP ${error.status}` : error.code || 'unknown'}`)
     account.status = 'connected'
@@ -102,4 +130,4 @@ async function syncCodex({ homeDir, nowMs = Date.now(), fetchImpl, log = () => {
   }
 }
 
-module.exports = { applyCodexUsage, syncCodex, titleCase }
+module.exports = { applyCodexUsage, parseResetCredits, syncCodex, titleCase }

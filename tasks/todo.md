@@ -1,3 +1,39 @@
+# 2026-09-23 — 額度詳情精簡、Claude 429、Codex 重置、Grok 方案；工作區搜尋放大鏡
+
+- [x] 工作區右欄：「檔案／搜尋」切換拿掉，標題列加放大鏡（`wsFilesSearchBtn`，aria-pressed）
+- [x] 額度詳情卡精簡成一行一個視窗，留方案名
+- [x] Claude 429：改報 `claude-code/…` UA；`fetchJson` 429 不重試＋端點冷卻；soft cache 沿用 planName
+- [x] Grok `tier: 1` → SuperGrok（CLI log 佐證），其他數字不猜
+- [x] Codex 重置次數＋到期日＋「使用」（官方 `codex app-server` 兌換）；Claude／Grok 查無同類 API
+
+Review：`test-usage.js` 38/38（新增 429／UA／重置明細／app-server 協定／id 驗證）、`test-claude-auth.js` 7/7、
+`e2e-usage-cdp.js` 24/24、`e2e-workspace-cdp.js` 183/183、`test-workspace-ui.js` 181/181；打包版截圖確認三家詳情卡與放大鏡。
+實測：同一顆 token，`claude-code/2.1.280` 連打 5 次全 200；`node`／`VoiceInk/1.26.0` 429。重置的兌換沒有真的按（會扣使用者的次數），只用唯讀的 `account/rateLimits/read` 驗過 app-server 握手。
+
+# 2026-09-23 — 兩支常駐 PowerShell 改寫成 Rust（voiceink-probe.exe）
+
+- [x] `native/voiceink-probe`：`sysmon` 模式＝probe.ps1（static／tick／detail 同協定同格式）、`observer` 模式＝observer.ps1
+- [x] 程序清單走 NtQuerySystemInformation、網路走 GetAdaptersAddresses＋GetIfEntry2；其餘 WMI 查詢照抄
+- [x] `src/main/native-probe.js`：有 exe 就用、沒有退回 PowerShell；`npm run build:probe`、extraResources、.gitignore
+- [x] `probe-native-probe-parity.js`：兩邊輸出對照；`probe-sysmon-idle-cpu.js` 改成兩種都量
+
+Review：`cargo test` 7/7、clippy 0 警告；parity ALL PASS（static 83 列逐字相同）；`electron:pack` 過；
+`e2e-sysmon-cdp.js` 114/114、`e2e-screentime-cdp.js` 19/19；sysmon／screentime 單元測試全綠。
+實測：常駐記憶體 190.9＋70.3MB → 3.2＋1.2MB；背景 CPU 6.02＋0.21% → 0.08＋0.03%；開著系統監控頁（2 秒一輪）7.03% → 1.09%。
+
+# 2026-09-23 — 全庫掃 bug、清死碼、降背景開銷
+
+- [x] ESLint（recommended＋no-undef／no-unexpected-multiline）掃 src 與 scripts
+- [x] 修 2 個「行首是 `(` 被接到上一行」：語音輸入手動插入退路（`start(el)` TypeError）、風扇曲線方向鍵移點後丟例外
+- [x] 刪死碼：未定義的 `renderSpecs` 呼叫、13 個沒人讀的變數、12 個沒人呼叫的 export／函式、~500 行沒人用的 CSS
+- [x] 系統監控取樣器沒人看時 `idle()`（30 秒一輪），常駐不變
+
+Review：ESLint src 0 問題；`vite build` 過；`test-sysmon-sampler-lifecycle.js`（修前紅：`sampler.idle is not a function`）、
+`test-sysmon-resident.js`、`test-sysmon-page-lifecycle.js`、`test-workspace-ui.js` 181/181 綠；`electron:pack` asar 驗證過；
+`e2e-sysmon-cdp.js` 114/114；`probe-sysmon-idle-cpu.js` 背景 CPU 5.65% → 0.52% 單核。
+既有失敗（改前就紅、與本次無關）：test-app-dialog-ime、test-asar-lock（要 npx electron）、test-explorer「監看保留選取」、
+test-temp-hygiene（test-explorer.js:396）、test-usage-state-race。
+
 # 2026-09-23 — 額度收成終端機下面那條、用量統計進 CC代理、Claude 自動續期、終端機複製與連結
 
 - [x] 額度頁 → `#termMain` 底下 26px 的 `#quotaBar`（點開原卡片、拖曳／Alt+←→ 排序、診斷、同步）

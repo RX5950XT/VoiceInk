@@ -30,12 +30,6 @@ function pad(n) {
 }
 
 /** @param {Date} d */
-function fmtDateTime(d) {
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
-    `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
-}
-
-/** @param {Date} d */
 function fmtHour(d) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:00:00`
 }
@@ -54,13 +48,6 @@ function startOfDay(d) {
 function weekStart(d) {
   const day = d.getDay() || 7
   return new Date(d.getFullYear(), d.getMonth(), d.getDate() - (day - 1))
-}
-
-/** @param {string} iso @returns {Date} */
-function parseStamp(iso) {
-  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/.exec(String(iso || ''))
-  if (!m) return new Date(NaN)
-  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]))
 }
 
 /**
@@ -286,12 +273,10 @@ module.exports = {
   WS_PORT,
   WS_PATH,
   pad,
-  fmtDateTime,
   fmtHour,
   fmtDay,
   startOfDay,
   weekStart,
-  parseStamp,
   splitHours,
   splitDays,
   getDomain,

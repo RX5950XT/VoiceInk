@@ -85,6 +85,30 @@ function normalizeWindow(raw) {
   }
 }
 
+/**
+ * Codex 的重置次數（其他家沒有這個欄位）。id 會被拿回來兌換，所以格式要卡：
+ * 兌換前 main 還會比對它確實在這份清單裡。
+ */
+function normalizeResetCredits(raw) {
+  if (!raw || typeof raw !== 'object') return undefined
+  const available = Number(raw.available)
+  if (!Number.isInteger(available) || available < 0 || available > 1000) return undefined
+  const credits = Array.isArray(raw.credits)
+    ? raw.credits
+      .filter((credit) => typeof credit?.id === 'string' && /^[A-Za-z0-9_.:-]{1,200}$/.test(credit.id))
+      .slice(0, 20)
+      .map((credit) => {
+        const expires = safeString(credit.expiresAt, '', 100)
+        return {
+          id: credit.id,
+          title: safeString(credit.title, '', 120),
+          expiresAt: expires && Number.isFinite(Date.parse(expires)) ? expires : ''
+        }
+      })
+    : []
+  return { available, credits }
+}
+
 function normalizeAccount(raw) {
   if (!raw || typeof raw !== 'object' || !PROVIDER_SET.has(raw.provider)) {
     throw new UsageError('INVALID_ACCOUNT', '額度帳戶資料格式錯誤')
@@ -95,6 +119,7 @@ function normalizeAccount(raw) {
     ? raw.windows.map(normalizeWindow).filter(Boolean).slice(0, 8)
     : []
   const lastRaw = safeString(raw.lastUpdated, '', 100)
+  const resetCredits = normalizeResetCredits(raw.resetCredits)
   return {
     id: safeString(raw.id, fallback.id, 100) || fallback.id,
     provider: raw.provider,
@@ -105,7 +130,8 @@ function normalizeAccount(raw) {
     lastUpdated: Number.isFinite(Date.parse(lastRaw)) ? lastRaw : fallback.lastUpdated,
     windows,
     notes: safeString(raw.notes, '', 1000),
-    order: Number.isInteger(order) ? Math.max(0, Math.min(PROVIDER_IDS.length - 1, order)) : fallback.order
+    order: Number.isInteger(order) ? Math.max(0, Math.min(PROVIDER_IDS.length - 1, order)) : fallback.order,
+    ...(resetCredits ? { resetCredits } : {})
   }
 }
 
@@ -190,6 +216,27 @@ async function readResponseText(response, maxBytes) {
   return Buffer.concat(chunks, size).toString('utf8')
 }
 
+const COOLDOWN_BASE_MS = 2 * 60_000
+const COOLDOWN_MAX_MS = 30 * 60_000
+/** 被 429 的端點（origin＋path）→ { until, delay }：冷卻期間不出門，連續被擋就加倍 */
+const rateLimitCooldowns = new Map()
+
+/**
+ * @param {string} key
+ * @param {number} retryAfterSec 上游給的 Retry-After（Anthropic 給 0＝沒說，就用自己的退避）
+ */
+function noteRateLimited(key, retryAfterSec) {
+  const previous = rateLimitCooldowns.get(key)?.delay || 0
+  const delay = Number.isFinite(retryAfterSec) && retryAfterSec > 0
+    ? Math.min(COOLDOWN_MAX_MS, retryAfterSec * 1000)
+    : Math.min(COOLDOWN_MAX_MS, previous ? previous * 2 : COOLDOWN_BASE_MS)
+  rateLimitCooldowns.set(key, { until: Date.now() + delay, delay })
+}
+
+function resetRateLimitsForTests() {
+  rateLimitCooldowns.clear()
+}
+
 async function fetchJson(url, options = {}) {
   // 錯誤訊息裡的主詞。這支也被 ccswitch 的 CLI 版本檢查借去打 npm registry，
   // 全部寫死「額度服務」會讓使用者看到牛頭不對馬嘴的訊息。
@@ -208,7 +255,13 @@ async function fetchJson(url, options = {}) {
   const retries = Math.max(1, Math.min(3, Number(options.retries) || 3))
   const timeoutMs = Math.max(1, Number(options.timeoutMs) || HTTP_TIMEOUT_MS)
   const maxBytes = Math.max(1, Number(options.maxBytes) || API_MAX_BYTES)
-  const stopStatuses = new Set(options.stopStatuses || [401, 403])
+  // 429 不重試：連打只會把限流拉長（實測 Claude 的額度 API 被每分鐘同步＋重試打成一直 429）
+  const stopStatuses = new Set([...(options.stopStatuses || [401, 403]), 429])
+  const cooldownKey = parsedUrl.origin + parsedUrl.pathname
+  const blockedUntil = rateLimitCooldowns.get(cooldownKey)?.until || 0
+  if (Date.now() < blockedUntil) {
+    throw new UsageError('RATE_LIMITED', `${label}查詢太頻繁，稍後自動再試`, 429)
+  }
   let lastError = null
 
   for (let attempt = 0; attempt < retries; attempt++) {
@@ -226,6 +279,10 @@ async function fetchJson(url, options = {}) {
       })
       if (!response?.ok) {
         const status = Number(response?.status) || 0
+        if (status === 429) {
+          noteRateLimited(cooldownKey, Number(response.headers?.get?.('retry-after')))
+          throw new UsageError('RATE_LIMITED', `${label}查詢太頻繁，稍後自動再試`, 429)
+        }
         throw new UsageError(
           'HTTP_ERROR',
           status ? `${label}暫時無法使用（HTTP ${status}）` : `${label}暫時無法使用`,
@@ -246,6 +303,7 @@ async function fetchJson(url, options = {}) {
       if (!shapeOk) {
         throw new UsageError('INVALID_RESPONSE', `${label}回應格式錯誤`)
       }
+      rateLimitCooldowns.delete(cooldownKey)
       return parsed
     } catch (error) {
       const normalized = error?.name === 'AbortError'
@@ -279,5 +337,6 @@ module.exports = {
   readResponseText,
   readJwtClaims,
   fetchJson,
-  publicError
+  publicError,
+  resetRateLimitsForTests
 }

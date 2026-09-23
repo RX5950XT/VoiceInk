@@ -12,7 +12,7 @@ const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-
 // 暫存 user-data-dir：使用者開著的正式實例佔 single-instance lock，
 // 沒有自己的資料夾會被擋掉（second-instance 轉交後退出，CDP 等不到主視窗）
 const USER_DATA_DIR = tempDir('voiceink-cdp-')
-const EXPECTED_ORDER = ['chat', 'explorer', 'ccswitch', 'agy', 'stt', 'translate', 'sysmon', 'hfmodels', 'settings']
+const EXPECTED_ORDER = ['chat', 'telegram', 'explorer', 'ccswitch', 'agy', 'stt', 'translate', 'sysmon', 'hfmodels', 'settings']
 /** 條上每一家把東西全打開（含未連線的那幾家），結構斷言才有固定的七顆 */
 const BAR_ALL = { kinds: ['rolling-5h', 'weekly', 'monthly'], showReset: true, showPlan: true, compact: false, hideDisconnected: false, showLastSync: true }
 // 額度條長在工作區主區裡：種一個專案讓主區切得過去；感測器關掉免得跳 UAC
@@ -358,6 +358,13 @@ async function main() {
     }
     pass('診斷內容已去敏')
 
+    // 真的兌換會扣使用者的次數，這裡只驗「清單外的 id 在碰到 CLI 之前就被擋下」
+    const fakeRedeem = await cdp.eval(`window.electronAPI.usage.redeemCodexReset('rlrc_not_in_list')`)
+    if (fakeRedeem?.ok !== false || fakeRedeem.error?.code !== 'INVALID_CREDIT') {
+      throw new Error(`清單外的重置 id 沒被擋：${JSON.stringify(fakeRedeem)}`)
+    }
+    pass('Codex 重置只收快取清單裡的 id（preload／ipc／白名單三份都通）')
+
     const startedBusy = await cdp.eval(`(async () => {
       // 自動同步還在跑的話先等它跑完，這裡要量的是「按下去那一次」
       for (let i = 0; i < 300 && document.getElementById('quotaSyncBtn').hasAttribute('aria-busy'); i += 1) {
@@ -407,7 +414,7 @@ async function main() {
     if (synced.chips !== 7 || !/^\d{1,2}:\d{2}$/.test(synced.last) || synced.error ||
         !allConnected || !antigravityConsistent ||
         // Ollama 上游不給重置時間，補一個假的就是這裡會抓到
-        (ollama?.windows > 0 && (ollama.resetWindows !== 0 || synced.ollamaResetText !== '上游未提供重置時間'))) {
+        (ollama?.windows > 0 && (ollama.resetWindows !== 0 || synced.ollamaResetText !== '未提供'))) {
       throw new Error(`同步後 UI 異常：${JSON.stringify(synced)}`)
     }
     pass('手動同步 busy／完成狀態與七家真實來源')

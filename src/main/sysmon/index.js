@@ -120,11 +120,22 @@ function createSysmonService(deps = {}) {
     /** @param {(payload: any) => void} fn */
     setEmitter(fn) { emit = typeof fn === 'function' ? fn : () => {} },
 
-    /** @param {unknown} key */
-    start(key) {
+    /**
+     * @param {unknown} key
+     * @param {{ background?: boolean }} [opts] 開機常駐那一次：沒人在看，直接用背景間隔；
+     *   頁面已經先叫起來的話不去動它（開機流程跟 renderer 進頁誰先到不一定）
+     */
+    start(key, opts = {}) {
       intervalKey = normalizeInterval(key)
       // nvidia-smi 的輪詢最小單位是秒，取樣 1 秒時它也給 1 秒
       gpu.start(Math.max(1, Math.round(INTERVALS[intervalKey] / 1000)))
+      if (opts.background) {
+        if (!sampler.isRunning()) {
+          sampler.start(intervalKey)
+          sampler.idle()
+        }
+        return { running: true, intervalKey }
+      }
       sampler.start(intervalKey)
       // 取樣器常駐：進頁時立刻把上一筆再送一次，畫面不必等下一輪 tick。
       // gpu／sensors 各自有自己的子程序，順便用當下的讀數蓋過取樣當下那一格。
@@ -144,6 +155,12 @@ function createSysmonService(deps = {}) {
       sampler.stop()
       gpu.stop()
       return { running: false, intervalKey }
+    },
+
+    /** 離開系統監控頁／視窗看不到：取樣器留著，只放慢（見 sampler 的 IDLE_INTERVAL_MS） */
+    idle() {
+      sampler.idle()
+      return { running: sampler.isRunning(), intervalKey }
     },
 
     status() {

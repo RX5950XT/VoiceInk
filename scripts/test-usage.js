@@ -320,7 +320,8 @@ test('訂閱方案取自本機憑證：Claude subscriptionType／Codex id_token�
       }), { status: 200 }),
       log: () => {}
     })
-    assert.equal(grok.planName, 'Grok Tier 1')
+    // tier 1＝SuperGrok（Grok CLI 自己的 log：jwt_claim "supergrok"），以前顯示成看不懂的 Tier 1
+    assert.equal(grok.planName, 'Grok SuperGrok')
   } finally {
     removeTree(homeDir)
   }
@@ -1062,7 +1063,8 @@ test('usage IPC 僅允許主視窗且錯誤不洩漏', async () => {
     'usage:load',
     'usage:sync',
     'usage:saveSettings',
-    'usage:diagnostics'
+    'usage:diagnostics',
+    'usage:redeemCodexReset'
   ])
   assert.deepEqual(await handlers.get('usage:load')({ allowed: false }), {
     ok: false,
@@ -1084,6 +1086,132 @@ test('usage IPC 僅允許主視窗且錯誤不洩漏', async () => {
     ok: false,
     error: { code: 'USAGE_FAILED', message: '額度資料處理失敗' }
   })
+})
+
+test('429 不重試、冷卻期間不出門；Claude 照 CLI 報 User-Agent', async () => {
+  const shared = require('../src/main/usage/shared')
+  const { syncClaude } = require('../src/main/usage/claude')
+  shared.resetRateLimitsForTests()
+  let calls = 0
+  const limited = async () => { calls++; return new Response('{}', { status: 429, headers: { 'retry-after': '0' } }) }
+  await assert.rejects(shared.fetchJson('https://api.example.test/usage', { fetchImpl: limited }), { status: 429, code: 'RATE_LIMITED' })
+  assert.equal(calls, 1, '429 不可以重試（以前一次同步打三下，把限流越拉越長）')
+  await assert.rejects(shared.fetchJson('https://api.example.test/usage', { fetchImpl: limited }), { code: 'RATE_LIMITED' })
+  assert.equal(calls, 1, '冷卻期間不出門')
+  // 別的端點不受影響
+  const ok = async () => new Response('{"a":1}', { status: 200 })
+  assert.deepEqual(await shared.fetchJson('https://api.example.test/other', { fetchImpl: ok }), { a: 1 })
+  shared.resetRateLimitsForTests()
+
+  const homeDir = tempDir('voiceink-usage-ua-')
+  try {
+    fs.mkdirSync(path.join(homeDir, '.claude'))
+    fs.writeFileSync(path.join(homeDir, '.claude', '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'tok' } }))
+    let userAgent = ''
+    await syncClaude({
+      homeDir,
+      fetchImpl: async (_url, init) => {
+        userAgent = init.headers['User-Agent'] || ''
+        return new Response(JSON.stringify({ five_hour: { utilization: 1 } }), { status: 200 })
+      },
+      log: () => {}
+    })
+    assert.match(userAgent, /^claude-code\/\d+\.\d+\.\d+$/, '別的 UA（含 Node 預設的 node）會被 Anthropic 一直 429')
+  } finally {
+    shared.resetRateLimitsForTests()
+    removeTree(homeDir)
+  }
+})
+
+test('Codex 重置次數：有次數才抓明細，到期時間進得了帳戶', async () => {
+  const { syncCodex } = require('../src/main/usage/codex')
+  const homeDir = tempDir('voiceink-usage-reset-')
+  try {
+    fs.mkdirSync(path.join(homeDir, '.codex'))
+    fs.writeFileSync(path.join(homeDir, '.codex', 'auth.json'), JSON.stringify({ tokens: { access_token: 'tok' } }))
+    const urls = []
+    const account = await syncCodex({
+      homeDir,
+      fetchImpl: async (url) => {
+        urls.push(url)
+        if (url.endsWith('/wham/usage')) {
+          return new Response(JSON.stringify({
+            rate_limit: { secondary_window: { used_percent: 100, reset_at: 1790415266 } },
+            rate_limit_reset_credits: { available_count: 1 }
+          }), { status: 200 })
+        }
+        return new Response(JSON.stringify({
+          credits: [
+            { id: 'rlrc_abc123', status: 'available', title: 'Full reset (Weekly + 5 hr)', expires_at: '2026-10-22T19:19:25.276350Z' },
+            { id: 'rlrc_used', status: 'redeemed', title: 'x', expires_at: '2026-10-01T00:00:00Z' }
+          ]
+        }), { status: 200 })
+      },
+      log: () => {}
+    })
+    assert.equal(urls.length, 2)
+    assert.deepEqual(account.resetCredits, {
+      available: 1,
+      credits: [{ id: 'rlrc_abc123', title: 'Full reset (Weekly + 5 hr)', expiresAt: '2026-10-22T19:19:25.276350Z' }]
+    })
+
+    urls.length = 0
+    const none = await syncCodex({
+      homeDir,
+      fetchImpl: async (url) => {
+        urls.push(url)
+        return new Response(JSON.stringify({ rate_limit: {}, rate_limit_reset_credits: { available_count: 0 } }), { status: 200 })
+      },
+      log: () => {}
+    })
+    assert.equal(urls.length, 1, '沒有次數就不多打明細')
+    assert.deepEqual(none.resetCredits, { available: 0, credits: [] })
+  } finally {
+    removeTree(homeDir)
+  }
+})
+
+test('Codex 重置走 app-server 協定：initialize → initialized → consume', async () => {
+  const { EventEmitter } = require('events')
+  const { PassThrough } = require('stream')
+  const { consumeCodexReset } = require('../src/main/usage/codex-reset')
+  const fake = (reply) => () => {
+    const child = new EventEmitter()
+    child.stdin = new PassThrough()
+    child.stdout = new PassThrough()
+    child.exitCode = null
+    child.pid = 0
+    child.sent = []
+    let buffer = ''
+    child.stdin.on('data', (chunk) => {
+      buffer += chunk
+      let i
+      while ((i = buffer.indexOf('\n')) >= 0) {
+        const msg = JSON.parse(buffer.slice(0, i)); buffer = buffer.slice(i + 1)
+        child.sent.push(msg)
+        if (msg.id === 1) child.stdout.write(JSON.stringify({ id: 1, result: { userAgent: 'codex' } }) + '\n')
+        if (msg.id === 2) child.stdout.write(JSON.stringify({ id: 2, ...reply }) + '\n')
+      }
+    })
+    child.stdin.on('finish', () => { child.exitCode = 0 })
+    fake.last = child
+    return child
+  }
+  assert.equal(await consumeCodexReset('rlrc_abc123', { spawnImpl: fake({ result: { outcome: 'reset' } }) }), 'reset')
+  const sent = fake.last.sent
+  assert.deepEqual(sent.map((m) => m.method), ['initialize', 'initialized', 'account/rateLimitResetCredit/consume'])
+  assert.equal(sent[2].params.creditId, 'rlrc_abc123')
+  assert.match(sent[2].params.idempotencyKey, /^[0-9a-f-]{36}$/)
+  assert.equal(await consumeCodexReset('x', { spawnImpl: fake({ result: { outcome: 'nothingToReset' } }) }), 'nothingToReset')
+  await assert.rejects(consumeCodexReset('x', { spawnImpl: fake({ result: { outcome: 'hacked' } }) }), { code: 'CODEX_RESET_FAILED' })
+  await assert.rejects(consumeCodexReset('x', { spawnImpl: fake({ error: { message: 'nope' } }) }), { code: 'CODEX_RESET_FAILED' })
+})
+
+// 「不在快取清單裡」那一段要讀 electron-store，放在 e2e-usage-cdp.js 驗
+test('兌換的 id 不是字串就擋（不碰 CLI）', async () => {
+  const usage = require('../src/main/usage')
+  await assert.rejects(usage.redeemCodexReset({ id: 1 }), { code: 'INVALID_CREDIT' })
+  await assert.rejects(usage.redeemCodexReset(''), { code: 'INVALID_CREDIT' })
 })
 
 async function run() {

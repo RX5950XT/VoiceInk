@@ -17,6 +17,9 @@ function registerUsageIpc({ ipcMain, service, isMainSender }) {
   ipcMain.handle('usage:diagnostics', (event) => (
     invoke(event, () => service.getDiagnostics())
   ))
+  ipcMain.handle('usage:redeemCodexReset', (event, creditId) => (
+    invoke(event, () => service.redeemCodexReset(creditId))
+  ))
 }
 
 module.exports = { registerUsageIpc }

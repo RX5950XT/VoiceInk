@@ -600,7 +600,7 @@ async function main() {
 
     // ===== [H] 專案內搜尋 =====
     await cdp.eval(`document.querySelector('.ws-right-tab[data-panel="files"]').click()`)
-    await cdp.eval(`document.querySelector('.ws-files-mode[data-view="search"]').click()`)
+    await cdp.eval(`document.getElementById('wsFilesSearchBtn').click()`)
     ok('[H] 切到搜尋時檔案樹收起來',
       await waitInPage(cdp, `document.getElementById('wsTree').offsetHeight === 0`, 5000))
     await cdp.eval(`(() => {
@@ -620,7 +620,7 @@ async function main() {
         5000))
     ok('[H] 游標停在命中的那一行（讀狀態列，Monaco 接手後 textarea 不會動）',
       await waitInPage(cdp, `/^Ln 1,/.test(document.getElementById('wsIdeCursorPos').textContent)`, 5000))
-    await cdp.eval(`document.querySelector('.ws-files-mode[data-view="tree"]').click()`)
+    await cdp.eval(`document.getElementById('wsFilesSearchBtn').click()`)
 
     // ===== [M] 拖資料夾加入專案 =====
     // 走真的 CDP 拖放（Input.dispatchDragEvent 的 files 會變成真路徑的 File），

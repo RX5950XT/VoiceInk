@@ -823,10 +823,7 @@ function initSidebarResize() {
  * 側欄上面三顆鈕：決定下面列的是專案／對話／終端機。
  * 兩個清單容器（終端機清單併在專案面板下半），切換只 toggle `hidden`，
  * 既有的 chat-page／terminal-page 一行都不用改。
- * @type {'projects' | 'chats'}
  */
-let sidebarMode = 'chats'
-
 const SIDEBAR_PANELS = {
   projects: 'projPanel',
   chats: 'chatPanel'
@@ -837,7 +834,6 @@ const SIDEBAR_PANELS = {
  */
 export function setSidebarMode(mode) {
   if (!SIDEBAR_PANELS[mode]) return
-  sidebarMode = mode
   document.querySelectorAll('.sidebar-mode').forEach((btn) => {
     const on = /** @type {HTMLElement} */ (btn).dataset.mode === mode
     btn.classList.toggle('active', on)
@@ -918,6 +914,7 @@ export function switchPage(pageName) {
     loadWorkspacePage().then((m) => m.refreshWorkspacePage())
     setChatPaneMode(chatPaneMode)
   }
+  if (pageName === 'telegram') import('./telegram-page.js').then((m) => m.refreshTelegramPage())
   if (pageName === 'ccswitch') loadCcSwitchPage().then((m) => m.refreshCcSwitchPage())
   if (pageName === 'explorer') loadExplorerPage().then((m) => m.refreshExplorerPage())
   if (pageName === 'hfmodels') loadHfPage().then((m) => m.start())

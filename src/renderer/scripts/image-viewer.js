@@ -251,10 +251,6 @@ export function imageViewerOpen() {
   return Boolean(ui)
 }
 
-export function closeImageViewer() {
-  close()
-}
-
 function close() {
   if (!ui) return
   document.removeEventListener('keydown', onKey, true)

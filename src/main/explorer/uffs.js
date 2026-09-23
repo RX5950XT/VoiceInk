@@ -47,11 +47,6 @@ function installDir() {
   return userDataPath ? path.join(userDataPath, 'uffs') : ''
 }
 
-function system32(exe) {
-  const root = process.env.SystemRoot || 'C:\\Windows'
-  return path.join(root, 'System32', exe)
-}
-
 /**
  * @param {unknown} raw
  * @returns {string}

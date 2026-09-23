@@ -72,6 +72,9 @@ const DEFAULT_USAGE_SETTINGS = Object.freeze({
 const ENDPOINTS = Object.freeze({
   claude: 'https://api.anthropic.com/api/oauth/usage',
   codex: 'https://chatgpt.com/backend-api/wham/usage',
+  // 重置次數的明細（到期時間）。usage 只給 available_count，有次數才多打這一支。
+  // 兌換不打 HTTP：走 Codex 官方的 app-server 協定（`usage/codex-reset.js`）
+  codexResetCredits: 'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits',
   grok: 'https://cli-chat-proxy.grok.com/v1/billing?format=credits',
   // 兩支都是第一方但沒有寫進文件的路由（實測 2026-09-01：
   // opencode 沒訂閱回 403 EntitlementError、ollama 回 200 帶 limits.monthly）。
@@ -89,6 +92,8 @@ const ENDPOINTS = Object.freeze({
     'https://cloudcode-pa.googleapis.com'
   ])
 })
+
+const APP_VERSION = require('../../../package.json').version
 
 const HTTP_TIMEOUT_MS = 15_000
 const API_MAX_BYTES = 1024 * 1024
@@ -139,6 +144,7 @@ module.exports = {
   PROVIDER_IDS,
   PROVIDER_META,
   DEFAULT_USAGE_SETTINGS,
+  APP_VERSION,
   ENDPOINTS,
   HTTP_TIMEOUT_MS,
   API_MAX_BYTES,

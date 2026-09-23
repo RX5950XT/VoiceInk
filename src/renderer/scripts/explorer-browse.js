@@ -81,11 +81,6 @@ export function normalizeBrowseState(raw = {}, fallback = {}) {
   }
 }
 
-/** @param {object} raw @returns {object} */
-export function snapshotBrowseState(raw) {
-  return normalizeBrowseState(raw)
-}
-
 /**
  * @param {object} raw
  * @param {string} fallbackId

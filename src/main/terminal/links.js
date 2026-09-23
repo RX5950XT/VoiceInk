@@ -174,5 +174,5 @@ async function revealLink(id, text, line) {
 }
 
 module.exports = {
-  resolveCandidate, resolveLinks, revealLink, noteCwd, locateInProjects, _liveCwd: liveCwd
+  resolveCandidate, resolveLinks, revealLink, noteCwd, locateInProjects
 }

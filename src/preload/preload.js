@@ -153,7 +153,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     load: () => ipcRenderer.invoke('usage:load'),
     sync: () => ipcRenderer.invoke('usage:sync'),
     saveSettings: (settings) => ipcRenderer.invoke('usage:saveSettings', settings),
-    getDiagnostics: () => ipcRenderer.invoke('usage:diagnostics')
+    getDiagnostics: () => ipcRenderer.invoke('usage:diagnostics'),
+    redeemCodexReset: (creditId) => ipcRenderer.invoke('usage:redeemCodexReset', creditId)
   },
 
   // ===== AGY 反向代理 =====
@@ -450,6 +451,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** @param {'fast'|'normal'|'slow'} intervalKey main 端有白名單，未知值退回 normal */
     start: (intervalKey) => ipcRenderer.invoke('sysmon:start', intervalKey),
     stop: () => ipcRenderer.invoke('sysmon:stop'),
+    idle: () => ipcRenderer.invoke('sysmon:idle'),
     /** 一次性硬體清單（CPU／主機板／BIOS／記憶體模組／GPU／實體碟／磁碟區） */
     inventory: () => ipcRenderer.invoke('sysmon:inventory'),
     /** 選到某一列才查路徑／擁有者；每輪都查會多 284ms */

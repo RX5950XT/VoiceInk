@@ -195,17 +195,10 @@ let searchTimer = 0
 let truncated = false
 let searchSort = 'rank'
 let editingPath = false
-let watching = false
 let marqueeDragging = false
 let marqueePaintMissed = false
 /** @type {ReturnType<typeof createListReorder> | null} */
 let placeReorder = null
-/** @type {(() => void) | null} */
-let unsubChanged = null
-/** @type {(() => void) | null} */
-let unsubProgress = null
-/** @type {(() => void) | null} */
-let disposeOperations = null
 /** @type {object | null} */
 let uffs = null
 let ensuring = false
@@ -326,10 +319,6 @@ function paneCwd(which) {
   return which === 'right' ? secondPane.cwd : cwd
 }
 
-function activeInHome() {
-  return paneInHome(activePane)
-}
-
 /** @param {'left' | 'right'} which */
 function paneInHome(which) {
   return pathKey(paneCwd(which)) === THIS_PC
@@ -398,7 +387,7 @@ function bindOnce() {
   started = true
   initExplorerResizers()
   // 長在最下面那條狀態列裡（「搜尋就緒」左邊），不再是浮在右下角的方塊
-  disposeOperations = mountExplorerOperations({
+  mountExplorerOperations({
     root: $('exStatus') || $('page-explorer'),
     before: $('exUffsChip'),
     api: electronAPI.explorer
@@ -532,7 +521,7 @@ function bindOnce() {
   })
   document.addEventListener('keydown', onPageKey)
   for (const type of ['mousedown', 'mouseup', 'auxclick']) document.addEventListener(type, onSideButton, true)
-  unsubChanged = electronAPI.explorer.onChanged((payload) => {
+  electronAPI.explorer.onChanged((payload) => {
     if (!payload) return
     // 比的是「要去的資料夾」不是 cwd：正在切換的時候拿舊 cwd 重讀會把切換蓋回去
     const here = navTarget || cwd
@@ -541,7 +530,7 @@ function bindOnce() {
     }
     if (dualPane && payload.path === secondPane.cwd) void loadSecond(secondPane.cwd, { pushHistory: false, keepSelection: true })
   })
-  unsubProgress = electronAPI.explorer.onUffsProgress((info) => {
+  electronAPI.explorer.onUffsProgress((info) => {
     if (!info) return
     const text = $('exUffsText')
     if (!text) return
@@ -2178,7 +2167,6 @@ async function loadHome(opts = {}) {
   truncated = false
   selected = new Set()
   anchor = ''
-  watching = false
   void electronAPI.explorer.unwatch()
   paintCrumbs()
   paintNav()
@@ -2322,11 +2310,8 @@ async function loadDir(dirPath, opts = {}) {
   if (dualPane && typeof electronAPI.explorer.watchDirs === 'function') {
     refreshExplorerWatches()
   } else {
-    void electronAPI.explorer.watch(cwd).then((watch) => {
-      if (seq === navSeq) watching = Boolean(watch?.ok && watch.data?.watching)
-    }).catch(() => {
-      if (seq === navSeq) watching = false
-    })
+    // 監看不起來就安靜退回手動重新整理（AGENTS.md「資料夾監看」）
+    void electronAPI.explorer.watch(cwd).catch(() => {})
   }
   if (!opts.silent) void electronAPI.explorer.saveState({ lastPath: cwd, sort: sortBy, sortDesc })
   return true
@@ -3616,15 +3601,4 @@ export function cooldownExplorerPage() {
   void electronAPI.explorer.uffsCancel()
   void electronAPI.explorer.unwatch()
   closeFilePreview()
-  watching = false
-}
-
-export function disposeExplorerPage() {
-  cooldownExplorerPage()
-  if (unsubChanged) unsubChanged()
-  if (unsubProgress) unsubProgress()
-  if (disposeOperations) disposeOperations()
-  unsubChanged = null
-  unsubProgress = null
-  disposeOperations = null
 }

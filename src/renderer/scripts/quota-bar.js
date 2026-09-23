@@ -2,7 +2,7 @@
  * 訂閱額度條：工作區主區最下面那一條（renderer）。
  *
  * 以前是獨立的「額度」頁，現在收成一條：一家一顆，顆上是每個視窗的小量表；
- * 點一下開原本那張完整的卡片（視窗、倒數、可信度、方案、備註都在），拖曳或 Alt+←→ 排序，
+ * 點一下開精簡詳情（名字＋方案、一個視窗一行；Codex 另有重置次數可以直接用），拖曳或 Alt+←→ 排序，
  * 「顯示設定」決定哪幾家、每家顯示哪些東西。資料、同步、排序都跟以前同一套 IPC（`usage:*`）。
  *
  * **自動同步**：條看得到的時候每分鐘同步一次（main 那邊會合併同時的請求）；視窗被藏起來、
@@ -13,6 +13,7 @@
  */
 
 import { electronAPI, showToast } from './app.js'
+import { askConfirm } from './app-dialog.js'
 import { createListReorder } from './list-reorder.js'
 
 const PROVIDERS = [
@@ -32,15 +33,19 @@ const STATUS_LABELS = {
   connected: '已連線',
   disconnected: '未連線'
 }
-const ACCURACY_LABELS = {
-  official: '官方 API',
-  local: '本機估算',
-  estimated: '快取／推估'
-}
 const WINDOW_LABELS = {
   'rolling-5h': '5 小時視窗',
   weekly: '每週視窗',
   monthly: '每月視窗'
+}
+/** 詳情一行一個視窗，名字要短 */
+const WINDOW_NAMES = { 'rolling-5h': '5 小時', weekly: '每週', monthly: '每月' }
+/** 用掉重置之後 Codex 回的結果 */
+const RESET_OUTCOMES = {
+  reset: ['Codex 額度已重置', 'success'],
+  nothingToReset: ['目前沒有需要重置的額度，次數沒有扣', 'info'],
+  noCredit: ['已經沒有可用的重置次數', 'error'],
+  alreadyRedeemed: ['這次重置已經用過了', 'info']
 }
 /** 條上的短名：寬度只有一點點 */
 const WINDOW_SHORT = { 'rolling-5h': '5h', weekly: '週', monthly: '月' }
@@ -172,21 +177,23 @@ function createElement(tag, className, text) {
   return element
 }
 
-// ===== 詳情卡（原本額度頁那張） =====
+// ===== 詳情卡 =====
+
+/** 詳情那一格的倒數：沒有重置時間就講清楚是哪一種沒有（完整句子放 title） */
+function rowCountdown(resetAt, nowMs, kind, used) {
+  if (!resetAt) return kind === 'rolling-5h' && Number(used) === 0 ? '未啟動' : '未提供'
+  return shortCountdown(resetAt, nowMs)
+}
 
 function createQuotaRow(window) {
   const row = createElement('div', 'usage-quota-row')
-  const head = createElement('div', 'usage-quota-head')
-  head.appendChild(createElement('strong', '', formatWindowTitle(window)))
-  const reset = createElement('span', 'usage-reset-label', formatCountdown(window.resetAt, Date.now(), window.kind, window.used))
-  reset.dataset.resetAt = window.resetAt || ''
-  reset.dataset.windowKind = window.kind
-  reset.dataset.windowUsed = String(window.used)
-  head.appendChild(reset)
-
   const value = percentage(window)
+  const name = WINDOW_NAMES[window.kind] || '額度'
+  row.appendChild(createElement('span', 'usage-quota-name', window.label ? `${window.label} ${name}` : name))
+
   const track = createElement('div', 'usage-progress-track')
   track.setAttribute('role', 'progressbar')
+  track.setAttribute('aria-label', `${formatWindowTitle(window)} 已使用`)
   track.setAttribute('aria-valuemin', '0')
   track.setAttribute('aria-valuemax', '100')
   track.setAttribute('aria-valuenow', String(value))
@@ -194,11 +201,67 @@ function createQuotaRow(window) {
   fill.style.width = `${value}%`
   track.appendChild(fill)
 
-  const foot = createElement('div', 'usage-quota-foot')
-  foot.appendChild(createElement('span', 'usage-percentage', `${value}%`))
-  foot.appendChild(createElement('span', '', '已使用'))
-  row.append(head, track, foot)
+  const reset = createElement('span', 'usage-reset-label', rowCountdown(window.resetAt, Date.now(), window.kind, window.used))
+  reset.title = formatCountdown(window.resetAt, Date.now(), window.kind, window.used)
+  reset.dataset.resetAt = window.resetAt || ''
+  reset.dataset.windowKind = window.kind
+  reset.dataset.windowUsed = String(window.used)
+  row.append(track, createElement('span', 'usage-percentage', `${value}%`), reset)
   return row
+}
+
+/** `10/23 到期`；不是今年的帶年份 */
+function formatExpiry(expiresAt) {
+  const time = Date.parse(expiresAt || '')
+  if (!Number.isFinite(time)) return '不會過期'
+  const date = new Date(time)
+  const sameYear = date.getFullYear() === new Date().getFullYear()
+  const text = date.toLocaleDateString('zh-TW', sameYear ? { month: 'numeric', day: 'numeric' } : undefined)
+  return `${text} 到期`
+}
+
+async function redeemReset(creditId, button) {
+  const ok = await askConfirm('用掉一次 Codex 重置？', {
+    desc: '5 小時與每週額度會立刻歸零重算，這一次用掉就沒了。',
+    confirmText: '用掉一次'
+  })
+  if (!ok) return
+  button.disabled = true
+  button.textContent = '重置中…'
+  button.setAttribute('aria-busy', 'true')
+  try {
+    const { outcome, state: next } = unwrap(await electronAPI.usage.redeemCodexReset(creditId))
+    if (next) state = next
+    const [message, type] = RESET_OUTCOMES[outcome] || ['Codex 回了看不懂的結果', 'error']
+    showToast(message, type)
+  } catch (error) {
+    showToast(error.message || 'Codex 重置失敗', 'error')
+  } finally {
+    render()
+  }
+}
+
+/** Codex 的重置次數：還有幾次、每一次什麼時候到期，旁邊直接用 */
+function createResetSection(resetCredits) {
+  const section = createElement('section', 'usage-resets')
+  const head = createElement('div', 'usage-resets-head')
+  head.append(createElement('span', '', '重置次數'), createElement('strong', '', String(resetCredits.available)))
+  section.appendChild(head)
+  if (!resetCredits.available) return section
+  const list = createElement('ul', 'usage-resets-list')
+  for (const credit of resetCredits.credits) {
+    const item = createElement('li', 'usage-resets-item')
+    const expiry = createElement('span', 'usage-resets-expiry', formatExpiry(credit.expiresAt))
+    if (credit.title) expiry.title = credit.title
+    const use = createElement('button', 'btn btn-secondary btn-sm', '使用')
+    use.type = 'button'
+    use.setAttribute('aria-label', `使用一次 Codex 重置（${formatExpiry(credit.expiresAt)}）`)
+    use.addEventListener('click', () => void redeemReset(credit.id, use))
+    item.append(expiry, use)
+    list.appendChild(item)
+  }
+  section.appendChild(list)
+  return section
 }
 
 /**
@@ -223,29 +286,23 @@ function createCard(account) {
   card.style.setProperty('--provider-accent', meta.accent)
 
   const header = createElement('header', 'usage-card-head')
-  header.append(
-    createElement('h2', 'usage-provider-name', meta.label),
-    createElement('span', `usage-status ${status}`, STATUS_LABELS[status])
-  )
-
-  const quotaList = createElement('div', 'usage-quota-list')
-  if (account.windows.length) {
-    for (const window of account.windows) quotaList.appendChild(createQuotaRow(window))
-  } else {
-    quotaList.appendChild(createElement('p', 'usage-empty', account.notes || '尚未取得額度資料'))
-  }
-
-  const footer = createElement('footer', 'usage-card-footer')
-  footer.append(
-    createElement('span', '', `可信度 · ${ACCURACY_LABELS[account.accuracy] || '未知'}`),
-    createElement('span', '', account.status === 'disconnected' ? '來源未偵測' : '來源已偵測')
-  )
+  header.appendChild(createElement('h2', 'usage-provider-name', meta.label))
   const plan = planLabel(account, meta.label)
-  if (plan) footer.appendChild(createElement('span', 'usage-card-plan', `方案 · ${plan}`))
-  if (account.notes && account.windows.length) {
-    footer.appendChild(createElement('p', 'usage-card-note', account.notes))
+  if (plan) header.appendChild(createElement('span', 'usage-card-plan', plan))
+  card.appendChild(header)
+
+  if (account.windows.length) {
+    const quotaList = createElement('div', 'usage-quota-list')
+    for (const window of account.windows) quotaList.appendChild(createQuotaRow(window))
+    card.appendChild(quotaList)
+  } else {
+    card.appendChild(createElement('p', 'usage-empty', account.notes || '尚未取得額度資料'))
   }
-  card.append(header, quotaList, footer)
+  if (account.resetCredits) card.appendChild(createResetSection(account.resetCredits))
+  // 只有「這是舊資料」要講；平常的「已從某某 API 讀取」不佔位子
+  if (account.windows.length && account.accuracy === 'estimated' && account.notes) {
+    card.appendChild(createElement('p', 'usage-card-note', account.notes))
+  }
   return card
 }
 
@@ -449,9 +506,9 @@ function updateCountdowns() {
     element.textContent = shortCountdown(element.dataset.shortResetAt, now)
   })
   document.querySelectorAll('#quotaPopover [data-reset-at]').forEach((element) => {
-    element.textContent = formatCountdown(
-      element.dataset.resetAt, now, element.dataset.windowKind, element.dataset.windowUsed
-    )
+    const { resetAt, windowKind, windowUsed } = element.dataset
+    element.textContent = rowCountdown(resetAt, now, windowKind, windowUsed)
+    element.title = formatCountdown(resetAt, now, windowKind, windowUsed)
   })
 }
 

@@ -14,7 +14,7 @@ let stopCalls = 0
 const context = {
   document: { getElementById: () => null, querySelectorAll: () => [] },
   electronAPI: { sysmon: {
-    onEvent: () => noop, start: noop, stop: () => { stopCalls++ }, cpuStress: noop, memStress: noop,
+    onEvent: () => noop, start: noop, stop: () => { stopCalls++ }, idle: noop, cpuStress: noop, memStress: noop,
     stressStatus: async () => ({ ok: false }),
     status: () => new Promise((resolve) => { resolveStatus = resolve })
   }, store: { get: async () => true } },

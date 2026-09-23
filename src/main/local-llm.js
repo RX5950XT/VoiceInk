@@ -32,7 +32,6 @@ const LANGUAGE_NAMES = {
 const TRANSLATE_MODEL_KEY = 'qwen35translate'
 const FALLBACK_LLM_KEY = 'qwen35translate'
 const DEFAULT_LLM_KEY = 'linguaforge08q4'
-const LINGUAFORGE_KEY = 'linguaforge08q4'
 /** LinguaForge 的量化版本（目前只出貨 Q4_K_M）共用整套 SFT 格式與 DECODE */
 const LINGUAFORGE_KEYS = Object.freeze(['linguaforge08q4'])
 
@@ -972,7 +971,6 @@ module.exports = {
   resolveLocalTranslateModel,
   getLoadInfo,
   resolveLinguaforgeDecode,
-  LINGUAFORGE_KEY,
   LINGUAFORGE_KEYS,
   isLinguaforge,
   LINGUAFORGE_CHUNK_CHARS,

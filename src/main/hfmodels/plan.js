@@ -195,8 +195,6 @@ function planRun(input) {
     warnings.push(`上下文 ${ctxSize} 超過模型訓練長度 ${ctxTrain}，超出的部分品質不保證`)
   }
 
-  const budgetMiB = device ? Math.floor((Number(device.freeMiB) || Number(device.totalMiB) || 0) * VRAM_SAFETY)
-    : 0
   const totalBudgetMiB = devices.reduce(
     (sum, d) => sum + Math.floor((Number(d.freeMiB) || Number(d.totalMiB) || 0) * VRAM_SAFETY), 0
   )

@@ -9,10 +9,18 @@ VoiceInk：Windows Electron AI 工作台。Vanilla JS + Vite（無前端框架�
 目前版本 **v1.25.0**（檔案總管雙欄右欄變成真的能用、操作中心收進狀態列且同名時可覆蓋、
 資料夾監看不再漏事件；前版終端機 PATH 不再被 Ctrl+G 橋接蓋掉；再前檢查更新改走鏡像）。
 
-nav 九頁：聊天（預設，**專案工作區與終端機都在同一頁**）｜檔案｜CC代理（`data-page` 仍是 `ccswitch`）｜
+nav 十頁：聊天（預設，**專案工作區與終端機都在同一頁**）｜Telegram（官方網頁版 `web.telegram.org/a` 放進 `<webview>`，可並排多開最多 4 格、共用 `persist:telegram`，每格頂端細列 ✕ 關／最右格 ＋ 再開，每格停的聊天室存 store `telegramPanes`（不用 localStorage：結束走 `app.exit()` 會掉最後幾秒的寫入）；`telegram-page.js`，第一次點才建）｜檔案｜CC代理（`data-page` 仍是 `ccswitch`）｜
 AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定。額度不再是一頁：收成工作區主區最下面那條，用量統計在 CC代理。
 
 ## 架構
+
+### 額度詳情精簡、Claude 不再 429、Codex 重置直接用；工作區搜尋改放大鏡（2026-09-23）
+
+- **額度詳情卡精簡**：名字＋方案一行，一個視窗一行（名稱｜量表｜%｜倒數），可信度／來源／「已從某某 API 讀取」都拿掉，只有在顯示舊資料時才留一行小字。
+- **Claude 一直 HTTP 429 的根因**：額度 API 看 User-Agent 限流，Node 預設的 `node` 會一直被擋，`claude-code/…` 不會。改報 CLI 的 UA；`fetchJson` 對 429 不再重試、並冷卻那個端點（以前每分鐘同步×3 次重試，把限流越拉越長）。
+- **Codex 重置次數**：詳情卡顯示還有幾次、每一次的到期日，旁邊「使用」（先確認）→ main 走官方 `codex app-server` 兌換（`usage/codex-reset.js`）→ 再同步一次。Claude、Grok 查不到同類 API。
+- **Grok 方案**：token 的 `tier: 1` 顯示成 SuperGrok（以前是 Tier 1）。
+- **工作區右欄**：拿掉「檔案／搜尋」兩顆切換，標題列資料夾圖示旁多一顆放大鏡，按一下換搜尋、再按回檔案樹。
 
 ### 額度收成終端機下面那條、Claude 自己續期、終端機複製與連結（2026-09-23）
 
@@ -303,11 +311,12 @@ src/main/
   ccswitch/           claude-settings.js（外科式改 env）、presets.js、providers.js（路由推導）、
                       models-scan.js、mcp.js、versions.js、credential.js、gateway/（server.js、oauth.js）
   codeusage/          scan.js（增量游標）、parsers.js（五家逐行）、pricing.js（單價＋RULES_VERSION）、index.js
-  sysmon/             probe.ps1 常駐取樣器、metrics.js（純函式差值）、sampler.js、gpu.js、bench.js、
+  native-probe.js     voiceink-probe.exe 的位置／找不到就退回 PowerShell（sysmon 與 screentime 共用）
+  sysmon/             probe.ps1（退路；平常跑 voiceink-probe.exe sysmon）、metrics.js（純函式差值）、sampler.js、gpu.js、bench.js、
                       stress.js、sensors.js（提權 sidecar 雙向橋接）、sensors-task.js、fans.js、
                       oc.js（效能調整）、pawnio.js（代裝＋驗簽）、ipc.js
   screentime/         使用時長：Tai 相容 SQLite、前景觀測、8908 WebSocket、統計查詢
-  usage/              七家額度 provider（全走官方端點）、api-key.js、6h soft cache、受限 IPC、
+  usage/              七家額度 provider（全走官方端點）、codex-reset.js（app-server 兌換重置）、api-key.js、6h soft cache、受限 IPC、
                       claude-auth.js（Claude 的 token 照 CLI 協定續期、寫回）
   agy/                server.js（127.0.0.1＋強制金鑰）、OpenAI/Anthropic ⇄ Gemini 雙向轉換、
                       catalog.js／model-map.js、credential.js（nudgeCli 續期）、logs.js
@@ -329,6 +338,7 @@ src/renderer/scripts/
 
 native/  dictation-hook/（WH_KEYBOARD_LL → resources/hook/）  sysmon-sensors/（→ resources/sensors/）
          explorer-shell/（IContextMenu + overlay → resources/shell/）
+         voiceink-probe/（Rust：系統監控取樣＋前景視窗觀測，取代兩支 PowerShell → resources/probe/）
 scripts/ 測試與探針（指令表見 CLAUDE.md「驗證方式」），dev-sandbox.js ＝ npm run dev:sandbox
 ```
 

@@ -11,6 +11,13 @@ const {
   readJwtClaims
 } = require('./shared')
 
+/**
+ * access token 的 `tier` 數字 → 訂閱名稱。x.ai 沒有公開這張表；
+ * 1 是從 Grok CLI 自己的 log 對出來的（`jwt_claim: "supergrok"`，內部代號 GrokPro）。
+ * 其他數字（Lite／Plus／Heavy／X Premium）沒有實測過，照舊顯示 `Tier N`，不用猜的。
+ */
+const GROK_TIER_NAMES = Object.freeze({ 1: 'SuperGrok' })
+
 function parseGrokSession(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
   for (const entry of Object.values(raw)) {
@@ -22,7 +29,7 @@ function parseGrokSession(raw) {
       accessToken: key,
       userId: typeof entry.user_id === 'string' ? entry.user_id.slice(0, 200) : '',
       email: typeof entry.email === 'string' ? entry.email.slice(0, 320) : '',
-      tier: Number.isInteger(tier) ? `Tier ${tier}` : ''
+      tier: Number.isInteger(tier) ? GROK_TIER_NAMES[tier] || `Tier ${tier}` : ''
     }
   }
   return null

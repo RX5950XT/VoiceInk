@@ -597,16 +597,12 @@ async function renderPanel(project = currentProject(), seq = projectSeq) {
 }
 
 /**
- * 檔案面板有兩個檢視（檔案樹／搜尋），共用同一個分頁。
+ * 檔案面板平常是檔案樹；按放大鏡換成搜尋，再按一次回檔案樹。
  * @param {string} [next]
  */
 function setFilesView(next) {
   if (next) filesView = next
-  document.querySelectorAll('.ws-files-mode').forEach((btn) => {
-    const on = /** @type {HTMLElement} */ (btn).dataset.view === filesView
-    btn.classList.toggle('active', on)
-    btn.setAttribute('aria-selected', on ? 'true' : 'false')
-  })
+  document.getElementById('wsFilesSearchBtn')?.setAttribute('aria-pressed', filesView === 'search' ? 'true' : 'false')
   if (el.tree) el.tree.hidden = filesView !== 'tree'
   if (el.search) el.search.hidden = filesView !== 'search'
   if (filesView === 'search') el.searchInput?.focus()
@@ -1693,7 +1689,6 @@ async function renderPorts(seq = projectSeq) {
 async function revealProject() {
   const project = currentProject()
   if (!project) return
-  const seq = projectSeq
   try {
     await call(electronAPI.workspace.reveal(project.id, ''), '開不了這個資料夾')
   } catch {
@@ -2819,11 +2814,9 @@ export function initWorkspacePage() {
   document.getElementById('wsPortsRefreshBtn')?.addEventListener('click', () => void renderPorts())
   document.getElementById('wsReviewCompareBtn')?.addEventListener('click', () => void runCompare())
   document.getElementById('wsReviewRefreshBtn')?.addEventListener('click', () => void renderBranches())
-  document.querySelectorAll('.ws-files-mode').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      setFilesView(/** @type {HTMLElement} */ (btn).dataset.view)
-      if (filesView === 'tree') void renderTree()
-    })
+  document.getElementById('wsFilesSearchBtn')?.addEventListener('click', () => {
+    setFilesView(filesView === 'search' ? 'tree' : 'search')
+    if (filesView === 'tree') void renderTree()
   })
   el.tree?.setAttribute('role', 'tree')
   el.tree?.addEventListener('keydown', onTreeKeydown)
