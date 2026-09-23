@@ -317,8 +317,8 @@ async function main() {
       }
     })()`)
     ok(
-      'stt page merges file + live + dictation into subtabs',
-      sttPage?.active && sttPage.subtabs === 3 && sttPage.activePanels === 1 &&
+      'stt page merges file + recorder + live + dictation into subtabs',
+      sttPage?.active && sttPage.subtabs === 4 && sttPage.activePanels === 1 &&
         sttPage.defaultPanel === 'stt-file' && sttPage.hasAsrSelect && sttPage.hasLlmSelect &&
         sttPage.perTabAsr &&
         sttPage.noOldPages,
