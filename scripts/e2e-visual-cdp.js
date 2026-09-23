@@ -13,10 +13,12 @@ const USER_DATA_DIR = tempDir('voiceink-e2e-visual-')
 fs.writeFileSync(path.join(USER_DATA_DIR, 'config.json'), JSON.stringify({ sysmonSensors: false }))
 fs.writeFileSync(path.join(USER_DATA_DIR, 'explorer.json'), JSON.stringify({ uffsAuto: false }))
 const PAGES = ['chat', 'telegram', 'explorer', 'ccswitch', 'agy', 'stt', 'translate', 'sysmon', 'hfmodels', 'settings']
+// 主視窗 minWidth 是 900，900 就是最窄的真實情況。不要再量更窄的：
+// 視窗 --hidden 時用 Emulation 縮寬，有 -webkit-app-region 的標題列元素不會重算樣式，
+// 量到的溢出是假的（視窗顯示中量就正常）。
 const VIEWPORTS = [
   { width: 1440, height: 1000 },
-  { width: 900, height: 900 },
-  { width: 560, height: 900 }
+  { width: 900, height: 900 }
 ]
 const SIGNATURES = {
   chat: ['.chat-sidebar', '.chat-main', '.chat-composer'],

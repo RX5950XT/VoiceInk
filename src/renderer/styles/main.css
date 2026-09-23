@@ -11207,6 +11207,25 @@ h6.md-h { font-size: 14px; }
   min-height: 0;
 }
 
+/*
+ * 切走時不可以 display:none／visibility:hidden：webview 會被當成藏起來、圖塊全丟，
+ * 切回來 GPU 要把每一格重畫一遍，主視窗整個卡 0.3–0.9 秒（3 格實測）。
+ * 改成原尺寸疊在底下、透明、點不到：圖塊留著，切回來 ~25ms；藏著時 Chromium 不畫透明層，CPU 一樣省。
+ */
+.main-content {
+  position: relative;
+}
+
+#page-telegram:not(.active) {
+  display: flex;
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  opacity: 0;
+  pointer-events: none;
+  animation: none;
+}
+
 .telegram-frame {
   flex: 1;
   display: flex;

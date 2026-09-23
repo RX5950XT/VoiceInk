@@ -6,13 +6,25 @@
 ## 專案概況
 
 VoiceInk：Windows Electron AI 工作台。Vanilla JS + Vite（無前端框架），Electron 43.4.1 ＋ Node.js 22。
-目前版本 **v1.25.0**（檔案總管雙欄右欄變成真的能用、操作中心收進狀態列且同名時可覆蓋、
+目前版本 **v1.28.1**（Telegram 切回來不再卡；再前 v1.25.0：檔案總管雙欄右欄變成真的能用、操作中心收進狀態列且同名時可覆蓋、
 資料夾監看不再漏事件；前版終端機 PATH 不再被 Ctrl+G 橋接蓋掉；再前檢查更新改走鏡像）。
 
 nav 十頁：聊天（預設，**專案工作區與終端機都在同一頁**）｜Telegram（官方網頁版 `web.telegram.org/a` 放進 `<webview>`，可並排多開最多 4 格（沒存過開 2 格；每格卡 600px，Web A 一律手機版版面）、共用 `persist:telegram`，每格頂端細列 ✕ 關／最右格 ＋ 再開，每格停的聊天室存 store `telegramPanes`（不用 localStorage：結束走 `app.exit()` 會掉最後幾秒的寫入）；`telegram-page.js`，第一次點才建）｜檔案｜CC代理（`data-page` 仍是 `ccswitch`）｜
 AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定。額度不再是一頁：收成工作區主區最下面那條，用量統計在 CC代理。
 
 ## 架構
+
+### Telegram 切回來不再卡（2026-09-23）
+
+- **根因**：切走時 `.page` 是 `display:none`，webview 被當成藏起來、圖塊全丟；切回來 GPU 主執行緒要把
+  每一格重畫（3 格各約 14 塊），主視窗那一幀跟著等，實測卡 300–945ms（trace 看得到 `RendererRasterWorker`
+  塞滿 CrGpuMain，主畫面與 Telegram 自己都沒有長任務）。`visibility:hidden` 一樣會丟圖塊，沒用。
+- **修法**：`#page-telegram:not(.active)` 改成原尺寸 `position:absolute` 疊在 `.main-content` 底下、`opacity:0`、
+  點不到；非作用頁一律 `inert`（擋 Tab 摸進透明的 webview）。切回來 19–29ms，藏著時 CPU 沒有變多
+  （Chromium 不畫透明層），GPU 多留約 50MB 圖塊。
+- **`e2e-visual-cdp.js` 拿掉 560px**：主視窗 `minWidth` 900 到不了；而且視窗 `--hidden` 時用 Emulation 縮寬，
+  有 `-webkit-app-region` 的標題列元素不重算樣式，量到的溢出是假的（視窗顯示中量就正常）。
+- **不是 Bug 的 CPU**：語音輸入開著時麥克風常駐（`dictation.js` 的刻意取捨），音訊服務一直吃約 7% 單核。
 
 ### 導覽列換真圖示、可拖曳排序；Telegram 一律手機版（2026-09-23）
 

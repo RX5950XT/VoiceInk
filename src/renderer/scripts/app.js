@@ -954,7 +954,10 @@ export function switchPage(pageName) {
     else item.removeAttribute('aria-current')
   })
   pages.forEach(page => {
-    page.classList.toggle('active', page.id === `page-${pageName}`)
+    const on = page.id === `page-${pageName}`
+    page.classList.toggle('active', on)
+    // Telegram 切走時只是透明疊在底下（見 main.css），不 inert 的話 Tab 還摸得到那幾格
+    page.inert = !on
   })
   // 先啟動新頁 acquire，再 release 舊頁，避免中間 owner 歸零觸發 unload＋重付 warm
   if (pageName === 'chat') {
