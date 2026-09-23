@@ -57,7 +57,16 @@ const PROVIDER_META = Object.freeze({
 
 const DEFAULT_USAGE_SETTINGS = Object.freeze({
   visibleProviders: Object.freeze([...PROVIDER_IDS]),
-  providerOrder: Object.freeze([...PROVIDER_IDS])
+  providerOrder: Object.freeze([...PROVIDER_IDS]),
+  // 工作區底下那條額度條每一家要顯示什麼（顯示設定裡的「每一家顯示」）
+  bar: Object.freeze({
+    kinds: Object.freeze(['rolling-5h', 'weekly', 'monthly']),
+    showReset: true,
+    showPlan: false,
+    compact: false,
+    hideDisconnected: true,
+    showLastSync: true
+  })
 })
 
 const ENDPOINTS = Object.freeze({

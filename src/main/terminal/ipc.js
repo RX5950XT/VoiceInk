@@ -74,6 +74,11 @@ function registerTerminalIpc({ ipcMain, service, isMainSender, dialog, getWindow
     invoke(event, () => service.clipboardText())
   ))
 
+  // 複製終端機裡選取的文字（同上，main 這支不受焦點影響）
+  ipcMain.handle('terminal:clipboardWrite', (event, text) => (
+    invoke(event, () => service.clipboardWrite(text))
+  ))
+
   // 剪貼簿裡的截圖：main 把圖存成 PNG，renderer 只拿得到那條路徑（路徑不從 renderer 收）。
   // 終端機貼的就是這條路徑——任何 AI CLI 看到圖片路徑都讀得進去，比丟 `^V` 讓 CLI
   // 自己去翻剪貼簿可靠得多。

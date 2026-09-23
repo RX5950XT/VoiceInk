@@ -197,6 +197,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** 貼上要讀的剪貼簿文字。**不要改用 `navigator.clipboard.readText()`**：
      *  那支要視窗有焦點，沒焦點直接 reject，Ctrl+V 就變成沒反應。 */
     clipboardText: () => ipcRenderer.invoke('terminal:clipboardText'),
+    /** 複製選取的文字（同上，走 main 才不受焦點影響） */
+    clipboardWrite: (text) => ipcRenderer.invoke('terminal:clipboardWrite', text),
     /** 剪貼簿裡的截圖：main 存成 PNG 後回 `{ path, width, height }`，沒有圖片回 null。
      *  終端機貼的是那條路徑——CLI 讀得到圖，比丟 `^V` 讓它自己翻剪貼簿可靠。 */
     clipboardImage: () => ipcRenderer.invoke('terminal:clipboardImage'),

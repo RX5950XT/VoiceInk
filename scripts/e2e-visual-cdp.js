@@ -12,7 +12,7 @@ const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-
 const USER_DATA_DIR = tempDir('voiceink-e2e-visual-')
 fs.writeFileSync(path.join(USER_DATA_DIR, 'config.json'), JSON.stringify({ sysmonSensors: false }))
 fs.writeFileSync(path.join(USER_DATA_DIR, 'explorer.json'), JSON.stringify({ uffsAuto: false }))
-const PAGES = ['chat', 'explorer', 'ccswitch', 'usage', 'agy', 'stt', 'translate', 'sysmon', 'hfmodels', 'settings']
+const PAGES = ['chat', 'explorer', 'ccswitch', 'agy', 'stt', 'translate', 'sysmon', 'hfmodels', 'settings']
 const VIEWPORTS = [
   { width: 1440, height: 1000 },
   { width: 900, height: 900 },
@@ -26,7 +26,6 @@ const SIGNATURES = {
   ccswitch: ['.cc-panel'],
   // 卡片是收到第一輪取樣才建出來的，所以 signature 挑靜態就在 DOM 裡的兩個面板
   sysmon: ['.sysmon-table', '.sysmon-stress-card'],
-  usage: ['.usage-card', '.usage-summary-strip'],
   agy: ['.agy-control', '.agy-stats', '.agy-models', '.agy-logs'],
   stt: ['.drop-zone', '.result-panel'],
   translate: ['.translate-pane', '.translate-banner'],
@@ -606,8 +605,11 @@ async function main() {
       features: [{ name: 'prefers-reduced-motion', value: 'reduce' }]
     })
     const reduced = await cdp.eval(`(() => {
-      document.querySelector('[data-page="usage"]').click()
-      const style = getComputedStyle(document.querySelector('.usage-card'))
+      // 以前量額度頁的卡片；額度收成工作區底下那條之後，量那顆會轉的同步鈕（有 reduce 的 fallback）
+      const btn = document.getElementById('quotaSyncBtn')
+      btn.setAttribute('aria-busy', 'true')
+      const style = getComputedStyle(btn)
+      btn.removeAttribute('aria-busy')
       return { animation: style.animationDuration, transition: style.transitionDuration }
     })()`)
     const durations = `${reduced.animation},${reduced.transition}`

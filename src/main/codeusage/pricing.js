@@ -78,6 +78,8 @@ const RULES_VERSION = 10
 const BUILTIN_PRICES = {
   // Anthropic 官方公開報價（2026-09 查證）
   'claude-fable-5': { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5, cacheWrite1h: 20 },
+  // Opus 5.5（2026-09 上線）：$4／$20、快取讀 $0.20；寫入照 Anthropic 規則 5m ×1.25、1h ×2
+  'claude-opus-5.5': { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5, cacheWrite1h: 8 },
   'claude-opus-5': { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25, cacheWrite1h: 10 },
   'claude-opus-4.8': { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25, cacheWrite1h: 10 },
   'claude-opus-4.7': { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25, cacheWrite1h: 10 },
@@ -96,6 +98,9 @@ const BUILTIN_PRICES = {
   // `cache_write_input_tokens`，所以那條路看不出來，但經 Claude Code／閘道打的同一顆會）。
   // OpenAI **沒有** 5m／1h 兩檔，所以 cacheWrite1h 寫成跟 cacheWrite 一樣的價
   // （留 0 等於說「1 小時快取寫入免費」，空著又會被 costOf 推成 1.6 倍）。
+  // gpt-6 系列（2026-09-23 查證，標準長度；長上下文另有加價，這張表只收一檔）
+  'gpt-6-sol': { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5, cacheWrite1h: 2.5 },
+  'gpt-6-luna': { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125, cacheWrite1h: 0.125 },
   'gpt-6-astra': { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5, cacheWrite1h: 12.5 },
   'gpt-5.6-sol': { input: 4, output: 20, cacheRead: 0.4, cacheWrite: 5, cacheWrite1h: 5 },
   'gpt-5.6-terra': { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 2.5, cacheWrite1h: 2.5 },

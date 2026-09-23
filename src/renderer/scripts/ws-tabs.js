@@ -2668,8 +2668,13 @@ function paintAiSessionTab(tab) {
       meta: el.aiSessionMeta,
       body: el.aiSessionBody,
       resumeBtn: /** @type {HTMLButtonElement | null} */ (el.aiResumeBtn),
-      resumeIntoBtn: /** @type {HTMLButtonElement | null} */ (el.aiResumeIntoBtn)
+      resumeIntoBtn: /** @type {HTMLButtonElement | null} */ (el.aiResumeIntoBtn),
+      copyPathBtn: /** @type {HTMLButtonElement | null} */ (el.aiCopyPathBtn)
     },
+    onCopyPath: (file) => void navigator.clipboard.writeText(file).then(
+      () => showToast('已複製路徑'),
+      () => showToast('複製失敗', 'error')
+    ),
     onOpenFile: (rel) => {
       if (tab.projectId) void openEditorTab({ id: tab.projectId, name: '' }, rel)
     },
@@ -3097,6 +3102,7 @@ export function initWsTabs() {
   el.aiSessionBody = document.getElementById('wsAiSessionBody')
   el.aiResumeBtn = document.getElementById('wsAiResumeBtn')
   el.aiResumeIntoBtn = document.getElementById('wsAiResumeIntoBtn')
+  el.aiCopyPathBtn = document.getElementById('wsAiCopyPathBtn')
   el.editorToChatBtn = document.getElementById('wsEditorToChatBtn')
 
   // IDE 元素

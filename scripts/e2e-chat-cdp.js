@@ -194,7 +194,7 @@ async function checkConcurrentUi(cdp, fake, check) {
   let autoConv = ''
   const extraFolders = []
   try {
-    await cdp.eval(`document.querySelector('.nav-tab[data-page="usage"]').click()`)
+    await cdp.eval(`document.querySelector('.nav-tab[data-page="ccswitch"]').click()`)
     await cdp.eval(`document.querySelector('.nav-tab[data-page="chat"]').click()`)
     await waitFor(() => cdp.eval(`!!document.querySelector('${row(made.b)}')`), 15_000, '側欄出現測試對話')
     const before = fake.bodies.length
@@ -238,7 +238,7 @@ async function checkConcurrentUi(cdp, fake, check) {
     check('側欄按鈕開出命名彈窗', asked === true)
     await cdp.eval(`(async () => {
       await window.electronAPI.chat.createFolder('CDP-資料夾')
-      document.querySelector('.nav-tab[data-page="usage"]').click()
+      document.querySelector('.nav-tab[data-page="ccswitch"]').click()
       document.querySelector('.nav-tab[data-page="chat"]').click()
     })()`)
     folderId = await waitFor(() => cdp.eval(`(() => {
@@ -272,7 +272,7 @@ async function checkConcurrentUi(cdp, fake, check) {
     // 資料夾拖曳排序：把後建的乙拖到甲上面
     const folderB = await cdp.eval(`(async () => {
       const f = await window.electronAPI.chat.createFolder('CDP-資料夾乙')
-      document.querySelector('.nav-tab[data-page="usage"]').click()
+      document.querySelector('.nav-tab[data-page="ccswitch"]').click()
       document.querySelector('.nav-tab[data-page="chat"]').click()
       return f.id
     })()`)
@@ -682,7 +682,7 @@ async function main() {
       return { a: a.id, b: b.id }
     })()`)
     try {
-      await cdp.eval(`document.querySelector('.nav-tab[data-page="usage"]').click()`)
+      await cdp.eval(`document.querySelector('.nav-tab[data-page="ccswitch"]').click()`)
       await cdp.eval(`document.querySelector('.nav-tab[data-page="chat"]').click()`)
       await waitFor(() => cdp.eval(
         `!!document.querySelector('.chat-list-item[data-id="${made.b}"] .chat-list-btn')`

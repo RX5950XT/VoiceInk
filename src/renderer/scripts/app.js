@@ -21,8 +21,8 @@ let liveCaption = null
 let translatePage = null
 /** @type {typeof import('./transcribe.js') | null} */
 let transcribePage = null
-/** @type {typeof import('./usage-page.js') | null} */
-let usagePage = null
+/** @type {typeof import('./quota-bar.js') | null} */
+let quotaBar = null
 /** @type {typeof import('./agy-page.js') | null} */
 let agyPage = null
 /** @type {typeof import('./terminal-page.js') | null} */
@@ -64,10 +64,10 @@ async function loadTranscribePage() {
   return transcribePage
 }
 
-/** @returns {Promise<typeof import('./usage-page.js')>} */
-async function loadUsagePage() {
-  if (!usagePage) usagePage = await import('./usage-page.js')
-  return usagePage
+/** 工作區底下那條訂閱額度。 @returns {Promise<typeof import('./quota-bar.js')>} */
+async function loadQuotaBar() {
+  if (!quotaBar) quotaBar = await import('./quota-bar.js')
+  return quotaBar
 }
 
 /** @returns {Promise<typeof import('./agy-page.js')>} */
@@ -212,7 +212,8 @@ export const electronAPI = window.electronAPI || {
       })),
       settings: {
         visibleProviders: [...USAGE_PROVIDERS],
-        providerOrder: [...USAGE_PROVIDERS]
+        providerOrder: [...USAGE_PROVIDERS],
+        bar: { kinds: ['rolling-5h', 'weekly', 'monthly'], showReset: true, showPlan: false, compact: false, hideDisconnected: false, showLastSync: true }
       },
       lastSyncedAt: null,
       diagnostics: []
@@ -891,6 +892,7 @@ export function setChatPaneMode(mode) {
   // 工作區主區剛從 display:none 顯現，xterm 要等這一幀才 fit 得準
   if (mode === 'workspace') {
     loadTerminalPage().then((m) => m.refreshTerminalPage())
+    loadQuotaBar().then((m) => m.refreshQuotaBar())
   }
 }
 
@@ -920,7 +922,6 @@ export function switchPage(pageName) {
   if (pageName === 'explorer') loadExplorerPage().then((m) => m.refreshExplorerPage())
   if (pageName === 'hfmodels') loadHfPage().then((m) => m.start())
   if (pageName === 'sysmon') loadSysmonPage().then((m) => m.refreshSysmonPage())
-  if (pageName === 'usage') loadUsagePage().then((m) => m.refreshUsagePage())
   if (pageName === 'agy') loadAgyPage().then((m) => m.refreshAgyPage())
   if (pageName === 'stt') {
     loadSttPage().then((m) => {
@@ -935,7 +936,6 @@ export function switchPage(pageName) {
   }
   if (pageName !== 'stt') liveCaption?.cooldownEngine()
   if (pageName !== 'translate') translatePage?.cooldownTranslatePage()
-  if (pageName !== 'usage') usagePage?.cooldownUsagePage()
   // 取樣器常駐：離開這一頁只收壓力測試與面板，不停 probe / nvidia-smi
   if (pageName !== 'sysmon') sysmonPage?.cooldownSysmonPage()
   if (pageName !== 'agy') agyPage?.cooldownAgyPage()

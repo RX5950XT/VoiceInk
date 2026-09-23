@@ -9,7 +9,7 @@
 Windows Electron AI 工作台：聊天＋終端機＋專案工作區＋本機 LLM＋Claude Code 工作台＋系統監控＋
 額度與用量統計＋AGY 反代＋語音轉文字＋翻譯與 TTS。Vanilla JS + Vite（無框架），Electron 43.4.1 ＋ Node 22。
 
-nav：聊天（預設，**工作區與終端機同一頁**）｜檔案｜CC代理｜額度｜AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定。
+nav：聊天（預設，**工作區與終端機同一頁**）｜檔案｜CC代理｜AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定（九頁；額度收成工作區底下那條、用量統計在 CC代理）。
 
 | 模組 | 一句話 |
 |---|---|
@@ -18,9 +18,9 @@ nav：聊天（預設，**工作區與終端機同一頁**）｜檔案｜CC代�
 | 專案工作區 | `src/main/workspace/`：專案＝本機資料夾（`workspaces.json`）；中間分頁列（終端機／Monaco 編輯器／`<webview>` 瀏覽器），右側欄＝檔案總管／Git／AI 記錄／監聽埠 |
 | 檔案 | 整機檔案總管（`src/main/explorer/`）；瀏覽本機資料夾；檔名搜尋走 UFFS（MFT），不自己 walk 整碟 |
 | HF模型 | 在 HF 搜 GGUF → 下載 → llama-server **router 模式** 一顆程序管全部模型 → 出現在聊天選單 |
-| CC代理 | `src/main/ccswitch/`：供應商 tile 改 `~/.claude/settings.json` 的 `env`／MCP／CLI 版本；非 Anthropic 格式經本機閘道轉協議 |
+| CC代理 | `src/main/ccswitch/`：供應商 tile 改 `~/.claude/settings.json` 的 `env`／MCP／CLI 版本／用量統計；非 Anthropic 格式經本機閘道轉協議 |
 | 系統監控 | `probe.ps1` 常駐取樣器＋`nvidia-smi`；六子頁（總覽／使用時長／處理程序／壓力測試／風扇控制／效能調整），感測器走提權 sidecar |
-| 額度／用量統計 | 額度＝七家官方端點（`usage.json`）；用量統計＝掃五家 CLI 本機記錄算 token／花費（`code-usage.json`），兩件事 |
+| 額度／用量統計 | 額度＝七家官方端點（`usage.json`），畫在工作區主區最下面那條（`quota-bar.js`，看得到時每分鐘自動同步）；用量統計＝掃五家 CLI 本機記錄算 token／花費（`code-usage.json`），在 CC代理的子分頁；兩件事 |
 | AGY 反代 | Antigravity 憑證 → OpenAI／Anthropic 端點；只綁 127.0.0.1＋強制金鑰 |
 | ASR／翻譯／TTS | 本地 sherpa（CPU）／llama-server（GPU）或雲端；翻譯 local（LinguaForge）／cloud；TTS 走 Edge TTS |
 | 語音輸入 | 全域右 Alt（原生 sidecar 吞鍵）→ 錄音 → ASR → 個人字典 → LLM 整理 → 剪貼簿＋Ctrl+V，底部浮藥丸 |
@@ -93,7 +93,7 @@ tag 要與 `package.json` 的 version 一致。
 - **代理／閘道不透傳上游狀態碼**：只有 429（含 `retry-after`）原樣回，其餘一律 502；每個端點走同一個 `statusFor`。
 - **不收 renderer 給的網址**：模型掃描只收 providerId，上游位址一律由 main 從 store 取。
 - **圖片只收 `data:` URI**（去下載客戶端給的 http URL＝SSRF 跳板）。
-- 不硬編碼 secrets（Antigravity OAuth 走環境變數）；外部 CLI 憑證（`~/.codex`／`~/.grok`／`~/.commandcode`）**只讀不寫**。
+- 不硬編碼 secrets（Antigravity OAuth 走環境變數）；外部 CLI 憑證（`~/.codex`／`~/.grok`／`~/.commandcode`）**只讀不寫**。唯一例外是 Claude 的 `~/.claude/.credentials.json`（見「用量統計與額度」的續期那條）。
 - **`workspace/files.js` 的 `resolveIn` 是唯一的檔案系統入口**：renderer 只送 `{ projectId, relPath }`；比對要帶路徑分隔符（`base + path.sep`），字面檢查後還要兩邊 `realpathSync.native`（資料夾連結繞得過字面比對）。
 - **git 一律 `spawn(..., { shell: false })` ＋參數陣列＋ `GIT_TERMINAL_PROMPT=0`／`GIT_ASKPASS=''`；stderr 不透傳**（裡面有遠端 URL、使用者名稱，有時是 token）。「沒東西可提交」要跟「提交失敗」分開講。
 - **agent 恢復指令是 main 的固定表**，session id 卡 `^[A-Za-z0-9_-]{6,64}$`，且要先確認那段對話屬於這個專案。
@@ -359,6 +359,12 @@ tag 要與 `package.json` 的 version 一致。
   照原本的路走。代價是 CLI 收不到滑鼠（Claude Code 的點選單要改用鍵盤），這是刻意的取捨。
   回歸 `probe-terminal-mouse.js`——**一定要有沒掛的對照組**，不然「永遠是 none」是恆真；
   拖曳本身不要模擬，離屏視窗沒畫過字，xterm 量不到字元尺寸，`getCoords()` 一律回 undefined。
+- **複製跟貼上一樣走 main 的剪貼簿，而且比照 Windows Terminal**（`term-copy.js`）：選起來放開就複製（放開的地方不在那一格也算，監聽掛 `window`）；
+  **有選取的 Ctrl+C＝複製**（沒選取才送 `^C`，中斷不能被吃掉）、Ctrl+Shift+C／Ctrl+Insert 一律複製；**右鍵有選取＝複製、沒選取才貼上**
+  （以前右鍵永遠貼上，選完按右鍵就把剛選的字貼回提示字元）。回歸 `e2e-terminal-copy-cdp.js`（真滑鼠事件，量 main 的剪貼簿）。
+- **Terminal 一定要給 `linkHandler`**：CLI 用 OSC 8 送的超連結，xterm 預設是先 `window.confirm()`（系統原生的「這個連結可能有危險」）再
+  `window.open()`，而 `window.open` 會被 main 擋掉——使用者看到的是「跳出警告，按了確定還是開不起來」。`term-links.js` 的 `oscLinkHandler`：
+  http(s) 開內建瀏覽器分頁、`file://` 換成路徑走 `revealLink`、其他協定不開。回歸 `e2e-terminal-copy-cdp.js` 的 [E]。
 - **xterm 自己不碰剪貼簿，Ctrl+V 要我們自己接**：不接的話那顆鍵只會變成 `^V`（`\x16`）送進
   PTY，Claude Code 那類 CLI 不認，畫面上**什麼都不會發生**；語音輸入走的正是「寫剪貼簿 ＋
   模擬 Ctrl+V」，所以症狀是「文字在別的 App 都貼得進去，只有這個終端機貼不進來」。接在
@@ -523,6 +529,13 @@ tag 要與 `package.json` 的 version 一致。
 - **快取的價錢要分開算**（Anthropic read = input×0.1、5m 寫入 ×1.25、1h ×2，Claude Code 幾乎都是 1h）；OpenAI 從 gpt-5.6 起有 cache write（`cacheWrite1h` 要寫成跟 `cacheWrite` 同價，留 0 或空著都會算錯）。
 - 沒有單價的模型 `costUsd` 回 **null 不是 0**；模型 id 要正規化後才合併（剝 `-thinking` 但**不剝 `-lite`**）；「不是模型名的 id」不收但 `unknown` 要留；改 `normalizeModel` 要把 `RULES_VERSION` +1。
 - **額度：`mergeExpectedWindows` 只能由 `usage/index.js` 呼叫**，空窗（API 失敗）也不可 merge（否則會生出「憑空的 100% 已用盡」還標成官方真實額度）。
+- **Claude 的 access token 要自己續（`usage/claude-auth.js`），而且只能照 Claude Code 自己的協定**：token 只活幾個小時、只有 CLI 在跑才會續，
+  不續的話「沒開 claude 的那幾個小時額度就跑掉，要去終端機開一次才讀得到」。refresh token 會輪替，**只換在記憶體裡＝把 CLI 手上那顆作廢**
+  （下次 CLI 續期 invalid_grant，整個登出），所以一定要寫回檔案，而且三件事缺一不可：兩把鎖（`~/.claude/.oauth_refresh.lock` 與舊版
+  `~/.claude.lock`，proper-lockfile 格式＝mkdir、60 秒 stale）、拿到鎖後重讀（access token 換過＝別人續好了，直接用）、CAS 寫回（檔案裡的
+  refresh token 還是我們送出去那顆才寫）＋原子替換、其他欄位原樣保留。端點 `platform.claude.com/v1/oauth/token`、JSON body、client_id 都是從
+  已安裝的 CLI 讀出來的；CLI 大改版時先跑 `probe-claude-refresh.js --force`（會真的續一次）。還沒到期卻 401 也要強制續一次再打。
+  回歸 `test-claude-auth.js`。Codex 的 token 十天才過期，仍維持只讀。
 - 訂閱方案來源全在本機登入檔不在額度 API；`seven_day_opus` 非 Max 回 **null 不是 0**；Command Code 的額度在 `billing/credits` 不是 `usage/summary`；OpenCode 的 403 ＝沒訂閱（要用 `disconnected`）；**Ollama 的 `usage` 是 0～1 的比例**且上游不給重置時間（不可自己算一個假的）。
 
 ### 系統監控／風扇／效能調整
@@ -585,13 +598,13 @@ tag 要與 `package.json` 的 version 一致。
 | 開發沙箱 | `probe-dev-sandbox.js`（**實測**沙箱讀得到你的模型與供應商，而你正在用的那份一個位元組都沒動；動 `dev-sandbox.js` 前後都要跑）|
 | 檔案總管 | `test-explorer.js`（路徑守衛＋自種暫存目錄）＋ `e2e-explorer-cdp.js`（暫存 user-data-dir，**不點第一列**）＋ `probe-explorer-uffs.js`（機器上真有 `uffs` 才打真搜尋）＋ `e2e-explorer-drag.js`（拖出去交給 OS 的內容，假 sender）＋ `test-explorer-shell.js`（殼層選單去重／sidecar 協定）＋ `probe-explorer-shell.js`（真 IContextMenu：7-Zip／WinRAR／傳送到、Drive 綠勾） |
 | 專案工作區 | `test-workspace.js`／`-nav`／`-ui`／`-state`／`-perf` ＋ `e2e-workspace-cdp.js`（暫存 user-data-dir ＋自種專案）；動 Monaco 前後跑 `probe-workspace-monaco.js`，動 PDF 前跑 `probe-workspace-pdf.js`；動編輯器／diff／預覽／專案切換前後跑 `probe-workspace-perf.js`（**打包版**開 1.4MB／4 萬行的檔，數 `createModel` 有沒有重做、量輸入法游標位置、驗專案隔離）；動大檔開關與記憶體前後跑 `probe-workspace-bigfile.js`（**打包版**量 1.4MB／4 萬行的開檔毫秒數、並排變更毫秒數，以及關掉之後堆積回不回得去、預覽的 iframe 有沒有被收掉） |
-| 終端機 | `test-terminal.js` ＋ `test-terminal-ui.js`（輸出合併、輸入法對位）＋ `probe-terminal-flicker.js`（**會叫到最前面**：DOM vs WebGL 量游標重建與 textarea 抖動）＋ `probe-terminal-upgrade.js`（**打包版**驗 WebGL／Unicode 11／字級／搜尋／分割／OSC 標題與 cwd）＋ `probe-terminal-ime.js`（**打包版**真的走一次 Chromium 輸入法組字）＋ `e2e-terminal.js`（真 ConPTY）＋ `e2e-terminal-cdp.js` ＋ `test-terminal-host.js`（獨立宿主）＋ `test-terminal-links.js` ＋ `probe-terminal-links.js`（真 xterm 座標，`npx electron`） ＋ `probe-terminal-editor.js`（Ctrl+G 的 $EDITOR 橋接：真的把那支 batch 跑起來，量它會不會卡住、送出與取消放不放得走）＋ `probe-terminal-mouse.js`（`npx electron`：CLI 開的滑鼠回報有沒有被擋掉，含沒掛的對照組） ＋ `probe-terminal-host-version.js`（唯讀：問這台機器上真的跑著的宿主是哪一份執行環境、還活著幾個 shell——「更新了卻沒生效」先跑這支）；動宿主或 `build.files`／`asarUnpack` 前後跑 `probe-terminal-restart.js`（**打包版**真的關 App、覆寫安裝檔再開回來）；管理員 `probe-terminal-admin.js`（免 UAC）／`probe-terminal-admin-elevate.js`（**跳一次 UAC**）；動 `foreground.js` 前後跑 `probe-terminal-foreground.js`（**會開／關記事本**，重現「記事本已經開著」再開第二次）；動配色或桌布前後跑 `probe-terminal-background.js`（**打包版**量桌布那一層畫不畫得出來、字有沒有被 opacity 一起壓掉、拿掉圖之後底色回不回得到不透明）|
+| 終端機 | `test-terminal.js` ＋ `test-terminal-ui.js`（輸出合併、輸入法對位）＋ `probe-terminal-flicker.js`（**會叫到最前面**：DOM vs WebGL 量游標重建與 textarea 抖動）＋ `probe-terminal-upgrade.js`（**打包版**驗 WebGL／Unicode 11／字級／搜尋／分割／OSC 標題與 cwd）＋ `probe-terminal-ime.js`（**打包版**真的走一次 Chromium 輸入法組字）＋ `e2e-terminal.js`（真 ConPTY）＋ `e2e-terminal-cdp.js` ＋ `test-terminal-host.js`（獨立宿主）＋ `test-terminal-links.js` ＋ `probe-terminal-links.js`（真 xterm 座標，`npx electron`） ＋ `probe-terminal-editor.js`（Ctrl+G 的 $EDITOR 橋接：真的把那支 batch 跑起來，量它會不會卡住、送出與取消放不放得走）＋ `probe-terminal-mouse.js`（`npx electron`：CLI 開的滑鼠回報有沒有被擋掉，含沒掛的對照組） ＋ `e2e-terminal-copy-cdp.js`（**打包版**：一般 PowerShell 裡拖曳選取、Ctrl+C／右鍵複製、OSC 8 連結不跳 confirm） ＋ `probe-terminal-host-version.js`（唯讀：問這台機器上真的跑著的宿主是哪一份執行環境、還活著幾個 shell——「更新了卻沒生效」先跑這支）；動宿主或 `build.files`／`asarUnpack` 前後跑 `probe-terminal-restart.js`（**打包版**真的關 App、覆寫安裝檔再開回來）；管理員 `probe-terminal-admin.js`（免 UAC）／`probe-terminal-admin-elevate.js`（**跳一次 UAC**）；動 `foreground.js` 前後跑 `probe-terminal-foreground.js`（**會開／關記事本**，重現「記事本已經開著」再開第二次）；動配色或桌布前後跑 `probe-terminal-background.js`（**打包版**量桌布那一層畫不畫得出來、字有沒有被 opacity 一起壓掉、拿掉圖之後底色回不回得到不透明）|
 | 聊天／Markdown | `e2e-chat.js`（mock SSE）＋ `e2e-chat-cdp.js` ＋ `test-markdown.js` |
 | HF模型 | `test-hfmodels.js` ＋ `probe-hf-router.js`（動 runtime 前跑）／`probe-hf-hub.js`／`probe-hf-detail.js`（打真 HF）＋ `e2e-hfmodels.js` ＋ `e2e-hf-cdp.js` |
 | CC代理／閘道 | `test-ccswitch.js` ＋ `e2e-ccswitch-cdp.js`；端點 `probe-ccswitch-endpoints.js`／模型 `probe-ccswitch-models.js`／Codex 參數 `probe-ccswitch-codex.js`；閘道 `test-ccswitch-gateway.js` ＋ `e2e-ccswitch-gateway.js` |
 | AGY | `test-agy-mappers.js` ＋ `e2e-agy.js`（mock）＋ `e2e-agy-cdp.js`；動映射表／端點順序前跑 `probe-agy-upstream.js`，動 `runAgyCli` 前跑 `probe-agy-nudge.js` |
-| 用量統計 | `test-code-usage.js` ＋ `e2e-code-usage.js`（真的讀本機記錄）＋ `probe-code-usage-audit.js`（不經 codeusage 重算對帳）|
-| 額度 | `test-usage.js` ＋ `e2e-usage.js` ＋ `e2e-usage-cdp.js`；動端點或解析前後跑 `probe-usage-endpoints.js`（打真上游）|
+| 用量統計 | `test-code-usage.js` ＋ `e2e-code-usage.js`（真的讀本機記錄）＋ `probe-code-usage-audit.js`（不經 codeusage 重算對帳）；畫面在 `e2e-usage-cdp.js` 的後半（CC代理的子分頁）|
+| 額度 | `test-usage.js` ＋ `test-claude-auth.js`（Claude 續期的鎖／CAS，假家目錄）＋ `e2e-usage.js` ＋ `e2e-usage-cdp.js`（工作區底下那條：顯示設定、排序、詳情、自動同步）；動端點或解析前後跑 `probe-usage-endpoints.js`（打真上游）；動續期前後跑 `probe-claude-refresh.js --force`（**會真的續你的 Claude 登入**）|
 | 系統監控 | `test-sysmon.js` ＋ `e2e-sysmon.js` ＋ `e2e-sysmon-cdp.js` ＋ `probe-sysmon-stress.js`（實機量有沒有壓到）＋ `e2e-sysmon-sensors.js`（**跳 UAC**）|
 | 風扇／效能調整 | `test-sysmon-fans.js` ＋ `e2e-sysmon-fans-cdp.js`（不接管真風扇）＋ `probe-sysmon-fans.js`／`probe-sensors-task.js`（**跳 UAC**）；`test-sysmon-oc.js` ＋ `e2e-sysmon-oc-cdp.js`（不按套用）|
 | 使用時長 | `test-screentime.js` ＋ `e2e-screentime-cdp.js`（**不關使用者的 Tai**）|

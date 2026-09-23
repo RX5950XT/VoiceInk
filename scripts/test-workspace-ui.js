@@ -465,7 +465,7 @@ function treeRefreshAndStatusSpinChecks() {
 
   const paintFn = workspacePage.slice(
     workspacePage.indexOf('function paintProjectStatuses'),
-    workspacePage.indexOf('const TERMS_COLLAPSED_KEY')
+    workspacePage.indexOf('function buildListItem')
   )
   check('終端機狀態更新不整組拆掉重建',
     /patchSessionChip/.test(paintFn) && !/host\.replaceChildren\(\)/.test(paintFn))

@@ -150,7 +150,7 @@ function presetById(id) {
 // ===== 子分頁 =====
 
 /**
- * @param {'providers'|'mcp'|'version'} name
+ * @param {'providers'|'mcp'|'version'|'stats'} name
  */
 function showSubtab(name) {
   activeSubtab = name
@@ -164,6 +164,12 @@ function showSubtab(name) {
   })
   if (name === 'mcp') void reloadMcp()
   if (name === 'version') void reloadVersions()
+  // 用量統計會掃 GB 等級的本機記錄，程式碼也另外 dynamic import：沒點進來就不載
+  if (name === 'stats') void refreshStats()
+}
+
+function refreshStats() {
+  return import('./code-usage-page.js').then((mod) => mod.refreshCodeUsagePage())
 }
 
 // ===== 供應商 =====
@@ -1188,13 +1194,14 @@ function bindOnce() {
 
   document.querySelectorAll('#ccSubtabs .subtab').forEach((btn) => {
     btn.addEventListener('click', () => showSubtab(
-      /** @type {'providers'|'mcp'|'version'} */ (btn.dataset.subtab)
+      /** @type {'providers'|'mcp'|'version'|'stats'} */ (btn.dataset.subtab)
     ))
   })
 
   document.getElementById('ccRefreshBtn')?.addEventListener('click', () => {
     if (activeSubtab === 'mcp') void reloadMcp()
     else if (activeSubtab === 'version') void reloadVersions()
+    else if (activeSubtab === 'stats') void refreshStats()
     else void reloadProviders()
   })
 

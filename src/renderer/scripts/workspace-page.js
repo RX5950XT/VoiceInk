@@ -130,16 +130,8 @@ function paintProjectStatuses() {
     const host = row.querySelector('.proj-status')
     if (!host) continue
     const sessions = terminalStatuses().filter((item) => item.projectId === row.dataset.id)
-    if (!sessions.length) {
-      if (host.querySelector('.proj-status-empty')) continue
-      for (const chip of host.querySelectorAll('.proj-session-status')) chip.remove()
-      const empty = document.createElement('span')
-      empty.className = 'proj-status-empty'
-      empty.textContent = '沒有終端機'
-      host.appendChild(empty)
-      continue
-    }
-    host.querySelector('.proj-status-empty')?.remove()
+    // 沒有還活著的終端機就收起來，有就攤開——不給按鈕，跟著狀態自己走
+    row.classList.toggle('terms-collapsed', !sessions.some((item) => item.state !== 'stopped'))
     const existing = new Map(
       [...host.querySelectorAll('.proj-session-status')].map((chip) => [chip.dataset.id, chip])
     )
@@ -217,58 +209,6 @@ function buildSessionChip(item) {
   return chip
 }
 
-const TERMS_COLLAPSED_KEY = 'wsProjTermsCollapsed'
-
-/** 收起了終端機清單的專案 id（存 localStorage，重畫與重開都留著）。 */
-function collapsedProjects() {
-  try {
-    const raw = JSON.parse(localStorage.getItem(TERMS_COLLAPSED_KEY) || '[]')
-    return new Set(Array.isArray(raw) ? raw.map(String) : [])
-  } catch {
-    return new Set()
-  }
-}
-
-/**
- * 專案那一列右邊的箭頭：把底下的終端機狀態清單收起／展開。
- * @param {HTMLElement} row
- * @param {string} id
- * @returns {HTMLButtonElement}
- */
-function buildTermsToggle(row, id) {
-  const btn = document.createElement('button')
-  btn.type = 'button'
-  btn.className = 'chat-list-btn proj-terms-toggle'
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
-  svg.setAttribute('viewBox', '0 0 24 24')
-  svg.setAttribute('aria-hidden', 'true')
-  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
-  path.setAttribute('d', 'M8 10l4 4 4-4')
-  svg.appendChild(path)
-  btn.appendChild(svg)
-  const paint = (open) => {
-    btn.setAttribute('aria-expanded', String(open))
-    btn.title = open ? '收起終端機清單' : '展開終端機清單'
-    btn.setAttribute('aria-label', btn.title)
-    row.classList.toggle('terms-collapsed', !open)
-  }
-  paint(!collapsedProjects().has(id))
-  btn.addEventListener('click', (event) => {
-    event.stopPropagation()
-    const next = btn.getAttribute('aria-expanded') !== 'true'
-    paint(next)
-    const set = collapsedProjects()
-    if (next) set.delete(id)
-    else set.add(id)
-    try {
-      localStorage.setItem(TERMS_COLLAPSED_KEY, JSON.stringify([...set]))
-    } catch {
-      /* 隱私模式寫不進去就算了，這一輪照樣收得起來 */
-    }
-  })
-  return btn
-}
-
 /**
  * @param {{ id: string, name: string, path: string, missing: boolean }} item
  * @returns {HTMLElement}
@@ -306,7 +246,7 @@ function buildListItem(item) {
   open.appendChild(status)
   open.addEventListener('click', () => void selectProject(item.id))
 
-  row.append(open, buildTermsToggle(row, item.id))
+  row.append(open)
   row.addEventListener('contextmenu', (event) => {
     event.preventDefault()
     showProjectMenu({ x: event.clientX, y: event.clientY }, row, item)

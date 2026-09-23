@@ -757,7 +757,8 @@ async function main() {
         // 看過三十個檔案會被說成改過三十個）
         && Array.isArray(detail.editedFiles) && detail.editedFiles.length === 0
         && Array.isArray(detail.readFiles) && detail.readFiles.length === 0
-        && detail.truncated === false)
+        && detail.truncated === false
+        && typeof detail.file === 'string' && require('path').isAbsolute(detail.file) && require('fs').existsSync(detail.file))
 
       // 接續要驗「這段對話是不是這個專案的」，不是只驗 id 長得像不像
       const resumed = await agents.resume('D:\\Proj', 'codex', 'xyz-789')

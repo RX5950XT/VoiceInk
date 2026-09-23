@@ -10,12 +10,37 @@ const {
   normalizeAccount
 } = require('./shared')
 
+const WINDOW_KINDS = ['rolling-5h', 'weekly', 'monthly']
+
 let storePromise = null
 
 function cloneDefaults() {
   return {
     visibleProviders: [...DEFAULT_USAGE_SETTINGS.visibleProviders],
-    providerOrder: [...DEFAULT_USAGE_SETTINGS.providerOrder]
+    providerOrder: [...DEFAULT_USAGE_SETTINGS.providerOrder],
+    bar: { ...DEFAULT_USAGE_SETTINGS.bar, kinds: [...DEFAULT_USAGE_SETTINGS.bar.kinds] }
+  }
+}
+
+/**
+ * 工作區底下那條額度條要顯示什麼（來自 IPC，逐欄驗）。
+ * 缺欄位就用預設；`kinds` 只收認得的視窗種類，全部取消也是合法的（只剩名字與狀態）。
+ * @param {unknown} raw
+ */
+function sanitizeBar(raw) {
+  const defaults = DEFAULT_USAGE_SETTINGS.bar
+  const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}
+  const kinds = Array.isArray(source.kinds)
+    ? WINDOW_KINDS.filter((kind) => source.kinds.includes(kind))
+    : [...defaults.kinds]
+  const flag = (key) => (typeof source[key] === 'boolean' ? source[key] : defaults[key])
+  return {
+    kinds,
+    showReset: flag('showReset'),
+    showPlan: flag('showPlan'),
+    compact: flag('compact'),
+    hideDisconnected: flag('hideDisconnected'),
+    showLastSync: flag('showLastSync')
   }
 }
 
@@ -38,7 +63,8 @@ function sanitizeSettings(raw) {
     : defaults.providerOrder
   return {
     visibleProviders: visible || defaults.visibleProviders,
-    providerOrder
+    providerOrder,
+    bar: sanitizeBar(raw?.bar)
   }
 }
 

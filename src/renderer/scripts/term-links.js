@@ -85,6 +85,35 @@ function activateHit(id, hit) {
 }
 
 /**
+ * CLI 用 OSC 8 送出來的超連結（Claude Code 的網址、檔名都是這種）。
+ *
+ * **一定要自己給 `linkHandler`**：xterm 預設是先跳 `window.confirm()`（「這個連結可能有危險」
+ * 那個系統原生彈窗）再 `window.open()`，而 `window.open` 會被 main 的 setWindowOpenHandler 擋掉
+ * ——使用者看到的是「跳出警告，按了確定還是開不起來」。網址直接開內建瀏覽器分頁；
+ * `file://` 換成路徑走跟畫面上路徑同一條（先問 main 存不存在）。其他協定一律不開。
+ * @param {string} id 工作階段 id
+ */
+export function oscLinkHandler(id) {
+  return {
+    allowNonHttpProtocols: true,
+    activate(event, uri) {
+      event?.preventDefault?.()
+      let parsed
+      try { parsed = new URL(uri) } catch { return }
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        void openBrowserTab(parsed.href)
+        return
+      }
+      if (parsed.protocol !== 'file:') return
+      // file:///C:/foo → C:\foo；UNC（file://server/share）先不收
+      if (parsed.host) return
+      const local = decodeURIComponent(parsed.pathname).replace(/^\/([A-Za-z]:)/, '$1').replace(/\//g, '\\')
+      if (local) activateHit(id, { text: local, url: '' })
+    }
+  }
+}
+
+/**
  * 把終端機的連結掛上去。回傳的 disposable 由 `term.dispose()` 一起收。
  * @param {import('@xterm/xterm').Terminal} term
  * @param {string} id 工作階段 id

@@ -9,6 +9,9 @@ const clipboardImage = require('./clipboard-image')
 const background = require('./background')
 const { HostClient } = require('./host-client')
 
+/** 複製上限：scrollback 5000 列 × 寬螢幕也到不了這麼多，擋的是 renderer 亂送 */
+const CLIPBOARD_MAX_CHARS = 8 * 1024 * 1024
+
 let client
 let emit = () => {}
 
@@ -148,6 +151,13 @@ module.exports = {
   // 貼上要讀的剪貼簿文字。renderer 的 `navigator.clipboard.readText()` 要視窗有焦點，
   // 沒焦點就 reject（症狀是「Ctrl+V 沒反應」）；main 這邊讀不受焦點影響。
   clipboardText: () => require('electron').clipboard.readText(),
+  // 複製選取的文字。跟讀一樣走 main：renderer 的 `navigator.clipboard.writeText()` 要文件有焦點，
+  // 放開滑鼠在別的地方（焦點在內建瀏覽器那顆 webview 上）就一聲不吭地失敗。
+  clipboardWrite: (text) => {
+    if (typeof text !== 'string') throw new Error('clipboard text must be a string')
+    require('electron').clipboard.writeText(text.slice(0, CLIPBOARD_MAX_CHARS))
+    return true
+  },
   // 剪貼簿裡的截圖：落成 PNG、回一條路徑，終端機再把路徑貼進去（見 clipboard-image.js）。
   // 沒有圖片就回 null，呼叫端自己決定下一步。
   clipboardImage: () => clipboardImage.save(),

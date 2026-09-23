@@ -1,3 +1,19 @@
+# 2026-09-23 — 額度收成終端機下面那條、用量統計進 CC代理、Claude 自動續期、終端機複製與連結
+
+- [x] 額度頁 → `#termMain` 底下 26px 的 `#quotaBar`（點開原卡片、拖曳／Alt+←→ 排序、診斷、同步）
+- [x] 顯示設定：哪幾家＋每一家顯示什麼（`settings.bar`，main 逐欄驗）
+- [x] 看得到時每 60 秒自動同步；進工作區／切回視窗補一次
+- [x] Claude token 照 CLI 協定自己續（鎖＋重讀＋CAS＋原子替換），401 也強制續一次
+- [x] 用量統計搬到 CC代理子分頁；nav 從十頁變九頁，五支 CDP 腳本的頁面清單跟著改
+- [x] 單價：Claude Opus 5.5、GPT-6 Sol、GPT-6 Luna（官方價，2026-09-23 查證）
+- [x] OSC 8 超連結不再跳 confirm，直接開內建瀏覽器
+- [x] 終端機複製：有選取 Ctrl+C／Ctrl+Shift+C／Ctrl+Insert／右鍵複製，剪貼簿走 main
+
+Review：`test-claude-auth.js` 7/7（舊 claude.js 紅 2）、`test-usage.js` 34/34、`test-code-usage.js` 158/158、
+`e2e-usage-cdp.js` 23/23、`e2e-terminal-copy-cdp.js` 12/12（安裝版 v1.25.0 紅 8）、`e2e-terminal-cdp.js` 58/58、
+`e2e-cdp-smoke.js` 22/22、`e2e-visual-cdp.js` 73、`e2e-agy-cdp.js` 34/34、`e2e-chat-cdp.js` 62/62、
+`probe-claude-refresh.js --force` 真的續了一次全綠。
+
 # 2026-09-21 — 欄寬可拖、分頁列縮小並可拖曳排序
 
 回報：四塊欄位（側欄／主欄／右欄／詳情）之間的縫隙要能拖大小；分頁列要窄一點矮一點，
@@ -599,3 +615,10 @@ Review：
 地雷：`e2e-explorer-cdp.js` 的 [C8]「資料夾監看有在跑」偶發會紅。這次把改動前的版本
 （1bdb439）放回去跑，同樣會紅，所以不是這批改的；改完的版本連兩次 102 全綠。腳本現在
 會在紅的時候把當下的清單與磁碟內容印出來，下次不用再從零查。
+
+## 2026-09-23 側欄終端機清單自動收合、AI 記錄標題完整顯示
+
+- [x] 專案列拿掉收合鈕：有還活著（不是 stopped）的終端機就攤開，沒有就收起（`paintProjectStatuses`）
+- [x] AI 記錄標題不再兩行截斷；main 端標題上限 80 → 500 字；「接續」疊到標頭右邊，標題吃滿寬度
+- Review：`test-workspace-ui` 185、`test-workspace` 276、`e2e-workspace-cdp` 183、`e2e-terminal-cdp` 59 全過；打包版截圖確認標題無截斷、按鈕不壓字
+- [x] 對話記錄工具列加「複製路徑」：main 的 `sessionDetail` 多回 `file`（`findSessionFile` 驗過屬於這個專案）；工具列按鈕不折行、標題與附註改省略號並放 `title`

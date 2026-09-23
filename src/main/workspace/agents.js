@@ -32,8 +32,8 @@ const WINDOW_DAYS = 60
 const MAX_SCAN_FILES = 600
 /** 每個檔案只讀開頭這麼多位元組來找標題（Codex 的第一行帶著整份系統提示，很大） */
 const HEAD_BYTES = 256 * 1024
-/** 標題長度 */
-const MAX_TITLE = 80
+/** 標題長度：側欄整段攤開顯示；ponytail: 貼了整份 log 當第一句的話只留前面這麼多 */
+const MAX_TITLE = 500
 /** 檢視單一對話時最多讀多少（幾十 MB 的 log 整份讀進來會把 main 卡住） */
 const MAX_DETAIL_BYTES = 3 * 1024 * 1024
 /** 檢視單一對話時最多列幾輪 */
@@ -654,6 +654,8 @@ async function sessionDetail(projectPath, agent, sessionId) {
     title: turns.find((t) => t.role === 'user')?.text?.slice(0, 60) || sessionId,
     mtime: stat ? stat.mtimeMs : Date.now(),
     source: sourceLabel(found.home),
+    // 記錄檔的真實路徑（工具列「複製路徑」用）：findSessionFile 已確認它屬於這個專案
+    file: targetFile,
     truncated,
     prompts,
     toolCallsCount,

@@ -32,7 +32,7 @@ export function createListReorder({ getList, itemSelector, ignoreSelector, onCom
 
   /** 搬完之後焦點要留在那一列上，否則鍵盤連按第二下就沒對象了 */
   const focusItem = (el) => {
-    const opener = el.querySelector('.chat-list-open, .ex-tab-open')
+    const opener = el.querySelector('.chat-list-open, .ex-tab-open, .quota-item-open')
     if (opener) opener.focus()
     else el.focus()
   }

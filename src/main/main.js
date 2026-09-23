@@ -1753,6 +1753,8 @@ registerTerminalIpc({
     editorCancel: (...args) => loadTerminal().editorCancel(...args),
     // 貼上讀的是 main 的剪貼簿（renderer 那支沒焦點會 reject）
     clipboardText: (...args) => loadTerminal().clipboardText(...args),
+    // 複製選取的文字，同一個理由走 main（navigator.clipboard 沒焦點會失敗）
+    clipboardWrite: (...args) => loadTerminal().clipboardWrite(...args),
     // 貼上截圖：main 把剪貼簿的圖存成 PNG，renderer 只拿得到路徑
     clipboardImage: (...args) => loadTerminal().clipboardImage(...args),
     // 終端機桌布（三支都要列，漏一支那顆按鈕就只會回通用錯誤）

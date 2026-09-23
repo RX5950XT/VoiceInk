@@ -1,10 +1,11 @@
 import { electronAPI, showToast, setChatPaneMode } from './app.js'
 import { terminalStatusLabel, setTerminalStatuses } from './ws-terminal-status.js'
-import { registerTermLinks } from './term-links.js'
+import { registerTermLinks, oscLinkHandler } from './term-links.js'
 import { askConfirm } from './app-dialog.js'
 import { splitForPty } from './term-write-chunks.js'
 import { bindImeCaret, syncImeCaret } from './term-ime.js'
 import { blockMouseReporting } from './term-mouse.js'
+import { bindTermCopy, handleCopyKey } from './term-copy.js'
 import { applyAppearance, normalizeAppearance, DEFAULT_TERM_BG_OPACITY } from './term-themes.js'
 import {
   initWsTabs, showSurface, trackTerminal, paintTerminalTab, currentProjectId
@@ -434,6 +435,8 @@ function createPane(id) {
     fontFamily: '"Cascadia Mono", "Cascadia Code", Consolas, "微軟正黑體", monospace',
     fontSize,
     scrollback: 5000,
+    // CLI 送的 OSC 8 超連結：不給這個的話 xterm 會先跳系統的 confirm() 再 window.open()（見 term-links.js）
+    linkHandler: oscLinkHandler(id),
     ...themeOptions()
   })
   const fit = new FitAddon()
@@ -463,6 +466,8 @@ function createPane(id) {
 
   term.attachCustomKeyEventHandler((event) => {
     if (event.isComposing) return true
+    // 複製：有選取時的 Ctrl+C、Ctrl+Shift+C、Ctrl+Insert（見 `term-copy.js`）。沒選取的 Ctrl+C 照舊中斷
+    if (handleCopyKey(term, event)) return false
     if (event.ctrlKey && !event.altKey && !event.metaKey) {
       // Ctrl+F 搜尋。PSReadLine 的 Windows 編輯模式沒有綁 Ctrl+F（實測
       // `Get-PSReadLineKeyHandler -Bound` 沒有這一條），拿來當搜尋不會擋到編輯。
@@ -512,14 +517,11 @@ function createPane(id) {
     return false
   })
   // 輸入法的候選字視窗要跟著游標，而且組字期間不准被 CLI 的重畫拉走（見 `term-ime.js`）
-  const disposeIme = bindImeCaret(term)
+  const disposeImeCaret = bindImeCaret(term)
 
-  // 一般終端機的習慣：選起來就進剪貼簿、右鍵就貼上
-  pane.addEventListener('mouseup', (event) => {
-    if (event.button !== 0) return
-    const selection = term.getSelection()
-    if (selection) void navigator.clipboard.writeText(selection).catch(() => {})
-  })
+  // 一般終端機的習慣：選起來就進剪貼簿；右鍵有選取就複製、沒有就貼上（見 `term-copy.js`）
+  const disposeCopy = bindTermCopy(term, pane, () => void pasteFromClipboard(term, { fallbackKey: false, id }))
+  const disposeIme = () => { disposeImeCaret(); disposeCopy() }
   // 右鍵是終端機自己的（貼上），不可以同時當成滑鼠事件轉給 CLI：AI CLI 開著 SGR 滑鼠回報時
   // 會收到右鍵，然後自己再貼一次系統剪貼簿——使用者看到的就是同一段貼了兩份。
   // 攔在 capture：xterm 的滑鼠處理掛在 pane 底下的 screen 元素上。
@@ -531,10 +533,6 @@ function createPane(id) {
       event.stopPropagation()
     }, true)
   }
-  pane.addEventListener('contextmenu', (event) => {
-    event.preventDefault()
-    void pasteFromClipboard(term, { fallbackKey: false, id })
-  })
 
   // 分割顯示時點哪一格，哪一格就是作用中的那個（打字、resize、未讀點都跟著它走）。
   // 用 pointerdown 不用 click：選取文字放開時 click 不一定會來。

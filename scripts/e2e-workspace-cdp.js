@@ -315,28 +315,19 @@ async function main() {
         menu: [...document.querySelectorAll('.ws-menu-item')].map((one) => one.textContent)
       })
     })()`)
-    ok('[B] 專案列上只剩終端機清單的收合鈕',
-      String(projectMenu).includes('"buttons":["chat-list-btn proj-terms-toggle"]'), projectMenu)
+    ok('[B] 專案列上沒有任何按鈕（終端機清單自己收合）',
+      String(projectMenu).includes('"buttons":[]'), projectMenu)
     ok('[B] 專案列右鍵會開選單',
       String(projectMenu).includes('在此開啟終端機') && String(projectMenu).includes('重新命名'), projectMenu)
     await cdp.eval(`document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))`)
     // 收合是用 CSS display 藏的：只斷言 class 抓不到打錯的變數名，要量得到高度歸零
     const termsFold = await cdp.eval(`(() => {
       const row = document.querySelector('#projList [data-id="${PROJECT_ID}"]')
-      const btn = row?.querySelector('.proj-terms-toggle')
       const status = row?.querySelector('.proj-status')
-      if (!btn || !status) return JSON.stringify({ err: 'no-toggle' })
-      const before = status.offsetHeight
-      btn.click()
-      const collapsed = status.offsetHeight
-      const stored = localStorage.getItem('wsProjTermsCollapsed') || ''
-      btn.click()
-      return JSON.stringify({ before, collapsed, stored, after: status.offsetHeight })
+      return JSON.stringify({ collapsed: row?.classList.contains('terms-collapsed'), height: status?.offsetHeight ?? -1 })
     })()`)
     const fold = JSON.parse(String(termsFold))
-    ok('[B] 終端機清單收得起來也展得開',
-      fold.before > 0 && fold.collapsed === 0 && fold.after === fold.before, termsFold)
-    ok('[B] 收合狀態有存起來', String(fold.stored).includes(PROJECT_ID), termsFold)
+    ok('[B] 沒有終端機在跑的專案，清單自己收起來', fold.collapsed === true && fold.height === 0, termsFold)
     const treeReady = await waitInPage(cdp, `document.querySelectorAll('#wsTree .ws-tree-row').length >= 2`, 10000)
     ok('[B] 檔案總管列得出東西', treeReady)
     const names = await cdp.eval(

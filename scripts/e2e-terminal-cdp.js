@@ -191,8 +191,8 @@ async function main() {
       termNewBtn: !!document.getElementById('termNewBtn')
     }))()`)
     // 終端機已併入聊天頁：nav 不再有 terminal 分頁，終端機在主區的分頁列上
-    ok('nav 十個分頁、聊天排第一、檔案在後、沒有 terminal 分頁',
-      nav.order.length === 10 && nav.order[0] === 'chat' && nav.order[1] === 'explorer' && !nav.order.includes('terminal'), JSON.stringify(nav.order))
+    ok('nav 九個分頁、聊天排第一、檔案在後、沒有 terminal 分頁',
+      nav.order.length === 9 && nav.order[0] === 'chat' && nav.order[1] === 'explorer' && !nav.order.includes('terminal'), JSON.stringify(nav.order))
     ok('分頁列有「＋」按鈕', nav.newBtn)
     ok('側欄沒有終端機清單，也沒有「＋ 終端機」', !nav.termList && !nav.termNewBtn, JSON.stringify(nav))
 
@@ -551,6 +551,13 @@ async function main() {
       const other = document.querySelector('#projList [data-id="w_status_other"] .proj-session-status')
       return own?.dataset.state === 'running' && !other
     })()`))
+    ok('側欄有終端機在跑的專案自己攤開、沒有的自己收起來（不靠按鈕）', await cdp.eval(`(() => {
+      const own = document.querySelector('#projList [data-id="w_status_test"]')
+      const other = document.querySelector('#projList [data-id="w_status_other"]')
+      return !own.classList.contains('terms-collapsed') && own.querySelector('.proj-status').offsetHeight > 0
+        && other.classList.contains('terms-collapsed') && other.querySelector('.proj-status').offsetHeight === 0
+        && !document.querySelector('#projList .proj-terms-toggle')
+    })()`))
     ok('背景專案完成時側欄即時更新', await waitInPage(cdp,
       `!!document.querySelector('#projList .proj-session-status[data-id="${createdId}"] .ws-status-icon.state-done')`))
     await cdp.eval(`document.querySelector('#projList [data-id="w_status_test"] .chat-list-open').click()`)
@@ -665,7 +672,7 @@ async function main() {
       term._core._writeBuffer.writeSync('\\r\\n' + Array.from({ length: 100 }, (_, i) => 'latest-line-' + i).join('\\r\\n'))
       term.scrollToTop()
       const wasScrolledUp = term.buffer.active.baseY > 0 && term.buffer.active.viewportY === 0
-      document.querySelector('.nav-tab[data-page="usage"]').click()
+      document.querySelector('.nav-tab[data-page="ccswitch"]').click()
       await new Promise((r) => setTimeout(r, 500))
       // 終端機跟聊天同頁：點分頁切回終端機主區
       document.querySelector('.nav-tab[data-page="chat"]').click()

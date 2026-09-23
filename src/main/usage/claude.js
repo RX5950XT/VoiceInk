@@ -1,6 +1,7 @@
 'use strict'
 
 const path = require('path')
+const { ensureFreshToken } = require('./claude-auth')
 const { ENDPOINTS } = require('./constants')
 const {
   createBaseAccount,
@@ -61,7 +62,11 @@ function applyClaudeUsage(raw, nowMs, subscriptionType = '') {
   return normalizeAccount(account)
 }
 
-async function syncClaude({ homeDir, nowMs = Date.now(), fetchImpl, log = () => {} }) {
+/**
+ * @param {{ homeDir: string, nowMs?: number, fetchImpl?: Function, authFetchImpl?: Function, log?: Function }} args
+ *   `authFetchImpl` 是續期那條（`claude-auth.js`）用的，測試要 mock 就兩個都給
+ */
+async function syncClaude({ homeDir, nowMs = Date.now(), fetchImpl, authFetchImpl, log = () => {} }) {
   const account = createBaseAccount('claude-code', nowMs)
   let credentials
   try {
@@ -72,31 +77,60 @@ async function syncClaude({ homeDir, nowMs = Date.now(), fetchImpl, log = () => 
     return normalizeAccount(account)
   }
 
-  const token = credentials?.claudeAiOauth?.accessToken
+  let token = credentials?.claudeAiOauth?.accessToken
   if (typeof token !== 'string' || !token.trim()) {
     account.status = 'disconnected'
     account.notes = 'Claude Code 已安裝，但目前未登入 OAuth。'
     return normalizeAccount(account)
   }
 
-  try {
-    const usage = await fetchJson(ENDPOINTS.claude, {
-      fetchImpl,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'anthropic-beta': 'oauth-2025-04-20',
-        Accept: 'application/json'
+  // 快過期就先續（沒開 CLI 的那幾個小時，額度才不會「跑掉」）。續不成就拿舊的那顆試，
+  // 真的不能用會在下面的 401 再續一次
+  const refresh = async (extra) => {
+    try {
+      const fresh = await ensureFreshToken(homeDir, { fetchImpl: authFetchImpl, log, nowMs, ...extra })
+      if (fresh.token) {
+        token = fresh.token
+        credentials = fresh.credentials
       }
-    })
+    } catch (error) {
+      log(`claude: token refresh failed ${error.status ? `HTTP ${error.status}` : error.code || 'unknown'}`)
+    }
+  }
+  await refresh({})
+
+  const request = () => fetchJson(ENDPOINTS.claude, {
+    fetchImpl,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'anthropic-beta': 'oauth-2025-04-20',
+      Accept: 'application/json'
+    }
+  })
+
+  try {
+    let usage
+    try {
+      usage = await request()
+    } catch (error) {
+      if (error.status !== 401) throw error
+      // 還沒到期卻 401：多半是 CLI 那邊換過了，或者被撤銷——強制續一次再試
+      const before = token
+      await refresh({ force: true, usedToken: before })
+      if (token === before) throw error
+      usage = await request()
+    }
     log(`claude: API OK windows=${Number(!!usage.five_hour) + Number(!!usage.seven_day) + Number(!!usage.seven_day_opus)}`)
     return applyClaudeUsage(usage, nowMs, credentials?.claudeAiOauth?.subscriptionType)
   } catch (error) {
     log(`claude: API failed ${error.status ? `HTTP ${error.status}` : error.code || 'unknown'}`)
     account.status = 'connected'
     account.accuracy = 'estimated'
-    account.notes = error.status
-      ? `Anthropic API 暫時無法使用（HTTP ${error.status}）。`
-      : 'Anthropic API 暫時無法使用。'
+    account.notes = error.status === 401
+      ? 'Claude Code 登入已失效，請在終端機重新登入一次。'
+      : error.status
+        ? `Anthropic API 暫時無法使用（HTTP ${error.status}）。`
+        : 'Anthropic API 暫時無法使用。'
     return normalizeAccount(account)
   }
 }

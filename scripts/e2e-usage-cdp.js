@@ -12,7 +12,15 @@ const EXE = process.env.VOICEINK_EXE || path.join(__dirname, '..', 'dist', 'win-
 // 暫存 user-data-dir：使用者開著的正式實例佔 single-instance lock，
 // 沒有自己的資料夾會被擋掉（second-instance 轉交後退出，CDP 等不到主視窗）
 const USER_DATA_DIR = tempDir('voiceink-cdp-')
-const EXPECTED_ORDER = ['chat', 'explorer', 'ccswitch', 'usage', 'agy', 'stt', 'translate', 'sysmon', 'hfmodels', 'settings']
+const EXPECTED_ORDER = ['chat', 'explorer', 'ccswitch', 'agy', 'stt', 'translate', 'sysmon', 'hfmodels', 'settings']
+/** 條上每一家把東西全打開（含未連線的那幾家），結構斷言才有固定的七顆 */
+const BAR_ALL = { kinds: ['rolling-5h', 'weekly', 'monthly'], showReset: true, showPlan: true, compact: false, hideDisconnected: false, showLastSync: true }
+// 額度條長在工作區主區裡：種一個專案讓主區切得過去；感測器關掉免得跳 UAC
+fs.writeFileSync(path.join(USER_DATA_DIR, 'config.json'), JSON.stringify({ sysmonSensors: false }))
+fs.mkdirSync(path.join(USER_DATA_DIR, 'quota-project'))
+fs.writeFileSync(path.join(USER_DATA_DIR, 'workspaces.json'), JSON.stringify({
+  projects: [{ id: 'w_quota_test', name: '額度測試', path: path.join(USER_DATA_DIR, 'quota-project'), createdAt: Date.now() }]
+}))
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 function getJson(url) {
@@ -102,7 +110,10 @@ async function getPages() {
 }
 
 async function main() {
-  const child = spawn(EXE, [`--remote-debugging-port=${PORT}`, `--user-data-dir=${USER_DATA_DIR}`], {
+  // 額度條只在看得到的時候自動同步（document.hidden 也代表「被別的視窗整個蓋住」）：
+  // 測試視窗常被蓋在後面，不關掉遮蔽偵測的話自動同步那條會隨機等不到
+  const child = spawn(EXE, [`--remote-debugging-port=${PORT}`, `--user-data-dir=${USER_DATA_DIR}`,
+    '--disable-backgrounding-occluded-windows'], {
     stdio: ['ignore', 'pipe', 'pipe']
   })
   let processLog = ''
@@ -128,264 +139,215 @@ async function main() {
       15_000,
       '額度 preload 初始化'
     )
-    // 預設頁是聊天，額度頁的模組要進頁才 dynamic import
-    await cdp.eval(`document.querySelector('[data-page="usage"]').click(), 'ok'`)
+    // 額度條長在工作區主區最下面：先開一個專案讓主區切成工作區
+    await cdp.eval(`document.querySelector('[data-page="chat"]').click(), 'ok'`)
+    await cdp.eval(`document.getElementById('sidebarModeProjects').click(), 'ok'`)
     await waitFor(
-      () => cdp.eval(`document.querySelectorAll('#usageGrid .usage-card').length >= 1`),
+      () => cdp.eval(`!!document.querySelector('#projList [data-id="w_quota_test"] .chat-list-open')`),
       15_000,
-      '額度初始卡片'
+      '測試專案出現在側欄'
+    )
+    await cdp.eval(`document.querySelector('#projList [data-id="w_quota_test"] .chat-list-open').click(), 'ok'`)
+    await waitFor(
+      () => cdp.eval(`(() => { const bar = document.getElementById('quotaBar'); return !!bar && bar.offsetParent !== null })()`),
+      15_000,
+      '工作區底下的額度條'
     )
 
     originalSettings = await cdp.eval(`(async () => (await window.electronAPI.usage.load()).data.settings)()`)
-    await cdp.eval(`(async () => {
-      document.querySelector('[data-page="usage"]').click()
-      document.getElementById('usageSettingsBtn').click()
+    // 走真的 UI：彈窗是照畫面上那份狀態填的，直接打 IPC 存的設定會被下一次「儲存」蓋回去
+    const applyAllOn = () => cdp.eval(`(async () => {
+      document.getElementById('quotaSettingsBtn').click()
       document.querySelectorAll('#usageProviderToggles input').forEach((input) => { input.checked = true })
+      const bar = ${JSON.stringify(BAR_ALL)}
+      document.querySelectorAll('#usageBarToggles input').forEach((input) => {
+        const key = input.value
+        input.checked = key.startsWith('kind:') ? bar.kinds.includes(key.slice(5)) : Boolean(bar[key])
+      })
       document.getElementById('usageSettingsSave').click()
+      await new Promise((resolve) => setTimeout(resolve, 400))
     })()`)
-    await waitFor(
-      () => cdp.eval(`document.querySelectorAll('#usageGrid .usage-card').length === 7`),
-      5000,
-      '顯示全部 provider'
-    )
+    await applyAllOn()
+    const chipCount = () => cdp.eval(`document.querySelectorAll('#quotaItems .quota-item').length`)
+    await waitFor(async () => (await chipCount()) === 7, 8000, '七顆額度')
 
     const structure = await cdp.eval(`(() => {
-      document.querySelector('[data-page="usage"]').click()
+      const bar = document.getElementById('quotaBar')
+      const surfaces = document.getElementById('wsSurfaces').getBoundingClientRect()
+      const rect = bar.getBoundingClientRect()
       return {
         order: [...document.querySelectorAll('.header-nav .nav-tab')].map((item) => item.dataset.page),
-        active: document.getElementById('page-usage').classList.contains('active'),
-        cards: document.querySelectorAll('#usageGrid .usage-card').length
+        noPage: !document.getElementById('page-usage'),
+        inTermMain: bar.closest('#termMain') !== null,
+        belowSurfaces: rect.top >= surfaces.bottom - 1,
+        height: rect.height,
+        chips: document.querySelectorAll('#quotaItems .quota-item').length
       }
     })()`)
-    if (JSON.stringify(structure.order) !== JSON.stringify(EXPECTED_ORDER) || !structure.active || structure.cards !== 7) {
-      throw new Error(`額度頁結構錯誤：${JSON.stringify(structure)}`)
+    if (JSON.stringify(structure.order) !== JSON.stringify(EXPECTED_ORDER) || !structure.noPage ||
+        !structure.inTermMain || !structure.belowSurfaces || structure.height > 30 || structure.chips !== 7) {
+      throw new Error(`額度條結構錯誤：${JSON.stringify(structure)}`)
     }
-    pass('額度位於聊天右側，七張卡片可見')
+    pass(`額度頁拿掉了；額度條在終端機下面、高 ${Math.round(structure.height)}px、七顆都在`)
 
-    const setVisibleCount = async (count) => {
-      await cdp.eval(`(() => {
-        document.getElementById('usageSettingsBtn').click()
-        document.querySelectorAll('#usageProviderToggles input').forEach((input, index) => {
-          input.checked = index < ${count}
-        })
-        document.getElementById('usageSettingsSave').click()
-      })()`)
-      return waitFor(
-        () => cdp.eval(`document.querySelectorAll('#usageGrid .usage-card').length === ${count}`),
-        5000,
-        `${count} 張額度卡片`
-      )
-    }
-    const readGridLayout = () => cdp.eval(`(() => {
-      const grid = document.getElementById('usageGrid')
-      const cards = [...grid.querySelectorAll('.usage-card')]
-      const rows = new Set(cards.map((card) => Math.round(card.getBoundingClientRect().top)))
-      return {
-        count: cards.length,
-        columns: getComputedStyle(grid).gridTemplateColumns.split(' ').filter(Boolean).length,
-        rows: rows.size,
-        cardWidth: cards[0]?.getBoundingClientRect().width || 0
-      }
-    })()`)
-    const expectedColumns = new Map([[2, 2], [3, 3], [4, 2], [5, 3], [6, 3], [7, 4]])
-    const layoutMatrix = []
-    for (const [count, columns] of expectedColumns) {
-      await setVisibleCount(count)
-      const layout = await readGridLayout()
-      const expectedRows = Math.ceil(count / columns)
-      if (layout.columns !== columns || layout.rows !== expectedRows) {
-        throw new Error(`額度卡片 ${count} 張排版錯誤：${JSON.stringify(layout)}`)
-      }
-      layoutMatrix.push(layout)
-    }
-    await setVisibleCount(7)
-    const wideLayout = await readGridLayout()
-    await cdp.send('Emulation.setDeviceMetricsOverride', {
-      width: 560,
-      height: 900,
-      deviceScaleFactor: 1,
-      mobile: false
-    })
-    const narrowLayout = await readGridLayout()
-    await cdp.send('Emulation.clearDeviceMetricsOverride')
-    if (narrowLayout.columns !== wideLayout.columns || narrowLayout.rows !== wideLayout.rows ||
-        narrowLayout.cardWidth >= wideLayout.cardWidth) {
-      throw new Error(`視窗縮放不應改變額度排版：${JSON.stringify({ wideLayout, narrowLayout })}`)
-    }
-    pass(`勾選數量決定排版（${layoutMatrix.map(({ count, columns, rows }) => `${count}=${columns}欄/${rows}列`).join('、')}），縮放只改卡片大小`)
-
+    // ===== 顯示設定：哪幾家 =====
     const visibility = await cdp.eval(`(async () => {
-      document.getElementById('usageSettingsBtn').click()
+      document.getElementById('quotaSettingsBtn').click()
       const dialog = document.getElementById('usageSettingsDialog')
-      const grok = dialog.querySelector('input[value="grok"]')
-      grok.checked = false
+      dialog.querySelector('#usageProviderToggles input[value="grok"]').checked = false
       document.getElementById('usageSettingsSave').click()
       await new Promise((resolve) => setTimeout(resolve, 500))
-      const chips = () => document.querySelectorAll('#usageProviderSummary .usage-provider-chip').length
-      const afterSave = document.querySelectorAll('#usageGrid .usage-card').length
-      const chipsAfterSave = chips()
+      const afterSave = document.querySelectorAll('#quotaItems .quota-item').length
+      const hasGrok = !!document.querySelector('#quotaItems .quota-item[data-id="grok"]')
+      document.querySelector('[data-page="ccswitch"]').click()
       document.querySelector('[data-page="chat"]').click()
-      document.querySelector('[data-page="usage"]').click()
-      const afterSwitch = document.querySelectorAll('#usageGrid .usage-card').length
-      const chipsAfterSwitch = chips()
-      return { afterSave, afterSwitch, chipsAfterSave, chipsAfterSwitch, dialogClosed: !dialog.open }
+      await new Promise((resolve) => setTimeout(resolve, 400))
+      const saved = (await window.electronAPI.usage.load()).data.settings.visibleProviders
+      return { afterSave, hasGrok, saved, dialogClosed: !dialog.open,
+        afterSwitch: document.querySelectorAll('#quotaItems .quota-item').length }
     })()`)
-    if (visibility.afterSave !== 6 || visibility.afterSwitch !== 6 || !visibility.dialogClosed) {
-      throw new Error(`顯示設定未持久：${JSON.stringify(visibility)}`)
+    if (visibility.afterSave !== 6 || visibility.hasGrok || visibility.afterSwitch !== 6 ||
+        visibility.saved.includes('grok') || !visibility.dialogClosed) {
+      throw new Error(`顯示設定未生效或未持久：${JSON.stringify(visibility)}`)
     }
-    pass('provider 顯示設定儲存並跨頁保留')
+    pass('取消勾選的工具從條上拿掉，存進設定，切頁回來還是一樣')
 
-    // 頂部橫條要跟卡片同一份 visibleAccounts()，關掉的 provider 不該還掛在上面
-    if (visibility.chipsAfterSave !== 6 || visibility.chipsAfterSwitch !== 6) {
-      throw new Error(`頂部橫條未跟隨顯示設定：${JSON.stringify(visibility)}`)
-    }
-    pass('頂部 provider 橫條只顯示勾選的項目')
-
-    await cdp.eval(`(async () => {
-      document.getElementById('usageSettingsBtn').click()
-      document.querySelector('#usageSettingsDialog input[value="grok"]').checked = true
-      document.getElementById('usageSettingsSave').click()
-    })()`)
-    await waitFor(
-      () => cdp.eval(`document.querySelectorAll('#usageGrid .usage-card').length === 7`),
-      5000,
-      '恢復顯示設定'
+    // 進工作區時快取太舊就該自己同步一次（不用按）
+    const autoSynced = await waitFor(
+      () => cdp.eval(`(async () => (await window.electronAPI.usage.load()).data.lastSyncedAt)()`),
+      150_000,
+      '進工作區後自動同步'
     )
+    pass(`進工作區後自己同步了一次（${new Date(autoSynced).toLocaleTimeString('zh-TW')}）`)
+    // 等畫面接到同步結果（量表要有資料才畫得出來）
+    await waitFor(() => cdp.eval(`!document.getElementById('quotaSyncBtn').hasAttribute('aria-busy')`), 150_000, '自動同步收尾')
+    const accountsWithWindows = await cdp.eval(`(async () => (await window.electronAPI.usage.load()).data.accounts.filter((a) => a.windows.length).length)()`)
 
-    const ordering = await cdp.eval(`(async () => {
-      const before = (await window.electronAPI.usage.load()).data.settings.providerOrder
-      const first = before[0]
-      const card = document.querySelector('[data-provider="' + first + '"]')
-      const sendKey = (key) => card.dispatchEvent(new KeyboardEvent('keydown', {
-        key,
-        bubbles: true,
-        cancelable: true
+    // ===== 顯示設定：每一家顯示什麼 =====
+    await applyAllOn()
+    const toggles = await cdp.eval(`(async () => {
+      const applyBar = async (changes) => {
+        document.getElementById('quotaSettingsBtn').click()
+        for (const [key, on] of Object.entries(changes)) {
+          document.querySelector('#usageBarToggles input[value="' + key + '"]').checked = on
+        }
+        document.getElementById('usageSettingsSave').click()
+        await new Promise((resolve) => setTimeout(resolve, 400))
+      }
+      const meters = () => [...document.querySelectorAll('#quotaItems .quota-meter-label')].map((el) => el.textContent)
+      const perChip = () => [...document.querySelectorAll('#quotaItems .quota-item')]
+        .map((el) => el.querySelectorAll('.quota-meter').length)
+      await applyBar({})
+      const all = { meters: meters(), resets: document.querySelectorAll('#quotaItems .quota-meter-reset').length, perChip: perChip() }
+      await applyBar({ 'kind:weekly': false, 'kind:monthly': false })
+      const onlyFive = meters()
+      await applyBar({ 'kind:weekly': true, 'kind:monthly': true, compact: true, showReset: false })
+      const compact = { perChip: perChip(), resets: document.querySelectorAll('#quotaItems .quota-meter-reset').length }
+      await applyBar({ compact: false, showReset: true, showLastSync: false })
+      const lastSyncText = document.getElementById('quotaLastSync').textContent
+      await applyBar({ showLastSync: true })
+      return { all, onlyFive, compact, lastSyncText, saved: (await window.electronAPI.usage.load()).data.settings.bar }
+    })()`)
+    if (accountsWithWindows > 0 && toggles.all.meters.length === 0) {
+      throw new Error(`有 ${accountsWithWindows} 家有額度視窗，條上卻一條量表都沒有：${JSON.stringify(toggles)}`)
+    }
+    if (toggles.onlyFive.some((label) => /週|月/.test(label))) {
+      throw new Error(`只勾 5 小時仍畫出週／月：${JSON.stringify(toggles)}`)
+    }
+    if (toggles.compact.perChip.some((count) => count > 1) || toggles.compact.resets !== 0) {
+      throw new Error(`精簡模式／關倒數沒生效：${JSON.stringify(toggles)}`)
+    }
+    if (toggles.lastSyncText !== '' || !toggles.saved.showLastSync || toggles.saved.compact) {
+      throw new Error(`「上次同步時間」開關或存檔不對：${JSON.stringify(toggles)}`)
+    }
+    pass(`每一家顯示的項目照勾選畫（量表 ${toggles.all.meters.length} 條、精簡後每顆最多 1 條）`)
+
+    // ===== 排序：鍵盤 Alt+→ 與拖曳 =====
+    const keyboard = await cdp.eval(`(async () => {
+      const before = [...document.querySelectorAll('#quotaItems .quota-item')].map((el) => el.dataset.id)
+      const first = document.querySelector('#quotaItems .quota-item')
+      first.querySelector('.quota-item-open').focus()
+      first.querySelector('.quota-item-open').dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'ArrowRight', altKey: true, bubbles: true, cancelable: true
       }))
-      card.focus()
-      sendKey(' ')
-      sendKey('ArrowRight')
-      const preview = [...document.querySelectorAll('#usageGrid .usage-card')]
-        .map((item) => item.dataset.provider)
-      sendKey('Enter')
       await new Promise((resolve) => setTimeout(resolve, 500))
-      const after = (await window.electronAPI.usage.load()).data.settings.providerOrder
-      const cancelCard = document.querySelector('[data-provider="' + after[0] + '"]')
-      const cancelKey = (key) => cancelCard.dispatchEvent(new KeyboardEvent('keydown', {
-        key,
-        bubbles: true,
-        cancelable: true
-      }))
-      cancelCard.focus()
-      cancelKey(' ')
-      cancelKey('ArrowRight')
-      const cancelPreview = [...document.querySelectorAll('#usageGrid .usage-card')]
-        .map((item) => item.dataset.provider)
-      cancelKey('Escape')
-      await new Promise((resolve) => setTimeout(resolve, 100))
-      const afterCancel = (await window.electronAPI.usage.load()).data.settings.providerOrder
-      const cancelRestored = [...document.querySelectorAll('#usageGrid .usage-card')]
-        .map((item) => item.dataset.provider)
+      const after = [...document.querySelectorAll('#quotaItems .quota-item')].map((el) => el.dataset.id)
+      const saved = (await window.electronAPI.usage.load()).data.settings.providerOrder
       return {
-        before,
-        preview,
-        after,
-        cancelPreview,
-        cancelRestored,
-        afterCancel,
-        orderButtons: document.querySelectorAll('.usage-order-btn').length,
-        announcement: document.getElementById('usageSortStatus')?.textContent || ''
+        before, after, saved,
+        focused: document.activeElement?.closest('.quota-item')?.dataset.id || '',
+        announcement: document.getElementById('quotaSortStatus').textContent
       }
     })()`)
-    if (ordering.orderButtons !== 0 || ordering.preview[1] !== ordering.before[0] ||
-        ordering.after[1] !== ordering.before[0] || !ordering.announcement ||
-        JSON.stringify(ordering.cancelPreview) === JSON.stringify(ordering.cancelRestored) ||
-        JSON.stringify(ordering.cancelRestored) !== JSON.stringify(ordering.after) ||
-        JSON.stringify(ordering.afterCancel) !== JSON.stringify(ordering.after)) {
-      throw new Error(`無按鈕鍵盤排序失敗：${JSON.stringify(ordering)}`)
+    if (keyboard.after[1] !== keyboard.before[0] || keyboard.after[0] !== keyboard.before[1] ||
+        keyboard.saved.indexOf(keyboard.before[0]) <= keyboard.saved.indexOf(keyboard.before[1]) ||
+        keyboard.focused !== keyboard.before[0] || !keyboard.announcement) {
+      throw new Error(`鍵盤排序失敗：${JSON.stringify(keyboard)}`)
     }
-    pass('無可見按鈕，卡片鍵盤排序可持久化並報讀')
+    pass('Alt+→ 把那一顆往後搬、存起來、焦點留在原本那顆、有報讀')
 
-    await cdp.eval(`window.electronAPI.usage.saveSettings(${JSON.stringify(originalSettings)})`)
-    const dragPreview = await cdp.eval(`(async () => {
-      document.querySelector('[data-page="chat"]').click()
-      document.querySelector('[data-page="usage"]').click()
-      // 進頁的 render() 是非同步的，會 replaceChildren 整個 grid；
-      // 不等它跑完就抓 card，拿到的是已經脫離文件的節點（getComputedStyle 全回空字串）
-      await new Promise((resolve) => setTimeout(resolve, 500))
-      const cards = [...document.querySelectorAll('#usageGrid .usage-card')]
-      const source = cards[0]
-      const target = cards[2]
-      const before = cards.map((card) => card.dataset.provider)
-      const columns = getComputedStyle(document.getElementById('usageGrid'))
-        .gridTemplateColumns.split(' ').length
-      const point = (type, x, y) => source.dispatchEvent(new PointerEvent(type, {
-        bubbles: true,
-        cancelable: true,
-        pointerId: 1,
-        isPrimary: true,
-        button: type === 'pointerdown' ? 0 : -1,
-        buttons: type === 'pointerdown' ? 1 : 0,
-        clientX: x,
-        clientY: y
+    const drag = await cdp.eval(`(async () => {
+      const items = () => [...document.querySelectorAll('#quotaItems .quota-item')]
+      const before = items().map((el) => el.dataset.id)
+      const source = items()[0]
+      const target = items()[2]
+      const point = (el, type, x, y) => el.dispatchEvent(new PointerEvent(type, {
+        bubbles: true, cancelable: true, pointerId: 1, isPrimary: true,
+        button: type === 'pointerdown' ? 0 : -1, buttons: type === 'pointerup' ? 0 : 1, clientX: x, clientY: y
       }))
-      const visualOrder = (nodes) => [...nodes].sort((a, b) => {
-        const ra = a.getBoundingClientRect()
-        const rb = b.getBoundingClientRect()
-        if (Math.abs(ra.top - rb.top) > 12) return ra.top - rb.top
-        return ra.left - rb.left
-      }).map((card) => card.dataset.provider)
-      const origin = source.getBoundingClientRect()
-      point('pointerdown', origin.left + 24, origin.top + 24)
-      point('pointermove', origin.left + 44, origin.top + 30)
-      const rect = target.getBoundingClientRect()
-      point('pointermove', rect.left + rect.width * 0.75, rect.top + rect.height / 2)
-      await new Promise((resolve) => requestAnimationFrame(resolve))
-      const liveCards = [...document.querySelectorAll('#usageGrid .usage-card')]
-      const preview = visualOrder(liveCards)
-      const domUnchanged = liveCards.map((card) => card.dataset.provider)
-      const shifted = liveCards.some((card) => getComputedStyle(card).transform !== 'none')
-      const overlay = document.querySelector('.usage-card-overlay')
-      const overlayStyle = overlay ? getComputedStyle(overlay) : null
-      const ghostStyle = getComputedStyle(source)
-      const dragged = {
-        ghostOpacity: ghostStyle.opacity,
-        overlayExists: Boolean(overlay),
-        overlayOpacity: overlayStyle?.opacity || '',
-        overlayFollows: overlayStyle ? overlayStyle.transform !== 'none' : false,
-        overlayInGrid: Boolean(overlay?.closest('#usageGrid')),
-        overlayCursor: overlayStyle?.cursor || '',
-        shifted,
-        head: source.querySelector('.usage-card-head').children.length,
-        plan: source.querySelectorAll('.usage-plan-name, .usage-provider-mark').length
-      }
-      point('pointercancel', rect.left + 10, rect.top + 10)
-      await new Promise((resolve) => requestAnimationFrame(resolve))
-      const restored = [...document.querySelectorAll('#usageGrid .usage-card')]
-        .map((card) => card.dataset.provider)
-      const leftover = Boolean(document.querySelector('.usage-card-overlay'))
-      return { before, preview, domUnchanged, restored, leftover, columns, dragged }
+      const a = source.getBoundingClientRect()
+      const b = target.getBoundingClientRect()
+      point(source.querySelector('.quota-item-open'), 'pointerdown', a.left + 6, a.top + a.height / 2)
+      point(window, 'pointermove', a.left + 14, a.top + a.height / 2)
+      point(window, 'pointermove', b.left + b.width * 0.75, b.top + b.height / 2)
+      const dragging = source.classList.contains('is-dragging')
+      point(window, 'pointerup', b.left + b.width * 0.75, b.top + b.height / 2)
+      // 拖完緊接著的 click 不可以開詳情
+      source.querySelector('.quota-item-open').click()
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      const after = items().map((el) => el.dataset.id)
+      const saved = (await window.electronAPI.usage.load()).data.settings.providerOrder
+      const popoverOpen = document.getElementById('quotaPopover').matches(':popover-open')
+      return { before, after, saved, dragging, popoverOpen }
     })()`)
-    if (JSON.stringify(dragPreview.preview) === JSON.stringify(dragPreview.before) ||
-        JSON.stringify(dragPreview.domUnchanged) !== JSON.stringify(dragPreview.before) ||
-        dragPreview.columns !== 4 ||
-        dragPreview.leftover ||
-        !dragPreview.dragged.shifted ||
-        Number(dragPreview.dragged.ghostOpacity) > 0.3 ||
-        Number(dragPreview.dragged.overlayOpacity) < 0.9 ||
-        !dragPreview.dragged.overlayExists ||
-        !dragPreview.dragged.overlayFollows ||
-        dragPreview.dragged.overlayInGrid ||
-        dragPreview.dragged.overlayCursor !== 'grabbing' ||
-        dragPreview.dragged.head !== 2 ||
-        dragPreview.dragged.plan !== 0 ||
-        JSON.stringify(dragPreview.restored) !== JSON.stringify(dragPreview.before)) {
-      throw new Error(`拖曳 overlay／鬼影預覽／取消還原失敗：${JSON.stringify(dragPreview)}`)
+    if (!drag.dragging || drag.after.indexOf(drag.before[0]) !== 2 ||
+        drag.saved.indexOf(drag.before[0]) <= drag.saved.indexOf(drag.before[2]) || drag.popoverOpen) {
+      throw new Error(`拖曳排序失敗：${JSON.stringify(drag)}`)
     }
-    pass('4 欄版面，跟手 overlay 不透明、格子裡半透明預覽，拖曳中不改 DOM，取消後還原')
+    pass('拖曳排序會搬、會存，放開那一下不會誤開詳情')
 
-    await cdp.eval(`window.electronAPI.usage.saveSettings(${JSON.stringify(originalSettings)})`)
+    // ===== 詳情：點一下看完整那張卡 =====
+    const popover = await cdp.eval(`(async () => {
+      const chip = document.querySelector('#quotaItems .quota-item .quota-item-open')
+      chip.click()
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      const pop = document.getElementById('quotaPopover')
+      const card = pop.querySelector('.usage-card')
+      const popRect = pop.getBoundingClientRect()
+      const barRect = document.getElementById('quotaBar').getBoundingClientRect()
+      const result = {
+        open: pop.matches(':popover-open'),
+        card: !!card,
+        provider: card?.dataset.provider || '',
+        chip: chip.closest('.quota-item').dataset.id,
+        above: popRect.bottom <= barRect.top + 1,
+        inViewport: popRect.left >= 0 && popRect.right <= innerWidth,
+        background: card ? getComputedStyle(card).backgroundColor : ''
+      }
+      chip.click()
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      result.closedAgain = !pop.matches(':popover-open')
+      return result
+    })()`)
+    if (!popover.open || !popover.card || popover.provider !== popover.chip || !popover.above ||
+        !popover.inViewport || popover.background === 'rgba(0, 0, 0, 0)' || !popover.closedAgain) {
+      throw new Error(`額度詳情異常：${JSON.stringify(popover)}`)
+    }
+    pass('點一下開那一家的完整卡片（在條的上方、不透明），再點一下收起來')
+
+    await applyAllOn()
     const diagnostics = await cdp.eval(`(async () => {
-      document.getElementById('usageDiagnosticsBtn').click()
+      document.getElementById('quotaDiagnosticsBtn').click()
       await new Promise((resolve) => setTimeout(resolve, 400))
       const text = document.getElementById('usageDiagnosticsText').textContent
       document.getElementById('usageDiagnosticsClose').click()
@@ -396,27 +358,38 @@ async function main() {
     }
     pass('診斷內容已去敏')
 
-    const startedBusy = await cdp.eval(`(() => {
-      document.getElementById('usageSyncBtn').click()
-      return document.getElementById('usageSyncBtn').getAttribute('aria-busy') === 'true'
+    const startedBusy = await cdp.eval(`(async () => {
+      // 自動同步還在跑的話先等它跑完，這裡要量的是「按下去那一次」
+      for (let i = 0; i < 300 && document.getElementById('quotaSyncBtn').hasAttribute('aria-busy'); i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 500))
+      }
+      document.getElementById('quotaSyncBtn').click()
+      return document.getElementById('quotaSyncBtn').getAttribute('aria-busy') === 'true'
     })()`)
     if (!startedBusy) throw new Error('同步按鈕未進入 busy')
     const synced = await waitFor(
       () => cdp.eval(`(async () => {
-        const button = document.getElementById('usageSyncBtn')
+        const button = document.getElementById('quotaSyncBtn')
         if (button.hasAttribute('aria-busy')) return null
         const response = await window.electronAPI.usage.load()
+        let ollamaResetText = ''
+        const ollamaChip = document.querySelector('#quotaItems .quota-item[data-id="ollama"] .quota-item-open')
+        if (ollamaChip) {
+          ollamaChip.click()
+          ollamaResetText = document.querySelector('#quotaPopover .usage-reset-label')?.textContent || ''
+          document.getElementById('quotaPopover').hidePopover()
+        }
         return {
-          cards: document.querySelectorAll('#usageGrid .usage-card').length,
-          last: document.getElementById('usageLastSync').textContent,
-          error: document.getElementById('usageError').textContent,
+          chips: document.querySelectorAll('#quotaItems .quota-item').length,
+          last: document.getElementById('quotaLastSync').textContent,
+          error: document.getElementById('quotaLastSync').classList.contains('is-error'),
           providers: response.data.accounts.map((account) => ({
             provider: account.provider,
             status: account.status,
             windows: account.windows.length,
             resetWindows: account.windows.filter((window) => window.resetAt).length
           })),
-          ollamaResetText: document.querySelector('[data-provider="ollama"] .usage-reset-label')?.textContent || ''
+          ollamaResetText
         }
       })()`),
       150_000,
@@ -430,15 +403,8 @@ async function main() {
       ))
     const antigravity = synced.providers.find((provider) => provider.provider === 'antigravity')
     const ollama = synced.providers.find((provider) => provider.provider === 'ollama')
-    // Antigravity 走**真上游**（這支測試不打 mock）。暫存 user-data-dir 的環境下沒有
-    // 上一次的快取可併，401 就回空窗——「windows === 4」只有在讀到使用者本機
-    // usage.json 的快取時才會成立（舊版測試沒有暫存資料夾，是靠那個撐著的）。
-    // 所以這裡只驗「結構與窗數一致」，數字本身由 test-usage.js 的純函式斷言守。
-    const antigravityConsistent = antigravity &&
-      antigravity.windows === antigravity.resetWindows &&
-      (antigravity.status === 'connected' ? antigravity.windows >= 0 : true)
-    if (synced.cards !== originalSettings.visibleProviders.length ||
-        !/上次同步/.test(synced.last) || synced.error ||
+    const antigravityConsistent = antigravity && antigravity.windows === antigravity.resetWindows
+    if (synced.chips !== 7 || !/^\d{1,2}:\d{2}$/.test(synced.last) || synced.error ||
         !allConnected || !antigravityConsistent ||
         // Ollama 上游不給重置時間，補一個假的就是這裡會抓到
         (ollama?.windows > 0 && (ollama.resetWindows !== 0 || synced.ollamaResetText !== '上游未提供重置時間'))) {
@@ -452,42 +418,40 @@ async function main() {
       const results = []
       for (const theme of ['dark', 'light']) {
         root.setAttribute('data-theme', theme)
-        const page = document.getElementById('page-usage')
-        const card = document.querySelector('.usage-card')
+        const bar = document.getElementById('quotaBar')
+        const name = document.querySelector('#quotaItems .quota-item-name')
         results.push({
           theme,
-          pageDisplay: getComputedStyle(page).display,
-          cardBackground: getComputedStyle(card).backgroundColor,
+          barDisplay: getComputedStyle(bar).display,
+          nameColor: name ? getComputedStyle(name).color : '',
           bodyOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth
         })
       }
       root.setAttribute('data-theme', original || 'dark')
       return results
     })()`)
-    if (themes.some((item) => item.pageDisplay === 'none' || item.bodyOverflow || item.cardBackground === 'rgba(0, 0, 0, 0)')) {
+    if (themes.some((item) => item.barDisplay === 'none' || item.bodyOverflow || !item.nameColor) ||
+        themes[0].nameColor === themes[1].nameColor) {
       throw new Error(`主題/RWD 異常：${JSON.stringify(themes)}`)
     }
-    pass('深淺主題可見且無水平溢出')
+    pass('深淺主題都看得到、字色跟著主題換、沒有水平溢出')
 
     // ===== 用量統計子分頁 =====
     // 只驗「切得過去、面板都在、統計讀得出來」。**刻意不按「掃描本機記錄」**：
     // 那會讀滿 GB 等級的 session 記錄，是使用者自己決定要不要跑的動作，不該由測試代按。
-    await cdp.eval("document.querySelector('#usageSubtabs .subtab[data-subtab=\"stats\"]').click()")
+    // 用量統計搬到 CC代理頁的子分頁
+    await cdp.eval("document.querySelector('[data-page=\"ccswitch\"]').click()")
+    await cdp.eval("document.querySelector('#ccSubtabs .subtab[data-subtab=\"stats\"]').click()")
     await waitFor(
-      () => cdp.eval("document.getElementById('usage-stats').classList.contains('active')"),
-      10_000,
-      '用量統計子分頁'
+      () => cdp.eval("document.getElementById('cc-stats').classList.contains('active') && document.querySelectorAll('#cuChart .cu-bar-col').length > 0"),
+      15_000,
+      'CC代理的用量統計子分頁'
     )
-    pass('用量統計子分頁切得過去')
+    pass('CC代理頁的「用量統計」子分頁切得過去')
 
-    const statsPanels = await cdp.eval("document.querySelectorAll('#usage-stats .cc-panel').length")
+    const statsPanels = await cdp.eval("document.querySelectorAll('#cc-stats .cc-panel').length")
     if (statsPanels !== 3) throw new Error(`用量統計應有三個面板，實際 ${statsPanels}`)
     pass('用量統計三個面板都在')
-
-    // 額度那組操作鈕在統計子分頁沒有意義，要收起來
-    const quotaBtnHidden = await cdp.eval("document.getElementById('usageSyncBtn').classList.contains('hidden')")
-    if (!quotaBtnHidden) throw new Error('統計子分頁沒有收起額度的同步鈕')
-    pass('統計子分頁收起額度操作鈕')
 
     const cuStats = await cdp.eval("window.electronAPI.codeusage.stats({ range: '7d' })")
     if (!cuStats?.ok) throw new Error(`用量統計 IPC 失敗：${JSON.stringify(cuStats?.error || {})}`)
@@ -597,8 +561,6 @@ async function main() {
     }
     pass('單價彈窗取消關得掉')
 
-    // 切回訂閱額度，讓後面的檢查與收尾在原本的狀態下進行
-    await cdp.eval("document.querySelector('#usageSubtabs .subtab[data-subtab=\"quota\"]').click()")
 
     if (process.env.VOICEINK_USAGE_SCREENSHOT) {
       await cdp.send('Emulation.setDeviceMetricsOverride', {

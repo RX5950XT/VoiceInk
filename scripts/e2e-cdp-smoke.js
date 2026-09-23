@@ -176,46 +176,41 @@ async function main() {
       JSON.stringify(visualShell)
     )
 
-    // ===== 額度儀錶板 =====
+    // ===== 訂閱額度條（工作區主區最下面；以前是獨立的額度頁） =====
     const usageUi = await cdp.eval(`(async () => {
       const order = [...document.querySelectorAll('.header-nav .nav-tab')]
         .map((item) => item.dataset.page)
       const chatWasDefault = document.getElementById('page-chat')?.classList.contains('active') === true
-      const usageTab = document.querySelector('[data-page="usage"]')
-      usageTab?.click()
-      for (let attempt = 0; attempt < 15; attempt++) {
-        await new Promise((resolve) => setTimeout(resolve, 200))
-        if (document.querySelectorAll('#usageGrid .usage-card').length) break
-        usageTab?.click()
-      }
       const usageState = await window.electronAPI.usage.load()
+      const bar = document.getElementById('quotaBar')
       return {
         order,
         chatWasDefault,
         hasApi: typeof window.electronAPI.usage?.load === 'function',
-        active: document.getElementById('page-usage')?.classList.contains('active') === true,
-        hasSync: !!document.getElementById('usageSyncBtn'),
-        hasGrid: !!document.getElementById('usageGrid'),
+        noUsagePage: !document.getElementById('page-usage'),
+        barInWorkspace: !!bar && bar.closest('#termMain') !== null,
+        hasSync: !!document.getElementById('quotaSyncBtn'),
         hasSettings: !!document.getElementById('usageSettingsDialog'),
         hasDiagnostics: !!document.getElementById('usageDiagnosticsDialog'),
+        statsInCc: !!document.querySelector('#page-ccswitch #cc-stats #cuSummary'),
         accounts: usageState.data.accounts.length,
-        visible: usageState.data.settings.visibleProviders.length,
-        cards: document.querySelectorAll('#usageGrid .usage-card').length
+        barSettings: !!usageState.data.settings.bar
       }
     })()`)
     ok(
-      'ten-tab order + usage page structure',
+      'nine-tab order + quota bar under the terminal + stats under CC',
       JSON.stringify(usageUi?.order) === JSON.stringify([
-        'chat', 'explorer', 'ccswitch', 'usage', 'agy', 'stt', 'translate', 'sysmon', 'hfmodels', 'settings'
+        'chat', 'explorer', 'ccswitch', 'agy', 'stt', 'translate', 'sysmon', 'hfmodels', 'settings'
       ]) &&
         usageUi.hasApi &&
-        usageUi.active &&
+        usageUi.noUsagePage &&
+        usageUi.barInWorkspace &&
         usageUi.hasSync &&
-        usageUi.hasGrid &&
         usageUi.hasSettings &&
         usageUi.hasDiagnostics &&
+        usageUi.statsInCc &&
         usageUi.accounts === 7 &&
-        usageUi.cards === usageUi.visible,
+        usageUi.barSettings,
       JSON.stringify(usageUi)
     )
 

@@ -69,21 +69,26 @@ function fileChips(list, onOpen) {
  *
  * @param {object} opts
  * @param {any} opts.tab 分頁本身（帶 sessionData／sessionRow）
- * @param {{ title: HTMLElement | null, meta: HTMLElement | null, body: HTMLElement | null, resumeBtn: HTMLButtonElement | null, resumeIntoBtn: HTMLButtonElement | null }} opts.els
+ * @param {{ title: HTMLElement | null, meta: HTMLElement | null, body: HTMLElement | null, resumeBtn: HTMLButtonElement | null, resumeIntoBtn: HTMLButtonElement | null, copyPathBtn: HTMLButtonElement | null }} opts.els
  * @param {(rel: string) => void} opts.onOpenFile
  * @param {() => Array<{ id: string, title: string }>} opts.terminals 這個專案現在開著哪些終端機
  * @param {(terminalId: string) => void} opts.onResume 接續（空字串＝開一個新的）
+ * @param {(file: string) => void} opts.onCopyPath 複製記錄檔的完整路徑
  */
-export function paintAiSession({ tab, els, onOpenFile, terminals, onResume }) {
+export function paintAiSession({ tab, els, onOpenFile, terminals, onResume, onCopyPath }) {
   const data = tab.sessionData
   const row = tab.sessionRow
-  if (els.title) els.title.textContent = tab.title
+  if (els.title) {
+    els.title.textContent = tab.title
+    els.title.title = tab.title
+  }
   if (els.meta) {
     const bits = []
     if (data?.source) bits.push(`來源：${data.source}`)
     if (row?.mtime) bits.push(new Date(row.mtime).toLocaleString('zh-TW'))
     if (data?.truncated) bits.push('記錄很長，只讀了前面一段')
     els.meta.textContent = bits.join(' · ')
+    els.meta.title = els.meta.textContent
   }
 
   // 接續：兩顆鈕都掛在工具列上（第二顆只有真的有終端機開著時才出現）
@@ -106,6 +111,12 @@ export function paintAiSession({ tab, els, onOpenFile, terminals, onResume }) {
         )
       })
     }
+  }
+
+  if (els.copyPathBtn) {
+    const file = typeof data?.file === 'string' ? data.file : ''
+    els.copyPathBtn.hidden = !file
+    els.copyPathBtn.onclick = () => onCopyPath(file)
   }
 
   if (!els.body) return

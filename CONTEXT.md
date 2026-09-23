@@ -9,10 +9,36 @@ VoiceInk：Windows Electron AI 工作台。Vanilla JS + Vite（無前端框架�
 目前版本 **v1.25.0**（檔案總管雙欄右欄變成真的能用、操作中心收進狀態列且同名時可覆蓋、
 資料夾監看不再漏事件；前版終端機 PATH 不再被 Ctrl+G 橋接蓋掉；再前檢查更新改走鏡像）。
 
-nav 十頁：聊天（預設，**專案工作區與終端機都在同一頁**）｜檔案｜CC代理（`data-page` 仍是 `ccswitch`）｜額度｜
-AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定。
+nav 九頁：聊天（預設，**專案工作區與終端機都在同一頁**）｜檔案｜CC代理（`data-page` 仍是 `ccswitch`）｜
+AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定。額度不再是一頁：收成工作區主區最下面那條，用量統計在 CC代理。
 
 ## 架構
+
+### 額度收成終端機下面那條、Claude 自己續期、終端機複製與連結（2026-09-23）
+
+- **額度頁拿掉了**：`#page-usage` 與 nav 那顆刪掉，訂閱額度改成 `#termMain` 最下面一條 26px 的
+  `#quotaBar`（`quota-bar.js`，原本的 `usage-page.js` 改名改寫）。一家一顆：小圓點（provider 色）＋名字＋
+  每個視窗一支小量表（`5h ▬ 37% 1時30分`），點一下用 popover 開原本那張完整卡片；拖曳或 Alt+←→ 排序
+  （沿用 `list-reorder.js`，拖完那一下 click 不開詳情）；條很窄時直向滾輪拿來左右捲，右緣會淡出。
+- **顯示設定多一組「每一家顯示」**：5 小時／每週／每月視窗、重置倒數、方案名稱、精簡（只留用得最多那條）、
+  隱藏未連線、上次同步時間。存在 `usage.json` 的 `settings.bar`，main 的 `store.sanitizeBar` 逐欄驗。
+  **彈窗是照 renderer 手上那份狀態填的**：測試直接打 IPC 改設定，下一次按「儲存」就被蓋回去。
+- **自動同步**：條看得到（在工作區、視窗沒被藏）時，快取超過 60 秒就同步；進工作區、視窗切回來都會補一次。
+  以前只有按鈕。一輪七家約 3 秒，main 那邊本來就會合併同時的請求。
+- **「額度跑掉、要去終端機開一次 claude」的根因**：Claude 的 access token 只活幾個小時，只有 CLI 在跑才會續。
+  新增 `usage/claude-auth.js`：快過期（或還沒到期卻 401）就照 Claude Code 自己的協定續——兩把鎖、鎖內重讀、
+  CAS 寫回、原子替換（細節見 AGENTS.md「用量統計與額度」）。協定是從已安裝的 CLI（2.1.280）讀出來的，
+  `probe-claude-refresh.js --force` 實測過：新 token 8 小時、額度 API 通、`claude auth status` 仍是登入。
+- **用量統計搬到 CC代理**：`#cc-stats` 子分頁，`code-usage-page.js` 原封不動（id 都沒改），點進去才 dynamic import。
+  單價新增 Claude Opus 5.5（$4／$20、讀 $0.20）、GPT-6 Sol（$2／$10）、GPT-6 Luna（$0.10／$0.50）。
+- **終端機的 OSC 8 連結**：以前點 Claude Code 印的網址會跳系統原生的 confirm（xterm 預設的 linkHandler），
+  按了也開不起來（`window.open` 被 main 擋）。現在 `linkHandler: oscLinkHandler(id)` 直接開內建瀏覽器分頁。
+- **終端機複製**（`term-copy.js`）：有選取的 Ctrl+C＝複製（沒選取才中斷）、Ctrl+Shift+C／Ctrl+Insert、
+  右鍵有選取＝複製；剪貼簿改走 main（`terminal:clipboardWrite`）。實測一般 PowerShell 裡拖曳選取本來就選得起來，
+  壞的是這幾條「選完怎麼複製」的路（舊版右鍵會把剛選的字貼回提示字元、Ctrl+C 直接變中斷）。
+- 測試：`test-claude-auth.js`（7 條，修之前 [F][F2] 紅）、`e2e-terminal-copy-cdp.js`（12 條，對安裝版 v1.25.0
+  跑 8 紅）、`e2e-usage-cdp.js` 改寫成額度條＋CC 用量統計（23 條）；nav 清單改九頁的有 smoke／terminal／
+  visual／agy／chat 五支。
 
 ### 檔案總管：操作中心收進狀態列、同名可覆蓋（2026-09-22）
 
@@ -281,7 +307,8 @@ src/main/
                       stress.js、sensors.js（提權 sidecar 雙向橋接）、sensors-task.js、fans.js、
                       oc.js（效能調整）、pawnio.js（代裝＋驗簽）、ipc.js
   screentime/         使用時長：Tai 相容 SQLite、前景觀測、8908 WebSocket、統計查詢
-  usage/              七家額度 provider（全走官方端點）、api-key.js、6h soft cache、受限 IPC
+  usage/              七家額度 provider（全走官方端點）、api-key.js、6h soft cache、受限 IPC、
+                      claude-auth.js（Claude 的 token 照 CLI 協定續期、寫回）
   agy/                server.js（127.0.0.1＋強制金鑰）、OpenAI/Anthropic ⇄ Gemini 雙向轉換、
                       catalog.js／model-map.js、credential.js（nudgeCli 續期）、logs.js
   dictation/          index.js（管線）、hotkey.js（原生 sidecar／uiohook 雙路徑）、hook.js、
@@ -293,7 +320,7 @@ src/main/
 
 src/renderer/scripts/
   app.js  chat-page.js（串流照對話分開）  chat-sidebar.js（資料夾／狀態）  chat-params-panel.js  chat-menu.js  markdown.js（零 innerHTML）  terminal-page.js  ccswitch-page.js  sysmon-page.js
-  usage-page.js  code-usage-page.js  agy-page.js  stt-page.js  transcribe.js  live-caption.js  vad.js
+  quota-bar.js（工作區底下的額度條）  code-usage-page.js（CC代理的用量統計）  agy-page.js  stt-page.js  transcribe.js  live-caption.js  vad.js
   translate-page.js  dictation.js  model-picker.js  custom-select.js（共用 ARIA listbox）
   workspace-page.js（專案側欄＋右側欄四面板＋檔案樹）  explorer-page.js（整機檔案總管）
   ws-tabs.js（分頁列＋編輯器＋內建瀏覽器）

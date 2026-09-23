@@ -40,10 +40,6 @@
             <span class="nav-icon">🧩</span>
             <span class="nav-text">CC代理</span>
           </button>
-          <button class="nav-tab" data-page="usage" title="額度" aria-label="額度">
-            <span class="nav-icon">📊</span>
-            <span class="nav-text">額度</span>
-          </button>
           <button class="nav-tab" data-page="agy" title="AGY反代" aria-label="AGY反代">
             <span class="nav-icon">🔀</span>
             <span class="nav-text">AGY反代</span>
@@ -472,11 +468,25 @@
                       <span class="ws-ai-session-title" id="wsAiSessionTitle">對話記錄</span>
                       <button type="button" id="wsAiResumeBtn" class="btn btn-primary btn-sm">在新終端機接續</button>
                       <button type="button" id="wsAiResumeIntoBtn" class="btn btn-secondary btn-sm" hidden>送進現有終端機</button>
+                      <button type="button" id="wsAiCopyPathBtn" class="btn btn-secondary btn-sm" hidden title="複製這段對話記錄檔的完整路徑">複製路徑</button>
                       <span class="ws-editor-spacer"></span>
                       <span class="ws-ai-session-meta" id="wsAiSessionMeta"></span>
                     </div>
                     <div class="ws-ai-session-body" id="wsAiSessionBody"></div>
                   </div>
+                </div>
+
+                <!-- 訂閱額度：七家官方端點，一家一顆，點開看完整那張卡；拖曳可排序（quota-bar.js） -->
+                <div class="quota-bar" id="quotaBar" role="region" aria-label="訂閱額度">
+                  <div class="quota-items" id="quotaItems" role="list" aria-label="各家額度"></div>
+                  <div class="quota-bar-side">
+                    <span class="quota-last-sync" id="quotaLastSync" role="status" aria-live="polite">尚未同步</span>
+                    <button type="button" id="quotaSyncBtn" class="btn-icon quota-bar-btn" title="立即同步額度" aria-label="立即同步額度">↻</button>
+                    <button type="button" id="quotaDiagnosticsBtn" class="btn-icon quota-bar-btn" title="同步診斷" aria-label="同步診斷">ⓘ</button>
+                    <button type="button" id="quotaSettingsBtn" class="btn-icon quota-bar-btn" title="顯示設定" aria-label="額度顯示設定">⚙</button>
+                  </div>
+                  <div id="quotaPopover" class="quota-popover" popover="auto" aria-label="額度詳情"></div>
+                  <p id="quotaSortStatus" class="visually-hidden" aria-live="polite"></p>
                 </div>
               </div>
 
@@ -971,6 +981,9 @@
                 <button type="button" class="subtab" data-subtab="version" role="tab" aria-selected="false">
                   CLI 版本
                 </button>
+                <button type="button" class="subtab" data-subtab="stats" role="tab" aria-selected="false">
+                  用量統計
+                </button>
               </div>
 
               <!-- 供應商 -->
@@ -1013,6 +1026,56 @@
                   </div>
                   <p class="cc-panel-desc">按「更新」會在終端機分頁執行。</p>
                   <div id="ccVersionList" class="cc-list" role="list"></div>
+                </section>
+              </div>
+
+              <!-- 用量統計：實際用掉多少 token（本機 session 記錄）。訂閱額度在工作區底下那條 -->
+              <div class="subtab-panel" id="cc-stats" data-subtab="stats" role="tabpanel">
+                <section class="cc-panel" aria-labelledby="cuTitle">
+                  <div class="cc-panel-head">
+                    <h2 id="cuTitle" class="cc-panel-title">用量統計</h2>
+                    <div class="cu-head-actions">
+                      <div id="cuRangeGroup" class="agy-range" role="group" aria-label="統計時間範圍">
+                        <button type="button" class="agy-range-btn" data-cu-range="24h" aria-pressed="false">24 小時</button>
+                        <button type="button" class="agy-range-btn is-active" data-cu-range="7d" aria-pressed="true">7 天</button>
+                        <button type="button" class="agy-range-btn" data-cu-range="30d" aria-pressed="false">30 天</button>
+                        <button type="button" class="agy-range-btn" data-cu-range="all" aria-pressed="false">全部</button>
+                      </div>
+                      <button type="button" id="cuPricesBtn" class="btn btn-secondary btn-sm">單價</button>
+                      <button type="button" id="cuSyncBtn" class="btn btn-primary btn-sm"
+                        title="增量掃描本機 session 記錄；規則改版會自動重讀">掃描本機記錄</button>
+                    </div>
+                  </div>
+                  <p id="cuSyncedAt" class="cc-panel-desc">尚未掃描</p>
+                  <p id="cuError" class="live-error hidden" role="alert"></p>
+
+                  <div id="cuSummary" class="cu-summary"></div>
+                  <p class="cc-panel-desc">花費依 API 公開單價估算；訂閱方案扣的是額度，不是這筆錢。Claude Code 長對話幾乎都是快取讀取。</p>
+                  <p id="cuUncosted" class="cu-note hidden" role="status"></p>
+                </section>
+
+                <section class="cc-panel" aria-labelledby="cuTrendTitle">
+                  <div class="cc-panel-head">
+                    <h2 id="cuTrendTitle" class="cc-panel-title">趨勢</h2>
+                    <div id="cuChartLegend" class="cu-legend"></div>
+                  </div>
+                  <div id="cuChart" class="cu-chart" role="img" aria-label="用量趨勢"></div>
+                </section>
+
+                <section class="cc-panel" aria-labelledby="cuBreakdownTitle">
+                  <div class="cc-panel-head">
+                    <h2 id="cuBreakdownTitle" class="cc-panel-title">分佈</h2>
+                  </div>
+                  <div class="cu-breakdown">
+                    <div class="cu-dist">
+                      <h3 class="cu-dist-title">依工具</h3>
+                      <div id="cuProviders" class="cc-list"></div>
+                    </div>
+                    <div class="cu-dist">
+                      <h3 class="cu-dist-title">依模型</h3>
+                      <div id="cuModels" class="cc-list"></div>
+                    </div>
+                  </div>
                 </section>
               </div>
             </div>
@@ -1335,129 +1398,6 @@
               <footer class="dialog-actions">
                 <button type="button" id="sysmonKillCancel" class="btn btn-secondary">取消</button>
                 <button type="button" id="sysmonKillConfirm" class="btn btn-primary sysmon-danger-btn">結束</button>
-              </footer>
-            </dialog>
-          </section>
-
-          <!-- 額度儀錶板 -->
-          <section id="page-usage" class="page">
-            <div class="usage-shell">
-              <header class="usage-header">
-                <div class="usage-heading">
-                  <p class="usage-eyebrow">本機訂閱狀態</p>
-                  <h1>額度儀錶板</h1>
-                  <p class="page-desc">七家 AI 工具的額度與重置時間。</p>
-                </div>
-                <div class="usage-actions" role="group" aria-label="額度操作">
-                  <button type="button" id="usageDiagnosticsBtn" class="btn btn-secondary btn-sm">診斷</button>
-                  <button type="button" id="usageSettingsBtn" class="btn btn-secondary btn-sm">顯示設定</button>
-                  <button type="button" id="usageSyncBtn" class="btn btn-primary btn-sm">
-                    <span class="usage-sync-icon" aria-hidden="true">↻</span>
-                    <span>同步</span>
-                  </button>
-                </div>
-              </header>
-
-              <div class="subtabs" id="usageSubtabs" role="tablist" aria-label="額度與用量">
-                <button type="button" class="subtab active" data-subtab="quota" role="tab" aria-selected="true">
-                  訂閱額度
-                </button>
-                <button type="button" class="subtab" data-subtab="stats" role="tab" aria-selected="false">
-                  用量統計
-                </button>
-              </div>
-
-              <!-- 訂閱額度：還剩多少（官方 API） -->
-              <div class="subtab-panel active" id="usage-quota" data-subtab="quota" role="tabpanel">
-                <div class="usage-pulse" aria-label="同步摘要">
-                  <div id="usageProviderSummary" class="usage-provider-summary"></div>
-                  <p id="usageLastSync" class="usage-last-sync" role="status" aria-live="polite">尚未同步</p>
-                </div>
-
-                <p id="usageError" class="live-error hidden" role="alert"></p>
-                <section id="usageGrid" class="usage-grid" aria-label="AI 工具額度卡片"></section>
-                <p id="usageSortStatus" class="visually-hidden" aria-live="polite"></p>
-              </div>
-
-              <!-- 用量統計：實際用掉多少 token（本機 session 記錄） -->
-              <div class="subtab-panel" id="usage-stats" data-subtab="stats" role="tabpanel">
-                <section class="cc-panel" aria-labelledby="cuTitle">
-                  <div class="cc-panel-head">
-                    <h2 id="cuTitle" class="cc-panel-title">用量統計</h2>
-                    <div class="cu-head-actions">
-                      <div id="cuRangeGroup" class="agy-range" role="group" aria-label="統計時間範圍">
-                        <button type="button" class="agy-range-btn" data-cu-range="24h" aria-pressed="false">24 小時</button>
-                        <button type="button" class="agy-range-btn is-active" data-cu-range="7d" aria-pressed="true">7 天</button>
-                        <button type="button" class="agy-range-btn" data-cu-range="30d" aria-pressed="false">30 天</button>
-                        <button type="button" class="agy-range-btn" data-cu-range="all" aria-pressed="false">全部</button>
-                      </div>
-                      <button type="button" id="cuPricesBtn" class="btn btn-secondary btn-sm">單價</button>
-                      <button type="button" id="cuSyncBtn" class="btn btn-primary btn-sm"
-                        title="增量掃描本機 session 記錄；規則改版會自動重讀">掃描本機記錄</button>
-                    </div>
-                  </div>
-                  <p id="cuSyncedAt" class="cc-panel-desc">尚未掃描</p>
-                  <p id="cuError" class="live-error hidden" role="alert"></p>
-
-                  <div id="cuSummary" class="cu-summary"></div>
-                  <p class="cc-panel-desc">花費依 API 公開單價估算；訂閱方案扣的是額度，不是這筆錢。Claude Code 長對話幾乎都是快取讀取。</p>
-                  <p id="cuUncosted" class="cu-note hidden" role="status"></p>
-                </section>
-
-                <section class="cc-panel" aria-labelledby="cuTrendTitle">
-                  <div class="cc-panel-head">
-                    <h2 id="cuTrendTitle" class="cc-panel-title">趨勢</h2>
-                    <div id="cuChartLegend" class="cu-legend"></div>
-                  </div>
-                  <div id="cuChart" class="cu-chart" role="img" aria-label="用量趨勢"></div>
-                </section>
-
-                <section class="cc-panel" aria-labelledby="cuBreakdownTitle">
-                  <div class="cc-panel-head">
-                    <h2 id="cuBreakdownTitle" class="cc-panel-title">分佈</h2>
-                  </div>
-                  <div class="cu-breakdown">
-                    <div class="cu-dist">
-                      <h3 class="cu-dist-title">依工具</h3>
-                      <div id="cuProviders" class="cc-list"></div>
-                    </div>
-                    <div class="cu-dist">
-                      <h3 class="cu-dist-title">依模型</h3>
-                      <div id="cuModels" class="cc-list"></div>
-                    </div>
-                  </div>
-                </section>
-              </div>
-            </div>
-
-            <dialog id="usageSettingsDialog" class="app-dialog usage-dialog" aria-labelledby="usageSettingsTitle">
-              <header class="dialog-head">
-                <h2 id="usageSettingsTitle" class="dialog-title">額度顯示設定</h2>
-                <p class="dialog-desc">選擇要顯示的工具，並調整卡片順序。</p>
-              </header>
-              <div class="usage-dialog-body">
-                <fieldset class="usage-settings-group">
-                  <legend>顯示項目</legend>
-                  <div id="usageProviderToggles" class="usage-provider-toggles"></div>
-                </fieldset>
-              </div>
-              <footer class="dialog-actions">
-                <button type="button" id="usageSettingsCancel" class="btn btn-secondary">取消</button>
-                <button type="button" id="usageSettingsSave" class="btn btn-primary">儲存變更</button>
-              </footer>
-            </dialog>
-
-            <dialog id="usageDiagnosticsDialog" class="app-dialog usage-dialog" aria-labelledby="usageDiagnosticsTitle">
-              <header class="dialog-head">
-                <h2 id="usageDiagnosticsTitle" class="dialog-title">同步診斷</h2>
-                <p class="dialog-desc">只顯示連線狀態與額度視窗，不含任何憑證內容。</p>
-              </header>
-              <div class="usage-dialog-body">
-                <pre id="usageDiagnosticsText" class="usage-diagnostics-text">尚無診斷資料</pre>
-              </div>
-              <footer class="dialog-actions">
-                <button type="button" id="usageDiagnosticsCopy" class="btn btn-secondary">複製診斷</button>
-                <button type="button" id="usageDiagnosticsClose" class="btn btn-primary">關閉</button>
               </footer>
             </dialog>
           </section>
@@ -2401,6 +2341,41 @@
           <button type="button" id="termNewCancelBtn" class="btn btn-secondary btn-sm">取消</button>
           <button type="button" id="termNewCreateBtn" class="btn btn-primary btn-sm">開啟</button>
         </div>
+      </dialog>
+
+      <dialog id="usageSettingsDialog" class="app-dialog usage-dialog" aria-labelledby="usageSettingsTitle">
+        <header class="dialog-head">
+          <h2 id="usageSettingsTitle" class="dialog-title">額度顯示設定</h2>
+          <p class="dialog-desc">勾選底部額度條要顯示的項目；順序直接在條上拖曳。</p>
+        </header>
+        <div class="usage-dialog-body">
+          <fieldset class="usage-settings-group">
+            <legend>顯示的工具</legend>
+            <div id="usageProviderToggles" class="usage-provider-toggles"></div>
+          </fieldset>
+          <fieldset class="usage-settings-group">
+            <legend>每一家顯示</legend>
+            <div id="usageBarToggles" class="usage-provider-toggles"></div>
+          </fieldset>
+        </div>
+        <footer class="dialog-actions">
+          <button type="button" id="usageSettingsCancel" class="btn btn-secondary">取消</button>
+          <button type="button" id="usageSettingsSave" class="btn btn-primary">儲存變更</button>
+        </footer>
+      </dialog>
+
+      <dialog id="usageDiagnosticsDialog" class="app-dialog usage-dialog" aria-labelledby="usageDiagnosticsTitle">
+        <header class="dialog-head">
+          <h2 id="usageDiagnosticsTitle" class="dialog-title">同步診斷</h2>
+          <p class="dialog-desc">只顯示連線狀態與額度視窗，不含任何憑證內容。</p>
+        </header>
+        <div class="usage-dialog-body">
+          <pre id="usageDiagnosticsText" class="usage-diagnostics-text">尚無診斷資料</pre>
+        </div>
+        <footer class="dialog-actions">
+          <button type="button" id="usageDiagnosticsCopy" class="btn btn-secondary">複製診斷</button>
+          <button type="button" id="usageDiagnosticsClose" class="btn btn-primary">關閉</button>
+        </footer>
       </dialog>
 
       <dialog id="cuPricesDialog" class="app-dialog" aria-label="模型單價">
