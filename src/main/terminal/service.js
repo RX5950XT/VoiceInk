@@ -135,7 +135,9 @@ module.exports = {
   // 儲存只把內容留著，關掉分頁才真的送回終端機（見 editor-bridge.js）
   editorSave: (id, content) => editorBridge.save(id, content),
   editorCancel: (id) => editorBridge.cancel(id),
-  catalog: terminal.catalog,
+  // Windows 組建號（`10.0.26200` 的最後一段）給 xterm 的 `windowsPty`。放這裡不放 pty.js：
+  // pty.js 是宿主檔，一改就得重開宿主（見 AGENTS.md「宿主活得比 App 久」）
+  catalog: () => ({ ...terminal.catalog(), winBuild: Number(require('os').release().split('.')[2]) || 0 }),
   createSession: terminal.createSession,
   renameSession: terminal.renameSession,
   listSessions,

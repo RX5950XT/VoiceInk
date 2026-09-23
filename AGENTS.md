@@ -358,6 +358,10 @@ tag 要與 `package.json` 的 version 一致。
   **不要改去攔 DOM 滑鼠事件或偽造 `shiftKey`**：xterm 的 Shift＋點擊是「延伸選取」，偽造
   會連帶改掉那個語意；擋在 parser 則是模式根本沒開，選取／右鍵貼上／滾輪捲 scrollback 全部
   照原本的路走。代價是 CLI 收不到滑鼠（Claude Code 的點選單要改用鍵盤），這是刻意的取捨。
+  **滾輪例外，要自己轉給 CLI**：模式沒開時 xterm 在備用畫面會把滾輪換成 ↑↓ 方向鍵，而 Claude Code
+  全螢幕（`"tui": "fullscreen"`，送 `?1049h`＋`?1000/1002/1003/1006h`）正是備用畫面——症狀是「滾輪變成
+  在輸入框翻提示詞歷史，畫面捲不動」。`term-mouse.js` 記住 CLI 想要滑鼠＋SGR，只在備用畫面時用
+  `attachCustomWheelEventHandler` 送 SGR 滾輪（64／65）；Ctrl+滾輪一律不送（字級）。回歸同一支的 [F][G]。
   回歸 `probe-terminal-mouse.js`——**一定要有沒掛的對照組**，不然「永遠是 none」是恆真；
   拖曳本身不要模擬，離屏視窗沒畫過字，xterm 量不到字元尺寸，`getCoords()` 一律回 undefined。
 - **複製跟貼上一樣走 main 的剪貼簿，而且比照 Windows Terminal**（`term-copy.js`）：選起來放開就複製（放開的地方不在那一格也算，監聽掛 `window`）；

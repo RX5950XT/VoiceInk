@@ -14,6 +14,15 @@ AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定�
 
 ## 架構
 
+### 終端機滾輪在 Claude Code 全螢幕會翻提示詞歷史（2026-09-23）
+
+- **根因**：`term-mouse.js` 擋掉 CLI 的滑鼠回報（為了能選字）之後，xterm 在備用畫面把滾輪換成 ↑↓ 鍵；
+  使用者的 Claude Code 設 `"tui": "fullscreen"`，整個工作階段都在備用畫面。改成記住 CLI 要滑鼠＋SGR，
+  備用畫面時滾輪自己包成 SGR 滾輪事件送出；一般畫面照舊捲 scrollback。順手修 Ctrl+滾輪放大字級時偷送方向鍵。
+- **`windowsPty`**：xterm 補上 `{ backend: 'conpty', buildNumber }`（組建號由 `service.js` 的 `catalog` 給，
+  不放 `pty.js` 免得宿主被判成舊版）。終端機拉高時 xterm 不再把 scrollback 拉回畫面、跟 ConPTY 對不上。
+- 測試：`probe-terminal-mouse.js` 13 條（新增 5 條滾輪，修之前 3 紅）。
+
 ### Telegram 切回來不再卡（2026-09-23）
 
 - **根因**：切走時 `.page` 是 `display:none`，webview 被當成藏起來、圖塊全丟；切回來 GPU 主執行緒要把

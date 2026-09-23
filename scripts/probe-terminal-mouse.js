@@ -15,6 +15,10 @@
  *  [C] 混在同一串裡的非滑鼠模式（`?1002;1004h`）照常生效，只有滑鼠那幾個被丟掉
  *  [D] 跟滑鼠無關的私有模式（`?1049h` 備用畫面）一個字都不准被吃掉
  *  [E] 關閉（`?1000l`）也要吞掉，不可以漏出去變成畫面上的亂碼
+ *  [F] CLI 開了滑鼠回報＋備用畫面（Claude Code 全螢幕）時，滾輪要轉成 SGR 滾輪事件送給 CLI，
+ *      不可以變成 ↑↓ 方向鍵（那會在輸入框翻提示詞歷史，使用者說的「滾輪變成回滾提示詞」）
+ *  [G] 備用畫面但 CLI 沒要滑鼠（less 那類）→ 維持 xterm 原本的方向鍵；一般畫面照常捲 scrollback；
+ *      Ctrl+滾輪是字級，不送任何東西給 CLI
  */
 
 'use strict'
@@ -51,6 +55,15 @@ window.__plain = make('plain', false)
 window.__blocked = make('blocked', true)
 
 window.__write = (which, text) => new Promise((resolve) => window[which].write(text, () => resolve(true)))
+window.__sent = []
+window.__blocked.onData((data) => window.__sent.push(data))
+window.__wheel = (opts) => {
+  window.__sent = []
+  const screen = window.__blocked.element.querySelector('.xterm-screen')
+  const r = screen.getBoundingClientRect()
+  screen.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, clientX: r.left + 5, clientY: r.top + 5, deltaMode: 0, ...opts }))
+  return window.__sent.join('')
+}
 window.__line = (which) => window[which].buffer.active.getLine(window[which].buffer.active.cursorY)?.translateToString(true) || ''
 </script>`
 
@@ -97,6 +110,22 @@ app.whenReady().then(async () => {
   await write('blocked', '\\x1b[?1000l\\x1b[?1002lX')
   const line = await run("window.__line('__blocked')")
   ok('關閉滑鼠回報的序列不會漏成畫面上的字', line.trim() === 'X', JSON.stringify(line))
+
+  console.log('\n[滾輪]')
+  const wheel = (opts) => run(`window.__wheel(${JSON.stringify(opts)})`)
+  await write('blocked', '\\x1b[?1049h\\x1b[?1000h\\x1b[?1006h')
+  const up = await wheel({ deltaY: -100 })
+  ok('全螢幕 CLI：滾輪往上送 SGR 滾輪（64），不是方向鍵', /^\x1b\[<64;\d+;\d+M$/.test(up), JSON.stringify(up))
+  const down = await wheel({ deltaY: 100 })
+  ok('全螢幕 CLI：滾輪往下送 SGR 滾輪（65）', /^\x1b\[<65;\d+;\d+M$/.test(down), JSON.stringify(down))
+  const zoom = await wheel({ deltaY: -100, ctrlKey: true })
+  ok('Ctrl+滾輪不送任何東西給 CLI', zoom === '', JSON.stringify(zoom))
+  await write('blocked', '\\x1b[?1000l\\x1b[?1006l')
+  const less = await wheel({ deltaY: -100 })
+  ok('備用畫面但 CLI 沒要滑鼠：照 xterm 原本送方向鍵', less === '\x1b[A', JSON.stringify(less))
+  await write('blocked', '\\x1b[?1049l\\x1b[?1000h\\x1b[?1006h')
+  const main = await wheel({ deltaY: -100 })
+  ok('一般畫面：滾輪留給 scrollback，不送給 CLI', main === '', JSON.stringify(main))
 
   console.log(`\n${passed} passed, ${failed} failed`)
   win.destroy()

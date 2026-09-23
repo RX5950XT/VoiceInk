@@ -436,6 +436,10 @@ function createPane(id) {
     scrollback: 5000,
     // CLI 送的 OSC 8 超連結：不給這個的話 xterm 會先跳系統的 confirm() 再 window.open()（見 term-links.js）
     linkHandler: oscLinkHandler(id),
+    // 告訴 xterm 對面是 ConPTY（VS Code 也這樣設）：終端機拉高時 ConPTY 是在底下補空白列，
+    // xterm 預設卻把 scrollback 拉回畫面——兩邊對不上，接下來的輸出就蓋錯列、畫面錯行
+    // （舊組建號的 ConPTY 不會自己重排，xterm 也會跟著關掉重排）
+    ...(catalog.winBuild ? { windowsPty: { backend: 'conpty', buildNumber: catalog.winBuild } } : {}),
     ...themeOptions()
   })
   const fit = new FitAddon()
