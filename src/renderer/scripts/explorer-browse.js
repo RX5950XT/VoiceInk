@@ -9,8 +9,8 @@
 export const BROWSE_PAGE_SIZE = 500
 export const VIRTUAL_OVERSCAN_ROWS = 12
 export const BROWSE_VIEW_MODES = new Set(['list', 'grid'])
-export const BROWSE_SORT_KEYS = new Set(['name', 'date', 'size'])
-export const BROWSE_SEARCH_SORTS = new Set(['rank', 'name', 'date', 'size'])
+export const BROWSE_SORT_KEYS = new Set(['name', 'date', 'size', 'type'])
+export const BROWSE_SEARCH_SORTS = new Set(['rank', 'name', 'date', 'size', 'type'])
 export const BROWSE_TILE_SIZES = [48, 64, 96, 128, 180, 256]
 export const BROWSE_DEFAULT_TILE = 96
 
@@ -72,6 +72,7 @@ export function normalizeBrowseState(raw = {}, fallback = {}) {
     showHidden: merged.showHidden === true,
     search: typeof merged.search === 'string' ? merged.search.trim().slice(0, MAX_TAB_SEARCH) : '',
     searchSort: BROWSE_SEARCH_SORTS.has(merged.searchSort) ? merged.searchSort : 'rank',
+    searchMode: merged.searchMode === 'filter' ? 'filter' : 'global',
     searchFilters: sanitizeFilters(merged.searchFilters || merged.filters),
     selected: sanitizeIds(merged.selected),
     anchor: typeof merged.anchor === 'string' ? merged.anchor.slice(0, 32767) : '',

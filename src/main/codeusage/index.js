@@ -362,14 +362,21 @@ function addTotals(item, row) {
  */
 function fillSeries(rows, from, to, bucket) {
   const step = bucket === 'hour' ? HOUR_MS : DAY_MS
-  const start = Math.floor(from / step) * step
-  const end = Math.floor(to / step) * step
+  // 日桶要切在「當地」零點：直接取 DAY_MS 的整數倍是 UTC 零點，臺灣凌晨 0～8 點會算進前一天
+  const slotOf = (ts) => {
+    const offset = bucket === 'day' ? new Date(ts).getTimezoneOffset() * 60_000 : 0
+    return Math.floor((ts - offset) / step) * step + offset
+  }
+  const start = slotOf(from)
+  const end = slotOf(to)
   const byTs = new Map()
   for (const row of rows) {
-    const slot = Math.floor(row.ts / step) * step
+    const slot = slotOf(row.ts)
     const item = byTs.get(slot) || { ts: slot, ...emptyTotals() }
     addTotals(item, row)
     item.costUsd += row.costUsd || 0
+    // 沒有單價的不是 0 元：記下來，浮動提示才不會寫成 $0
+    if (row.costUsd === null) item.uncosted = true
     byTs.set(slot, item)
   }
   const out = []

@@ -523,6 +523,8 @@ function createOcEngine(deps = {}) {
       load()
       lastError = ''
       panic = false
+      // 已經照提示按了「還原出廠」，「上次可能沒還原」那句就該收起來
+      dirtyLastRun = false
       resetNow()
       return snapshot()
     },

@@ -85,7 +85,8 @@ async function chooseModelsDir() {
     properties: ['openDirectory', 'createDirectory']
   })
   const picked = result?.filePaths?.[0]
-  if (result?.canceled || !picked) return { dir: readModelsDir() }
+  // 取消＝沒換：回 null，renderer 才不會跳「已換模型資料夾」
+  if (result?.canceled || !picked) return null
   store?.set?.('hfModelsDir', picked)
   library.setRoot(picked)
   runtime.stop()
@@ -676,7 +677,7 @@ async function removeLocal(id) {
  * @param {string} sourcePath
  */
 async function importLocal(sourcePath) {
-  const result = library.importFile(sourcePath)
+  const result = await library.importFile(sourcePath)
   await writePresets()
   refreshFit(result.id).catch(() => {})
   if (runtime.status().running) await runtime.listModels({ reload: true }).catch(() => [])

@@ -574,7 +574,7 @@ async function asyncSections() {
 
       const src = path.join(tmp2, 'user-model.gguf')
       fs.writeFileSync(src, Buffer.alloc(512))
-      const imported = library.importFile(src)
+      const imported = await library.importFile(src)
       ok('匯入本機檔案', library.has(imported.id) === true, imported.id)
       ok('匯入是複製不是搬移', fs.existsSync(src) === true)
 

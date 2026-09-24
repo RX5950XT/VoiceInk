@@ -73,7 +73,8 @@ function formatBucket(ts, bucket) {
  */
 async function call(promise, fallback) {
   const result = await promise
-  const errorEl = document.getElementById('cuError')
+  // 單價彈窗開著時錯誤寫進彈窗，頁面上那行被 backdrop 蓋住看不到
+  const errorEl = document.querySelector('#cuPricesDialog[open] .cc-dialog-error') || document.getElementById('cuError')
   if (!result?.ok) {
     const message = result?.error?.message || fallback
     if (errorEl) {
@@ -190,7 +191,7 @@ function renderChart() {
     const tip = el('div', 'cu-bar-tip')
     tip.append(el('span', 'cu-bar-tip-time', formatBucket(item.ts, latest.bucket)))
     tip.append(el('span', 'cu-bar-tip-main',
-      `${item.requests} 次 · ${formatTokens(item.tokens)} tokens · ${formatMoney(item.costUsd)}`))
+      `${item.requests} 次 · ${formatTokens(item.tokens)} tokens · ${item.uncosted && !item.costUsd ? '未設單價' : formatMoney(item.costUsd)}`))
     const detail = partsText(item)
     if (detail) tip.append(el('span', 'cu-bar-tip-parts', detail))
     col.append(tip)
@@ -249,6 +250,8 @@ function renderDistribution(hostId, rows, labelOf) {
     item.append(track)
     const detail = partsText(row)
     if (detail) item.append(el('span', 'cu-dist-parts', detail))
+    // 例如 Antigravity 只統計得到經過反代的那段，不講的話數字看起來像完整的
+    if (row.note) item.append(el('span', 'cu-dist-parts', row.note))
     host.append(item)
   }
   if (!rows.length) host.append(el('p', 'cc-empty', '沒有資料。'))
@@ -275,6 +278,7 @@ function openPricesDialog() {
   const dialog = /** @type {HTMLDialogElement} */ (document.getElementById('cuPricesDialog'))
   const host = document.getElementById('cuPriceRows')
   if (!dialog || !host || !latest) return
+  dialog.querySelector('.cc-dialog-error')?.classList.add('hidden')
   host.replaceChildren()
 
   const head = el('div', 'cu-price-row')
@@ -339,6 +343,13 @@ async function savePrices() {
   const dialog = /** @type {HTMLDialogElement} */ (document.getElementById('cuPricesDialog'))
   if (!host) return
   /** @type {Record<string, object>} */
+  // 「新增模型」欄打了字卻沒按 Enter 就按儲存：先幫他加成一列、讓他填價錢，不要默默丟掉
+  const pending = /** @type {HTMLInputElement|null} */ (document.getElementById('cuNewModel'))
+  if (pending?.value.trim()) {
+    addPriceRow()
+    host.querySelector('.cu-price-row:last-child .cu-price-input')?.focus()
+    return
+  }
   const prices = {}
   for (const row of host.querySelectorAll('.cu-price-row')) {
     const model = row.dataset.model
@@ -450,7 +461,7 @@ function bindOnce() {
     /** @type {HTMLDialogElement} */ (document.getElementById('cuPricesDialog')).close()
   })
   document.getElementById('cuNewModel')?.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') {
+    if (event.key === 'Enter' && !event.isComposing && event.keyCode !== 229) {
       event.preventDefault()
       addPriceRow()
     }

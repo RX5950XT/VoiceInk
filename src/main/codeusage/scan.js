@@ -32,18 +32,21 @@ const MAX_FILES = 4000
 
 /**
  * 遞迴找檔案。**不跟隨符號連結**（Grok 的 session 目錄實際遇過連結成環）。
+ * 非同步：幾千個 session 檔同步 stat 一輪要大半秒（實測），整段期間主程序完全不動，
+ * 畫面就像當掉。
  *
  * @param {string} dir
  * @param {(name: string) => boolean} match
  * @param {number} sinceMs 只收這個時間之後修改過的
  * @param {string[]} out
  * @param {number} depth
+ * @returns {Promise<void>}
  */
-function collectFiles(dir, match, sinceMs, out, depth = 0) {
+async function collectFiles(dir, match, sinceMs, out, depth = 0) {
   if (depth > 8 || out.length >= MAX_FILES) return
   let entries
   try {
-    entries = fs.readdirSync(dir, { withFileTypes: true })
+    entries = await fs.promises.readdir(dir, { withFileTypes: true })
   } catch {
     return
   }
@@ -52,13 +55,13 @@ function collectFiles(dir, match, sinceMs, out, depth = 0) {
     const full = path.join(dir, entry.name)
     if (entry.isSymbolicLink()) continue
     if (entry.isDirectory()) {
-      collectFiles(full, match, sinceMs, out, depth + 1)
+      await collectFiles(full, match, sinceMs, out, depth + 1)
       continue
     }
     if (!entry.isFile() || !match(entry.name)) continue
     let stat
     try {
-      stat = fs.statSync(full)
+      stat = await fs.promises.stat(full)
     } catch {
       continue
     }
@@ -143,7 +146,7 @@ async function scanSource(source, cursors, onEvent, sinceMs) {
   /** @type {string[]} */
   const files = []
   for (const root of source.roots) {
-    collectFiles(root, source.match, sinceMs, files)
+    await collectFiles(root, source.match, sinceMs, files)
   }
 
   let scannedBytes = 0

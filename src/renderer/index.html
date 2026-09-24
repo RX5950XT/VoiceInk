@@ -264,7 +264,7 @@
                       type="button"
                       id="wsNewBtn"
                       class="btn-icon ws-new-btn"
-                      title="新增分頁"
+                      title="新增分頁（Ctrl+Shift+T 直接開終端機）"
                       aria-label="新增分頁"
                       aria-haspopup="true"
                       aria-expanded="false"
@@ -687,6 +687,8 @@
                          aria-label="搜尋整機檔案" autocomplete="off" spellcheck="false">
                   <span id="exSearchHint" class="ex-search-hint" role="status"></span>
                 </div>
+                <button type="button" id="exScopeBtn" class="btn-icon ex-second-scope"
+                        aria-pressed="true" title="搜尋整機檔案" aria-label="搜尋範圍：整機">🌐</button>
                 <details class="ex-search-filters" id="exSearchFilters">
                   <summary>篩選</summary>
                   <div class="ex-search-filter-popover">
@@ -712,6 +714,12 @@
                   <button type="button" id="exNewFolderBtn" class="btn btn-secondary btn-sm">新增資料夾</button>
                   <button type="button" id="exNewFileBtn" class="btn btn-secondary btn-sm">新增檔案</button>
                   <button type="button" id="exEmptyBinBtn" class="btn btn-secondary btn-sm" hidden>清空資源回收筒</button>
+                  <select id="exSort" class="select ex-second-sort" aria-label="排序">
+                    <option value="name">名稱</option>
+                    <option value="date">修改時間</option>
+                    <option value="size">大小</option>
+                  </select>
+                  <button type="button" id="exSortDir" class="btn-icon" title="排序方向" aria-label="排序方向">↑</button>
                   <button type="button" id="exViewListBtn" class="btn-icon" title="清單" aria-label="清單檢視" aria-pressed="true">☰</button>
                   <button type="button" id="exViewGridBtn" class="btn-icon" title="圖示" aria-label="圖示檢視" aria-pressed="false">▦</button>
                   <button type="button" id="exDualBtn" class="btn btn-secondary btn-sm" aria-pressed="false">雙欄</button>
@@ -736,6 +744,10 @@
                     <button type="button" class="ex-sort" data-sort="name">名稱</button>
                     <button type="button" class="ex-sort" data-sort="size">大小</button>
                     <button type="button" class="ex-sort" data-sort="date">修改</button>
+                    <span id="exColSizeGrip" class="ex-col-grip ex-col-grip-size" role="separator"
+                          aria-orientation="vertical" aria-label="調整大小欄寬度" tabindex="0"></span>
+                    <span id="exColDateGrip" class="ex-col-grip ex-col-grip-date" role="separator"
+                          aria-orientation="vertical" aria-label="調整修改時間欄寬度" tabindex="0"></span>
                   </div>
                   <div id="exList" class="ex-list" role="listbox" aria-label="檔案清單" tabindex="0"></div>
                   <div id="exHome" class="ex-home" aria-label="本機" hidden></div>
@@ -902,9 +914,8 @@
                 <section class="hf-panel">
                   <div class="hf-library-actions">
                     <h2>本機 API</h2>
-                    <button type="button" id="hfCopyEndpointBtn" class="btn btn-secondary btn-sm">複製 OpenAI 端點</button>
                   </div>
-                  <p class="setting-hint" id="hfServerHint">啟動執行環境後，聊天與其他程式可打這個端點。</p>
+                  <p class="setting-hint" id="hfServerHint">啟動執行環境後，聊天頁的本機模型會自動連這裡（有金鑰保護，外部程式用不了）。</p>
                   <dl class="hf-specs" id="hfServerSpecs"></dl>
                   <div id="hfGpuMeters" class="hf-gpu-meters"></div>
                   <h2>用量</h2>
@@ -1175,6 +1186,12 @@
                 <div id="stimeChart" class="stime-chart" role="img" aria-label="時長柱狀圖">
                   <div id="stimeTip" class="stime-tip" hidden role="tooltip"></div>
                 </div>
+                <section id="stimeDrillWrap" class="stime-card hidden">
+                  <header class="stime-card-head">
+                    <h2 id="stimeDrillTitle">此時段</h2>
+                  </header>
+                  <div id="stimeDrill" class="stime-list"></div>
+                </section>
                 <div class="stime-split">
                   <section class="stime-card">
                     <header class="stime-card-head"><h2>最常使用</h2></header>
@@ -1185,12 +1202,6 @@
                     <div id="stimeCats" class="stime-list"></div>
                   </section>
                 </div>
-                <section id="stimeDrillWrap" class="stime-card hidden">
-                  <header class="stime-card-head">
-                    <h2 id="stimeDrillTitle">此時段</h2>
-                  </header>
-                  <div id="stimeDrill" class="stime-list"></div>
-                </section>
               </div>
 
               <!-- 處理程序：虛擬捲動的完整清單 -->
@@ -1649,8 +1660,10 @@
                 <button id="selectFileBtn" class="btn btn-secondary">
                   或點擊選擇檔案
                 </button>
+                <!-- 錄音機錄好的檔：直接列最近幾段，點一下就轉錄（不用去檔案對話框裡找） -->
                 <div class="recording-pick" id="recordingPickGroup" hidden>
-                  <select id="recordingPick" class="select" aria-label="選一段錄音機錄好的檔案來轉錄"></select>
+                  <p class="recording-pick-title">或轉錄錄音機的錄音</p>
+                  <div id="recordingPickList" class="recording-pick-list" role="list"></div>
                 </div>
               </div>
               <input
@@ -2186,7 +2199,7 @@
                   <section class="settings-section" id="set-basic" data-section="basic">
                     <header class="settings-section-head">
                       <h2 class="settings-section-title">基本</h2>
-                      <p class="settings-section-desc">主題即時套用，無需按儲存。</p>
+                      <p class="settings-section-desc">這一頁都即時套用，不用按儲存。</p>
                     </header>
                     <div class="settings-card">
                       <div class="setting-group">
@@ -2313,7 +2326,7 @@
                 </div>
 
                 <div class="settings-footer">
-                  <p class="settings-footer-hint">主題會即時套用；其餘設定按「儲存設定」後生效。</p>
+                  <p class="settings-footer-hint">「基本」即時套用；其餘按「儲存設定」後生效。</p>
                   <button type="button" id="saveSettingsBtn" class="btn btn-primary">儲存設定</button>
                 </div>
               </div>
@@ -2447,9 +2460,10 @@
           <div id="cuPriceRows" class="cc-list"></div>
           <div class="setting-group">
             <label for="cuNewModel">新增模型</label>
-            <input type="text" id="cuNewModel" class="input" placeholder="例如 gemini-3.7-flash" spellcheck="false" />
+            <input type="text" id="cuNewModel" class="input" placeholder="輸入模型名稱後按 Enter 加一列" spellcheck="false" />
           </div>
         </div>
+        <p class="live-error hidden cc-dialog-error" role="alert"></p>
         <div class="dialog-actions">
           <button type="button" id="cuPricesCancelBtn" class="btn btn-secondary btn-sm">取消</button>
           <button type="button" id="cuPricesSaveBtn" class="btn btn-primary btn-sm">儲存</button>
@@ -2542,6 +2556,8 @@
             </p>
           </div>
         </div>
+        <p class="live-error hidden cc-dialog-error" role="alert"></p>
+        <p class="cc-status hidden cc-dialog-status" role="status" aria-live="polite"></p>
         <div class="dialog-actions">
           <button type="button" id="ccProviderCancelBtn" class="btn btn-secondary btn-sm">取消</button>
           <button type="button" id="ccProviderSaveBtn" class="btn btn-primary btn-sm">儲存</button>
@@ -2570,6 +2586,8 @@
             </p>
           </div>
         </div>
+        <p class="live-error hidden cc-dialog-error" role="alert"></p>
+        <p class="cc-status hidden cc-dialog-status" role="status" aria-live="polite"></p>
         <div class="dialog-actions">
           <button type="button" id="ccMcpCancelBtn" class="btn btn-secondary btn-sm">取消</button>
           <button type="button" id="ccMcpSaveBtn" class="btn btn-primary btn-sm">儲存</button>

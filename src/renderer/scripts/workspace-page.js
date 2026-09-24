@@ -12,6 +12,7 @@ import {
   setActiveProject,
   forgetProjectBrowsers,
   newTerminalWithCommand,
+  newShellTerminal,
   closeActiveTab,
   cycleTab,
   retargetTabs,
@@ -2002,7 +2003,11 @@ function paintGitFiles(project, status) {
 
   // 篩選框只有在真的有一堆檔案時才有意義；三五個檔案還要先打字反而礙事
   if (el.gitFilter) el.gitFilter.hidden = status.files.length < GIT_FILTER_MIN_FILES
-  if (el.gitFilter?.hidden) gitFilter = ''
+  if (el.gitFilter?.hidden) {
+    // 框藏起來時字也要清掉，不然之後框再出現，裡面的字跟實際沒在篩的清單對不上
+    gitFilter = ''
+    el.gitFilter.value = ''
+  }
   const keep = (files) => (gitFilter ? files.filter((file) => file.path.toLowerCase().includes(gitFilter)) : files)
 
   // 哪些檔名在這份清單裡不只一個（`index.js` 這種）——只有它們需要在列上印出所在資料夾
@@ -2216,11 +2221,13 @@ async function addWorktree() {
   if (!project) return
   const name = await askInput('新工作樹的分支名稱', { desc: '同時也是資料夾名。', confirmText: '下一步' })
   if (name === null) return
-  const base = (await askInput('從哪個分支或 commit 開？', {
+  const base = await askInput('從哪個分支或 commit 開？', {
     desc: '留空＝目前的 HEAD。',
     placeholder: 'HEAD',
     confirmText: '建立'
-  })) ?? ''
+  })
+  // 取消＝整件事不做，不是「留空用 HEAD」
+  if (base === null) return
   try {
     const made = await call(electronAPI.workspace.worktreeAdd(project.id, name, base.trim()), '建不出工作樹')
     showToast(`已建立 ${made.branch}`)
@@ -2680,29 +2687,41 @@ async function resumeSession(project, row) {
 // ===== 對外 =====
 
 /**
- * 工作區的三個全域快捷鍵：Ctrl+P 快速開檔、Ctrl+W 關分頁、Ctrl+Tab 切分頁。
+ * 工作區的全域快捷鍵：Ctrl+P 快速開檔、Ctrl+W 關分頁、Ctrl+Tab 切分頁，
+ * 以及跟 Windows 終端機一樣的 Ctrl+Shift+T 開終端機、Ctrl+Shift+W 關分頁。
  *
  * **只在使用者真的在看工作區時才收**（`#termMain` 看得見＝聊天頁在前、
  * 而且切到工作區那半邊），否則會把瀏覽器的列印快捷鍵搶走。
- * **焦點在終端機裡時三個都不收**——那三顆在 shell 裡本來就有意思
+ * **焦點在終端機裡時 Ctrl+P／Ctrl+W 不收**——那兩顆在 shell 裡本來就有意思
  * （Ctrl+W 刪一個詞、Ctrl+P 上一筆指令），搶走等於把終端機弄壞。
+ * Ctrl+Tab 與 Ctrl+Shift+T／W 在 shell 裡沒有用途，終端機裡也收（`terminal-page.js` 放行給這裡）。
  *
  * @param {KeyboardEvent} event
  */
 function onGlobalKeydown(event) {
   if (!(event.ctrlKey || event.metaKey) || event.altKey) return
   const key = event.key.toLowerCase()
-  if (key !== 'p' && key !== 'w' && event.key !== 'Tab') return
-  const project = currentProject()
+  if (key !== 'p' && key !== 'w' && key !== 't' && event.key !== 'Tab') return
   const main = document.getElementById('termMain')
-  if (!project || !main || main.offsetParent === null) return
-  if (document.activeElement?.closest('#termHost')) return
+  if (!main || main.offsetParent === null) return
   if (event.key === 'Tab') {
     event.preventDefault()
     void cycleTab(event.shiftKey ? -1 : 1)
     return
   }
-  if (event.shiftKey) return
+  if (event.shiftKey) {
+    if (key === 't') {
+      event.preventDefault()
+      void newShellTerminal()
+    } else if (key === 'w') {
+      event.preventDefault()
+      void closeActiveTab()
+    }
+    return
+  }
+  const project = currentProject()
+  if (!project || key === 't') return
+  if (document.activeElement?.closest('#termHost')) return
   if (key === 'w') {
     event.preventDefault()
     void closeActiveTab()
@@ -2852,6 +2871,7 @@ export function initWorkspacePage() {
   })
   el.searchInput?.addEventListener('input', queueSearch)
   el.searchInput?.addEventListener('keydown', (event) => {
+    if (event.isComposing || event.keyCode === 229) return // 輸入法選字的 Enter 不算
     if (/** @type {KeyboardEvent} */ (event).key === 'Enter') {
       window.clearTimeout(searchTimer)
       void runSearch()

@@ -13,6 +13,7 @@ const originalLoad = Module._load
 const originalHome = os.homedir
 const folders = ['Desktop', 'Downloads', 'Documents', 'Pictures', 'Music', 'Videos']
 let electron = true
+;(async () => {
 try {
   for (const folder of folders) {
     fs.mkdirSync(path.join(root, folder))
@@ -25,13 +26,13 @@ try {
     } : {}
     return originalLoad.call(this, request, ...args)
   }
-  const moved = drives.listPlaces()
+  const moved = await drives.listPlaces()
   for (const folder of folders) {
     const id = folder.toLowerCase()
     assert.equal(moved.find(item => item.id === id)?.path, path.join(root, 'moved-' + id))
   }
   electron = false
-  const fallback = drives.listPlaces()
+  const fallback = await drives.listPlaces()
   for (const folder of folders) {
     assert.equal(fallback.find(item => item.id === folder.toLowerCase())?.path, path.join(root, folder))
   }
@@ -41,3 +42,7 @@ try {
   os.homedir = originalHome
   removeTree(root)
 }
+})().catch((error) => {
+  console.error(error)
+  process.exit(1)
+})

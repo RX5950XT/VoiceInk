@@ -219,16 +219,16 @@ async function main() {
     const file = path.join(dir, 'note.txt')
     fs.writeFileSync(file, 'x')
 
-    ok('相對路徑以階段 cwd 為基準', links.resolveCandidate(base, 'sub dir/note.txt')?.full === file)
-    ok('資料夾回 dir', links.resolveCandidate(base, 'sub dir')?.kind === 'dir')
-    ok('檔案回 file', links.resolveCandidate(base, 'sub dir/note.txt')?.kind === 'file')
-    ok('絕對路徑不需要 cwd', links.resolveCandidate('', file)?.full === file)
+    ok('相對路徑以階段 cwd 為基準', (await links.resolveCandidate(base, 'sub dir/note.txt'))?.full === file)
+    ok('資料夾回 dir', (await links.resolveCandidate(base, 'sub dir'))?.kind === 'dir')
+    ok('檔案回 file', (await links.resolveCandidate(base, 'sub dir/note.txt'))?.kind === 'file')
+    ok('絕對路徑不需要 cwd', (await links.resolveCandidate('', file))?.full === file)
     // 沒有基準就別拿 process.cwd() 頂替：那是 App 自己的目錄，跟畫面上看到的無關
-    ok('相對路徑沒有 cwd 就回 null', links.resolveCandidate('', 'sub dir/note.txt') === null)
-    ok('不存在的路徑回 null', links.resolveCandidate(base, 'nope/none.txt') === null)
-    ok('含控制字元回 null', links.resolveCandidate(base, `sub dir${String.fromCharCode(0)}/note.txt`) === null)
-    ok('超長字串回 null', links.resolveCandidate(base, 'a'.repeat(600)) === null)
-    ok('非字串回 null', links.resolveCandidate(base, { full: file }) === null)
+    ok('相對路徑沒有 cwd 就回 null', (await links.resolveCandidate('', 'sub dir/note.txt')) === null)
+    ok('不存在的路徑回 null', (await links.resolveCandidate(base, 'nope/none.txt')) === null)
+    ok('含控制字元回 null', (await links.resolveCandidate(base, `sub dir${String.fromCharCode(0)}/note.txt`)) === null)
+    ok('超長字串回 null', (await links.resolveCandidate(base, 'a'.repeat(600))) === null)
+    ok('非字串回 null', (await links.resolveCandidate(base, { full: file })) === null)
 
     const projects = [
       { id: 'w_parent', path: base },

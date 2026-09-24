@@ -205,6 +205,22 @@ function saveClosedBlocks() {
 /** @param {string} id */
 const isOpen = (id) => !closedBlocks.has(id)
 
+/**
+ * 區塊裡的長清單（S.M.A.R.T.、磁碟區、感測器…）跟區塊相反：**預設收起**，點開的才記。
+ * 全部攤開時一顆硬碟就吃掉快一千像素高，總覽等於要捲六千多像素才看得完。
+ */
+const OPEN_SUBS_KEY = 'voiceink.sysmon.openSubs'
+const openSubs = new Set((() => {
+  try {
+    const raw = JSON.parse(localStorage.getItem(OPEN_SUBS_KEY) || '[]')
+    return Array.isArray(raw) ? raw.filter((v) => typeof v === 'string') : []
+  } catch { return [] }
+})())
+
+function saveOpenSubs() {
+  try { localStorage.setItem(OPEN_SUBS_KEY, JSON.stringify([...openSubs])) } catch { /* 存不了就算了 */ }
+}
+
 const DASH = '—'
 
 /** LibreHardwareMonitor 的感測器型別 → 中文與單位 */
@@ -1288,7 +1304,7 @@ function describeBlocks(s, inv) {
       spark: null,
       stats: [
         ['主機名稱', sys?.hostname || DASH],
-        ['處理程序', String(s.processes.length)]
+        ['處理程序', String(s.processes.reduce((n, p) => n + (p.count || 1), 0))]
       ],
       viz: null,
       specs: [
@@ -1311,7 +1327,7 @@ function describeBlocks(s, inv) {
         ['系統磁碟', osInfo?.systemDrive || DASH],
         ['Windows 目錄', osInfo?.windowsDir || DASH],
         ['虛擬化', sys?.hypervisor ? 'Hypervisor 執行中' : '未執行'],
-        ['處理程序數', String(s.processes.length)],
+        ['處理程序數', String(s.processes.reduce((n, p) => n + (p.count || 1), 0))],
         ['已開機', fmtUptime(osInfo?.bootedAt)]
       ],
       groups: [
@@ -1579,16 +1595,16 @@ function buildBody(b, desc) {
     const det = document.createElement('details')
     det.className = 'sysmon-sub'
     const key = `${desc.id}/${group.title}`
-    det.open = isOpen(key)
+    det.open = openSubs.has(key)
     const summary = document.createElement('summary')
     summary.textContent = `${group.title}（${group.rows.length}）`
     /** @type {HTMLElement[]} */
     const slots = []
     det.append(summary, buildSpecList(group.rows, slots))
     det.addEventListener('toggle', () => {
-      if (det.open) closedBlocks.delete(key)
-      else closedBlocks.add(key)
-      saveClosedBlocks()
+      if (det.open) openSubs.add(key)
+      else openSubs.delete(key)
+      saveOpenSubs()
     })
     b.body.appendChild(det)
     b.slots.groups.push(slots)
@@ -1630,6 +1646,7 @@ function renderBlocks() {
 
     b.el.dataset.span = String(desc.span || 2)
     b.name.textContent = desc.title
+    b.name.title = desc.title
     b.sub.textContent = desc.sub
     // 標題列必須是單行（不然每塊高度會跳），所以放不下時靠 title 補完整內容
     b.sub.title = desc.sub
@@ -1754,6 +1771,13 @@ function rebuildRows() {
       ? `${state.rows.length} 組 / ${raw} 個處理程序`
       : `${state.rows.length} 組（${raw} 個處理程序）`
   }
+  // 選中的那個已經結束：「強制結束」不能還亮著（按下去只會得到找不到程序）
+  if (state.selectedPid != null && !s.processes.some((p) => p.pid === state.selectedPid)) {
+    state.selectedPid = null
+    updateKillButtons()
+    const box = $('sysmonDetail')
+    if (box) box.textContent = '程序已結束。'
+  }
   renderVisibleRows()
 }
 
@@ -1871,11 +1895,16 @@ async function doKill() {
   const proc = state.rows.find((p) => p.pid === pid)
   const pids = proc?.pids?.length ? proc.pids : [pid]
   const force = confirm?.dataset.force === '1'
+  // 合併的那組（chrome ×30）強制結束帶 /T 會連子程序一起收，後面的 pid 早就不在了：
+  // 全部跑完、只要有一個成功就算成功
+  let okCount = 0
   let res = { ok: true }
   for (const id of pids) {
-    res = await electronAPI.sysmon.kill(id, force)
-    if (!res?.ok) break
+    const one = await electronAPI.sysmon.kill(id, force)
+    if (one?.ok) okCount += 1
+    else res = one
   }
+  if (okCount > 0) res = { ok: true }
   if (res?.ok) {
     state.selectedPid = null
     updateKillButtons()
@@ -2248,7 +2277,32 @@ async function toggleMemStress(run) {
 }
 
 /** 壓力測試頁上方那一條即時儀錶：跑測試時不必切回總覽也看得到負載與溫度 */
+/** main 那邊 5 分鐘到會自己停，不發事件：畫面還寫「執行中」時順手問一次真相 */
+function syncStressStatus() {
+  const cpuStat = $('sysmonCpuStressStat')
+  const memStat = $('sysmonMemStressStat')
+  const showing = [cpuStat, memStat].some((el) => el?.textContent?.startsWith('執行中'))
+  if (!showing || state.stressSyncing) return
+  state.stressSyncing = true
+  electronAPI.sysmon.stressStatus().then((res) => {
+    if (!res?.ok) return
+    const pairs = [
+      [res.data.cpu.running, cpuStat, 'sysmonCpuStressStart', 'sysmonCpuStressStop'],
+      [res.data.memory.running, memStat, 'sysmonMemStressStart', 'sysmonMemStressStop']
+    ]
+    for (const [running, stat, startId, stopId] of pairs) {
+      if (running || !stat?.textContent?.startsWith('執行中')) continue
+      stat.textContent = '已停止。'
+      const start = /** @type {HTMLButtonElement|null} */ ($(startId))
+      const stop = /** @type {HTMLButtonElement|null} */ ($(stopId))
+      if (start) start.disabled = false
+      if (stop) stop.disabled = true
+    }
+  }).finally(() => { state.stressSyncing = false })
+}
+
 function renderStressGauges() {
+  syncStressStatus()
   const s = state.sample
   const cpuHost = $('sysmonStressCpu')
   const gpuHost = $('sysmonStressGpu')
@@ -2440,7 +2494,8 @@ const diskPeaks = new Map()
 function fillBenchDisks() {
   const select = /** @type {HTMLSelectElement|null} */ ($('sysmonBenchDisk'))
   if (!select || !state.inventory) return
-  const vols = state.inventory.volumes || []
+  // 雲端硬碟這類虛擬磁碟測出來的不是硬碟速度（總覽也把它們分開列）
+  const vols = (state.inventory.volumes || []).filter((v) => !v.virtual)
   if (!vols.length || select.dataset.filled === String(vols.length)) return
   const current = select.value
   select.textContent = ''
@@ -2476,7 +2531,7 @@ async function runBench() {
   }
   const d = res.data
   showBenchResult(
-    `${d.drive}　序列寫入 ${d.writeMbPerSec.toFixed(1)} MB/s（含 fsync，實際落盤）\n` +
+    `${drive}　序列寫入 ${d.writeMbPerSec.toFixed(1)} MB/s（含 fsync，實際落盤）\n` +
     `序列讀取 ${d.readMbPerSec.toFixed(1)} MB/s（含系統快取）\n` +
     `測試檔 ${d.sizeMb} MB，已刪除`
   )
@@ -2688,7 +2743,13 @@ export function initSysmonPage() {
   $('sysmonStressStop')?.addEventListener('click', () => stopStress())
 
   $('sysmonBenchStart')?.addEventListener('click', runBench)
-  $('sysmonBenchStop')?.addEventListener('click', () => electronAPI.sysmon.cancelDiskBench())
+  $('sysmonBenchStop')?.addEventListener('click', () => {
+    // 要等測試檔那一輪寫完才停得下來，先講一聲
+    showBenchResult('正在取消…')
+    const stop = /** @type {HTMLButtonElement|null} */ ($('sysmonBenchStop'))
+    if (stop) stop.disabled = true
+    void electronAPI.sysmon.cancelDiskBench()
+  })
 
   // 取樣器常駐：縮到系統匣也不停。被藏住時只略過重畫，回來立刻把上一筆畫上去。
   document.addEventListener('visibilitychange', () => {
@@ -2754,6 +2815,10 @@ async function enableSensors() {
     if (status.state === 'declined' && state.sensorsAuto) {
       state.sensorsAuto = false
       electronAPI.store.set('sysmonSensors', false)
+    } else if ((status.state === 'on' || status.state === 'starting') && !state.sensorsAuto) {
+      // 之前按過「否」、這次手動重試成功：下次開 App 要照常自己起來
+      state.sensorsAuto = true
+      electronAPI.store.set('sysmonSensors', true)
     }
     // 感測器一進來就重畫，溫度那幾區才會立刻出現
     if (state.subtab === 'overview') renderBlocks()

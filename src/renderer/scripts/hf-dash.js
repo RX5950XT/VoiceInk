@@ -3,7 +3,7 @@
  * 金鑰不出 renderer；端點只顯示 127.0.0.1 與埠。
  */
 
-import { electronAPI, showToast } from './app.js'
+import { electronAPI } from './app.js'
 
 const POLL_MS = 2000
 const $ = (id) => document.getElementById(id)
@@ -95,7 +95,7 @@ async function refresh(seq) {
   if (hint) {
     hint.textContent = data.running
       ? `上線中 · 埠 ${data.port}。聊天頁的本機模型會自動連這裡。`
-      : '啟動執行環境後，聊天與其他程式可打這個端點。'
+      : '啟動執行環境後，聊天頁的本機模型會自動連這裡（有金鑰保護，外部程式用不了）。'
   }
   spec($('hfServerSpecs'), [
     ['OpenAI', data.openaiBaseUrl || '—'],
@@ -135,16 +135,4 @@ export function stopDash() {
   generation++
   clearTimeout(timer)
   timer = null
-}
-
-export async function copyEndpoint() {
-  const result = await electronAPI.hfmodels.dashboard()
-  const url = result?.ok ? result.data?.openaiBaseUrl : ''
-  if (!url) { showToast('執行環境尚未啟動', 'error'); return }
-  try {
-    await navigator.clipboard.writeText(url)
-    showToast('已複製 OpenAI 端點', 'success')
-  } catch {
-    showToast('無法寫入剪貼簿', 'error')
-  }
 }

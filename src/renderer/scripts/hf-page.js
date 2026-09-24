@@ -9,9 +9,9 @@
  * 錯誤訊息都是 HF 上任何人都能填的字串。
  */
 
-import { electronAPI, showToast } from './app.js'
+import { electronAPI, showToast, cleanIpcError } from './app.js'
 import { renderMarkdown } from './markdown.js'
-import { startDash, stopDash, copyEndpoint } from './hf-dash.js'
+import { startDash, stopDash } from './hf-dash.js'
 
 /** 搜尋輸入防抖：每打一個字就打一次 HF 太粗魯 */
 const SEARCH_DEBOUNCE_MS = 400
@@ -55,6 +55,8 @@ const $ = (id) => document.getElementById(id)
  * @returns {Promise<any>} 失敗回 null
  */
 async function call(promise, opt = {}) {
+  // 新的一次操作先清掉上一次的錯誤，不然紅字會一直掛到下次搜尋
+  if (!opt.quiet) clearError()
   let result
   try {
     result = await promise
@@ -282,6 +284,10 @@ function renderDownloadOptions(detail) {
     body.appendChild(el('p', 'setting-hint',
       '讀不到檔頭，算不出可行性；下載後仍會顯示實際參數。'))
   }
+  // 沒偵測到 GPU 時每個量化都會被標成「CPU／放不下」，原因不能只藏在 hover 裡
+  if (detail.info && Array.isArray(detail.devices) && !detail.devices.length) {
+    body.appendChild(el('p', 'setting-hint', '沒偵測到 GPU（執行環境還沒裝？），以下先用 CPU 估算。'))
+  }
   for (const variant of variants) body.appendChild(renderVariantRow(detail.repoId, variant))
   return section
 }
@@ -317,10 +323,27 @@ function renderVariantRow(repoId, variant) {
   const dl = el('button', 'btn btn-primary btn-sm', variant.installed ? '已安裝' : '下載')
   dl.type = 'button'
   dl.disabled = !!variant.installed
-  dl.addEventListener('click', () => startInstall(repoId, variant, dl, bar, fill))
+  dl.addEventListener('click', () => startInstall(repoId, variant, dl, bar, fill, cancel))
   actions.appendChild(dl)
+  // 下載動輒幾十 GB，按錯要能停（main 留著 .part，下次可以續傳）
+  const cancel = el('button', 'btn btn-secondary btn-sm hidden', '取消')
+  cancel.type = 'button'
+  cancel.addEventListener('click', () => void call(electronAPI.hfmodels.cancelInstall(variant.id)))
+  actions.appendChild(cancel)
   row.appendChild(actions)
   row.appendChild(bar)
+  // 下載中切去看別的 repo 再回來：進度改接到這一份新畫的元素上
+  const live = progress.get(variant.id)
+  if (live) {
+    dl.disabled = true
+    dl.textContent = '下載中…'
+    bar.classList.remove('hidden')
+    cancel.classList.remove('hidden')
+    live.fill = fill
+    live.button = dl
+    live.cancel = cancel
+    live.bar = bar
+  }
   return row
 }
 
@@ -328,22 +351,26 @@ function renderVariantRow(repoId, variant) {
  * @param {string} repoId @param {object} variant
  * @param {HTMLButtonElement} button @param {HTMLElement} bar @param {HTMLElement} fill
  */
-async function startInstall(repoId, variant, button, bar, fill) {
+async function startInstall(repoId, variant, button, bar, fill, cancel) {
   button.disabled = true
   button.textContent = '下載中…'
   bar.classList.remove('hidden')
   fill.style.width = '0%'
-  progress.set(variant.id, { received: 0, total: variant.bytes, fill, button })
+  cancel?.classList.remove('hidden')
+  progress.set(variant.id, { received: 0, total: variant.bytes, fill, button, cancel, bar })
   const result = await call(electronAPI.hfmodels.install(repoId, variant.id))
+  // 期間可能重畫過，用最新那份元素收尾
+  const live = progress.get(variant.id) || { button, bar, cancel }
   progress.delete(variant.id)
+  live.cancel?.classList.add('hidden')
   if (!result) {
-    button.disabled = false
-    button.textContent = '重試下載'
-    bar.classList.add('hidden')
+    live.button.disabled = false
+    live.button.textContent = '重試下載'
+    live.bar.classList.add('hidden')
     return
   }
-  button.textContent = '已安裝'
-  bar.classList.add('hidden')
+  live.button.textContent = '已安裝'
+  live.bar.classList.add('hidden')
   variant.installed = true
   showToast(`已下載 ${variant.id}，正在自動量測最佳參數`, 'success')
   refreshLibrary()
@@ -405,7 +432,7 @@ function renderModelCard(model) {
     const rows = [
       ['Context', model.plan.ctxSize ? `${model.plan.ctxSize}` : ''],
       ['KV', model.plan.cacheTypeK ? `${model.plan.cacheTypeK}/${model.plan.cacheTypeV}` : ''],
-      ['MTP', model.plan.hasMtp ? (model.plan.specType || 'draft-mtp') : '關'],
+      ['MTP', model.plan.hasMtp ? (model.plan.specType || '關') : '關'],
       ['視覺', model.plan.vision ? (model.mmproj || '開') : '無'],
       ['思考', model.plan.reasoning ? '開' : (model.thinkingCapable ? '關' : '')],
       ['GPU', model.plan.device || 'CPU']
@@ -479,6 +506,8 @@ function armDelete(model, button) {
 async function doDelete(model) {
   const done = await call(electronAPI.hfmodels.remove(model.id))
   if (done) showToast(`已刪除 ${model.id}`, 'success')
+  // 探索頁的詳情是快取的（installed 在裡面），不清掉的話那個量化會一直是「已安裝」按不下去
+  inspected.clear()
   refreshLibrary()
 }
 
@@ -515,6 +544,10 @@ async function runAutoTune(id, button) {
   button.disabled = false
   button.textContent = label || '自動調參'
   if (!result) return
+  if (Array.isArray(result.results) && !result.results.some((r) => r.tps > 0)) {
+    showToast('量測沒有跑出任何結果，參數沒變', 'error')
+    return
+  }
   showToast(result.best
     ? `已套用最快的一組：${result.best.label}`
     : '量完了，目前這組已經是最快的', 'success')
@@ -738,9 +771,12 @@ async function runTune() {
   if (!result) { if (status) status.textContent = '調校失敗'; return }
   if (status) {
     const rows = (result.results || []).map((r) => `${r.label} ${r.tps ? r.tps.toFixed(1) : '—'} tok/s`)
-    status.textContent = result.best
-      ? `最快：${result.best.label}（已套用）　${rows.join('・')}`
-      : `目前這組已經是最快的　${rows.join('・')}`
+    const measured = (result.results || []).some((r) => r.tps > 0)
+    status.textContent = !measured
+      ? `量測沒有跑出任何結果，參數沒變　${rows.join('・')}`
+      : result.best
+        ? `最快：${result.best.label}（已套用）　${rows.join('・')}`
+        : `目前這組已經是最快的　${rows.join('・')}`
   }
   await refreshLibrary()
   const fresh = libraryRows.find((m) => m.id === editing?.id)
@@ -861,7 +897,7 @@ async function installRuntime(item, button) {
     await electronAPI.models.download(item.key)
     showToast(`已安裝 ${item.label}`, 'success')
   } catch (error) {
-    showError(String(error?.message || '執行環境下載失敗'))
+    showError(cleanIpcError(error) || '執行環境下載失敗')
     button.disabled = false
     button.textContent = '安裝'
   } finally {
@@ -955,7 +991,9 @@ export function start() {
     $('hfSearchBtn')?.addEventListener('click', runSearch)
     $('hfSearchInput')?.addEventListener('input', scheduleSearch)
     $('hfSearchInput')?.addEventListener('keydown', (event) => {
-      if (/** @type {KeyboardEvent} */ (event).key === 'Enter') { clearTimeout(searchTimer); runSearch() }
+      const key = /** @type {KeyboardEvent} */ (event)
+      if (key.isComposing || key.keyCode === 229) return // 輸入法選字的 Enter 不算
+      if (key.key === 'Enter') { clearTimeout(searchTimer); runSearch() }
     })
     $('hfSearchSort')?.addEventListener('change', runSearch)
     $('hfRuntimeToggle')?.addEventListener('click', toggleRuntime)
@@ -971,14 +1009,16 @@ export function start() {
     $('hfChooseDirBtn')?.addEventListener('click', chooseDir)
     $('hfTokenSaveBtn')?.addEventListener('click', saveToken)
     $('hfModelsMax')?.addEventListener('change', async (event) => {
-      const value = Number(/** @type {HTMLInputElement} */ (event.target).value) || 2
-      await electronAPI.store.set('hfModelsMax', Math.max(1, Math.min(8, value)))
-      await call(electronAPI.hfmodels.applyPresets(), { quiet: true })
+      const input = /** @type {HTMLInputElement} */ (event.target)
+      const value = Math.max(1, Math.min(8, Math.round(Number(input.value)) || 2))
+      input.value = String(value) // 框裡顯示的要跟實際存的一樣
+      await electronAPI.store.set('hfModelsMax', value)
+      const applied = await call(electronAPI.hfmodels.applyPresets())
+      if (applied) showToast('已套用（執行環境若在跑會重新啟動，已載入的模型要重新載入）', 'success')
     })
     $('hfParamsSaveBtn')?.addEventListener('click', saveParams)
     $('hfParamsCancelBtn')?.addEventListener('click', closeParams)
     $('hfParamsResetBtn')?.addEventListener('click', resetParams)
-    $('hfCopyEndpointBtn')?.addEventListener('click', copyEndpoint)
     $('hfAutoInstallBtn')?.addEventListener('click', autoInstallRuntime)
     $('hfAutoTuneBtn')?.addEventListener('click', runAutoTuneFromDialog)
     $('hfFitBtn')?.addEventListener('click', runFit)

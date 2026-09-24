@@ -99,14 +99,16 @@ export function oscLinkHandler(id) {
     activate(event, uri) {
       event?.preventDefault?.()
       let parsed
-      try { parsed = new URL(uri) } catch { return }
+      // 畫面上是可點的底線，點了不開也要講一聲，不然像壞掉
+      const unsupported = () => showToast('這種連結不支援開啟', 'error')
+      try { parsed = new URL(uri) } catch { unsupported(); return }
       if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
         void openBrowserTab(parsed.href)
         return
       }
-      if (parsed.protocol !== 'file:') return
+      if (parsed.protocol !== 'file:') { unsupported(); return }
       // file:///C:/foo → C:\foo；UNC（file://server/share）先不收
-      if (parsed.host) return
+      if (parsed.host) { unsupported(); return }
       const local = decodeURIComponent(parsed.pathname).replace(/^\/([A-Za-z]:)/, '$1').replace(/\//g, '\\')
       if (local) activateHit(id, { text: local, url: '' })
     }

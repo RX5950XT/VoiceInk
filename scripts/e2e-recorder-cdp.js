@@ -197,12 +197,12 @@ async function main() {
     await cdp.eval(`document.getElementById('clearFileBtn').click(), 'ok'`)
     await cdp.eval(`document.querySelector('#sttSubtabs [data-subtab="recorder"]').click(), 'ok'`)
     await cdp.eval(`document.querySelector('#sttSubtabs [data-subtab="file"]').click(), 'ok'`)
-    await waitFor(() => cdp.eval(`document.getElementById('recordingPick').options.length === 2`), 8000, '錄音下拉')
+    await waitFor(() => cdp.eval(`document.querySelectorAll('#recordingPickList .recording-pick-item').length === 1`), 8000, '最近的錄音')
     const pickVisible = await cdp.eval(`document.getElementById('recordingPickGroup').offsetHeight > 0`)
-    ok('檔案轉錄的「或選一段錄音」看得到', pickVisible)
+    ok('檔案轉錄的「最近的錄音」看得到', pickVisible)
     await cdp.shot('file-pick.png')
-    await cdp.eval(`(() => { const s = document.getElementById('recordingPick'); s.value = ${JSON.stringify(recName)}; s.dispatchEvent(new Event('change')); return 1 })()`)
-    ok('從下拉選錄音也帶得進來', await cdp.eval(`document.querySelector('#fileInfo .file-name').textContent === ${JSON.stringify(recName)} && document.getElementById('recordingPick').value === ''`))
+    await cdp.eval(`document.querySelector('#recordingPickList .recording-pick-item[data-name=${JSON.stringify(recName)}]').click(), 'ok'`)
+    ok('點最近的錄音就帶得進來', await cdp.eval(`document.querySelector('#fileInfo .file-name').textContent === ${JSON.stringify(recName)}`))
     await cdp.eval(`document.getElementById('clearFileBtn').click(), 'ok'`)
 
     // ---- 字幕紀錄 ----

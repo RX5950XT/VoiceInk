@@ -39,37 +39,43 @@ async function main() {
     env[handler]({ key: 'Enter', preventDefault() {}, target: { value: '中文' } })
     assert.ok(actions > 0, `${file} 組字結束後可正常導覽`)
   }
+  // Enter 由 openDialog 掛在 dialog 上的 capture 監聽統一處理，所以用真的 openDialog 跑
   let input
-  let closed = 0
-  let complete
-  const context = {
-    document: { createElement: () => ({ appendChild() {}, setAttribute() {},
-      focus() {}, select() {}, addEventListener(type, fn) { this[type] = fn } }) },
-    fakeDialog(opts, fill) {
-      fill({ appendChild(node) {} })
-      return { dialog: { close() { closed++; complete(true) } },
-        done: new Promise(resolve => { complete = resolve }) }
+  let dialog
+  function node(tag) {
+    const listeners = {}
+    return {
+      tagName: tag.toUpperCase(), value: '', returnValue: '',
+      appendChild() {}, setAttribute() {}, focus() {}, select() {}, remove() {}, showModal() {},
+      querySelector() { return null },
+      addEventListener(type, fn) { listeners[type] = fn },
+      fire(type, event) { listeners[type]?.(event) },
+      close(value) { this.returnValue = value; this.closed = (this.closed || 0) + 1; this.fire('close') }
     }
   }
-  const create = context.document.createElement
-  context.document.createElement = tag => {
-    const node = create()
-    if (tag === 'input') input = node
-    return node
+  const context = {
+    document: {
+      body: { appendChild() {} },
+      createElement(tag) {
+        const made = node(tag)
+        if (tag === 'input') input = made
+        if (tag === 'dialog') dialog = made
+        return made
+      }
+    }
   }
   vm.createContext(context)
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/renderer/scripts/app-dialog.js'), 'utf8')
     .replace(/^export /gm, ''), context)
-  vm.runInContext('openDialog = fakeDialog', context)
   const answer = context.askInput('重新命名')
   for (const event of [{ isComposing: true }, { isComposing: false, keyCode: 229 }]) {
-    input.keydown({ key: 'Enter', preventDefault() {}, ...event })
-    assert.equal(closed, 0, '選中文字時 Enter 不得提交或關閉輸入框')
+    dialog.fire('keydown', { key: 'Enter', target: input, preventDefault() {}, ...event })
+    assert.equal(dialog.closed || 0, 0, '選中文字時 Enter 不得提交或關閉輸入框')
   }
   input.value = '中文檔名'
-  input.keydown({ key: 'Enter', isComposing: false, keyCode: 13, preventDefault() {} })
+  dialog.fire('keydown', { key: 'Enter', isComposing: false, keyCode: 13, target: input, preventDefault() {} })
   assert.equal(await answer, '中文檔名')
-  assert.equal(closed, 1)
+  assert.equal(dialog.closed, 1)
   console.log('PASS 輸入彈窗組字 Enter 保留、組字完成後 Enter 提交')
 }
 main().catch(error => { console.error(error); process.exitCode = 1 })

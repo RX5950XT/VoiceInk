@@ -33,6 +33,8 @@ function makeFakeAutoUpdater() {
     on(name, fn) { handlers[name] = fn },
     fire(name, payload) { handlers[name]?.(payload) },
     async checkForUpdates() { this.checkCount += 1; return null },
+    downloadCount: 0,
+    async downloadUpdate() { this.downloadCount += 1; return [] },
     install(silent, runAfter) { this.installCalls.push([silent, runAfter]); return true },
     quitAndInstall(silent, runAfter) { this.quitCalls.push([silent, runAfter]) }
   }
@@ -97,7 +99,16 @@ async function main() {
     assert.strictEqual(updater.status().state, 'available')
     assert.strictEqual(updater.status().version, '1.12.0')
     assert.ok(seen.length > 0, '狀態要推播給 renderer')
-    console.log('[B] 關閉自動更新只通知不下載 ✓')
+    assert.strictEqual(fake.downloadCount, 0, '只通知，不自己下載')
+    // 手動模式：發現新版後再按一次（按鈕已變「下載更新」）才下載，不是重新檢查
+    const checksBefore = fake.checkCount
+    await updater.check()
+    assert.strictEqual(fake.downloadCount, 1, '手動模式要有辦法下載')
+    assert.strictEqual(fake.checkCount, checksBefore, '按「下載更新」不該再檢查一次')
+    assert.strictEqual(updater.status().state, 'downloading')
+    fake.fire('error', new Error('boom'))
+    assert.ok(updater.status().message.startsWith('下載更新失敗'), '下載中失敗不能說成檢查失敗')
+    console.log('[B] 關閉自動更新只通知不下載、按鈕可手動下載 ✓')
   }
 
   // [C] 狀態機：檢查 → 下載 → 完成，百分比與訊息都要跟上

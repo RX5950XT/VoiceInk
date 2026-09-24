@@ -13,6 +13,10 @@ const HISTORY = 60
 const state = {
   inited: false,
   timer: 0,
+  /** 上一次套用失敗的原因（main 不留，下次操作才清） */
+  applyError: '',
+  /** 套用成功當下的草稿（JSON），用來看之後有沒有動過 */
+  appliedDraft: '',
   /** @type {any} */
   data: null,
   /** @type {any} */
@@ -162,8 +166,10 @@ function renderNotices(data) {
   if (data.dirtyLastRun && !data.applied) {
     notes.push({ kind: 'info', text: '上次可能沒還原；重開機或按「還原出廠」。' })
   }
-  if (data.panic || data.lastError) {
-    notes.push({ kind: 'warn', text: data.lastError || '過熱，已還原出廠。' })
+  // 套用失敗的原因 main 不留（下一輪輪詢就洗掉），renderer 自己記到下次操作
+  const error = data.lastError || state.applyError
+  if (data.panic || error) {
+    notes.push({ kind: 'warn', text: error || '過熱，已還原出廠。' })
   }
   for (const note of notes) {
     host.append(el('p', `oc-note oc-note-${note.kind}`, note.text))
@@ -554,8 +560,10 @@ function render(data) {
   state.data = data
   const status = $('ocStatus')
   if (status) {
+    // 套用後又動了滑桿：草稿跟已套用的不一樣，不能還說「已套用」
+    const changed = data.applied && state.appliedDraft && JSON.stringify(data.draft) !== state.appliedDraft
     status.textContent = data.applied
-      ? '已套用（這次開機有效）'
+      ? (changed ? '已套用；有變更還沒套用' : '已套用（這次開機有效）')
       : (data.available ? '尚未套用' : '感測器未連線')
   }
   const apply = /** @type {HTMLButtonElement|null} */ ($('ocApplyBtn'))
@@ -873,11 +881,19 @@ function initOcPanel() {
   state.inited = true
   $('ocApplyBtn')?.addEventListener('click', () => {
     electronAPI.sysmon.ocApply().then((res) => {
-      if (res?.ok) render(res.data)
-      else renderNotices({ ...state.data, lastError: res?.error?.message || '套用失敗' })
+      if (res?.ok) {
+        state.applyError = ''
+        state.appliedDraft = JSON.stringify(res.data?.draft)
+        render(res.data)
+      } else {
+        state.applyError = res?.error?.message || '套用失敗'
+        renderNotices(state.data)
+      }
     })
   })
   $('ocResetBtn')?.addEventListener('click', () => {
+    state.applyError = ''
+    state.appliedDraft = ''
     electronAPI.sysmon.ocReset().then((res) => { if (res?.ok) render(res.data) })
   })
 }

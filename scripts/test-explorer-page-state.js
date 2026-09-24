@@ -2,7 +2,7 @@ const fs = require('fs')
 const vm = require('vm')
 const assert = require('assert/strict')
 const source = fs.readFileSync('src/renderer/scripts/explorer-page.js', 'utf8').replace(/^import[\s\S]*?from '[^']+'\r?\n/gm, '').replace(/^export /gm, '')
-const input = { value: 'old' }
+const input = { value: 'old', setAttribute() {} }
 const head = { hidden: false, querySelectorAll: () => [] }
 const pending = {}
 const api = { uffsSearch: () => new Promise(resolve => { pending.search = resolve }), listDir: path => new Promise(resolve => { pending[path] = resolve }), watch: async () => ({ ok: true, data: {} }), saveState: async () => {}, uffsCancel: async () => {} }

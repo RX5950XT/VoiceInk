@@ -50,13 +50,15 @@ async function run() {
   await started
   const settings = { visibleProviders: ['codex'], providerOrder: [...PROVIDER_IDS].reverse() }
   await service.saveSettings(settings)
+  // 存進去會補上 bar 預設值；vm 裡建的物件原型不同，JSON 來回一次再比
+  const expected = JSON.parse(JSON.stringify(store.sanitizeSettings(settings)))
   release()
   await sync
-  assert.deepEqual(state.settings, settings, '同步完成不可蓋回舊的排序與顯示設定')
+  assert.deepEqual(state.settings, expected, '同步完成不可蓋回舊的排序與顯示設定')
   assert.ok(state.lastSyncedAt > 0, '設定儲存不可清掉同步結果')
 
   await Promise.all([service.saveSettings(settings), service.sync()])
-  assert.deepEqual(state.settings, settings)
+  assert.deepEqual(state.settings, expected)
   assert.ok(state.lastSyncedAt > 0)
   console.log('PASS: usage sync preserves settings saved during provider requests and concurrent saves')
 }

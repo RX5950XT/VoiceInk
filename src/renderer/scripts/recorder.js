@@ -154,6 +154,10 @@ function paintState() {
   $('recStopBtn').classList.toggle('hidden', !on)
   $('recStatus').classList.toggle('active', on)
   $('recStatus').querySelector('.status-text').textContent = on ? '錄音中' : '未錄音'
+  // 切到別頁也照樣在錄：導覽列的「語音轉文字」亮紅點，不會忘了它還開著
+  const nav = document.querySelector('.nav-tab[data-page="stt"]')
+  nav?.classList.toggle('is-recording', on)
+  if (nav) nav.title = on ? '語音轉文字（錄音機錄音中）' : '語音轉文字'
   if (!on) {
     $('recLevel').style.width = '0%'
     $('recTimer').textContent = '00:00'

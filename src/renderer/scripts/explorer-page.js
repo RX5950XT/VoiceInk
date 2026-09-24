@@ -17,6 +17,7 @@ import { openPreview as openFilePreview, closePreview as closeFilePreview, previ
 import { mountExplorerOperations } from './explorer-operations.js'
 import { nextZoomState } from './explorer-zoom.js'
 import { initResizer } from './pane-resize.js'
+import { syncCustomSelects } from './custom-select.js'
 import {
   BROWSE_PAGE_SIZE as BROWSE_PAGE_SIZE_IMPORT,
   normalizeBrowseState as normalizeBrowseStateImport,
@@ -24,7 +25,9 @@ import {
   mergeBrowsePage as mergeBrowsePageImport,
   visibleBrowseRange as visibleBrowseRangeImport,
   pageOffsetsForRange as pageOffsetsForRangeImport,
-  selectBrowseRange as selectBrowseRangeImport
+  selectBrowseRange as selectBrowseRangeImport,
+  BROWSE_SORT_KEYS,
+  BROWSE_SEARCH_SORTS
 } from './explorer-browse.js'
 import {
   RECYCLE_CWD,
@@ -145,7 +148,7 @@ function normalizeRightPaneState(raw) {
     history,
     histIndex: Math.max(0, Math.min(history.length - 1, Number(value.histIndex) | 0)),
     search: String(value.search || '').trim().slice(0, 200),
-    sortBy: value.sortBy === 'date' || value.sortBy === 'size' ? value.sortBy : 'name',
+    sortBy: BROWSE_SORT_KEYS.has(value.sortBy) ? value.sortBy : 'name',
     sortDesc: value.sortDesc === true,
     selected: Array.isArray(value.selected) ? value.selected.filter(Boolean).slice(0, 10000) : [],
     anchor: String(value.anchor || ''),
@@ -194,6 +197,8 @@ let contextMenuSeq = 0
 let searchTimer = 0
 let truncated = false
 let searchSort = 'rank'
+/** 左欄搜尋框：'global' 走 UFFS 整機搜尋；'filter' 只篩目前資料夾（跟右欄同一顆切換）。 */
+let searchMode = 'global'
 let editingPath = false
 let marqueeDragging = false
 let marqueePaintMissed = false
@@ -227,6 +232,8 @@ const secondPane = {
   search: '',
   sortBy: 'name',
   sortDesc: false,
+  /** 整機搜尋結果的排序；'rank' 是 UFFS 回來的相關度順序 */
+  searchSort: 'rank',
   view: 'list',
   tile: DEFAULT_TILE,
   /** 'filter' 只篩目前資料夾；'global' 走 UFFS 整機搜尋，結果放進 hits。 */
@@ -296,13 +303,106 @@ function iconFor(entry) {
   return '📄'
 }
 
-function inSearch() {
+function searchQuery() {
   const input = /** @type {HTMLInputElement | null} */ ($('exSearch'))
-  return Boolean(input && input.value.trim())
+  return input ? input.value.trim() : ''
+}
+
+/** 整機搜尋中（清單換成搜尋結果）。只篩目前資料夾不算。 */
+function inSearch() {
+  return searchMode === 'global' && Boolean(searchQuery())
+}
+
+/** 只篩目前資料夾時的關鍵字（小寫）；沒在篩就是空字串 */
+function filterQuery() {
+  return searchMode === 'filter' ? searchQuery().toLocaleLowerCase() : ''
 }
 
 function listed() {
-  return inSearch() ? hits : entries
+  if (inSearch()) return hits
+  const query = filterQuery()
+  if (!query) return entries
+  return entries.filter((entry) => entry && String(entry.name || '').toLocaleLowerCase().includes(query))
+}
+
+const SORT_OPTIONS = {
+  browse: [['name', '名稱'], ['date', '修改時間'], ['size', '大小'], ['type', '類型']],
+  // 搜尋結果的名稱欄顯示的是完整路徑，所以那一欄照路徑排
+  search: [['rank', '相關度'], ['name', '路徑'], ['date', '修改時間'], ['size', '大小'], ['type', '類型']]
+}
+
+/**
+ * 左右欄的排序下拉＋方向鈕：搜尋中跟瀏覽中能選的不一樣，換模式才重建選項。
+ * @param {HTMLSelectElement | null} select
+ * @param {HTMLElement | null} dirBtn
+ * @param {{ searching: boolean, key: string, desc: boolean, disabled?: boolean }} opts
+ */
+function paintSortControls(select, dirBtn, { searching, key, desc, disabled = false }) {
+  if (select) {
+    const mode = searching ? 'search' : 'browse'
+    let changed = false
+    if (select.dataset.mode !== mode) {
+      select.dataset.mode = mode
+      select.replaceChildren(...SORT_OPTIONS[mode].map(([value, label]) => new Option(label, value)))
+      changed = true
+    }
+    if (select.value !== key) {
+      select.value = key
+      changed = true
+    }
+    if (select.disabled !== disabled) {
+      select.disabled = disabled
+      changed = true
+    }
+    // 程式改 value 不會發 change，自訂下拉的按鈕字要另外同步
+    if (changed) syncCustomSelects()
+  }
+  const dir = /** @type {HTMLButtonElement | null} */ (dirBtn)
+  if (dir) {
+    dir.textContent = desc ? '↓' : '↑'
+    dir.disabled = disabled || key === 'rank'
+  }
+}
+
+/**
+ * @param {HTMLElement | null} btn
+ * @param {boolean} global
+ */
+function paintScopeButton(btn, global) {
+  if (!btn) return
+  btn.textContent = global ? '🌐' : '📁'
+  btn.title = global ? '搜尋整機檔案（按一下改成只篩這個資料夾）' : '只篩這個資料夾（按一下改成搜尋整機）'
+  btn.setAttribute('aria-label', `搜尋範圍：${global ? '整機' : '這個資料夾'}`)
+  btn.setAttribute('aria-pressed', global ? 'true' : 'false')
+}
+
+/**
+ * 搜尋結果排序。'rank' 照 UFFS 回來的順序（每筆帶 rank）；'name' 照完整路徑。
+ * @param {Array<object>} list
+ * @param {string} by
+ * @param {boolean} desc
+ */
+/** 排序用的副檔名；沒有副檔名的排最前面。 */
+function extOf(name) {
+  const text = String(name || '')
+  const dot = text.lastIndexOf('.')
+  return dot > 0 ? text.slice(dot + 1) : ''
+}
+
+function sortHitList(list, by, desc) {
+  const sorted = list.slice().sort((a, b) => {
+    if (by === 'rank') return (a.rank || 0) - (b.rank || 0)
+    // 照路徑排就是要看同一個資料夾的東西排在一起，資料夾不另外拉到最前面
+    if (by !== 'name' && Boolean(a.dir) !== Boolean(b.dir)) return a.dir ? -1 : 1
+    let cmp = 0
+    if (by === 'size') cmp = (Number(a.size) || 0) - (Number(b.size) || 0)
+    else if (by === 'date') cmp = (Number(a.mtimeMs) || 0) - (Number(b.mtimeMs) || 0)
+    else if (by === 'type') cmp = extOf(a.name).localeCompare(extOf(b.name), 'en', { sensitivity: 'base' })
+    if (by !== 'name' && cmp === 0) cmp = String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hant', { numeric: true, sensitivity: 'base' })
+    if (by === 'name') cmp = String(a.path || a.name || '').localeCompare(String(b.path || b.name || ''), 'zh-Hant', { numeric: true, sensitivity: 'base' })
+    return desc ? -cmp : cmp
+  })
+  return sorted
 }
 
 /** 右欄是不是作用中。單欄時永遠是左欄。 */
@@ -339,6 +439,7 @@ function setActivePane(which) {
   if (next === activePane) return
   activePane = next
   paintActivePane()
+  paintRecycleChrome()
   paintStatus()
   paintCmdBar()
   void paintDetail()
@@ -380,6 +481,25 @@ function initExplorerResizers() {
     min: 220,
     max: 520
   })
+  // 清單的「大小」「修改」欄：把手在欄的左緣，往左拖變寬；名稱欄吃剩下的
+  initResizer({
+    handleId: 'exColSizeGrip',
+    panelSelector: '#exListHead [data-sort="size"]',
+    cssVar: '--ex-col-size',
+    storageKey: 'exColSizeWidth',
+    invert: true,
+    min: 56,
+    max: 240
+  })
+  initResizer({
+    handleId: 'exColDateGrip',
+    panelSelector: '#exListHead [data-sort="date"]',
+    cssVar: '--ex-col-date',
+    storageKey: 'exColDateWidth',
+    invert: true,
+    min: 90,
+    max: 320
+  })
 }
 
 function bindOnce() {
@@ -404,6 +524,9 @@ function bindOnce() {
   $('exDualBtn')?.addEventListener('click', () => void toggleDualPane())
   $('exDetailToggleBtn')?.addEventListener('click', toggleDetailPane)
   $('exListHead')?.addEventListener('click', onSortClick)
+  $('exSort')?.addEventListener('change', (e) => applySort(String(e.target.value), sortDesc))
+  $('exSortDir')?.addEventListener('click', () => applySort(inSearch() ? searchSort : sortBy, !sortDesc))
+  $('exScopeBtn')?.addEventListener('click', () => setLeftScope(searchMode === 'global' ? 'filter' : 'global'))
   $('exList')?.addEventListener('mousedown', () => setActivePane('left'), true)
   $('exSecondPane')?.addEventListener('mousedown', () => setActivePane('right'), true)
   $('exList')?.addEventListener('mousedown', onListMouseDown)
@@ -457,12 +580,24 @@ function bindOnce() {
     paintSecondPane()
   })
   $('exSecondSort')?.addEventListener('change', (e) => {
-    secondPane.sortBy = e.target.value === 'date' || e.target.value === 'size' ? e.target.value : 'name'
+    const value = String(e.target.value)
+    if (secondInSearch()) {
+      secondPane.searchSort = BROWSE_SEARCH_SORTS.has(value) ? value : 'rank'
+      secondPane.hits = sortHitList(secondPane.hits, secondPane.searchSort, secondPane.sortDesc)
+      paintSecondPane()
+      return
+    }
+    secondPane.sortBy = BROWSE_SORT_KEYS.has(value) ? value : 'name'
     saveSecondPaneState()
     void loadSecond(secondPane.cwd, { pushHistory: false })
   })
   $('exSecondSortDir')?.addEventListener('click', () => {
     secondPane.sortDesc = !secondPane.sortDesc
+    if (secondInSearch()) {
+      secondPane.hits = sortHitList(secondPane.hits, secondPane.searchSort, secondPane.sortDesc)
+      paintSecondPane()
+      return
+    }
     saveSecondPaneState()
     void loadSecond(secondPane.cwd, { pushHistory: false })
   })
@@ -829,9 +964,10 @@ function paintList() {
   const rows = listed()
   if (empty) {
     empty.hidden = rows.length > 0
-    empty.textContent = inSearch() ? '沒有符合的檔案' : inRecycle() ? '資源回收筒是空的' : '這個資料夾是空的'
+    empty.textContent = inSearch() || filterQuery() ? '沒有符合的檔案' : inRecycle() ? '資源回收筒是空的' : '這個資料夾是空的'
   }
-  const canVirtualize = !inSearch() && rows.length > 250
+  // 篩過的清單跟 entries 的索引對不上，虛擬捲動（照位置補載頁面）只給完整清單用
+  const canVirtualize = !inSearch() && !filterQuery() && rows.length > 250
   if (canVirtualize) {
     const range = visibleBrowseRange({
       total: rows.length,
@@ -1117,6 +1253,7 @@ function endEditSecondPath() {
 }
 
 async function onSecondPathKey(e) {
+  if (e.isComposing || e.keyCode === 229) return // 跟左欄 onPathKey 一樣：輸入法選字的 Enter 不算
   if (e.key === 'Escape') {
     e.preventDefault()
     endEditSecondPath()
@@ -1209,7 +1346,8 @@ async function runSecondSearch(query) {
       secondPane.hits = []
     } else {
       if (hint) hint.textContent = ''
-      secondPane.hits = data.hits || []
+      secondPane.hits = (data.hits || []).map((hit, rank) => ({ ...hit, rank }))
+      secondPane.searchSort = 'rank'
     }
   } catch {
     if (seq !== secondPane.searchSeq) return
@@ -1244,30 +1382,18 @@ function paintSecondPane() {
   if (up) up.disabled = pathKey(secondPane.cwd) === THIS_PC || secondPane.loading
   const search = /** @type {HTMLInputElement | null} */ ($('exSecondSearch'))
   if (search && search.value !== secondPane.search) search.value = secondPane.search
-  const scope = $('exSecondScopeBtn')
-  if (scope) {
-    const global = secondPane.searchMode === 'global'
-    scope.textContent = global ? '🌐' : '📁'
-    scope.title = global ? '搜尋整機檔案' : '只篩這個資料夾'
-    scope.setAttribute('aria-label', `搜尋範圍：${scope.title}`)
-    scope.setAttribute('aria-pressed', global ? 'true' : 'false')
-  }
+  paintScopeButton($('exSecondScopeBtn'), secondPane.searchMode === 'global')
   // 篩選面板只有整機搜尋用得到；篩目前資料夾時收起來，免得把窄窄的右欄標頭再擠爆。
   const filters = /** @type {HTMLDetailsElement | null} */ ($('exSecondSearchFilters'))
   if (filters) {
     filters.hidden = secondPane.searchMode !== 'global'
     if (filters.hidden) filters.open = false
   }
-  const sort = /** @type {HTMLSelectElement | null} */ ($('exSecondSort'))
-  if (sort) {
-    sort.value = secondPane.sortBy
-    sort.disabled = searching
-  }
-  const sortDir = $('exSecondSortDir')
-  if (sortDir) {
-    sortDir.textContent = secondPane.sortDesc ? '↓' : '↑'
-    sortDir.disabled = searching
-  }
+  paintSortControls(/** @type {HTMLSelectElement | null} */ ($('exSecondSort')), $('exSecondSortDir'), {
+    searching,
+    key: searching ? secondPane.searchSort : secondPane.sortBy,
+    desc: secondPane.sortDesc
+  })
   $('exSecondViewListBtn')?.setAttribute('aria-pressed', secondPane.view === 'list' ? 'true' : 'false')
   $('exSecondViewGridBtn')?.setAttribute('aria-pressed', secondPane.view === 'grid' ? 'true' : 'false')
   const grid = secondPane.view === 'grid'
@@ -1552,6 +1678,7 @@ async function loadSecond(dirPath, opts = {}) {
   }
   saveSecondPaneState()
   paintSecondTabs()
+  paintRecycleChrome()
   refreshExplorerWatches()
   return true
 }
@@ -1970,6 +2097,7 @@ function syncTab() {
     showHidden,
     search: $('exSearch')?.value || '',
     searchSort,
+    searchMode,
     searchFilters: searchFilters(),
     selected: [...selected],
     anchor,
@@ -2011,6 +2139,7 @@ function applyTabState(tab) {
   sortDesc = state.sortDesc
   showHidden = state.showHidden
   searchSort = state.searchSort
+  searchMode = state.searchMode === 'filter' ? 'filter' : 'global'
   selected = new Set(state.selected)
   anchor = state.anchor
   cursor = state.cursor
@@ -2300,7 +2429,8 @@ async function loadDir(dirPath, opts = {}) {
     if (input) input.value = restoreSearch
     const query = restoreSearch
     restoreSearch = ''
-    if (query && uffs?.installed) void runSearch(query)
+    if (searchMode === 'filter') paintList()
+    else if (query && uffs?.installed) void runSearch(query)
   }
   restoreScrollTop = 0
   paintRecycleChrome()
@@ -2365,23 +2495,61 @@ async function goUp() {
 function paintSortHead() {
   const head = $('exListHead')
   if (!head) return
-  head.hidden = view === 'grid' || (inHome() && !inSearch())
-  const active = inSearch() ? searchSort : sortBy
+  const searching = inSearch()
+  const home = inHome() && !searching
+  head.hidden = view === 'grid' || home
+  const active = searching ? searchSort : sortBy
   for (const btn of head.querySelectorAll('.ex-sort')) {
     const key = btn.getAttribute('data-sort')
     btn.classList.toggle('is-active', key === active)
-    btn.textContent = key === 'name' ? '名稱' : key === 'size' ? '大小' : '修改'
+    btn.textContent = key === 'name' ? (searching ? '路徑' : '名稱') : key === 'size' ? '大小' : '修改'
     if (key === active) btn.textContent += sortDesc ? ' ↓' : ' ↑'
+  }
+  // 方格檢視沒有欄位標頭，排序靠工具列這組；本機首頁不是一般資料夾，沒得排
+  paintSortControls(/** @type {HTMLSelectElement | null} */ ($('exSort')), $('exSortDir'), {
+    searching,
+    key: active,
+    desc: sortDesc,
+    disabled: home
+  })
+  const global = searchMode === 'global'
+  paintScopeButton($('exScopeBtn'), global)
+  const input = /** @type {HTMLInputElement | null} */ ($('exSearch'))
+  if (input) {
+    input.placeholder = global ? '搜尋整機檔案…' : '篩選目前資料夾…'
+    input.setAttribute('aria-label', global ? '搜尋整機檔案' : '篩選目前資料夾')
+  }
+  // 篩選條件只有整機搜尋用得到
+  const filters = /** @type {HTMLDetailsElement | null} */ ($('exSearchFilters'))
+  if (filters) {
+    filters.hidden = !global
+    if (!global) filters.open = false
   }
 }
 
+/** @param {'global' | 'filter'} mode */
+function setLeftScope(mode) {
+  searchMode = mode === 'filter' ? 'filter' : 'global'
+  searchSeq++
+  if (searchTimer) clearTimeout(searchTimer)
+  void electronAPI.explorer.uffsCancel()
+  hits = []
+  searching = false
+  const hint = $('exSearchHint')
+  if (hint) hint.textContent = ''
+  onSearchInput()
+  $('exSearch')?.focus()
+}
+
 function paintRecycleChrome() {
-  const rec = inRecycle()
+  // 新增／清空回收筒作用在「作用中那一欄」（newFolder 用 activeCwd），顯示也要跟著它，不是永遠看左欄
+  const rec = activeInRecycle()
+  const home = paneInHome(activePane)
   const folderBtn = $('exNewFolderBtn')
   const fileBtn = $('exNewFileBtn')
   const emptyBtn = $('exEmptyBinBtn')
-  if (folderBtn) folderBtn.hidden = rec || inHome()
-  if (fileBtn) fileBtn.hidden = rec || inHome()
+  if (folderBtn) folderBtn.hidden = rec || home
+  if (fileBtn) fileBtn.hidden = rec || home
   const up = $('exUpBtn')
   if (up) up.disabled = inHome()
   if (emptyBtn) emptyBtn.hidden = !rec
@@ -2390,39 +2558,34 @@ function paintRecycleChrome() {
 function onSortClick(e) {
   const btn = e.target.closest('.ex-sort')
   if (!btn) return
-  const key = btn.getAttribute('data-sort')
-  if (key !== 'name' && key !== 'date' && key !== 'size') return
+  const key = String(btn.getAttribute('data-sort'))
+  const current = inSearch() ? searchSort : sortBy
+  applySort(key, current === key ? !sortDesc : false)
+}
+
+/**
+ * 欄位標頭與工具列排序下拉共用。搜尋中排的是結果（不重讀），瀏覽中重讀資料夾。
+ * @param {string} key
+ * @param {boolean} desc
+ */
+function applySort(key, desc) {
   if (inSearch()) {
-    if (searchSort === key) sortDesc = !sortDesc
-    else {
-      searchSort = key
-      sortDesc = false
-    }
+    if (!BROWSE_SEARCH_SORTS.has(key)) return
+    searchSort = key
+    sortDesc = desc
     sortHits()
-    paintSortHead()
     paintList()
+    syncTab()
     return
   }
-  if (sortBy === key) sortDesc = !sortDesc
-  else {
-    sortBy = key
-    sortDesc = false
-  }
+  if (!BROWSE_SORT_KEYS.has(key)) return
+  sortBy = key
+  sortDesc = desc
   void loadDir(cwd, { silent: true, keepSelection: true })
 }
 
 function sortHits() {
-  if (searchSort === 'rank') return
-  const by = searchSort
-  const desc = sortDesc
-  hits = hits.slice().sort((a, b) => {
-    if (Boolean(a.dir) !== Boolean(b.dir)) return a.dir ? -1 : 1
-    let cmp = 0
-    if (by === 'size') cmp = (Number(a.size) || 0) - (Number(b.size) || 0)
-    else if (by === 'date') cmp = (Number(a.mtimeMs) || 0) - (Number(b.mtimeMs) || 0)
-    else cmp = String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hant', { numeric: true, sensitivity: 'base' })
-    return desc ? -cmp : cmp
-  })
+  hits = sortHitList(hits, searchSort, sortDesc)
 }
 
 function clearSearchInput() {
@@ -2471,6 +2634,7 @@ function searchFilters(which = 'left') {
 function onSearchFilterChange() {
   syncTab()
   persistTabs()
+  if (searchMode !== 'global') return
   const query = /** @type {HTMLInputElement | null} */ ($('exSearch'))?.value.trim()
   if (!query || !uffs?.installed) return
   if (searchTimer) clearTimeout(searchTimer)
@@ -2484,7 +2648,7 @@ function onSearchInput() {
   syncTab()
   persistTabs()
   if (searchTimer) clearTimeout(searchTimer)
-  if (!q) {
+  if (!q || searchMode === 'filter') {
     void electronAPI.explorer.uffsCancel()
     hits = []
     searching = false
@@ -2518,7 +2682,7 @@ async function runSearch(q) {
       hits = []
     } else {
       $('exSearchHint') && ($('exSearchHint').textContent = '')
-      hits = data.hits || []
+      hits = (data.hits || []).map((hit, rank) => ({ ...hit, rank }))
       searchSort = 'rank'
       truncated = Boolean(data.truncated)
     }
@@ -3552,7 +3716,7 @@ export async function refreshExplorerPage() {
     const boot = await call(electronAPI.explorer.bootstrap(), '打不開檔案總管')
     view = boot.view === 'grid' ? 'grid' : 'list'
     tile = TILE_SIZES.includes(Number(boot.tile)) ? Number(boot.tile) : DEFAULT_TILE
-    sortBy = boot.sort === 'date' || boot.sort === 'size' ? boot.sort : 'name'
+    sortBy = BROWSE_SORT_KEYS.has(boot.sort) ? boot.sort : 'name'
     sortDesc = boot.sortDesc === true
     showHidden = boot.showHidden === true
     dualPane = boot.dualPane === true

@@ -6,13 +6,30 @@
 ## 專案概況
 
 VoiceInk：Windows Electron AI 工作台。Vanilla JS + Vite（無前端框架），Electron 43.4.1 ＋ Node.js 22。
-目前版本 **v1.29.0**（語音轉文字頁多了錄音機、即時字幕留逐字稿紀錄；前版 v1.28.1 Telegram 切回來不再卡；再前 v1.25.0：檔案總管雙欄右欄變成真的能用、操作中心收進狀態列且同名時可覆蓋、
+目前版本 **v1.30.0**（主程序同步 I/O 改非同步＋逾時修「沒有回應」、全專案 UX 稽核、檔案頁排序／範圍切換／欄寬、終端機快捷鍵；前版 v1.29.0 語音轉文字頁多了錄音機、即時字幕留逐字稿紀錄；再前 v1.28.1 Telegram 切回來不再卡；再前 v1.25.0：檔案總管雙欄右欄變成真的能用、操作中心收進狀態列且同名時可覆蓋、
 資料夾監看不再漏事件；前版終端機 PATH 不再被 Ctrl+G 橋接蓋掉；再前檢查更新改走鏡像）。
 
 nav 十頁：聊天（預設，**專案工作區與終端機都在同一頁**）｜Telegram（官方網頁版 `web.telegram.org/a` 放進 `<webview>`，可並排多開最多 4 格（沒存過開 2 格；每格卡 600px，Web A 一律手機版版面）、共用 `persist:telegram`，每格頂端細列 ✕ 關／最右格 ＋ 再開，每格停的聊天室存 store `telegramPanes`（不用 localStorage：結束走 `app.exit()` 會掉最後幾秒的寫入）；`telegram-page.js`，第一次點才建）｜檔案｜CC代理（`data-page` 仍是 `ccswitch`）｜
 AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定。額度不再是一頁：收成工作區主區最下面那條，用量統計在 CC代理。
 
 ## 架構
+
+### 「沒有回應」、全專案 UX 稽核、檔案頁排序與範圍（2026-09-24，v1.30.0）
+
+- **卡死**：事件記錄 30 天 22 次 AppHang（主程序 UI 執行緒被擋住，沒有堆疊）。找得到的同步阻塞全改成非同步＋逾時：
+  `explorer/drives.js`（`isDirSoon`、`listPlaces`／`listDrives` 並行探測 1.5 秒逾時；使用者的「下載」在 NAS 上）、`explorer/index.js` bootstrap、
+  `explorer/recycle.js`（SID 資料夾、whoami、丟回收筒 PowerShell）、`terminal/links.js`（`statSoon` 800ms；**UNC 預設不查**，
+  Claude Code 輸出的 JSON 轉義 `\\Users` 會被當網路路徑）、`codeusage/scan.js`、`workspace/agents.js`、`stt-archive.readRecording`、`hfmodels/library.importFile`。
+  VoiceInkSensors.exe 的「Pipe is broken」是主程式死掉後的連帶結果，不是起因。
+- **檔案頁**：左欄也有 `#exScopeBtn`（`searchMode` 'global'｜'filter'，分頁各自記、存進 `explorer.json`）；`#exSort`／`#exSortDir` 工具列排序，
+  搜尋中選項換成 相關度／路徑／時間／大小／類型（`sortHitList`，hit 帶 `rank`）；排序鍵多了 `type`（副檔名，沒有的排前面，main `fs.js` `sortEntries` 與 renderer 共用 `BROWSE_SORT_KEYS`）。
+  「大小」「修改」欄寬是 `--ex-col-size`／`--ex-col-date`（`initResizer` 以欄標題當 panel、`invert`）；欄標題與清單都 `scrollbar-gutter: stable` 才對得齊。
+  收起的欄位把手用 `:has(+ …[hidden])` 一起藏。
+- **終端機**：打包版 `.xterm-viewport` 的原生捲軸跟 xterm 自畫的疊成兩條 → `scrollbar-width: none`；Ctrl+Shift+T／W、終端機內 Ctrl+Tab（`terminal-page.js` 放行、`workspace-page.js` 處理）。
+- **語音**：即時字幕兩欄 grid（<860px 疊起）；檔案轉錄 `#recordingPickList` 列最近 4 段；錄音中 `.nav-tab.is-recording`。
+- **風扇**：`sysmon-fans.js` 改斜投影（側透視角，`AX`／`ORIGIN`／`BOX`），16 個位置投影後互不重疊。**系統監控總覽**：`openSubs`（`voiceink.sysmon.openSubs`）記細項展開。
+- **UX 稽核**：十區逐條查證後修（更新手動下載、設定頁草稿與確認、CC代理錯誤就地顯示、聊天 Enter 不砍回覆、工作區 worktree 取消、多處 IME Enter、HF／AGY 下載取消與錯誤、系統監控 BIOS 還原／風扇編輯器／使用時長），清單見 `tasks/todo.md`。
+- 測試：4 支長期紅的單元測試都是測試過時，已跟上（`test-app-dialog-ime` 改測 `openDialog` 的 capture Enter；`test-usage-state-race` 比 `sanitizeSettings` 後的值）。
 
 ### 終端機滾輪在 Claude Code 全螢幕會翻提示詞歷史（2026-09-23）
 

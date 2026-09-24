@@ -12,6 +12,7 @@
 
 import { electronAPI, showToast, getSettings } from './app.js'
 import { syncCustomSelects } from './custom-select.js'
+import { askConfirm } from './app-dialog.js'
 
 /** 可以拿來整理文字的本地模型。LinguaForge 是翻譯專用的 SFT 模型，餵它整理只會得到譯文。 */
 const LOCAL_CLEANUP_KEYS = ['qwen35translate', 'qwen354b']
@@ -258,6 +259,8 @@ function bindOnce() {
   })
 
   $('dictationClearBtn')?.addEventListener('click', async () => {
+    const ok = await askConfirm('清空所有語音輸入紀錄？', { desc: '刪了就找不回來。', confirmText: '清空', danger: true })
+    if (!ok) return
     await electronAPI.dictation.clearRecords()
     await refreshRecords()
     showToast('紀錄已清空')
@@ -272,6 +275,20 @@ function bindOnce() {
     if (btn.dataset.action === 'copy') {
       await navigator.clipboard.writeText(row.querySelector('.dict-record-text')?.textContent || '')
       showToast('已複製')
+      return
+    }
+    // 就地二次確認（跟其他刪除一樣）：第一下只變紅，3 秒內再按才刪
+    if (btn.dataset.armed !== '1') {
+      btn.dataset.armed = '1'
+      btn.classList.add('is-armed')
+      btn.textContent = '✓'
+      btn.title = '再按一次刪除'
+      setTimeout(() => {
+        btn.dataset.armed = ''
+        btn.classList.remove('is-armed')
+        btn.textContent = '🗑'
+        btn.title = '刪除'
+      }, 3000)
       return
     }
     await electronAPI.dictation.deleteRecord(id)

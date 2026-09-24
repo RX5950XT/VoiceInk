@@ -33,55 +33,65 @@ const MAX_POINTS = 10
  */
 const SPIN_SCALE = 6
 
-// ===== 等角投影 =====
-// 世界座標：x = 深度（0 背板 → D 前面板）、y = 寬度（0 主機板托盤 → W 側板）、z = 高度。
-// 視點在左前上方，近側板不畫，所以看得進機殼內部。
-const AX = { x: [0.87, 0.5], y: [-0.87, 0.5], z: [0, -1] }
-const ORIGIN = [56, 152]
+// ===== 斜上方視角（側透） =====
+// 像隔著玻璃側板看進一台直立機殼：主機板那面正對著你（不變形，CPU／顯示卡風扇畫成正圓），
+// 深度方向往右上斜著退進去，所以同時看得到頂面與前面板。以前用等角投影，主機板被壓成
+// 菱形、好幾顆風扇投影後疊在一起（前2 被 GPU4 蓋住、PCH 壓在前3 上），很難對得上實機。
+//
+// 世界座標：x = 前後（0 後面板 → D 前面板）、y = 深度（0 玻璃側板 → W 主機板托盤）、z = 高度。
+const DEPTH_SCALE = 0.62
+const DEPTH_ANGLE = (32 * Math.PI) / 180
+const AX = {
+  x: [1, 0],
+  y: [DEPTH_SCALE * Math.cos(DEPTH_ANGLE), -DEPTH_SCALE * Math.sin(DEPTH_ANGLE)],
+  z: [0, -1]
+}
+const ORIGIN = [22, 180]
 const BOX = { d: 110, w: 60, h: 140 }
+const VIEW_BOX = '0 0 186 190'
 
 /** 世界座標 → 螢幕座標 */
 const P = (x, y, z) => [
-  ORIGIN[0] + AX.x[0] * x + AX.y[0] * y,
+  ORIGIN[0] + AX.x[0] * x + AX.y[0] * y + AX.z[0] * z,
   ORIGIN[1] + AX.x[1] * x + AX.y[1] * y + AX.z[1] * z
 ]
 const pts = (list) => list.map((p) => P(p[0], p[1], p[2]).map((n) => n.toFixed(1)).join(',')).join(' ')
 
 /**
- * 風扇所在平面的兩個單位向量。`det > 0` 才不會左右鏡像（鏡像的話扇葉會倒著轉）。
- * `tray` 是主機板托盤（y = 0 那面，法線朝向觀看者）。
+ * 風扇所在平面的兩個單位向量。行列式要是正的，不然扇葉會鏡像、看起來倒著轉。
  */
 const NEG = (v) => [-v[0], -v[1]]
+const upright = (u, v) => (u[0] * v[1] - u[1] * v[0] < 0 ? { u, v: NEG(v) } : { u, v })
 const PLANES = {
-  panel: { u: AX.y, v: AX.z },      // 前／後面板（x 固定）
-  deck: { u: AX.x, v: AX.y },       // 頂／底（z 固定）
-  tray: { u: NEG(AX.x), v: AX.z }   // 主機板托盤與側板（y 固定）
+  panel: upright(AX.y, AX.z),   // 前／後面板（x 固定）
+  deck: upright(AX.x, AX.y),    // 頂／底（z 固定）
+  tray: upright(AX.x, AX.z),    // 主機板托盤（y = W）與玻璃側板（y = 0）
 }
 
 /**
  * 通用槽位在機殼裡的位置。id 要跟 main 的 `fans.js` SLOTS 對得上。
- * 不是任何一張真主機板的實圖——只是讓人對得上「前／後／上／下」的方位。
- * **投影之後不可以互相疊到**（等角投影會把 z 與 x+y 壓在同一個螢幕軸上，
- * 世界座標看起來離很遠的兩顆在畫面上可能只差十幾個單位）：
- * 動座標之後拿 `scratchpad/geom.js` 那套「兩兩距離 ≥ r1+r2+4」重算一次。
+ * 不是任何一張真主機板的實圖——只是讓人對得上「前／後／上／下／板上」的方位。
+ * 座標是投影之後逐顆驗過不互相疊到的（外框兩兩不相交、標籤不壓到別顆）；
+ * 動任何一顆都要重驗。`la` 是標籤放哪一側：a 上、b 下、l 左、r 右。
  */
+const W = BOX.w
 const SLOT_3D = {
-  'top-1': { p: [28, 30, 140], plane: 'deck', r: 10, code: '上1', la: 'a' },
-  'top-2': { p: [58, 30, 140], plane: 'deck', r: 10, code: '上2', la: 'a' },
-  pump: { p: [88, 30, 140], plane: 'deck', r: 10, code: '泵', la: 'a' },
-  rear: { p: [0, 30, 112], plane: 'panel', r: 9, code: '後', la: 'l' },
-  'front-1': { p: [110, 30, 112], plane: 'panel', r: 11, code: '前1', la: 'l' },
-  'front-2': { p: [110, 30, 70], plane: 'panel', r: 11, code: '前2', la: 'l' },
-  'front-3': { p: [110, 30, 28], plane: 'panel', r: 11, code: '前3', la: 'l' },
-  bottom: { p: [58, 30, 0], plane: 'deck', r: 10, code: '底', la: 'b' },
-  side: { p: [52, 60, 62], plane: 'tray', r: 10, code: '側', la: 'l' },
-  cpu: { p: [34, 8, 88], plane: 'tray', r: 10, code: 'CPU', la: 'l' },
-  'cpu-opt': { p: [64, 8, 96], plane: 'tray', r: 7, code: 'CPU2', la: 'a' },
-  gpu: { p: [42, 10, 56], plane: 'tray', r: 7.5, code: 'GPU', la: 'l' },
-  'gpu-2': { p: [74, 10, 40], plane: 'tray', r: 7, code: 'GPU2', la: 'l' },
-  'gpu-3': { p: [58, 10, 22], plane: 'tray', r: 6.5, code: 'GPU3', la: 'b' },
-  'gpu-4': { p: [90, 10, 70], plane: 'tray', r: 6.5, code: 'GPU4', la: 'l' },
-  pch: { p: [86, 8, 26], plane: 'tray', r: 6, code: 'PCH', la: 'b' }
+  'top-1': { p: [22, W * 0.35, BOX.h], plane: 'deck', r: 9, code: '上1', la: 'a' },
+  'top-2': { p: [54, W * 0.35, BOX.h], plane: 'deck', r: 9, code: '上2', la: 'a' },
+  pump: { p: [86, W * 0.35, BOX.h], plane: 'deck', r: 9, code: '泵', la: 'a' },
+  rear: { p: [0, W / 2, 112], plane: 'panel', r: 9, code: '後', la: 'l' },
+  'front-1': { p: [BOX.d, W / 2, 116], plane: 'panel', r: 11, code: '前1', la: 'r' },
+  'front-2': { p: [BOX.d, W / 2, 76], plane: 'panel', r: 11, code: '前2', la: 'r' },
+  'front-3': { p: [BOX.d, W / 2, 36], plane: 'panel', r: 11, code: '前3', la: 'r' },
+  bottom: { p: [56, W / 2, 0], plane: 'deck', r: 10, code: '底', la: 'b' },
+  side: { p: [30, 0, 30], plane: 'tray', r: 10, code: '側', la: 'l', glass: true },
+  cpu: { p: [30, W, 106], plane: 'tray', r: 11, code: 'CPU', la: 'l' },
+  'cpu-opt': { p: [58, W, 106], plane: 'tray', r: 7.5, code: 'CPU2', la: 'r' },
+  gpu: { p: [22, W, 79], plane: 'tray', r: 7.5, code: 'GPU', la: 'b' },
+  'gpu-2': { p: [64, W, 79], plane: 'tray', r: 7.5, code: 'GPU2', la: 'b' },
+  'gpu-3': { p: [22, W, 53], plane: 'tray', r: 7.5, code: 'GPU3', la: 'b' },
+  'gpu-4': { p: [64, W, 53], plane: 'tray', r: 7.5, code: 'GPU4', la: 'b' },
+  pch: { p: [76, W, 28], plane: 'tray', r: 5, code: 'PCH', la: 'b' }
 }
 
 const state = {
@@ -116,33 +126,33 @@ const fmt = (value, unit = '') => (
 
 // ===== 機殼示意圖 =====
 
-/** 機殼外殼：半透明的玻璃面 + 描邊。半透明是為了不用處理遮擋順序（風扇一律畫在最上層）。 */
+/**
+ * 機殼：由裡到外畫（托盤 → 後面板／底 → 主機板與零件 → 頂 → 前面板 → 玻璃側板的框），
+ * 外側幾面半透明，看得到裡面、也不用處理遮擋順序（風扇一律畫在最上層）。
+ */
 function buildShell(svg) {
   const { d, w, h } = BOX
-  const faces = [
-    ['fan-face fan-face-tray', [[0, 0, 0], [d, 0, 0], [d, 0, h], [0, 0, h]]],
-    ['fan-face', [[0, 0, 0], [0, w, 0], [0, w, h], [0, 0, h]]],
-    ['fan-face fan-face-floor', [[0, 0, 0], [d, 0, 0], [d, w, 0], [0, w, 0]]],
-    ['fan-face fan-face-front', [[d, 0, 0], [d, w, 0], [d, w, h], [d, 0, h]]]
-  ]
-  for (const [cls, quad] of faces) svg.append(svgEl('polygon', { class: cls, points: pts(quad) }))
-
-  // 主機板與板上的大零件（CPU 座、顯示卡、晶片組），畫在托盤面上稍微往外浮一點，才有厚度感。
-  // **不另外印文字**：槽位代碼本來就叫 CPU／GPU／PCH，印兩次只會互相疊到。
-  const flat = (y, x1, z1, x2, z2, cls) => svgEl('polygon', {
-    class: cls, points: pts([[x1, y, z1], [x2, y, z1], [x2, y, z2], [x1, y, z2]])
-  })
+  const quad = (cls, list) => svgEl('polygon', { class: cls, points: pts(list) })
   svg.append(
-    flat(2, 14, 16, 96, 126, 'fan-board'),
-    flat(5, 24, 74, 54, 118, 'fan-part'),
-    flat(7, 20, 46, 92, 66, 'fan-part'),
-    flat(5, 78, 18, 98, 36, 'fan-part')
+    quad('fan-face fan-face-tray', [[0, w, 0], [d, w, 0], [d, w, h], [0, w, h]]),
+    quad('fan-face fan-face-rear', [[0, 0, 0], [0, w, 0], [0, w, h], [0, 0, h]]),
+    quad('fan-face fan-face-floor', [[0, 0, 0], [d, 0, 0], [d, w, 0], [0, w, 0]])
   )
-  // 機殼骨架：頂面開口與近側板的邊，補上「這是個盒子」的線索
-  const edge = (a, b) => svgEl('polyline', { class: 'fan-edge', points: pts([a, b]) })
+  // 主機板與板上的大零件（CPU 座、兩張顯示卡、晶片組）貼在托盤上，往外浮一點才有厚度。
+  // **不另外印文字**：槽位代碼本來就叫 CPU／GPU／PCH，印兩次只會互相疊到。
+  const flat = (y, x1, z1, x2, z2, cls) => quad(cls, [[x1, y, z1], [x2, y, z1], [x2, y, z2], [x1, y, z2]])
   svg.append(
-    svgEl('polygon', { class: 'fan-edge fan-edge-top', points: pts([[0, 0, h], [d, 0, h], [d, w, h], [0, w, h]]) }),
-    edge([d, w, 0], [d, w, h]), edge([0, w, 0], [d, w, 0]), edge([0, w, 0], [0, w, h])
+    flat(w - 1, 6, 22, 86, 124, 'fan-board'),
+    flat(w - 3, 16, 94, 44, 118, 'fan-part'),
+    flat(w - 5, 8, 70, 92, 88, 'fan-part fan-part-gpu'),
+    flat(w - 5, 8, 44, 92, 62, 'fan-part fan-part-gpu'),
+    flat(w - 3, 68, 22, 84, 34, 'fan-part')
+  )
+  svg.append(
+    quad('fan-face fan-face-top', [[0, 0, h], [d, 0, h], [d, w, h], [0, w, h]]),
+    quad('fan-face fan-face-front', [[d, 0, 0], [d, w, 0], [d, w, h], [d, 0, h]]),
+    // 拿掉的玻璃側板只留虛線框：告訴人「你是從這一面看進去的」
+    quad('fan-edge fan-edge-glass', [[0, 0, 0], [d, 0, 0], [d, 0, h], [0, 0, h]])
   )
 }
 
@@ -152,7 +162,7 @@ function buildChassis() {
   if (!host || state.chassisBuilt) return
   host.textContent = ''
   const svg = svgEl('svg', {
-    viewBox: '0 0 158 252', class: 'fan-chassis-svg', role: 'group',
+    viewBox: VIEW_BOX, class: 'fan-chassis-svg', role: 'group',
     'aria-label': '機殼與主機板示意圖'
   })
   buildShell(svg)
@@ -160,7 +170,9 @@ function buildChassis() {
   for (const [slot, spec] of Object.entries(SLOT_3D)) {
     const plane = PLANES[spec.plane]
     const [px, py] = P(spec.p[0], spec.p[1], spec.p[2])
-    const group = svgEl('g', { class: 'fan-slot', 'data-slot': slot, tabindex: '0', role: 'button' })
+    const group = svgEl('g', {
+      class: spec.glass ? 'fan-slot is-glass' : 'fan-slot', 'data-slot': slot, tabindex: '0', role: 'button'
+    })
     const disc = svgEl('g', {
       class: 'fan-disc',
       transform: `matrix(${(plane.u[0] * spec.r).toFixed(3)} ${(plane.u[1] * spec.r).toFixed(3)} `
@@ -182,11 +194,14 @@ function buildChassis() {
     // 標籤只放**短代碼**：十三個接頭全名印上去必定互相疊到（實測 System Fan #1~#5
     // 截斷後長得一模一樣，等於沒有資訊）。全名走 <title> 與 aria-label。
     // 擺放方向逐槽指定（`la`）：前面板那一排上下相鄰，標籤一律往內側放才不會壓到下一顆。
+    // 標籤離外框多遠要看它投影之後實際多寬多高（斜著的面板很窄、頂面很扁）
+    const ex = 1.16 * spec.r * (Math.abs(plane.u[0]) + Math.abs(plane.v[0]))
+    const ey = 1.16 * spec.r * (Math.abs(plane.u[1]) + Math.abs(plane.v[1]))
     const place = {
-      a: [px, py - spec.r - 3.5, 'middle'],
-      b: [px, py + spec.r + 6.5, 'middle'],
-      l: [px - spec.r - 3, py + 2, 'end'],
-      r: [px + spec.r + 3, py + 2, 'start']
+      a: [px, py - ey - 2, 'middle'],
+      b: [px, py + ey + 5.5, 'middle'],
+      l: [px - ex - 2, py + 1.8, 'end'],
+      r: [px + ex + 2, py + 1.8, 'start']
     }[spec.la || 'b']
     const label = svgEl('text', {
       class: 'fan-slot-label', 'text-anchor': place[2],
@@ -421,6 +436,8 @@ function bindCurve(svg, channel, readout) {
   }
 
   svg.addEventListener('pointerdown', (event) => {
+    // 只有左鍵：右鍵留給刪點，不能順手又在空白處加一個
+    if (event.button !== 0) return
     const target = /** @type {Element} */ (event.target)
     const point = target.closest('.fan-point')
     if (point) {
@@ -454,6 +471,16 @@ function bindCurve(svg, channel, readout) {
       .sort((a, b) => a[0] - b[0])
       .filter((p, i, list) => i === 0 || p[0] !== list[i - 1][0])
     commit(points)
+    save()
+  })
+
+  // 滑鼠也要刪得掉點（以前只有焦點在點上按 Delete）
+  svg.addEventListener('contextmenu', (event) => {
+    const point = /** @type {Element} */ (event.target).closest?.('.fan-point')
+    event.preventDefault()
+    if (!point || channel.points.length <= 2) return
+    const index = Number(point.getAttribute('data-index'))
+    commit(channel.points.filter((_, i) => i !== index))
     save()
   })
 
@@ -495,6 +522,11 @@ function chip(label, value) {
 function renderEditor(data) {
   const host = $('fanEditor')
   if (!host || state.dragging) return
+  // 每秒輪詢會整塊重建：使用者正在打字、拖滑桿或下拉開著時不可以動它，
+  // 不然焦點被搶走、輸入法組字被打斷、下拉選了等於沒選（選單的 change 發在已被丟掉的舊節點上）
+  const active = document.activeElement
+  if (active && host.contains(active) && active.matches('input, select, textarea')) return
+  if (host.querySelector('[aria-expanded="true"]')) return
   const channel = data.channels.find((c) => c.id === state.selectedId)
   if (!channel) {
     host.hidden = true
@@ -584,7 +616,7 @@ function renderEditor(data) {
     const svg = buildCurve(channel, source)
     plot.append(svg)
     plot.append(el('p', 'fan-axis-note',
-      `橫軸 ${source?.label || ''}（${source?.unit || ''}）、直軸 PWM%。拖點調整，虛線以下是下限。`))
+      `橫軸 ${source?.label || ''}（${source?.unit || ''}）、直軸 PWM%。點空白加點、拖點調整、右鍵刪點，虛線以下是下限。`))
     host.append(plot)
     paintCurve(svg, channel)
     bindCurve(svg, channel, readout)
@@ -688,6 +720,8 @@ function onEditorInput(event) {
     if (out) out.textContent = `${target.value}%`
     if (event.type === 'input') return
   }
+  // 名稱／下限打完（離開欄位或按 Enter）才存：逐字存會把打到一半的 3 夾成 20，也會打斷輸入法
+  if ((fieldName === 'label' || fieldName === 'minPwm') && event.type === 'input') return
   const value = fieldName === 'fixed' || fieldName === 'minPwm' ? Number(target.value) : target.value
   saveChannel(state.selectedId, { [fieldName]: value })
 }

@@ -176,17 +176,18 @@ function remove(id) {
  * 使用者自己有一顆 gguf：複製進模型庫（**不搬移**——搬走使用者原本的檔案不是我們該做的事）
  * @param {string} sourcePath
  * @param {string} [id] 省略時用檔名
- * @returns {{ id: string, dir: string }}
+ * @returns {Promise<{ id: string, dir: string }>}
  */
-function importFile(sourcePath, id = '') {
-  const stat = fs.statSync(sourcePath)
+async function importFile(sourcePath, id = '') {
+  const stat = await fs.promises.stat(sourcePath)
   if (!stat.isFile() || !/\.gguf$/i.test(sourcePath)) throw new Error('只能匯入 .gguf 檔案')
   const name = id || path.basename(sourcePath).replace(/\.gguf$/i, '')
   const safe = name.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 96)
   if (!isValidId(safe)) throw new Error('模型代號格式不正確')
   const dir = dirFor(safe)
   fs.mkdirSync(dir, { recursive: true })
-  fs.copyFileSync(sourcePath, path.join(dir, path.basename(sourcePath)))
+  // 非同步：一顆 gguf 動輒幾 GB，同步複製會讓整個 App 在複製完之前完全沒有回應
+  await fs.promises.copyFile(sourcePath, path.join(dir, path.basename(sourcePath)))
   writeMeta(safe, { source: 'import', importedAt: new Date().toISOString() })
   return { id: safe, dir }
 }

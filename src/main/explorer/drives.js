@@ -10,10 +10,38 @@
 const fs = require('../raw-fs')
 const os = require('os')
 const path = require('path')
-const { spawnSync, execFile } = require('child_process')
+const { execFile } = require('child_process')
 
 /** 虛擬位置：Windows 那樣的「本機」首頁（不是真路徑，別送進 paths）。 */
 const THIS_PC = 'thispc'
+
+/**
+ * 碰使用者資料夾／磁碟一次最多等多久。**這一整支都不可以用同步 fs**：
+ * 「下載」常被搬到網路磁碟，NAS 睡著時 `statSync` 會把主程序卡到 SMB 逾時（十幾秒），
+ * 整個 App 在 Windows 眼裡就是「沒有回應」。逾時一律當成「在，只是現在慢」。
+ */
+const PROBE_TIMEOUT_MS = 1500
+
+/**
+ * @template T
+ * @param {Promise<T>} promise
+ * @param {T} fallback 逾時回這個
+ * @returns {Promise<T>}
+ */
+function withTimeout(promise, fallback, ms = PROBE_TIMEOUT_MS) {
+  let timer
+  const late = new Promise((resolve) => { timer = setTimeout(() => resolve(fallback), ms) })
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer))
+}
+
+/**
+ * 是不是資料夾。不存在回 false；網路磁碟太慢（逾時）回 true，讓它照樣列出來。
+ * @param {string} full
+ * @returns {Promise<boolean>}
+ */
+function isDirSoon(full) {
+  return withTimeout(fs.promises.stat(full).then((st) => st.isDirectory(), () => false), true)
+}
 
 /**
  * @param {unknown} raw
@@ -29,29 +57,22 @@ function isThisPc(raw) {
  * @param {string} label
  * @returns {{ id: string, label: string, path: string } | null}
  */
-function place(folder, id, label) {
-  try {
-    const full = path.resolve(folder)
-    if (!fs.statSync(full).isDirectory()) return null
-    return { id, label, path: full }
-  } catch {
-    return null
-  }
+async function place(folder, id, label) {
+  const full = path.resolve(folder)
+  return await isDirSoon(full) ? { id, label, path: full } : null
 }
 
 /**
- * @returns {Array<{ id: string, label: string, path: string }>}
+ * @returns {Promise<Array<{ id: string, label: string, path: string }>>}
  */
-function listPlaces() {
+async function listPlaces() {
   let home = ''
   try {
     home = os.homedir()
   } catch {
     return []
   }
-  const out = []
-  const homePlace = place(home, 'home', '個人資料夾')
-  if (homePlace) out.push(homePlace)
+  const pending = [place(home, 'home', '個人資料夾')]
   const known = [
     ['Desktop', 'desktop', '桌面'],
     ['Downloads', 'downloads', '下載'],
@@ -68,38 +89,30 @@ function listPlaces() {
     } catch {
       // 純 Node 或系統位置取不到時，保留家目錄退路。
     }
-    const item = place(full, id, label)
-    if (item) out.push(item)
+    pending.push(place(full, id, label))
   }
-  return out
+  // 六個一起查：一個在睡著的 NAS 上也只多等一次逾時，不是六次
+  return (await Promise.all(pending)).filter(Boolean)
 }
 
 /**
- * @returns {string[]}
+ * @returns {Promise<string[]>}
  */
-function driveLetters() {
+async function driveLetters() {
   const exe = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'fsutil.exe')
-  try {
-    const result = spawnSync(exe, ['fsinfo', 'drives'], {
-      encoding: 'utf8',
-      timeout: 3000,
-      windowsHide: true
-    })
-    const found = String(result.stdout || '').match(/[A-Z]:\\/gi) || []
-    if (found.length) return [...new Set(found.map((item) => item[0].toUpperCase()))]
-  } catch {
-    // 退回 C–Z；仍跳過 A／B，避免軟碟機卡住
-  }
-  const fallback = []
-  for (let code = 67; code <= 90; code += 1) {
-    const letter = String.fromCharCode(code)
-    try {
-      if (fs.existsSync(`${letter}:\\`)) fallback.push(letter)
-    } catch {
-      // 這顆碰不得
-    }
-  }
-  return fallback
+  const stdout = await new Promise((resolve) => {
+    execFile(exe, ['fsinfo', 'drives'], { encoding: 'utf8', timeout: 3000, windowsHide: true },
+      (error, out) => resolve(error ? '' : String(out || '')))
+  })
+  const found = stdout.match(/[A-Z]:\\/gi) || []
+  if (found.length) return [...new Set(found.map((item) => item[0].toUpperCase()))]
+  // 退回 C–Z 一起問；仍跳過 A／B，避免軟碟機卡住
+  const letters = []
+  for (let code = 67; code <= 90; code += 1) letters.push(String.fromCharCode(code))
+  const alive = await Promise.all(letters.map((letter) => (
+    withTimeout(fs.promises.stat(`${letter}:\\`).then(() => true, () => false), true)
+  )))
+  return letters.filter((_, i) => alive[i])
 }
 
 /**
@@ -108,8 +121,8 @@ function driveLetters() {
  *
  * @returns {Array<{ letter: string, path: string, total: number, free: number }>}
  */
-function listDrives() {
-  return driveLetters().map((letter) => ({
+async function listDrives() {
+  return (await driveLetters()).map((letter) => ({
     letter,
     path: `${letter}:\\`,
     total: 0,
@@ -140,8 +153,9 @@ function driveInfo() {
   infoPending = new Promise((resolve) => {
     execFile(exe, ['-NoProfile', '-NonInteractive', '-Command', script], {
       windowsHide: true, encoding: 'utf8', timeout: 8000, maxBuffer: 256 * 1024
-    }, (error, out) => resolve(error ? listDrives().map(toInfo) : parseDriveInfo(out)))
-  }).finally(() => { infoPending = null })
+    }, (error, out) => resolve(error ? [] : parseDriveInfo(out)))
+  }).then(async (parsed) => (parsed.length ? parsed : (await listDrives()).map(toInfo)))
+    .finally(() => { infoPending = null })
   return infoPending
 }
 
@@ -163,7 +177,7 @@ function parseDriveInfo(raw) {
   try {
     parsed = JSON.parse(String(raw || '').trim() || 'null')
   } catch {
-    return listDrives().map(toInfo)
+    return []
   }
   const list = Array.isArray(parsed) ? parsed : (parsed ? [parsed] : [])
   const out = []
@@ -182,7 +196,7 @@ function parseDriveInfo(raw) {
       remote: String((item && item.ProviderName) || '').slice(0, 260)
     })
   }
-  return out.length ? out : listDrives().map(toInfo)
+  return out
 }
 
 function capacity(raw) {
@@ -190,4 +204,4 @@ function capacity(raw) {
   return Number.isFinite(n) && n > 0 ? n : 0
 }
 
-module.exports = { THIS_PC, isThisPc, listPlaces, listDrives, driveInfo, parseDriveInfo }
+module.exports = { THIS_PC, isThisPc, listPlaces, listDrives, driveInfo, parseDriveInfo, isDirSoon }

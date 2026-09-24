@@ -94,7 +94,8 @@ function appendRecording(name, bytes) {
 }
 
 function readRecording(name) {
-  return fs.readFileSync(recordingPath(name))
+  // 非同步：錄音最長 200 MB，同步讀會讓整個 App 卡到讀完
+  return fs.promises.readFile(recordingPath(name))
 }
 
 function deleteRecording(name) {

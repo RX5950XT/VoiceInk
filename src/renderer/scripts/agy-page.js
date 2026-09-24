@@ -152,7 +152,10 @@ function renderStatus() {
 
   // 憑證一旦真的連上就清掉舊提示，否則使用者照做修好了指引還賴在畫面上
   if (running && status?.credential?.connected) credentialHint = null
-  renderCredentialHelp(credentialHint || (running ? status?.credential : null))
+  // 指引裡的來源（有沒有裝 CLI）要用這一輪的，不是出錯當下拍的照：裝好了再按重新整理要看得出來
+  renderCredentialHelp(credentialHint
+    ? { ...credentialHint, sources: status?.credential?.sources ?? credentialHint.sources }
+    : (running ? status?.credential : null))
 
   const dbHealth = status?.db
   if (dbHealth && !dbHealth.ready) showError('日誌資料庫無法開啟，流量記錄暫時停用。')
@@ -405,7 +408,14 @@ function renderLogs(payload) {
   if (!tbody) return
 
   const rows = Array.isArray(payload?.logs) ? payload.logs : []
-  if (empty) empty.classList.toggle('hidden', rows.length > 0)
+  if (empty) {
+    empty.classList.toggle('hidden', rows.length > 0)
+    // 有篩選時沒結果是「沒有符合的」，不是「還沒有流量」
+    const filtered = Boolean(byId('agyProtocolFilter')?.value) || byId('agyErrorsOnly')?.checked === true
+    empty.textContent = filtered
+      ? '沒有符合篩選的記錄。'
+      : '尚無流量記錄。啟動服務並讓客戶端送出第一個請求後就會出現。'
+  }
 
   tbody.replaceChildren(...rows.map((log) => {
     const tr = createElement('tr', log.status >= 400 ? 'is-error' : '')
@@ -474,8 +484,8 @@ function startPolling() {
     // Credential Manager，常駐背景後不擋的話就是 5 秒一次、開著整天。
     if (busy || document.hidden) return
     void (async () => {
+      // 不在這裡清錯誤：操作失敗（埠被占用、欄位驗證）的訊息要留到使用者下一次操作
       if (!await refreshStatus()) return
-      showError('')
       await refreshData()
     })()
   }, POLL_INTERVAL_MS)
@@ -780,13 +790,17 @@ async function saveSettings() {
     showError('日誌保留天數必須是 1–365 的整數。')
     return
   }
+  const wasRunning = status?.running === true
   await withBusy(async () => {
     const next = await callAgy('saveSettings', {
       port,
       retentionDays,
       logBodies: byId('agyLogBodiesInput')?.checked === true
     })
-    if (next) showToast('設定已儲存', 'success')
+    if (!next) return
+    // 跑著的服務改埠會重啟；新埠被占用時服務會停掉，不能說成功
+    if (wasRunning && next.running === false) showError(`設定已儲存，但連接埠 ${port} 無法使用，服務已停止。`)
+    else showToast('設定已儲存', 'success')
   })
 }
 

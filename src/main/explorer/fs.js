@@ -21,7 +21,7 @@ const MAX_READ_BYTES = 2 * 1024 * 1024
 const MAX_TEXT_BYTES = 8 * 1024
 const MAX_MARKDOWN_BYTES = 4 * 1024 * 1024
 const COPY_CHUNK_BYTES = 1024 * 1024
-const SORT_KEYS = new Set(['name', 'date', 'size'])
+const SORT_KEYS = new Set(['name', 'date', 'size', 'type'])
 const HIDDEN_NAMES = new Set([
   '.git',
   '$recycle.bin',
@@ -196,7 +196,7 @@ function isIntoSelf(from, dir) {
 
 /**
  * @param {unknown} raw
- * @returns {{ by: 'name'|'date'|'size', desc: boolean, showHidden: boolean }}
+ * @returns {{ by: 'name'|'date'|'size'|'type', desc: boolean, showHidden: boolean }}
  */
 function sanitizeSort(raw) {
   const obj = raw && typeof raw === 'object' ? raw : {}
@@ -205,12 +205,19 @@ function sanitizeSort(raw) {
 }
 
 /**
- * 資料夾永遠排在檔案前面，其餘依 name／date／size。
+ * 資料夾永遠排在檔案前面，其餘依 name／date／size／type（副檔名）。
  * @param {Array<{ name: string, dir: boolean, size?: number, mtimeMs?: number }>} entries
  * @param {{ by?: string, desc?: boolean }} opts
  */
+/** 排序用的副檔名；沒有副檔名的排最前面（跟檔案總管一樣）。 */
+function extOf(name) {
+  const text = String(name || '')
+  const dot = text.lastIndexOf('.')
+  return dot > 0 ? text.slice(dot + 1) : ''
+}
+
 function sortEntries(entries, opts) {
-  const by = opts && opts.by === 'size' ? 'size' : opts && opts.by === 'date' ? 'date' : 'name'
+  const by = opts && SORT_KEYS.has(opts.by) ? opts.by : 'name'
   const desc = Boolean(opts && opts.desc)
   const copy = Array.isArray(entries) ? entries.slice() : []
   copy.sort((a, b) => {
@@ -218,6 +225,7 @@ function sortEntries(entries, opts) {
     let cmp = 0
     if (by === 'size') cmp = (Number(a.size) || 0) - (Number(b.size) || 0)
     else if (by === 'date') cmp = (Number(a.mtimeMs) || 0) - (Number(b.mtimeMs) || 0)
+    else if (by === 'type') cmp = extOf(a.name).localeCompare(extOf(b.name), 'en', { sensitivity: 'base' })
     else cmp = String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hant', { numeric: true, sensitivity: 'base' })
     if (cmp === 0) {
       cmp = String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hant', { numeric: true, sensitivity: 'base' })

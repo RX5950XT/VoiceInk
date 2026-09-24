@@ -14,6 +14,7 @@ import { renderMarkdown } from './markdown.js'
 import { askConfirm } from './app-dialog.js'
 import { createChatSidebar } from './chat-sidebar.js'
 import { openParamsDialog, countParams } from './chat-params-panel.js'
+import { openImageViewer } from './image-viewer.js'
 
 const DEFAULT_CHAT_API_URL = 'https://openrouter.ai/api/v1'
 /** 與 main 的 chat.MAX_PROVIDERS 對齊；這裡只是提早擋下、真正的上限在 main */
@@ -437,6 +438,15 @@ function buildImage(src) {
   img.alt = '附加圖片'
   img.loading = 'lazy'
   if (src) img.src = src
+  // 訊息裡只有縮圖，點了要看得到原圖（src 是非同步補上的，點的當下再讀）
+  img.addEventListener('click', () => {
+    const url = img.currentSrc || img.src
+    if (!url) return
+    openImageViewer({
+      items: [{ path: url, name: '圖片' }],
+      mediaUrl: async (path) => ({ ok: true, data: { url: path } })
+    })
+  })
   return img
 }
 
@@ -757,6 +767,8 @@ function autoGrowInput() {
 function onInputKeydown(event) {
   if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return
   event.preventDefault()
+  // 回應中按 Enter 不當成「停止」：使用者多半是打好下一句想送，砍掉正在寫的回覆太意外。停止只走按鈕
+  if (streams.has(currentId)) return
   handleSend()
 }
 
@@ -790,9 +802,17 @@ function onDragLeave() {
  * @param {DragEvent} event
  */
 function onDrop(event) {
-  const files = [...(event.dataTransfer?.files || [])].filter((f) => f.type.startsWith('image/'))
+  const dropped = [...(event.dataTransfer?.files || [])]
+  const files = dropped.filter((f) => f.type.startsWith('image/'))
   composerEl?.classList.remove('is-dragover')
-  if (!files.length) return
+  if (!files.length) {
+    // 拖的時候框已經亮了，放開卻什麼都沒發生會像壞掉
+    if (dropped.length) {
+      event.preventDefault()
+      showToast('只能附加圖片', 'error')
+    }
+    return
+  }
   event.preventDefault()
   addAttachments(files)
 }
@@ -1021,6 +1041,8 @@ function syncComposer() {
     sendBtn.textContent = busy ? '停止' : '送出'
     sendBtn.classList.toggle('btn-danger', busy)
   }
+  const hint = document.getElementById('chatComposerHint')
+  if (hint) hint.textContent = busy ? '回應中 · 按「停止」中斷' : 'Enter 送出 · Shift+Enter 換行'
   messagesEl?.classList.toggle('is-busy', busy)
 }
 
@@ -1039,6 +1061,7 @@ async function refreshModelSelect() {
   // option.value 用流水號、真正的資料放 dataset：
   // 不同供應商可以有同名模型，拿模型名當 value 會選錯組。
   let index = 0
+  let matched = false
   for (const provider of providers) {
     const models = Array.isArray(provider?.models) ? provider.models : []
     if (!models.length) continue
@@ -1053,10 +1076,23 @@ async function refreshModelSelect() {
       option.dataset.model = model
       // 生圖模型在選單裡標出來，不然選到之後只會覺得「怎麼回了一張圖」
       option.textContent = imageSet.has(model) ? `🖼 ${model}` : model
-      if (provider.id === activeProviderId && model === currentModel) option.selected = true
+      if (provider.id === activeProviderId && model === currentModel) {
+        option.selected = true
+        matched = true
+      }
       group.appendChild(option)
     }
     modelSelect.appendChild(group)
+  }
+  // 存的模型已不在清單裡（例如設定頁刪掉了）：main 會拒絕送出，
+  // 別讓瀏覽器預設顯示第一顆、看起來像已經選好
+  if (index > 0 && !matched) {
+    const placeholder = document.createElement('option')
+    placeholder.value = ''
+    placeholder.textContent = '請選擇模型'
+    placeholder.disabled = true
+    placeholder.selected = true
+    modelSelect.prepend(placeholder)
   }
   modelSelect.disabled = index === 0
 }
@@ -1575,8 +1611,7 @@ export async function saveChatSettings(validation = null) {
 
   await electronAPI.store.set('chatProviders', providerDraft)
   await electronAPI.store.set('chatProviderId', draftId)
-  // 空白與重複的模型列以前是靜默消失的，使用者只會看到自己打的東西不見
-  if (checked.dropped > 0) showToast(`已略過 ${checked.dropped} 個空白或重複的模型`)
+  // 空白與重複的模型列略過幾筆，由呼叫端（設定頁的 saveSettings）併進「設定已儲存」那則提示
   await refreshModelSelect()
   await refreshBanner()
   return true

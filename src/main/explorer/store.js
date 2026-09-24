@@ -12,7 +12,7 @@ const places = require('./places')
 const { sanitizeSearchFilters } = require('./search-filter')
 
 const VIEW_MODES = new Set(['list', 'grid'])
-const SORT_KEYS = new Set(['name', 'date', 'size'])
+const SORT_KEYS = new Set(['name', 'date', 'size', 'type'])
 /**
  * 方格檢視的圖示邊長（px）。Ctrl+滾輪一次跳一級，像檔案總管的
  * 小圖示→中圖示→大圖示→特大圖示。renderer 也認同一份（`explorer-page.js`）。
@@ -95,7 +95,7 @@ function sanitizeTile(raw) {
 
 /**
  * @param {unknown} raw
- * @returns {'name'|'date'|'size'}
+ * @returns {'name'|'date'|'size'|'type'}
  */
 function sanitizeSortKey(raw) {
   return typeof raw === 'string' && SORT_KEYS.has(raw) ? raw : 'name'
@@ -181,9 +181,10 @@ function sanitizeTab(raw, fallbackId = 't1') {
     sortDesc: state.sortDesc === true,
     showHidden: state.showHidden === true,
     search,
-    searchSort: state.searchSort === 'date' || state.searchSort === 'size' || state.searchSort === 'name'
+    searchSort: SORT_KEYS.has(state.searchSort)
       ? state.searchSort
       : 'rank',
+    searchMode: state.searchMode === 'filter' ? 'filter' : 'global',
     searchFilters: sanitizeSearchFilters(state.searchFilters || state.filters),
     selected: sanitizeSelected(state.selected),
     anchor: typeof state.anchor === 'string' ? state.anchor.slice(0, 32767) : '',

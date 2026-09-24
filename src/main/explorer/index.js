@@ -40,8 +40,8 @@ function configure(opts) {
   }
 }
 
-function defaultPlaces() {
-  const items = drives.listPlaces()
+async function defaultPlaces() {
+  const items = await drives.listPlaces()
   items.unshift({ id: 'thispc', label: '本機', path: drives.THIS_PC })
   items.push({ id: 'recycle', label: '資源回收筒', path: recycle.RECYCLE_CWD })
   return items
@@ -49,18 +49,21 @@ function defaultPlaces() {
 
 async function listPlaces() {
   const state = await store.readState()
-  return places.mergePlaces(state.places, defaultPlaces())
+  return places.mergePlaces(state.places, await defaultPlaces())
 }
 
 async function bootstrap() {
   const state = await store.readState()
-  const listed = await listPlaces()
-  const disks = drives.listDrives()
+  const [listed, disks] = await Promise.all([listPlaces(), drives.listDrives()])
   // 沒存過就落在「本機」首頁（＝Windows 檔案總管的預設畫面）。
   let cwd = state.lastPath || drives.THIS_PC
   if (!recycle.isRecyclePath(cwd) && !drives.isThisPc(cwd)) {
+    // 先非同步問一次：上次停在睡著的網路磁碟時，同步的 resolveExisting 會把整個 App 卡住。
+    // 太慢就照原路徑交給 renderer（listDir 是非同步的，慢也只慢那一格）
+    const reachable = await drives.isDirSoon(cwd).catch(() => false)
     try {
-      paths.resolveExisting(cwd)
+      if (!reachable) throw new Error('gone')
+      paths.resolveAbs(cwd)
     } catch {
       cwd = listed[0] ? listed[0].path : (disks[0] ? disks[0].path : 'C:\\')
     }
@@ -148,7 +151,7 @@ async function addPlace(raw) {
 async function removePlace(rawId) {
   const id = String(rawId || '').trim()
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw paths.fail('BAD_PATH', '路徑不合法')
-  const builtins = defaultPlaces()
+  const builtins = await defaultPlaces()
   const builtinIds = new Set(builtins.map((b) => b.id))
   const stored = await snapshotPlaces()
   let next

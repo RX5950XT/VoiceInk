@@ -10,6 +10,8 @@ const state = {
   kind: 'app',
   range: 'day',
   date: isoDate(new Date()),
+  /** 使用者自己翻過日期才保留；沒翻過就每次進頁都對準今天（App 常駐過夜不能還停在昨天） */
+  dateTouched: false,
   drillStamp: '',
   generation: 0
 }
@@ -44,7 +46,16 @@ function shiftDate(delta) {
   }
   else if (state.range === 'year') d.setFullYear(d.getFullYear() + delta)
   else d.setDate(d.getDate() + delta)
-  state.date = isoDate(d)
+  // 不翻進未來：超過今天就停在今天（今天所在的那一段）
+  const today = isoDate(new Date())
+  state.date = isoDate(d) > today ? today : isoDate(d)
+  state.dateTouched = state.date !== today
+}
+
+/** 已經在今天那一段就不能再往後翻 */
+function syncNextButton() {
+  const next = /** @type {HTMLButtonElement|null} */ ($('stimeNext'))
+  if (next) next.disabled = state.date >= isoDate(new Date())
 }
 
 function dateLabel() {
@@ -69,6 +80,7 @@ function markTabs(rootId, attr, value) {
 }
 
 async function refresh() {
+  syncNextButton()
   const generation = ++state.generation
   const label = $('stimeDateLabel')
   if (label) label.textContent = dateLabel()
@@ -150,7 +162,8 @@ function renderChart(data) {
   }
   const showEvery = labels.length > 14 ? Math.ceil(labels.length / 12) : 1
   series.forEach((value, i) => {
-    const btn = el('button', 'stime-col')
+    // 只有「日」可以點進某個小時看明細；其他範圍的柱子不要長得像按鈕
+    const btn = el('button', state.range === 'day' ? 'stime-col' : 'stime-col is-static')
     btn.type = 'button'
     const bar = el('i')
     bar.style.height = `${Math.max(2, Math.round(value / max * 100))}%`
@@ -212,7 +225,11 @@ function onBarClick(data, index) {
   }
   const hour = String(index).padStart(2, '0')
   state.drillStamp = `${data.start.slice(0, 10)} ${hour}:00:00`
+  // 標出點的是哪一根，明細也捲進畫面（它在清單下面，不捲的話看起來像沒反應）
+  const cols = $('stimeChart')?.querySelectorAll('.stime-col') || []
+  cols.forEach((col, i) => col.classList.toggle('is-on', i === index))
   refreshDrill()
+  $('stimeDrillWrap')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
 }
 
 async function refreshDrill() {
@@ -304,6 +321,10 @@ function bind() {
       if (res?.ok && res.data?.saved) {
         note.textContent = `已匯出 ${res.data.fileName}（${res.data.rows} 列）`
         note.classList.remove('hidden')
+      } else if (!res?.ok) {
+        // 檔案被 Excel 開著、副檔名不對：要講，不然像按了沒反應
+        note.textContent = res?.error?.message || '匯出失敗'
+        note.classList.remove('hidden')
       }
     })
   })
@@ -320,6 +341,7 @@ export function initScreentimePanel() {
 
 export function showScreentimePanel() {
   initScreentimePanel()
+  if (!state.dateTouched) state.date = isoDate(new Date())
   refresh()
 }
 

@@ -12,7 +12,7 @@ const crypto = require('crypto')
 const fs = require('../raw-fs')
 const fsp = require('../raw-fs').promises
 const path = require('path')
-const { spawnSync } = require('child_process')
+const { execFile } = require('child_process')
 const paths = require('./paths')
 const drives = require('./drives')
 
@@ -88,17 +88,18 @@ function parseIFile(buf) {
 /**
  * @returns {Array<{ drive: string, sid: string, dir: string }>}
  */
-function sidFolders() {
+async function sidFolders() {
   const out = []
-  for (const disk of drives.listDrives()) {
+  for (const disk of await drives.listDrives()) {
     const letter = disk.letter
     const bin = `${letter}:\\$Recycle.Bin`
-    let names
-    try {
-      names = fs.readdirSync(bin, { withFileTypes: true })
-    } catch {
-      continue
-    }
+    // 非同步＋逾時：網路磁碟睡著時 readdirSync 會把整個 App 卡住（網路磁碟本來也沒有回收筒）
+    let timer
+    const names = await Promise.race([
+      fsp.readdir(bin, { withFileTypes: true }).catch(() => null),
+      new Promise((resolve) => { timer = setTimeout(() => resolve(null), 1500) })
+    ]).finally(() => clearTimeout(timer))
+    if (!names) continue
     for (const entry of names) {
       if (!entry.isDirectory()) continue
       if (!/^S-[0-9\-]+$/i.test(entry.name)) continue
@@ -163,7 +164,7 @@ async function readItem(iPath, rPath) {
 async function list() {
   const entries = []
   let truncated = false
-  for (const folder of sidFolders()) {
+  for (const folder of await sidFolders()) {
     let names
     try {
       names = await fsp.readdir(folder.dir)
@@ -199,15 +200,14 @@ async function list() {
   return { path: RECYCLE_CWD, entries, truncated }
 }
 
-function userSid() {
+async function userSid() {
   if (cachedSid) return cachedSid
   const exe = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'whoami.exe')
-  const result = spawnSync(exe, ['/user'], {
-    encoding: 'utf8',
-    windowsHide: true,
-    timeout: 5000
+  const stdout = await new Promise((resolve) => {
+    execFile(exe, ['/user'], { encoding: 'utf8', windowsHide: true, timeout: 5000 },
+      (error, out) => resolve(error ? '' : String(out || '')))
   })
-  const match = String(result.stdout || '').match(/S-1-5-[0-9\-]+/)
+  const match = stdout.match(/S-1-5-[0-9\-]+/)
   cachedSid = match ? match[0] : ''
   return cachedSid
 }
@@ -248,7 +248,7 @@ function newIName(full) {
 async function trashNative(full) {
   const st = fs.lstatSync(full)
   const drive = full[0].toUpperCase()
-  const sid = userSid()
+  const sid = await userSid()
   if (!sid) throw new Error('no sid')
   const dir = `${drive}:\\$Recycle.Bin\\${sid}`
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
@@ -273,14 +273,17 @@ async function trashNative(full) {
  * @param {string} full
  * @param {boolean} isDir
  */
-function trashViaPS(full, isDir) {
+async function trashViaPS(full, isDir) {
   const method = isDir ? 'DeleteDirectory' : 'DeleteFile'
   const script = 'Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::'
     + method + '(' + psQuote(full) + ',' + "'OnlyErrorDialogs'" + ',' + "'SendToRecycleBin'" + ')'
-  const result = spawnSync(powershellPath(), [
-    '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script
-  ], { windowsHide: true, timeout: 30_000, encoding: 'utf8' })
-  if (result.error || result.status !== 0) throw paths.fail('DELETE_FAILED', '刪不掉')
+  // 非同步：大資料夾丟回收筒要好幾秒，同步等的話整個 App 會卡住
+  const failed = await new Promise((resolve) => {
+    execFile(powershellPath(), [
+      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script
+    ], { windowsHide: true, timeout: 30_000, encoding: 'utf8' }, (error) => resolve(Boolean(error)))
+  })
+  if (failed) throw paths.fail('DELETE_FAILED', '刪不掉')
 }
 
 /**
@@ -310,7 +313,7 @@ async function trash(full) {
   } catch {
     // 跨磁碟 rename 失敗時改走 FileIO
   }
-  trashViaPS(full, isDir)
+  await trashViaPS(full, isDir)
 }
 
 /**
@@ -386,8 +389,8 @@ async function purge(recycleKey) {
 
 async function empty() {
   let count = 0
-  const sid = userSid()
-  for (const folder of sidFolders()) {
+  const sid = await userSid()
+  for (const folder of await sidFolders()) {
     if (sid && folder.sid.toLowerCase() !== sid.toLowerCase()) continue
     let names
     try {

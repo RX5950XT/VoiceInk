@@ -703,6 +703,9 @@ async function closeMany(list) {
     // eslint-disable-next-line no-await-in-loop
     await closeTab(tab.id)
   }
+  // 未存檔與終端機分頁要各自按 × 確認，批次裡會被略過：講清楚，不然像按了沒反應
+  const kept = list.filter((tab) => findTab(tab.id)).length
+  if (kept) showToast(`${kept} 個分頁沒關（未存檔或終端機），要各自按 × 確認`)
 }
 
 /**
@@ -1426,6 +1429,8 @@ function paintEditor(tab) {
     if (el.editorPreviewBtn) el.editorPreviewBtn.hidden = true
     if (el.editorSaveBtn) el.editorSaveBtn.hidden = true
     if (el.editorFindBtn) el.editorFindBtn.hidden = true
+    // 沒有文字可帶；留著的話會把上一個分頁殘留在 textarea 的選取標成這個檔案送進聊天
+    if (el.editorToChatBtn) el.editorToChatBtn.hidden = true
     if (el.editorNote) {
       el.editorNote.textContent = tab.readonly || ''
       el.editorNote.hidden = !tab.readonly
@@ -1434,6 +1439,7 @@ function paintEditor(tab) {
   }
 
   if (el.unsupported) el.unsupported.hidden = true
+  if (el.editorToChatBtn) el.editorToChatBtn.hidden = false
   if (el.ideStatusbar) el.ideStatusbar.hidden = false
 
   cancelShadowSync()
@@ -2759,6 +2765,16 @@ function closeMenu() {
   menuEl = null
   el.newBtn?.setAttribute('aria-expanded', 'false')
   window.removeEventListener('pointerdown', onOutsideMenu, true)
+  window.removeEventListener('keydown', onMenuKey, true)
+}
+
+/** 跟右鍵選單（ws-menu.js）一樣，Esc 關得掉 @param {KeyboardEvent} event */
+function onMenuKey(event) {
+  if (event.key !== 'Escape') return
+  event.preventDefault()
+  event.stopPropagation()
+  closeMenu()
+  el.newBtn?.focus()
 }
 
 /** @param {PointerEvent} event */
@@ -2822,6 +2838,7 @@ function toggleMenu() {
   document.body.appendChild(menuEl)
   anchor.setAttribute('aria-expanded', 'true')
   window.addEventListener('pointerdown', onOutsideMenu, true)
+  window.addEventListener('keydown', onMenuKey, true)
 }
 
 /**
@@ -2843,6 +2860,11 @@ async function newTerminal(preset, admin) {
   } catch {
     // call 已經吐過 toast
   }
+}
+
+/** Ctrl+Shift+T：開一個一般終端機（跟「＋ → 終端機」同一條路） */
+export function newShellTerminal() {
+  return newTerminal('shell', false)
 }
 
 /**
@@ -3412,6 +3434,7 @@ export function initWsTabs() {
     else showToast('只支援 http 與 https 的網址', 'error')
   })
   el.browserUrl?.addEventListener('keydown', (event) => {
+    if (event.isComposing || event.keyCode === 229) return // 輸入法選字的 Enter 不算
     if (event.key === 'Enter') {
       event.preventDefault()
       navigateBrowser()

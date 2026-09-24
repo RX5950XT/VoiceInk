@@ -472,6 +472,10 @@ function createPane(id) {
     // 複製：有選取時的 Ctrl+C、Ctrl+Shift+C、Ctrl+Insert（見 `term-copy.js`）。沒選取的 Ctrl+C 照舊中斷
     if (handleCopyKey(term, event)) return false
     if (event.ctrlKey && !event.altKey && !event.metaKey) {
+      // 切分頁／開關分頁交給工作區（workspace-page.js 的 onGlobalKeydown）。
+      // xterm 收了只會送一個 Tab 或 ^T／^W 進 shell，跟使用者要的完全不同
+      if (event.key === 'Tab') return false
+      if (event.shiftKey && ['t', 'T', 'w', 'W'].includes(event.key)) return false
       // Ctrl+F 搜尋。PSReadLine 的 Windows 編輯模式沒有綁 Ctrl+F（實測
       // `Get-PSReadLineKeyHandler -Bound` 沒有這一條），拿來當搜尋不會擋到編輯。
       // Ctrl+Shift+F 也收：那是 Windows 終端機的習慣。
@@ -885,6 +889,10 @@ export function openNewTerminalDialog(cwd = '') {
 }
 
 async function createSession() {
+  // 建立要等 ConPTY 起來，期間連按會開出兩個工作階段
+  const btn = /** @type {HTMLButtonElement|null} */ (document.getElementById('termNewCreateBtn'))
+  if (btn?.disabled) return
+  if (btn) btn.disabled = true
   try {
     const created = await call(electronAPI.terminal.create({
       shell: shellSelect.value,
@@ -899,6 +907,8 @@ async function createSession() {
     await openSession(created.id)
   } catch {
     // call() 已經把訊息顯示出來了
+  } finally {
+    if (btn) btn.disabled = false
   }
 }
 
@@ -1051,6 +1061,7 @@ export function initTerminalPage() {
   findInput?.addEventListener('keydown', (event) => {
     // 搜尋列的按鍵不可以漏回終端機（Enter 會被當成送出指令）
     event.stopPropagation()
+    if (event.isComposing || event.keyCode === 229) return // 輸入法選字的 Enter 不算
     if (event.key === 'Enter') {
       event.preventDefault()
       runFind(event.shiftKey ? -1 : 1)

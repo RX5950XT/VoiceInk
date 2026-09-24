@@ -270,6 +270,20 @@ body.is-maximized .win-btn#winMax {
   transition: none;
 }
 
+/* 錄音機在背景錄音中 */
+.nav-tab.is-recording { position: relative; }
+.nav-tab.is-recording::after {
+  content: '';
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--danger, #e5484d);
+  box-shadow: 0 0 0 2px var(--bg-primary);
+}
+
 .nav-tab.is-dragging {
   opacity: 0.55;
 }
@@ -1320,6 +1334,12 @@ option:disabled {
   color: var(--text-tertiary);
 }
 
+/* 整個 select 停用時 Chromium 把每個 option 都當成 :disabled：選中那項會變成灰字壓在強調色上
+   （對比 1.1，檔案頁在「本機」首頁停用排序下拉時實際發生過） */
+option:disabled:checked {
+  color: var(--select-option-selected-text);
+}
+
 .btn:disabled,
 .btn-icon:disabled,
 .icon-btn:disabled,
@@ -2268,6 +2288,9 @@ option:disabled {
    回歸 `probe-terminal-background.js` 的 [G]。 */
 .term-pane .xterm .xterm-viewport {
   background-color: transparent;
+  /* xterm.css 還給它 `overflow-y: scroll`，全域捲軸樣式就在右緣畫出一條原生軌道，
+     跟 xterm 6 自己畫的捲軸（`.scrollbar.vertical`）疊成兩條。捲動本來就由 xterm 那條管。 */
+  scrollbar-width: none;
 }
 
 /* 這裡**刻意不動 `opacity`**：以前為了「讓 Chromium 畫得到游標方框」把它改成
@@ -4782,8 +4805,13 @@ body:has(.ws-monaco .find-widget.visible) .workbench-hover-container {
 }
 
 .chat-msg:hover .chat-msg-actions,
-.chat-msg-actions:focus-within {
+.chat-msg-actions:focus-within,
+.chat-msg-actions:has(.chat-msg-action.is-armed) {
   opacity: 1;
+}
+
+.chat-msg-images img {
+  cursor: zoom-in;
 }
 
 .chat-msg-action {
@@ -7992,7 +8020,7 @@ h6.md-h { font-size: 14px; }
 /* ── 等角機殼示意圖 ── */
 
 /* 收成一欄時卡片會撐到整頁寬，示意圖跟著等比長到 1500px 高 —— 給它一個上限 */
-.fan-chassis { width: 100%; max-width: 330px; margin-inline: auto; }
+.fan-chassis { width: 100%; max-width: 360px; margin-inline: auto; }
 .fan-chassis-svg { width: 100%; height: auto; display: block; overflow: visible; }
 
 /* 半透明的殼：不用處理遮擋順序，風扇一律畫在最上層 */
@@ -8004,9 +8032,11 @@ h6.md-h { font-size: 14px; }
   vector-effect: non-scaling-stroke;
 }
 
-.fan-face-tray { fill: var(--surface-hover); fill-opacity: 0.8; }
+.fan-face-tray { fill: var(--surface-hover); fill-opacity: 0.85; }
+.fan-face-rear { fill-opacity: 0.4; }
 .fan-face-floor { fill-opacity: 0.35; }
-.fan-face-front { fill-opacity: 0.28; }
+.fan-face-top { fill-opacity: 0.18; }
+.fan-face-front { fill-opacity: 0.3; }
 
 .fan-edge {
   fill: none;
@@ -8015,10 +8045,14 @@ h6.md-h { font-size: 14px; }
   vector-effect: non-scaling-stroke;
 }
 
-.fan-edge-top { stroke: var(--border-color); }
+.fan-edge-glass { stroke: var(--border-color); stroke-dasharray: 3 2; }
 
 .fan-board { fill: var(--accent-soft); fill-opacity: 0.5; stroke: var(--border-color); stroke-width: 0.4; }
 .fan-part { fill: var(--surface-hover); stroke: var(--border-color); stroke-width: 0.4; }
+.fan-part-gpu { fill: var(--surface-solid); fill-opacity: 0.7; }
+
+/* 側板風扇裝在（拿掉的）玻璃側板上：框線用虛線，跟板上的風扇分得出來 */
+.fan-slot.is-glass .fan-frame { stroke-dasharray: 3 2; }
 
 .fan-slot { cursor: pointer; outline: none; }
 
@@ -8591,7 +8625,14 @@ h6.md-h { font-size: 14px; }
   min-width: 0;
 }
 
-.sysmon-block-title strong { font-size: 15px; font-weight: 700; }
+/* 標題列固定單行：長型號折成兩行會讓並排的兩塊高低不一，全名在 title */
+.sysmon-block-title strong {
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .sysmon-block-sub {
   min-width: 0;
@@ -8689,6 +8730,10 @@ h6.md-h { font-size: 14px; }
 }
 
 .sysmon-viz-grid { display: grid; gap: 6px 18px; }
+
+/* 16～32 條執行緒一條一整列太浪費：寬螢幕排成多欄，CPU 區塊從八百多高縮到三分之一 */
+.sysmon-viz-cores .sysmon-viz-grid { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+.sysmon-viz-meters .sysmon-viz-grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
 
 .sysmon-corecell,
 .sysmon-metercell {
@@ -9327,6 +9372,11 @@ h6.md-h { font-size: 14px; }
 
 .stime-col.is-on i { opacity: 1; }
 
+/* 點了某個小時：其他柱子淡掉，看得出選的是哪一根 */
+.stime-chart:has(.stime-col.is-on) .stime-col:not(.is-on) i { opacity: 0.4; }
+
+.stime-col.is-static { cursor: default; }
+
 .stime-split {
   display: grid;
   grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
@@ -9794,9 +9844,7 @@ h6.md-h { font-size: 14px; }
 
 /* 第二行：走直連還是經閘道、憑證從哪來。缺東西時轉成警示色 */
 .cc-tile-meta {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
   color: var(--text-secondary);
   font-size: 12px;
 }
@@ -10068,9 +10116,8 @@ h6.md-h { font-size: 14px; }
 }
 
 .cu-dist-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .cu-dist-value {
@@ -10381,8 +10428,13 @@ h6.md-h { font-size: 14px; }
 }
 
 .dict-record:hover .dict-record-actions,
-.dict-record:focus-within .dict-record-actions {
+.dict-record:focus-within .dict-record-actions,
+.dict-record-actions:has(.is-armed) {
   opacity: 1;
+}
+
+.dict-record-actions .is-armed {
+  color: var(--danger);
 }
 
 .dict-record-text {
@@ -10508,17 +10560,73 @@ h6.md-h { font-size: 14px; }
 }
 
 .recording-pick {
-  display: flex;
-  justify-content: center;
-  margin-top: 12px;
+  width: min(460px, 100%);
+  margin: 20px auto 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-light);
+  cursor: default;
 }
 
 .recording-pick[hidden] {
   display: none;
 }
 
-.recording-pick .custom-select {
-  min-width: 260px;
+.recording-pick-title {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.recording-pick-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* 一段錄音一列：時間｜長度・大小｜轉錄。整列都能按 */
+.recording-pick-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+
+.recording-pick-item:hover,
+.recording-pick-item:focus-visible {
+  border-color: var(--accent-primary);
+  background: var(--surface-hover);
+}
+
+.recording-pick-when {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recording-pick-meta {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.recording-pick-go {
+  color: var(--accent-primary);
+  font-weight: 600;
+}
+
+.recording-pick-all {
+  align-self: center;
+  margin-top: 2px;
 }
 
 .live-history {
@@ -10539,6 +10647,94 @@ h6.md-h { font-size: 14px; }
 
 .live-history-tr {
   margin: 0 0 8px;
+}
+
+/* 即時字幕：左邊設定＋開始，右邊字幕紀錄。以前是一條 520px 的窄欄置中，
+   寬螢幕兩側全空、紀錄被推到畫面外要捲才看得到。 */
+#stt-live.active {
+  display: grid;
+  grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+#stt-live .live-content,
+#stt-live .live-history {
+  max-width: none;
+  margin: 0;
+}
+
+#stt-live .live-content {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+}
+
+#stt-live .live-content .option-group {
+  flex: none;
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+/* 選單跟著欄寬走，長模型名用刪節號，不要把卡片撐破 */
+#stt-live .live-content .custom-select {
+  display: flex;
+  width: 100%;
+}
+
+#stt-live .live-content .custom-select-trigger {
+  /* inline-flex 底下的純文字不吃 text-overflow，長模型名會蓋到箭頭上 */
+  display: block;
+  min-width: 0;
+  line-height: 38px;
+}
+
+/* 模型選單是這張卡片的一部分，不要再包一層卡片（卡片套卡片） */
+#stt-live .scope-models {
+  flex-direction: column;
+  /* 直排又 wrap 的話每一行寬度由內容決定，長模型名會把選單撐出卡片 */
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 14px;
+  margin: 0;
+  padding: 0 0 14px;
+  border: 0;
+  border-bottom: 1px solid var(--border-light);
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+#stt-live #liveCaptionDisplayGroup .setting-hint {
+  margin: 0;
+}
+
+#stt-live .live-controls {
+  margin: 4px 0 0;
+}
+
+#stt-live .live-controls .btn-large {
+  flex: 1;
+  justify-content: center;
+  padding: 12px 20px;
+}
+
+/* 紀錄吃滿右欄的高度：視窗多高就列多少，不是固定 360px 一小格 */
+#stt-live .live-history {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+#stt-live .live-history .dict-records {
+  max-height: calc(100vh - 300px);
+  min-height: 240px;
+}
+
+@media (max-width: 860px) {
+  #stt-live.active { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* ===== HF模型頁 =====
@@ -11387,10 +11583,11 @@ h6.md-h { font-size: 14px; }
 
 .ex-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 6px 8px;
   flex-shrink: 0;
-  padding: 10px 14px;
+  padding: 5px 10px;
   border-bottom: 1px solid var(--border-color);
   user-select: none;
 }
@@ -11512,7 +11709,8 @@ h6.md-h { font-size: 14px; }
 .ex-pathbar {
   display: flex;
   align-items: center;
-  min-width: 0;
+  /* 窄視窗時工具列換行，也不要把路徑擠到看不見 */
+  min-width: 180px;
   flex: 1;
   min-height: 32px;
   padding: 0 4px;
@@ -11653,7 +11851,7 @@ h6.md-h { font-size: 14px; }
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
-  padding: 6px 14px;
+  padding: 4px 10px;
   border-bottom: 1px solid var(--border-color);
   overflow-x: auto;
   user-select: none;
@@ -11667,14 +11865,11 @@ h6.md-h { font-size: 14px; }
   opacity: 0.45;
 }
 
-/* 三塊欄位之間的把手。`margin-inline: -3px` 讓它壓在 8px 的 gap 上，不另外佔版面。 */
+/* 三塊欄位之間的把手，本身就是欄位之間那條縫（.ex-body 不另外給 gap，不然縫會變兩倍寬）。 */
 .ex-resizer {
   flex: none;
-  /* 一定要 position：沒有它 z-index 不生效，`margin-inline: -3px` 讓左右欄疊上來，
-     把手中間那條就點不到（詳情欄那條整個拖不動）。 */
   position: relative;
   width: 6px;
-  margin-inline: -3px;
   cursor: col-resize;
   border-radius: 3px;
   background: transparent;
@@ -11690,6 +11885,11 @@ h6.md-h { font-size: 14px; }
 
 .ex-resizer[hidden] { display: none; }
 
+/* 旁邊那欄收起來，它的把手也要一起收：不然右邊會剩一兩條拖不動的線 */
+#exSecondResizer:has(+ .ex-second-pane[hidden]),
+#exDetailResizer:has(+ .ex-detail.is-collapsed),
+#exDetailResizer:has(+ .ex-detail.is-home) { display: none; }
+
 /* 拖欄寬時整頁不要選到字 */
 body.is-col-resizing { user-select: none; cursor: col-resize; }
 
@@ -11697,8 +11897,7 @@ body.is-col-resizing { user-select: none; cursor: col-resize; }
   display: flex;
   flex: 1;
   min-height: 0;
-  gap: 8px;
-  padding: 8px;
+  padding: 4px 6px 6px;
 }
 
 .ex-sidebar {
@@ -11783,6 +11982,7 @@ body.is-col-resizing { user-select: none; cursor: col-resize; }
 .ex-main {
   flex: 1;
   min-width: 0;
+  container-type: inline-size;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -11790,10 +11990,14 @@ body.is-col-resizing { user-select: none; cursor: col-resize; }
 }
 
 .ex-list-head {
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 88px 148px;
+  grid-template-columns: minmax(0, 1fr) var(--ex-col-size, 88px) var(--ex-col-date, 148px);
   gap: 8px;
   flex-shrink: 0;
+  /* 跟下面清單留一樣寬的捲軸槽，欄標題才會對齊欄位 */
+  overflow-y: hidden;
+  scrollbar-gutter: stable;
   padding: 4px 18px 4px 18px;
   border-bottom: 1px solid var(--border-color);
   user-select: none;
@@ -11801,6 +12005,33 @@ body.is-col-resizing { user-select: none; cursor: col-resize; }
 
 .ex-list-head[hidden] {
   display: none;
+}
+
+/* 欄寬把手：站在「大小」「修改」欄左邊那 8px 間隙的正中間（右內距 18px） */
+.ex-col-grip {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  width: 6px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.ex-col-grip-size { right: calc(var(--ex-col-date, 148px) + var(--ex-col-size, 88px) + 27px); }
+.ex-col-grip-date { right: calc(var(--ex-col-date, 148px) + 19px); }
+
+.ex-col-grip::after {
+  content: '';
+  position: absolute;
+  inset: 0 2px;
+  border-radius: 1px;
+  background: var(--border-color);
+}
+
+.ex-col-grip:hover::after,
+.ex-col-grip:focus-visible::after,
+.ex-col-grip.is-dragging::after {
+  background: var(--accent-primary);
 }
 
 .ex-sort {
@@ -11829,6 +12060,7 @@ body.is-col-resizing { user-select: none; cursor: col-resize; }
   position: relative; /* 框選的框是它的子元素，要有定位基準 */
   flex: 1;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   padding: 6px 8px 16px;
 }
 
@@ -11844,7 +12076,7 @@ body.is-col-resizing { user-select: none; cursor: col-resize; }
 
 .ex-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 88px 148px;
+  grid-template-columns: minmax(0, 1fr) var(--ex-col-size, 88px) var(--ex-col-date, 148px);
   gap: 8px;
   align-items: center;
   padding: 6px 10px;
@@ -11910,6 +12142,15 @@ body.is-col-resizing { user-select: none; cursor: col-resize; }
   font-size: 12px;
   color: var(--text-tertiary);
   font-variant-numeric: tabular-nums;
+}
+
+/* 左欄被右欄擠窄時收掉「修改」那欄，不然名稱會被擠成一個字一行 */
+@container (max-width: 460px) {
+  .ex-list-head,
+  .ex-list:not(.is-grid) .ex-row { grid-template-columns: minmax(0, 1fr) 72px; }
+  .ex-list-head [data-sort='date'],
+  .ex-col-grip,
+  .ex-list:not(.is-grid) .ex-row-mtime { display: none; }
 }
 
 .ex-list.is-grid ~ .ex-list-head,
@@ -12109,6 +12350,9 @@ body.is-col-resizing { user-select: none; cursor: col-resize; }
   flex: 0 0 auto;
 }
 
+.ex-toolbar-actions .custom-select { flex: 0 0 auto; }
+
+.custom-select[data-select-id="exSort"] .custom-select-trigger,
 .custom-select[data-select-id="exSecondSort"] .custom-select-trigger {
   min-width: 78px;
   min-height: 28px;
@@ -12117,6 +12361,7 @@ body.is-col-resizing { user-select: none; cursor: col-resize; }
   font-size: 12px;
 }
 
+.custom-select[data-select-id="exSort"] .custom-select-trigger::after,
 .custom-select[data-select-id="exSecondSort"] .custom-select-trigger::after {
   right: 8px;
 }

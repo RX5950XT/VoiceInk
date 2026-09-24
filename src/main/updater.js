@@ -61,7 +61,7 @@ function get() {
     state: autoEnabled ? 'downloading' : 'available',
     version: info?.version || '',
     percent: 0,
-    message: autoEnabled ? `發現新版本 v${info?.version}，開始下載…` : `發現新版本 v${info?.version}。`
+    message: autoEnabled ? `發現新版本 v${info?.version}，開始下載…` : `發現新版本 v${info?.version}，按「下載更新」開始下載。`
   }))
   autoUpdater.on('update-not-available', () => emit({ state: 'none', percent: 0, message: '已經是最新版本。' }))
   autoUpdater.on('download-progress', (p) => emit({
@@ -77,7 +77,14 @@ function get() {
   }))
   autoUpdater.on('error', (err) => {
     console.error('[updater] update failed')
-    emit({ state: 'error', percent: 0, message: '檢查更新失敗（無法連線到 GitHub，或這個版本沒有附帶更新資訊）。' })
+    const wasDownloading = state.state === 'downloading'
+    emit({
+      state: 'error',
+      percent: 0,
+      message: wasDownloading
+        ? '下載更新失敗，請稍後再按「檢查更新」重試。'
+        : '檢查更新失敗（無法連線到 GitHub，或這個版本沒有附帶更新資訊）。'
+    })
   })
   downloadWithFallback(autoUpdater.httpExecutor)
   updater = autoUpdater
@@ -104,9 +111,14 @@ function hasUpdateConfig() {
   }
 }
 
-/** 手動按「檢查更新」；autoDownload 開著的話會直接接著下載 */
+/** 手動按「檢查更新」；autoDownload 開著的話會直接接著下載；手動模式已發現新版時這顆鈕就是「下載更新」 */
 async function check() {
   if (!app.isPackaged) return status()
+  if (state.state === 'available' && updater) {
+    emit({ state: 'downloading', percent: 0, message: `開始下載 v${state.version}…` })
+    updater.downloadUpdate().catch(() => {}) // 失敗由 'error' 事件回報
+    return status()
+  }
   if (!hasUpdateConfig()) {
     emit({ state: 'unsupported', percent: 0, message: '此預覽版未附更新資訊。' })
     return status()

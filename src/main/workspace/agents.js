@@ -271,12 +271,13 @@ function codexHead(lines) {
  * @param {number} sinceMs
  * @param {Array<{ file: string, mtime: number }>} out
  * @param {number} depth
+ * @returns {Promise<void>} 非同步：Codex 的 sessions 一掃幾百份，同步 stat 會卡住主程序
  */
-function collect(dir, sinceMs, out, depth = 0) {
+async function collect(dir, sinceMs, out, depth = 0) {
   if (depth > 6 || out.length >= MAX_SCAN_FILES) return
   let entries
   try {
-    entries = fs.readdirSync(dir, { withFileTypes: true })
+    entries = await fsp.readdir(dir, { withFileTypes: true })
   } catch {
     return
   }
@@ -285,13 +286,13 @@ function collect(dir, sinceMs, out, depth = 0) {
     if (entry.isSymbolicLink()) continue
     const full = path.join(dir, entry.name)
     if (entry.isDirectory()) {
-      collect(full, sinceMs, out, depth + 1)
+      await collect(full, sinceMs, out, depth + 1)
       continue
     }
     if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue
     let stat
     try {
-      stat = fs.statSync(full)
+      stat = await fsp.stat(full)
     } catch {
       continue
     }
@@ -368,7 +369,7 @@ async function sessions(projectPath) {
   for (const home of claudeHomes()) {
     /** @type {Array<{ file: string, mtime: number }>} */
     const found = []
-    collect(path.join(home, 'projects', encodeClaudeDir(projectPath)), sinceMs, found)
+    await collect(path.join(home, 'projects', encodeClaudeDir(projectPath)), sinceMs, found)
     found.sort((a, b) => b.mtime - a.mtime)
     for (const item of found.slice(0, MAX_SESSIONS)) {
       const id = path.basename(item.file, '.jsonl')
@@ -390,7 +391,7 @@ async function sessions(projectPath) {
     /** @type {Array<{ file: string, mtime: number }>} */
     const found = []
     for (const root of ['sessions', 'archived_sessions']) {
-      collect(path.join(home, root), sinceMs, found)
+      await collect(path.join(home, root), sinceMs, found)
     }
     found.sort((a, b) => b.mtime - a.mtime)
     let taken = 0
@@ -478,7 +479,7 @@ async function findSessionFile(projectPath, agent, sessionId) {
       /** @type {Array<{ file: string, mtime: number }>} */
       const matches = []
       for (const root of ['sessions', 'archived_sessions']) {
-        collect(path.join(home, root), sinceMs, matches)
+        await collect(path.join(home, root), sinceMs, matches)
       }
       // 由新到舊，命中第一個就停。不停的話每按一次接續／檢視都要把這個家目錄底下
       // 最多 MAX_SCAN_FILES 份記錄各讀 HEAD_BYTES 的檔頭，只為了挑出同一份的最新版。

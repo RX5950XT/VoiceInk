@@ -143,6 +143,7 @@ tag 要與 `package.json` 的 version 一致。
 - **更新會把捷徑放到過期**：electron-builder 更新時走 keepShortcuts 刻意不重建捷徑，但更新會把安裝資料夾與 `VoiceInk.exe` 整個換掉——`.lnk` 的 IDList 記著舊的時間戳，Windows 解析不到目標，工作列與開始功能表就退回「一張白紙加捷徑箭頭」。**視窗自己的 HICON 是對的**（`WM_GETICON` 拿得到圖），所以照著程式碼查永遠查不到。解法是 `build/installer.nsh` 的 `customInstall`：每次安裝把「本來就存在」的開始功能表／桌面／已釘選那三份重寫一次並補回 AUMID（`build/` 整個被 `.gitignore` 擋掉，那支要 `!build/installer.nsh` 放行）。回歸 `probe-taskbar-icon.js`（比對捷徑與 exe 解析到的是不是同一格系統影像清單）。
 - **常駐三件套缺一不可**：`requestSingleInstanceLock()`；沒搶到鎖的用 **`app.quit()` 不是 `app.exit()`**；`whenReady` 也要 `if (!hasInstanceLock) return`。`close` 攔截必須放行 `isQuitting`。管理員終端機的 `--terminal-admin-host=` 要攔在搶鎖**之前**。
 - **`document.hidden` 同時代表「被完全遮住」**，所以**不可以**關 `setBackgroundThrottling`（實測會讓它恆為 false）。常駐時只有計時器被節流（89ms → 19828ms），main→renderer 派送仍是 0～1ms。
+- **主程序不准對「可能是網路路徑」的東西做同步 I/O**（`statSync`／`existsSync`／`readdirSync`／`spawnSync`）：NAS 睡著、VPN 斷線時 SMB 逾時十幾秒，整個 UI 執行緒停住 → Windows 判 AppHang 強制關掉（事件記錄 1002，沒有堆疊）。使用者資料夾（下載、文件…）可能被搬到網路磁碟；一律 `fs.promises` ＋逾時（`drives.js` 的 `withTimeout`／`isDirSoon`），掃大量檔案也要非同步。
 - `before-quit` 要收：終端機 `killAll()`、sysmon 三顆、`llama-asr.unload()`、`dictationHud.close()`、`agy.shutdown()`（**不是 `stop()`**）、`oc.shutdown()`／風扇排在 `sensors.stop()` 之前；`workspace:flushDrafts` 要排在 `killAll()` **之前**（存不起來時要能取消結束）。
 
 ### 聊天
@@ -276,6 +277,8 @@ tag 要與 `package.json` 的 version 一致。
 ### 終端機
 
 - **忙碌判定不能只靠 OSC 133**（PSReadLine 會重送整份提示字元）：標記要帶 `Get-History` 的 id 且**比大小**，第一個看到的標記只是「現在這個提示字元」；也不能只靠靜默（AI CLI 是常駐 REPL）。兩者都要。
+- **xterm 6 自己畫捲軸（`.scrollbar.vertical`）**，但 `xterm.css` 的 `.xterm-viewport` 仍是 `overflow-y: scroll`：打包版會多畫一條原生捲軸疊在旁邊（開發版看不出來）。已設 `scrollbar-width: none`，不要拿掉。
+- 終端機的按鍵攔截（`attachCustomKeyEventHandler`）要對 App 層快捷鍵（Ctrl+Tab、Ctrl+Shift+T／W）回 `false`，不然 xterm 吃掉、工作區收不到。
 - **狀態變動只能就地改那一列，不可 `renderList()` 重建**（待確認的刪除鈕與改名輸入框掛在 DOM 上 → 跑著的終端機刪不掉）。
 - 注入 PowerShell 的 `-Command` 字串不可含雙引號（用單引號＋`+` 相接，`$ok = $?` 必須第一句）。
 - shell 與啟動指令只收 key（固定表），cwd 走系統對話框再 `statSync().isDirectory()`。
@@ -574,6 +577,7 @@ tag 要與 `package.json` 的 version 一致。
 - **`themes.css` 沒有 `--surface`／`--accent`／`--border` 這三個名字**（是 `--surface-glass`／`--surface-solid`／ `--accent-primary`／`--border-color`）：CSS 變數打錯不報錯，只會變成「沒有背景」或（SVG `fill`）純黑。新寫樣式前先 grep `themes.css`；回歸要量 `getComputedStyle` 的實際顏色。
 - **用 `el.hidden` 收合的元素，CSS 若寫了 `display` 就必須自己補 `[hidden] { display: none }`**（`.btn`、`.sidebar-panel`、`.app-dialog` 都中過；`<dialog>` 寫 `display` 一定要帶 `[open]`，否則沒開的彈窗全浮出來）。只斷言 `.hidden === true` 抓不到，**要量 `offsetHeight`**；`<details>` 收起後子元素的 `offsetHeight` 還是舊值。
 - **`backdrop-filter` 會偷走 `position: fixed` 的定位基準**（`positionMenu` 要先歸零量原點再回推）。
+- **程式改 `<select>.value` 不會觸發 `custom-select.js` 重畫**（它只看 childList／attributes）：改完要呼叫 `syncCustomSelects()`。停用的 `<select>` 所有 option 都算 `:disabled`，選中那項的字色要另外給（`option:disabled:checked`），不然對比度掉到 1.1。
 - 下拉走 `custom-select.js`（原生 `<select>` 留作資料與事件來源）；`optgroup` 只能用 `querySelectorAll('option')` 讀；flex 版面要收斂的是 `.custom-select` 不是 `.select`。
 - 批次改 CSS 前先確認選擇器不是某條多選擇器規則的結尾（曾把共用規則的 `background` 一起刪掉，全 App 玻璃面板變透明）。
 - 彈窗：body 要掛上共用的 `overflow-y: auto` 規則、內容區要自己補 `padding: 4px 24px 0`。
@@ -589,6 +593,7 @@ tag 要與 `package.json` 的 version 一致。
 
 - **在這個 App 裡開發這個 App，一律 `npm run dev:sandbox`**（`scripts/dev-sandbox.js`）：三份 VoiceInk 預設共用 `%APPDATA%\voiceink`，而 `requestSingleInstanceLock()` 綁的是 **userData 路徑**（`main.js` 特地在搶鎖前就套用 `--user-data-dir`）——不換路徑只會把使用者的視窗叫到前面然後自己關掉，還跟他搶資料檔與 AGY 的埠。沙箱在 `%APPDATA%\voiceink-dev`：`models`／`hf-models` 用 junction 接回真的那份（唯讀，30GB 不能複製）；`config.json`／`workspaces.json` **複製**一份（有真資料可用又弄不髒）；會累積的紀錄（usage／code-usage／ agy-logs／dictations／terminals）**不接**；`agyEnabled`／`dictationEnabled`／`sysmonSensors`／檔案頁 `uffsAuto` 強制關掉（這幾個的影響跑得出 userData 之外）。**寫進沙箱前一律先 `rm` 目的地**——`writeFileSync`／`copyFileSync` 會跟著符號連結寫到對面去，沙箱裡只要有一條指回真 userData 的連結，這支「保護資料」的腳本就會親手覆寫使用者的設定。
 - **腳本不准自己往 `%TEMP%` 撒東西**：暫存一律 `scripts/lib/test-temp.js` 的 `tempDir(prefix)`／`tempFile(name)`——全部收在 `%TEMP%\voiceink-tests\run-<pid>-*`，程序結束（含 Ctrl+C、`npx electron` 的 `app.exit()`）自動刪，當掉沒刪成的超過 6 小時由下一支腳本清掉（以前 76 支各自 `mkdtemp`，累積 260 多個資料夾）。守門 `test-temp-hygiene.js`；真的要留的那一行加 `// temp-ok: 原因`。
+- **用 PowerShell `Start-Process` 開的測試實例，工具呼叫一結束就被連帶收掉**（看起來像 App 自己當掉）：要用 node `spawn({ detached: true })` 開。
 - **CDP 收尾只能殺自己**：暫存 `--user-data-dir` ＋只對自己 spawn 的 `child.pid` 跑 `taskkill /PID /T`；**禁止 `/IM VoiceInk.exe`**（會關掉使用者的安裝版）。
 - **不可以用「第一列」或「總數」指涉自己建的東西**（最糟會刪掉使用者的資料）：一律 `[data-id="..."]`，中途建的都要刪掉。
 - 同一時間只能跑一支 CDP 測試；挑主視窗一律用 `/index\.html/`（HUD 也是一個 page target）。

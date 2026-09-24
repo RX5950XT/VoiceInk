@@ -585,9 +585,17 @@ function createFanEngine(deps = {}) {
       return { identifying: true, ms: IDENTIFY_MS }
     },
 
-    /** 全部交還 BIOS，但不改 `enabled`（使用者只是想先放手看看） */
+    /**
+     * 全部交還 BIOS，但不改 `enabled`（使用者只是想先放手看看）。
+     * 每條通道的模式也要改成 bios：只 releaseAll 的話計時器下一輪（1 秒）就照原本的曲線／固定值接管回去。
+     * 曲線點與固定值留著，之後切回來還在。
+     */
     resetAll() {
       load()
+      for (const [id, channel] of Object.entries(config.channels)) {
+        config.channels[id] = { ...channel, mode: 'bios' }
+      }
+      persist()
       releaseAll()
       return this.list()
     },

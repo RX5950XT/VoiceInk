@@ -560,8 +560,9 @@ async function main() {
       '自訂沒填端點時彈窗不會關掉'
     )
     assert(
-      (await cdp.eval("document.getElementById('ccStatus').textContent")).includes('Base URL'),
-      '自訂沒填端點有明講'
+      // 寫在彈窗裡：頁面上的 #ccStatus 被 backdrop 蓋住，看起來像按了沒反應
+      (await cdp.eval("document.querySelector('#ccProviderDialog .cc-dialog-status').textContent")).includes('Base URL'),
+      '自訂沒填端點有明講（在彈窗裡）'
     )
 
     // 真的建一筆自訂的（走閘道那種），確認存得下來、清單看得到協議

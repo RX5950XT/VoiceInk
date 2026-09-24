@@ -34,13 +34,32 @@ function hasControlChar(text) {
   return false
 }
 
+/** 一個候選字最多等多久（網路磁碟睡著、主機名解析不到都會拖很久） */
+const STAT_TIMEOUT_MS = 800
+
+/**
+ * @param {string} full
+ * @returns {Promise<import('fs').Stats | null>}
+ */
+function statSoon(full) {
+  let timer
+  const late = new Promise((resolve) => { timer = setTimeout(() => resolve(null), STAT_TIMEOUT_MS) })
+  return Promise.race([fs.promises.stat(full).catch(() => null), late]).finally(() => clearTimeout(timer))
+}
+
 /**
  * 把畫面上的一串字解析成真的存在的路徑。不存在、含控制字元、太長一律回 null。
+ *
+ * **非同步＋逾時**：以前是 `statSync`，滑過終端機一次最多 32 個候選字。CLI 輸出裡
+ * JSON 轉義過的 `\\Users\\...` 會被當成 UNC 路徑，Windows 要等網路名稱解析逾時
+ * （十幾秒）才回來——那段時間主程序整個停住，視窗變成「沒有回應」。
+ * 滑過去（hover）時也不碰 UNC：真的網路路徑點下去才查（`allowUnc`）。
  * @param {string} cwd 這個工作階段的起始工作目錄
  * @param {unknown} raw
- * @returns {{ full: string, kind: 'file' | 'dir' } | null}
+ * @param {{ allowUnc?: boolean }} [opts]
+ * @returns {Promise<{ full: string, kind: 'file' | 'dir' } | null>}
  */
-function resolveCandidate(cwd, raw) {
+async function resolveCandidate(cwd, raw, opts = {}) {
   const text = typeof raw === 'string' ? raw.trim() : ''
   if (!text || text.length > MAX_LENGTH || hasControlChar(text)) return null
   const expanded = text === '~' || text.startsWith('~/') || text.startsWith('~\\')
@@ -49,12 +68,9 @@ function resolveCandidate(cwd, raw) {
   // 相對路徑沒有基準就不猜：`process.cwd()` 是 App 自己的目錄，跟畫面上看到的無關
   if (!path.isAbsolute(expanded) && !cwd) return null
   const full = path.resolve(cwd || '', expanded)
-  let stat
-  try {
-    stat = fs.statSync(full)
-  } catch {
-    return null
-  }
+  if (!opts.allowUnc && full.startsWith('\\\\')) return null
+  const stat = await statSoon(full)
+  if (!stat) return null
   return { full, kind: stat.isDirectory() ? 'dir' : 'file' }
 }
 
@@ -127,11 +143,12 @@ async function baseCwd(id) {
 async function resolveLinks(id, texts) {
   if (!Array.isArray(texts) || !texts.length) return []
   const cwd = await baseCwd(id)
+  const picked = texts.slice(0, MAX_CANDIDATES)
+  const hits = await Promise.all(picked.map((text) => resolveCandidate(cwd, text)))
   const out = []
-  for (const text of texts.slice(0, MAX_CANDIDATES)) {
-    const hit = resolveCandidate(cwd, text)
-    if (hit) out.push({ text: String(text), kind: hit.kind })
-  }
+  hits.forEach((hit, i) => {
+    if (hit) out.push({ text: String(picked[i]), kind: hit.kind })
+  })
   return out
 }
 
@@ -143,7 +160,7 @@ async function resolveLinks(id, texts) {
  * @returns {Promise<object>}
  */
 async function revealLink(id, text, line) {
-  const hit = resolveCandidate(await baseCwd(id), text)
+  const hit = await resolveCandidate(await baseCwd(id), text, { allowUnc: true })
   if (!hit) {
     const error = new Error('NO_PATH')
     error.code = 'NO_PATH'

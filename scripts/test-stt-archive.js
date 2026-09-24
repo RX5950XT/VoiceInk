@@ -43,7 +43,6 @@ const b = 'rec-1700000100000.webm'
 archive.appendRecording(a, new Uint8Array([1, 2]))
 archive.appendRecording(a, new Uint8Array([3]))
 archive.appendRecording(b, Buffer.from([9]))
-ok('[B] 兩塊接起來', Buffer.compare(archive.readRecording(a), Buffer.from([1, 2, 3])) === 0)
 const recs = archive.listRecordings()
 ok('[B] 新的在前', recs[0].name === b && recs[1].name === a)
 ok('[B] 路徑在 recordings 底下', recs[0].path === path.join(root, 'recordings', b))
@@ -83,6 +82,8 @@ archive.registerSttArchiveIpc({
   openPath: async () => ''
 })
 ;(async () => {
+  // readRecording 是非同步的（大檔不能卡主程序）
+  ok('[B] 兩塊接起來', Buffer.compare(await archive.readRecording(a), Buffer.from([1, 2, 3])) === 0)
   const denied = await handlers['sttArchive:recordings']('other')
   ok('[E] 非主視窗擋掉', denied.ok === false && denied.error.code === 'FORBIDDEN')
   const bad = await handlers['sttArchive:readRecording']('main', '../../config.json')

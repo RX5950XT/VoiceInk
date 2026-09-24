@@ -601,10 +601,12 @@ async function loadStartupSettings() {
   })
 
   loginInput.addEventListener('change', async () => {
-    const result = await electronAPI.system?.setStartup?.(loginInput.checked).catch(() => null)
+    const want = loginInput.checked
+    const result = await electronAPI.system?.setStartup?.(want).catch(() => null)
     // 寫入失敗（權限／政策）就把勾勾轉回實際狀態，不要讓 UI 說謊
     loginInput.checked = result?.openAtLogin === true
-    showToast(loginInput.checked ? '已設定開機自動啟動' : '已取消開機自動啟動')
+    if (loginInput.checked !== want) showToast('開機自動啟動設定失敗', 'error')
+    else showToast(want ? '已設定開機自動啟動' : '已取消開機自動啟動')
   })
 }
 
@@ -717,7 +719,7 @@ function renderUpdateStatus(st) {
   statusEl.textContent = st?.message || ''
   const busy = st?.state === 'checking' || st?.state === 'downloading'
   checkBtn.disabled = busy || st?.state === 'unsupported'
-  checkBtn.textContent = st?.state === 'checking' ? '檢查中…' : '檢查更新'
+  checkBtn.textContent = st?.state === 'checking' ? '檢查中…' : st?.state === 'available' ? '下載更新' : '檢查更新'
   installBtn.classList.toggle('hidden', st?.state !== 'downloaded')
   if (autoInput) autoInput.disabled = st?.state === 'unsupported'
 }
@@ -984,7 +986,8 @@ export function switchPage(pageName) {
   }
   if (pageName === 'translate') loadTranslatePage().then((m) => m.prewarmTranslatePage())
   if (pageName === 'settings') {
-    loadSettingsForm()
+    // 有沒存的修改就不重灌草稿（切頁回來、再點一次「設定」都不能把剛打的字洗掉）
+    loadSettingsForm({ keepDraft: settingsDirty })
     refreshModels()
   }
   if (pageName !== 'stt') liveCaption?.cooldownEngine()
@@ -1277,7 +1280,7 @@ async function refreshGpuCapabilityUi(forceRefresh = false) {
   if (llmGpuHint) {
     if (ok) {
       const be = backends.filter((b) => b !== 'cpu-fallback').join(' / ') || '將自動選擇'
-      llmGpuHint.textContent = `可用：${gpuCapability.name}，${gpuCapability.vramMiB} MiB。後端優先：${be}（僅本地翻譯；ASR 仍為 CPU）。`
+      llmGpuHint.textContent = `可用：${gpuCapability.name}，${gpuCapability.vramMiB} MiB。後端優先：${be}（只影響本地翻譯）。`
     } else {
       llmGpuHint.textContent = gpuCapability?.reason
         ? `${gpuCapability.reason}。將使用 CPU 推論。`
@@ -1450,6 +1453,16 @@ function renderAsrCloudFields() {
   }
 }
 
+/** 改名即時反映到上方下拉（聊天供應商那邊也是這樣） */
+function syncAsrCloudName() {
+  const cur = asrCloudsDraft.find((c) => c.id === asrCloudDraftId)
+  if (!cur || !asrCloudSelect) return
+  cur.name = asrCloudNameInput?.value.trim() || ''
+  const option = [...asrCloudSelect.options].find((o) => o.value === asrCloudDraftId)
+  if (option) option.textContent = cur.name || '未命名設定'
+  syncCustomSelects()
+}
+
 function handleAsrCloudSwitch() {
   captureAsrCloudFields()
   asrCloudDraftId = asrCloudSelect?.value || ''
@@ -1510,14 +1523,24 @@ async function loadAsrCloudSettings() {
 }
 
 let segmentsInited = false
+/** 設定頁有沒存的修改（「基本」那區即時套用，不算） */
+let settingsDirty = false
+
+function markSettingsDirty(event) {
+  const target = /** @type {HTMLElement|null} */ (event.target instanceof HTMLElement ? event.target : null)
+  // 「基本」即時套用；模型清單的下載／刪除也是當下就做，都不算草稿
+  if (!target || target.closest('#set-basic') || target.closest('.model-actions')) return
+  if (event.type === 'click' && !target.closest('button')) return
+  settingsDirty = true
+}
 
 /**
  * 從 store 重灌設定表單
  */
-async function loadSettingsForm() {
+async function loadSettingsForm({ keepDraft = false } = {}) {
   const settings = await getSettings()
 
-  await loadAsrCloudSettings()
+  if (!keepDraft) await loadAsrCloudSettings()
 
   const llmGpuSeg = settings.llmGpu ? 'gpu' : 'cpu'
   const theme = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark'
@@ -1530,27 +1553,33 @@ async function loadSettingsForm() {
     asrAddModelBtn?.addEventListener('click', () => appendAsrModelRow('', { focus: true }))
     asrAddCloudBtn?.addEventListener('click', handleAddAsrCloud)
     asrDeleteCloudBtn?.addEventListener('click', () => void handleDeleteAsrCloud())
+    asrCloudNameInput?.addEventListener('input', syncAsrCloudName)
+    const scroll = document.getElementById('settingsScroll')
+    for (const type of ['input', 'change', 'click']) scroll?.addEventListener(type, markSettingsDirty)
     segmentsInited = true
+  } else if (keepDraft) {
+    setSegmentValue('themeSegment', theme)
   } else {
     setSegmentValue('llmGpuSegment', llmGpuSeg)
     setSegmentValue('themeSegment', theme)
   }
   await refreshGpuCapabilityUi()
 
-  if (ttsRateInput) {
-    ttsRateInput.value = String(settings.ttsRate)
-    updateTtsRateLabel(settings.ttsRate)
-  }
-
   if (!ttsVoiceCatalog?.voicesByLang || !Object.keys(ttsVoiceCatalog.voicesByLang).length) {
     await populateTtsVoiceSelects()
   }
-  applyTtsVoicesToForm(settings.ttsVoices || DEFAULT_TTS_VOICES)
+  if (!keepDraft) {
+    if (ttsRateInput) {
+      ttsRateInput.value = String(settings.ttsRate)
+      updateTtsRateLabel(settings.ttsRate)
+    }
+    applyTtsVoicesToForm(settings.ttsVoices || DEFAULT_TTS_VOICES)
+  }
   syncCustomSelects()
   await loadStartupSettings()
   await loadTermAppearanceSettings()
   await loadUpdateSettings()
-  await loadChatSettings()
+  if (!keepDraft) await loadChatSettings()
 }
 
 async function saveSettings() {
@@ -1558,27 +1587,50 @@ async function saveSettings() {
 
   // 先把畫面欄位收回雲端 ASR 草稿，再取「目前選用那一筆」的金鑰來擋空
   captureAsrCloudFields()
-  const curCloud = asrCloudsDraft.find((c) => c.id === asrCloudDraftId) || null
   const badCloud = asrCloudsDraft.find((c) => c.apiUrl && !/^https?:\/\//i.test(c.apiUrl))
   if (badCloud) {
     showToast(`設定「${badCloud.name || '未命名'}」的 API URL 要以 http:// 或 https:// 開頭`, 'error')
+    activateSettingsSection('cloud')
+    if (asrCloudSelect && asrCloudDraftId !== badCloud.id) {
+      asrCloudSelect.value = badCloud.id
+      handleAsrCloudSwitch()
+      syncCustomSelects()
+    }
+    asrApiUrlInput?.focus()
     return
   }
 
-  // 後端選擇已移到各子分頁自己的模型選單，這裡只在「有任何一頁真的選了雲端」時擋空金鑰
-  const usingCloudAsr = await Promise.all(
+  // 後端選擇已移到各子分頁自己的模型選單（值是 cloud:<設定 id>:<模型>），
+  // 只擋「真的被選用」的那幾組沒金鑰；沒帶 id 或指到已刪除的，執行時會退回這次存的 asrCloudId
+  const cloudRefs = await Promise.all(
     ['fileAsr', 'liveAsr', 'dictationAsr'].map((k) => electronAPI.store.get(k, 'local:qwen3asr'))
-  ).then((values) => values.some((v) => String(v || '').startsWith('cloud')))
-  if (usingCloudAsr && !curCloud?.apiKey) {
-    showToast('語音轉文字選的是雲端，需要 API Key', 'error')
+  ).then((values) => values.filter((v) => String(v || '').startsWith('cloud')).map((v) => String(v).split(':')[1] || ''))
+  const pickCloud = (id) => asrCloudsDraft.find((c) => c.id === id)
+    || asrCloudsDraft.find((c) => c.id === asrCloudDraftId) || asrCloudsDraft[0]
+  const usedClouds = cloudRefs.map(pickCloud)
+  const keyless = usedClouds.find((c) => c && !c.apiKey)
+  if (usedClouds.some((c) => !c) || keyless) {
+    showToast(`語音轉文字用到的「${keyless?.name || '雲端設定'}」沒有 API Key`, 'error')
+    activateSettingsSection('cloud')
+    if (keyless && asrCloudSelect && asrCloudDraftId !== keyless.id) {
+      asrCloudSelect.value = keyless.id
+      handleAsrCloudSwitch()
+      syncCustomSelects()
+    }
+    asrApiKeyInput?.focus()
     return
   }
   const chatValidation = validateChatSettings()
-  if (!chatValidation.ok) return
+  if (!chatValidation.ok) {
+    activateSettingsSection('cloud')
+    return
+  }
+  const notes = []
+  if (chatValidation.dropped > 0) notes.push(`略過 ${chatValidation.dropped} 個空白或重複的模型`)
   if (llmGpu) {
     if (!gpuCapability) await refreshGpuCapabilityUi()
     if (!gpuCapability?.ok) {
-      showToast(gpuCapability?.reason || '此裝置無法使用 GPU 推論', 'error')
+      notes.push(`${gpuCapability?.reason || '此裝置無法使用 GPU 推論'}，已改用 CPU`)
       llmGpu = false
       setSegmentValue('llmGpuSegment', 'cpu')
     }
@@ -1596,8 +1648,11 @@ async function saveSettings() {
     saveChatSettings(chatValidation)
   ])
 
+  settingsDirty = false
+  renderAsrCloudSelect()
   document.dispatchEvent(new CustomEvent('settings-changed'))
-  showToast('設定已儲存')
+  // 附帶提醒併進同一則（只有一個 toast，分開跳會被下一則立刻蓋掉）
+  showToast(notes.length ? `設定已儲存（${notes.join('；')}）` : '設定已儲存')
 }
 
 // ===== 模型管理 UI =====
@@ -1689,7 +1744,19 @@ function renderModelItem(model) {
     progress.classList.remove('hidden')
   } else if (model.downloaded) {
     actions.appendChild(actionBtn('📂', 'btn-secondary', () => electronAPI.models.openFolder(model.key)))
-    actions.appendChild(actionBtn('刪除', 'btn-secondary', async () => {
+    const deleteBtn = actionBtn('刪除', 'btn-secondary', async () => {
+      // 就地二次確認：模型動輒 1～2.7GB，誤點就要重新下載
+      if (deleteBtn.dataset.armed !== '1') {
+        deleteBtn.dataset.armed = '1'
+        deleteBtn.classList.add('btn-danger')
+        deleteBtn.textContent = '確定刪除？'
+        setTimeout(() => {
+          deleteBtn.dataset.armed = ''
+          deleteBtn.classList.remove('btn-danger')
+          deleteBtn.textContent = '刪除'
+        }, 3000)
+        return
+      }
       try {
         const st = await electronAPI.engine.status()
         if (st.asrLoaded || st.llmLoaded) {
@@ -1701,7 +1768,8 @@ function renderModelItem(model) {
       } catch (e) {
         showToast(`刪除失敗: ${cleanIpcError(e)}`, 'error')
       }
-    }))
+    })
+    actions.appendChild(deleteBtn)
   } else {
     actions.appendChild(actionBtn('下載', 'btn-primary', () => startDownload(model)))
   }
@@ -1720,7 +1788,9 @@ async function startDownload(model) {
   try {
     await refreshModelsAfter(() => electronAPI.models.download(model.key))
   } catch (error) {
-    showToast(`下載失敗: ${cleanIpcError(error)}`, 'error')
+    const message = cleanIpcError(error)
+    if (message.includes('已取消')) showToast('已取消下載')
+    else showToast(`下載失敗: ${message}`, 'error')
     refreshModels()
   }
 }
@@ -1736,11 +1806,12 @@ async function refreshModelsAfter(fn) {
 /**
  * 下載進度
  */
-function onModelProgress({ key, receivedBytes, totalBytes }) {
+function onModelProgress({ key, receivedBytes, totalBytes, stage }) {
   const percent = totalBytes > 0
     ? Math.min(100, (receivedBytes / totalBytes) * 100)
     : 0
-  const text = `${formatBytes(receivedBytes)} / ${formatBytes(totalBytes)} (${percent.toFixed(0)}%)`
+  // 解壓階段（main 送 stage）已經取消不了，文字照實講、取消鈕停用
+  const text = stage || `${formatBytes(receivedBytes)} / ${formatBytes(totalBytes)} (${percent.toFixed(0)}%)`
 
   const item = modelList?.querySelector(`.model-item[data-key="${key}"]`)
   if (item) {
@@ -1748,6 +1819,8 @@ function onModelProgress({ key, receivedBytes, totalBytes }) {
     progress.classList.remove('hidden')
     progress.querySelector('.model-progress-fill').style.width = percent + '%'
     item.querySelector('.model-size').textContent = text
+    const cancelBtn = /** @type {HTMLButtonElement|null} */ (item.querySelector('.model-actions .btn'))
+    if (cancelBtn && stage) cancelBtn.disabled = true
   }
 
   if (latestModels[key]) {

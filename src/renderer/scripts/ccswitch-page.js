@@ -31,6 +31,8 @@ let versions = []
 /** 目前正在編輯哪一筆（空字串＝新增） */
 let editingProviderId = ''
 let editingMcpId = ''
+/** 這次彈窗存檔後要不要再套用一次（編輯的是使用中那家，或從「啟用」帶來填金鑰） */
+let applyOnSave = false
 /** @type {object | null} */
 let gateway = null
 /** @type {{ btn: HTMLElement, timer: number } | null} */
@@ -62,22 +64,43 @@ async function call(promise, fallback) {
   return result.data
 }
 
+/**
+ * 彈窗開著時訊息寫進彈窗裡：頁面上的 #ccError／#ccStatus 被 backdrop 蓋住，看起來像按了沒反應。
+ * @param {string} cls
+ * @param {string} pageId
+ */
+function messageTarget(cls, pageId) {
+  return document.querySelector(`dialog[open] .${cls}`) || document.getElementById(pageId)
+}
+
 function showError(message) {
-  const el = document.getElementById('ccError')
+  const el = messageTarget('cc-dialog-error', 'ccError')
   if (!el) return
   el.textContent = message
   el.classList.remove('hidden')
 }
 
 function hideError() {
-  document.getElementById('ccError')?.classList.add('hidden')
+  document.querySelectorAll('#ccError, .cc-dialog-error').forEach((el) => el.classList.add('hidden'))
+}
+
+/** 開彈窗時清掉上一次留在彈窗裡的訊息 @param {HTMLElement} dialog */
+function clearDialogMessages(dialog) {
+  dialog.querySelectorAll('.cc-dialog-error, .cc-dialog-status').forEach((el) => {
+    el.textContent = ''
+    el.classList.add('hidden')
+  })
 }
 
 /**
  * @param {string} message
  */
-function showStatus(message) {
-  const el = document.getElementById('ccStatus')
+/**
+ * @param {string} message
+ * @param {{ page?: boolean }} [opts] page：頁面層級的狀態，一律寫在頁面上
+ */
+function showStatus(message, { page = false } = {}) {
+  const el = page ? document.getElementById('ccStatus') : messageTarget('cc-dialog-status', 'ccStatus')
   if (!el) return
   el.textContent = message
   el.classList.toggle('hidden', !message)
@@ -190,8 +213,10 @@ async function reloadGateway() {
   btn?.setAttribute('aria-checked', gateway.running ? 'true' : 'false')
   if (text) {
     const missing = []
-    if (!gateway.credentials?.codex) missing.push('Codex')
-    if (!gateway.credentials?.grok) missing.push('Grok')
+    // 在 App 裡登入並綁定的帳號閘道也會用（優先於 CLI 憑證），有的話就不算缺
+    const hasAccount = (provider) => accounts.some((a) => a.provider === provider)
+    if (!gateway.credentials?.codex && !hasAccount('codex')) missing.push('Codex')
+    if (!gateway.credentials?.grok && !hasAccount('grok-build')) missing.push('Grok')
     text.textContent = gateway.running
       ? `已開啟 · ${gateway.baseUrl}${missing.length ? ` · ${missing.join('、')} 尚未登入 CLI` : ''}`
       : '已關閉 · 需要轉換格式時請先手動開啟'
@@ -207,8 +232,10 @@ async function toggleGateway() {
       '切換閘道失敗'
     )
     await reloadProviders()
-  } catch {
+  } catch (error) {
     await reloadGateway()
+    // reloadGateway 成功時會把錯誤藏掉，補顯示回來，不然開關閃一下就沒下文
+    showError(error instanceof Error ? error.message : '切換閘道失敗')
   } finally {
     if (btn) btn.disabled = false
   }
@@ -227,12 +254,16 @@ async function reloadProviders() {
       ? `設定檔：${data.settingsPath}`
       : `設定檔尚未建立，第一次切換時會產生：${data?.settingsPath || ''}`
   }
-  // currentId 有值但 activeId 空＝設定檔被別的工具或使用者手改過
-  showStatus(currentId && !activeId
-    ? 'settings.json 的 Base URL 與記錄不符（被其他工具改過？）。再按一次「切換」會寫回。'
-    : '')
   renderProviders()
   await reloadGateway()
+  // currentId 有值但 activeId 空＝設定檔被別的工具或使用者手改過；
+  // 但經閘道的家在閘道沒開時也比不上（每次重開 App 閘道都是關的），那要講真正的原因
+  const current = providers.find((p) => p.id === currentId)
+  showStatus(!currentId || activeId
+    ? ''
+    : current?.route === 'gateway' && !gateway?.running
+      ? `「${current.name}」要經轉換閘道，但閘道沒開，Claude Code 現在連不上；打開上面的「轉換閘道」即可。`
+      : 'settings.json 的 Base URL 與記錄不符（被其他工具改過？）。再按一次「啟用」會寫回。', { page: true })
   // 閘道狀態會影響「需要閘道」那個標記，拿到之後重畫一次
   renderProviders()
 }
@@ -325,7 +356,7 @@ function providerTile(item) {
     use.addEventListener('click', () => {
       // 缺金鑰的直接帶去填，不要送 IPC 再吃一次 MISSING_API_KEY
       if (missingKey) {
-        openProviderDialog(item.id)
+        openProviderDialog(item.id, { activateOnSave: true })
         field('ccKeyInput').focus()
         return
       }
@@ -353,7 +384,8 @@ function providerTile(item) {
   // 自訂一律可刪，內建要同一家有第二筆（舊資料會有）才出現
   const deletable = item.presetId === 'custom' ||
     providers.filter((entry) => entry.presetId === item.presetId).length > 1
-  if (deletable) {
+  // 使用中的不能刪：刪了 settings.json 還留著它的端點與金鑰，畫面卻沒有任何一家是「使用中」
+  if (deletable && !isActive) {
     const delBtn = iconButton('🗑', `刪除 ${item.name}`, () => armDelete(delBtn, () => void deleteProvider(item.id)))
     actions.append(delBtn)
   }
@@ -437,10 +469,15 @@ async function deleteProvider(id) {
 /**
  * @param {string} [id] 空＝新增（新增的都是自訂供應商）
  */
-function openProviderDialog(id = '') {
+function openProviderDialog(id = '', { activateOnSave = false } = {}) {
   const dialog = /** @type {HTMLDialogElement} */ (document.getElementById('ccProviderDialog'))
   if (!dialog || !catalog) return
   editingProviderId = id
+  // 編輯使用中那家（或從「啟用」被帶來填金鑰）存檔後要再套用一次，不然 settings.json 還是舊的
+  applyOnSave = activateOnSave || (id !== '' && id === activeId)
+  clearDialogMessages(dialog)
+  document.getElementById('ccScanHint').textContent = '留空用預設值（灰字）。'
+  document.getElementById('ccProviderCancelBtn').textContent = '取消'
   const item = id ? providers.find((entry) => entry.id === id) : null
   const nameInput = /** @type {HTMLInputElement} */ (document.getElementById('ccNameInput'))
   const keyInput = /** @type {HTMLInputElement} */ (document.getElementById('ccKeyInput'))
@@ -865,6 +902,12 @@ async function persistProvider() {
     field('ccBaseUrlInput').focus()
     return ''
   }
+  // main 對不是 http(s) 的網址會安靜存成空字串，要在這裡就講
+  if (presetId === 'custom' && !/^https?:\/\/\S/i.test(String(payload.baseUrl).trim())) {
+    showStatus('Base URL 要以 http:// 或 https:// 開頭')
+    field('ccBaseUrlInput').focus()
+    return ''
+  }
 
   try {
     if (editingProviderId) {
@@ -889,7 +932,8 @@ async function saveProvider() {
   const id = await persistProvider()
   if (!id) return
   dialog.close()
-  await reloadProviders()
+  if (applyOnSave) await activateProvider(id)
+  else await reloadProviders()
 }
 
 /**
@@ -915,14 +959,16 @@ async function loadModels() {
     // 新增模式落地之後，接下來的掃描與儲存都對著這一筆
     editingProviderId = id
     document.getElementById('ccProviderDialogTitle').textContent = '編輯供應商'
+    // 已經先存檔了，「取消」撤不回，按鈕別再叫取消
+    document.getElementById('ccProviderCancelBtn').textContent = '關閉'
     await reloadProviders()
     const result = await electronAPI.ccswitch.scanModels(id)
     const scan = result?.ok ? result.data : null
     if (scan?.ok) {
       rebuildModelSelects(scan.models)
-      hint.textContent = `已載入 ${scan.models.length} 個模型，直接從下拉挑。`
+      hint.textContent = `已先儲存並載入 ${scan.models.length} 個模型，直接從下拉挑。`
     } else {
-      hint.textContent = scan?.error || '掃描失敗，改用手動輸入。'
+      hint.textContent = `已先儲存；${scan?.error || '掃描失敗，改用手動輸入。'}`
     }
   } finally {
     btn.disabled = false
@@ -932,13 +978,17 @@ async function loadModels() {
 
 /** 開彈窗時順手掃一次；失敗不吵——手動按鈕會講原因 */
 async function autoScanModels() {
-  if (!editingProviderId) return
+  const id = editingProviderId
+  if (!id) return
   const preset = dialogPreset()
   // 內建沒有 modelsUrl 的家（現在沒有，留著守）與沒填端點的自訂都跳過
   if (preset?.id !== 'custom' && !preset?.modelsUrl) return
   try {
-    const result = await electronAPI.ccswitch.scanModels(editingProviderId)
+    const result = await electronAPI.ccswitch.scanModels(id)
     const scan = result?.ok ? result.data : null
+    // 回來時彈窗可能已關掉或換成別家，舊結果不能塞進新那家的下拉
+    const dialog = /** @type {HTMLDialogElement|null} */ (document.getElementById('ccProviderDialog'))
+    if (id !== editingProviderId || !dialog?.open) return
     if (scan?.ok) {
       rebuildModelSelects(scan.models)
       document.getElementById('ccScanHint').textContent = `已載入 ${scan.models.length} 個模型，直接從下拉挑。`
@@ -1009,10 +1059,14 @@ function renderMcp() {
  * @param {string} id
  * @param {boolean} enabled
  */
+/** MCP 寫在 ~/.claude.json，Claude Code 只在啟動時讀一次（跟切供應商同一句提醒） */
+const MCP_RESTART_NOTE = '已寫入 ~/.claude.json；開著的 Claude Code 要重開才會載入'
+
 async function toggleMcp(id, enabled) {
   try {
     await call(electronAPI.ccswitch.toggleMcp(id, enabled), '切換 MCP 狀態失敗')
     await reloadMcp()
+    showStatus(MCP_RESTART_NOTE)
   } catch {
     // call() 已經顯示訊息
   }
@@ -1025,6 +1079,7 @@ async function deleteMcp(id) {
   try {
     await call(electronAPI.ccswitch.deleteMcp(id), '刪除 MCP 伺服器失敗')
     await reloadMcp()
+    showStatus(MCP_RESTART_NOTE)
   } catch {
     // call() 已經顯示訊息
   }
@@ -1037,6 +1092,9 @@ function openMcpDialog(id = '') {
   const dialog = /** @type {HTMLDialogElement} */ (document.getElementById('ccMcpDialog'))
   if (!dialog || !catalog) return
   editingMcpId = id
+  clearDialogMessages(dialog)
+  const specHint = document.getElementById('ccMcpSpecHint')
+  if (specHint) specHint.textContent = 'stdio 要有 command；http／sse 要有 url。Windows 上的 npx／node 會自動包成 cmd /c。'
   const item = id ? mcpServers.find((entry) => entry.id === id) : null
   const templateGroup = document.getElementById('ccMcpTemplateGroup')
   const templateSelect = /** @type {HTMLSelectElement} */ (document.getElementById('ccMcpTemplate'))
@@ -1094,6 +1152,11 @@ async function saveMcp() {
     return
   }
 
+  // 新增用到既有名稱＝main 會整台覆蓋（env 裡的金鑰一起沒了），先擋下來
+  if (!editingMcpId && mcpServers.some((entry) => entry.id === id.trim())) {
+    if (hint) hint.textContent = `已經有「${id.trim()}」了，換個名稱，或按那一台的「編輯」。`
+    return
+  }
   const previous = editingMcpId ? mcpServers.find((entry) => entry.id === editingMcpId) : null
   try {
     await call(
@@ -1102,6 +1165,7 @@ async function saveMcp() {
     )
     dialog.close()
     await reloadMcp()
+    showStatus(MCP_RESTART_NOTE)
   } catch {
     // call() 已經顯示訊息
   }
@@ -1114,11 +1178,23 @@ async function reloadVersions() {
   if (list && !versions.length) {
     list.replaceChildren(el('p', 'cc-empty', '檢查中…'))
   }
+  // 每支 CLI 跑 --version 加查 npm，要好幾秒：按鈕要看得出在跑，也免得連按開一堆子程序
+  const btn = /** @type {HTMLButtonElement|null} */ (document.getElementById('ccCheckVersionBtn'))
+  const label = btn?.textContent || '重新檢查'
+  if (btn) {
+    btn.disabled = true
+    btn.textContent = '檢查中…'
+  }
   try {
     versions = await call(electronAPI.ccswitch.checkVersions(), '檢查 CLI 版本失敗')
     renderVersions()
   } catch {
     // call() 已經顯示訊息
+  } finally {
+    if (btn) {
+      btn.disabled = false
+      btn.textContent = label
+    }
   }
 }
 
@@ -1237,6 +1313,9 @@ export function refreshCcSwitchPage() {
     try {
       if (!catalog) catalog = await call(electronAPI.ccswitch.catalog(), '讀取供應商預設失敗')
       await reloadProviders()
+      // 回到頁面時停在別的子分頁（例如去終端機更新完 CLI 回來）也要重查那一頁，不然還掛著「有新版」
+      if (activeSubtab === 'version' && versions.length) void reloadVersions()
+      else if (activeSubtab === 'mcp') void reloadMcp()
     } catch {
       // call() 已經顯示訊息
     }

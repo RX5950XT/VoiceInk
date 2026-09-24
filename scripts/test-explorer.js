@@ -209,9 +209,9 @@ console.log('\n[F] 本機位置與磁碟')
   ok('磁碟資訊只接受有效磁碟代號', parsed.length === 2)
   ok('磁碟名稱與剩餘容量保留', parsed[0].label === '中文磁碟' && parsed[0].free === 40)
   ok('容量不接受負數或超過總量', parsed[1].total === 0 && parsed[1].free === 0)
-  const places = drives.listPlaces()
+  const places = await drives.listPlaces()
   ok('至少有家目錄', places.some((p) => p.id === 'home' && fs.existsSync(p.path)), JSON.stringify(places.map((p) => p.id)))
-  const disks = drives.listDrives()
+  const disks = await drives.listDrives()
   ok('至少有一顆磁碟', disks.length >= 1 && /^[A-Z]$/.test(disks[0].letter), JSON.stringify(disks.map((d) => d.letter)))
 }
 
@@ -271,6 +271,13 @@ console.log('\n[H] 排序是 listDir 的真實轉換（資料夾在前）')
   const bySizeDesc = await files.listDir(dir, { sort: 'size', desc: true })
   ok('大小遞減', bySizeDesc.entries.filter((e) => !e.dir).map((e) => e.name).join(',') === 'a.txt,c.txt')
   removeTree(dir)
+  // 清單有快取，另開一個資料夾
+  const typeDir = tempDir('vi-ex-type-')
+  for (const name of ['c.txt', 'README', 'b.md', 'a.txt']) fs.writeFileSync(path.join(typeDir, name), 'x')
+  fs.mkdirSync(path.join(typeDir, 'b-dir'))
+  const byType = await files.listDir(typeDir, { sort: 'type' })
+  ok('類型：沒副檔名在前、再依副檔名、同類依名', byType.entries.map((e) => e.name).join(',') === 'b-dir,README,b.md,a.txt,c.txt')
+  removeTree(typeDir)
 }
 
 console.log('\n[H2] 大於 MAX_ENTRIES 時先全資料夾排序再截斷')
@@ -393,7 +400,7 @@ console.log('\n[I] 預設刪除進資源回收筒，可還原；永久刪除是�
 
   // 回歸：從磁碟根目錄刪掉的東西也要還原得回去。原本 restore 檢查的是「父資料夾能不能寫」，
   // 而磁碟根目錄被當成鎖住的位置，所以 D:\ 底下刪掉的東西一律 PROTECTED，整個回收筒形同壞掉。
-  const driveRoot = path.parse(os.tmpdir()).root
+  const driveRoot = path.parse(tempDir('vi-ex-rootprobe-')).root
   const rootFile = path.join(driveRoot, `vi-ex-root-${Date.now()}.txt`)
   let wrote = false
   try {
@@ -481,7 +488,7 @@ console.log('\n[K] Enter 在頁面快捷鍵裡（點選 rebuild 後焦點不在�
   ok('onPageKey 的 Enter 會 openEntry', /e\.key === 'Enter'[\s\S]{0,200}openEntry/.test(body))
   ok('快捷鍵不因畫面上未開的 dialog 整頁失效', !/\.app-dialog, dialog\[open\]/.test(body) && /dialog\[open\]/.test(body))
   ok('loadDir 有 navSeq', /const seq = \+\+navSeq/.test(pageSrc) && /if \(seq !== navSeq\) return/.test(pageSrc))
-  ok('監看保留選取', /onChanged[\s\S]{0,200}keepSelection:\s*true/.test(pageSrc))
+  ok('監看保留選取', /onChanged[\s\S]{0,400}keepSelection:\s*true/.test(pageSrc))
   ok('回收筒不預覽原路徑', /inRecycle\(\)/.test(pageSrc) && /IMAGE_EXT|inspect\(/.test(pageSrc))
 }
 

@@ -144,15 +144,33 @@ function setupFileSelection() {
 
   clearFileBtn.addEventListener('click', clearFile)
 
-  const pick = /** @type {HTMLSelectElement|null} */ (document.getElementById('recordingPick'))
-  pick?.addEventListener('change', () => {
-    const rec = recordingOptions.find((r) => r.name === pick.value)
-    pick.value = ''
+  // 清單在拖放區裡面：點它不可以順便打開檔案對話框
+  document.getElementById('recordingPickGroup')?.addEventListener('click', (e) => {
+    e.stopPropagation()
+    const btn = /** @type {HTMLElement} */ (e.target).closest('button')
+    if (!btn) return
+    if (btn.dataset.act === 'all') {
+      document.querySelector('#sttSubtabs .subtab[data-subtab="recorder"]')?.dispatchEvent(new MouseEvent('click'))
+      return
+    }
+    const rec = recordingOptions.find((r) => r.name === btn.dataset.name)
     if (rec) useRecording(rec)
   })
 }
 
-/** @type {{ name: string, path: string, size: number, startedAt: number }[]} */
+/** 檔案轉錄頁直接列出來的錄音數；更多的到錄音機分頁看 */
+const RECORDING_PICK_MAX = 4
+
+/** @param {number} ms */
+function formatClock(ms) {
+  const sec = Math.max(0, Math.floor(ms / 1000))
+  const h = Math.floor(sec / 3600)
+  const mm = String(Math.floor((sec % 3600) / 60)).padStart(2, '0')
+  const ss = String(sec % 60).padStart(2, '0')
+  return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`
+}
+
+/** @type {{ name: string, path: string, size: number, startedAt: number, endedAt?: number }[]} */
 let recordingOptions = []
 
 /**
@@ -168,20 +186,43 @@ export function useRecording(rec) {
 }
 
 /**
- * 重讀「或選一段錄音」下拉（切到檔案轉錄時呼叫）
+ * 重讀「最近的錄音」清單（切到檔案轉錄時呼叫）
  */
 export async function refreshRecordingPick() {
-  const pick = document.getElementById('recordingPick')
+  const list = document.getElementById('recordingPickList')
   const group = document.getElementById('recordingPickGroup')
-  if (!pick || !group || !electronAPI.sttArchive) return
+  if (!list || !group || !electronAPI.sttArchive) return
   const res = await electronAPI.sttArchive.recordings()
   if (!res?.ok) console.warn('[檔案轉錄] 讀不到錄音清單:', res?.error?.message)
   recordingOptions = res?.ok ? res.data : []
-  const opts = [new Option('或選一段錄音…', '')]
-  for (const r of recordingOptions.slice(0, 30)) {
-    opts.push(new Option(`${new Date(r.startedAt).toLocaleString()}（${formatFileSize(r.size)}）`, r.name))
+  const rows = recordingOptions.slice(0, RECORDING_PICK_MAX).map((r) => {
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'recording-pick-item'
+    btn.dataset.name = r.name
+    btn.setAttribute('role', 'listitem')
+    const when = document.createElement('span')
+    when.className = 'recording-pick-when'
+    when.textContent = new Date(r.startedAt).toLocaleString()
+    const meta = document.createElement('span')
+    meta.className = 'recording-pick-meta'
+    const length = r.endedAt ? `${formatClock(r.endedAt - r.startedAt)} · ` : ''
+    meta.textContent = `${length}${formatFileSize(r.size)}`
+    const go = document.createElement('span')
+    go.className = 'recording-pick-go'
+    go.textContent = '轉錄'
+    btn.append(when, meta, go)
+    return btn
+  })
+  if (recordingOptions.length > RECORDING_PICK_MAX) {
+    const all = document.createElement('button')
+    all.type = 'button'
+    all.className = 'btn btn-secondary btn-sm recording-pick-all'
+    all.dataset.act = 'all'
+    all.textContent = `全部 ${recordingOptions.length} 段錄音`
+    rows.push(all)
   }
-  pick.replaceChildren(...opts)
+  list.replaceChildren(...rows)
   group.hidden = recordingOptions.length === 0
 }
 

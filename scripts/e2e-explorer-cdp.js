@@ -190,7 +190,9 @@ async function main() {
 
     console.log('\n[A] nav')
     const order = await cdp.eval(`[...document.querySelectorAll('.header-nav .nav-tab')].map((el) => el.dataset.page)`)
-    assert(order[0] === 'chat' && order[1] === 'explorer', '檔案排在聊天後面', JSON.stringify(order))
+    // Telegram 是後來刻意插在聊天旁邊的；略過它之後檔案仍要緊接在聊天後面
+    const core = order.filter((page) => page !== 'telegram')
+    assert(core[0] === 'chat' && core[1] === 'explorer', '檔案排在聊天後面', JSON.stringify(order))
     assert(order.includes('settings') && !order.includes('terminal'), '仍有設定、沒有 terminal 分頁', JSON.stringify(order))
 
     console.log('\n[B] 頁面結構')
@@ -357,7 +359,8 @@ async function main() {
       // 真的用滑鼠點清單下方的空白（不是 dispatchEvent，那繞過命中測試）
       const spot = await cdp.eval(`(() => {
         const r = document.getElementById('exList').getBoundingClientRect()
-        return { x: Math.round(r.left + r.width / 2), y: Math.round(r.bottom - 12) }
+        // 靠左點：正下方中央常有剛跳出來的提示（toast）蓋著，點到的會是它不是清單
+        return { x: Math.round(r.left + 40), y: Math.round(r.bottom - 12) }
       })()`)
       const onRow = await cdp.eval(`(() => {
         const el = document.elementFromPoint(${spot.x}, ${spot.y})
