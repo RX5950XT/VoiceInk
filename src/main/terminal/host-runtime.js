@@ -67,9 +67,15 @@ function connection(userData, create = false) {
  * （宿主是獨立程序，App 更新不會把它換掉——見 `service.js` 的 `hostState`）。
  *
  * @param {string} [execPath]
- * @returns {{ name: string, version: string, ptyRoot: string }}
+ * @returns {{ name: string, version: string, ptyRoot: string, native: string }} `native`＝Rust 宿主的路徑（空字串＝Electron 版）
  */
 function runtimeName(execPath = process.execPath) {
+  const native = nativeHostExe()
+  if (native) {
+    // Rust 宿主：整份就是一支 exe，內容雜湊就是版本
+    const hash = crypto.createHash('sha256').update(`voiceink-term-${PROTOCOL}`).update(fs.readFileSync(native))
+    return { name: `runtime-${hash.digest('hex').slice(0, 24)}`, version: 'native', ptyRoot: '', native }
+  }
   const version = process.versions.electron || fs.readFileSync(path.join(path.dirname(execPath), 'version'), 'utf8').trim()
   const hash = crypto.createHash('sha256').update(version)
   for (const name of HOST_FILES) hash.update(fs.readFileSync(path.join(__dirname, name)))
@@ -77,16 +83,33 @@ function runtimeName(execPath = process.execPath) {
   // 所以 node-pty 的 JS 與原生檔都改指 app.asar.unpacked。
   const ptyRoot = unpacked(path.dirname(require.resolve('@lydell/node-pty')))
   hash.update(fs.readFileSync(path.join(ptyRoot, 'package.json')))
-  return { name: `runtime-${hash.digest('hex').slice(0, 24)}`, version, ptyRoot }
+  return { name: `runtime-${hash.digest('hex').slice(0, 24)}`, version, ptyRoot, native: '' }
+}
+
+/**
+ * `voiceink-term.exe`（native/voiceink-probe/src/bin/voiceink-term，Rust）：取代「把整支 Electron
+ * 複製進 userData 當 Node 跑」（工作集 277MB → 個位數 MB）。找不到（沒跑 build:probe）才退回。
+ * 在函式裡才 require：這支也會被複製進 Electron 版宿主的執行環境，那裡沒有 native-probe.js。
+ */
+function nativeHostExe() {
+  if (process.env.VOICEINK_TERM_HOST === 'electron') return ''
+  return require('../native-probe').resolveProbeExe({ name: 'voiceink-term.exe' })
 }
 
 /** 原生檔案不能鎖住安裝目錄；執行環境按內容分版，運行中的版本永不覆寫。 */
 function stageRuntime(root, execPath = process.execPath) {
-  const { name, version, ptyRoot } = runtimeName(execPath)
+  const { name, version, ptyRoot, native } = runtimeName(execPath)
   const dir = path.join(root, name)
   if (!fs.existsSync(path.join(dir, 'ready'))) {
     const staging = fs.mkdtempSync(path.join(root, 'runtime-building-'))
     try {
+      if (native) {
+        // 同樣複製一份出來跑：安裝目錄的 exe 不能被常駐程序鎖住（更新要覆寫它）
+        fs.copyFileSync(native, path.join(staging, 'VoiceInkTerminalHost.exe'))
+        fs.writeFileSync(path.join(staging, 'ready'), version)
+        fs.renameSync(staging, dir)
+        return finishRuntime(root, dir, true)
+      }
       fs.copyFileSync(execPath, path.join(staging, 'VoiceInkTerminalHost.exe'))
       for (const file of RUNTIME_FILES) fs.copyFileSync(path.join(path.dirname(execPath), file), path.join(staging, file))
       // 這幾支在 app.asar 裡：copyFileSync 會先解壓成 %TEMP%\<uuid>.tmp.js 當中繼，程序被強制結束就留在那裡；
@@ -106,9 +129,13 @@ function stageRuntime(root, execPath = process.execPath) {
       throw error
     }
   }
+  return finishRuntime(root, dir, Boolean(native))
+}
+
+function finishRuntime(root, dir, native) {
   if (fs.lstatSync(dir).isSymbolicLink() || fs.realpathSync.native(dir) !== dir) throw hostError('HOST_PATH')
   pruneRuntimes(root, path.basename(dir))
-  return { exe: path.join(dir, 'VoiceInkTerminalHost.exe'), entry: path.join(dir, 'host.js'), dir }
+  return { exe: path.join(dir, 'VoiceInkTerminalHost.exe'), entry: native ? '' : path.join(dir, 'host.js'), dir, native }
 }
 
 /** 每次改版就多一份 248MB；執行中的宿主鎖著自己的 exe，開得起來才代表沒人在用。 */

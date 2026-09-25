@@ -66,7 +66,9 @@ function createGpuFeed(deps = {}) {
         `--query-gpu=${QUERY}`,
         '--format=csv,noheader,nounits',
         `-l`, String(intervalSec)
-      ], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })
+        // detached（DETACHED_PROCESS）：主控台程式不另外掛一顆隱形 conhost.exe（實測少一個程序、約 9MB）；
+        // 輸出一樣走管道，收掉一樣靠 stop() 的 kill
+      ], { windowsHide: true, detached: true, stdio: ['ignore', 'pipe', 'ignore'] })
     } catch {
       available = false
       return

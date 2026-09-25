@@ -6,7 +6,7 @@
 ## 專案概況
 
 VoiceInk：Windows Electron AI 工作台。Vanilla JS + Vite（無前端框架），Electron 43.4.1 ＋ Node.js 22。
-目前版本 **v1.30.0**（主程序同步 I/O 改非同步＋逾時修「沒有回應」、全專案 UX 稽核、檔案頁排序／範圍切換／欄寬、終端機快捷鍵；前版 v1.29.0 語音轉文字頁多了錄音機、即時字幕留逐字稿紀錄；再前 v1.28.1 Telegram 切回來不再卡；再前 v1.25.0：檔案總管雙欄右欄變成真的能用、操作中心收進狀態列且同名時可覆蓋、
+目前版本 **v1.31.0**（最重的幾段改 Rust：終端機宿主 `voiceink-term.exe`、用量掃描、資料夾大小、語音輸入熱鍵；常駐 sidecar 不再掛 conhost；前版 v1.30.0 主程序同步 I/O 改非同步＋逾時修「沒有回應」、全專案 UX 稽核、檔案頁排序／範圍切換／欄寬、終端機快捷鍵；再前 v1.29.0 語音轉文字頁多了錄音機、即時字幕留逐字稿紀錄；再前 v1.28.1 Telegram 切回來不再卡；再前 v1.25.0：檔案總管雙欄右欄變成真的能用、操作中心收進狀態列且同名時可覆蓋、
 資料夾監看不再漏事件；前版終端機 PATH 不再被 Ctrl+G 橋接蓋掉；再前檢查更新改走鏡像）。
 
 nav 十頁：聊天（預設，**專案工作區與終端機都在同一頁**）｜Telegram（官方網頁版 `web.telegram.org/a` 放進 `<webview>`，可並排多開最多 4 格（沒存過開 2 格；每格卡 600px，Web A 一律手機版版面）、共用 `persist:telegram`，每格頂端細列 ✕ 關／最右格 ＋ 再開，每格停的聊天室存 store `telegramPanes`（不用 localStorage：結束走 `app.exit()` 會掉最後幾秒的寫入）；`telegram-page.js`，第一次點才建）｜檔案｜CC代理（`data-page` 仍是 `ccswitch`）｜
@@ -365,7 +365,7 @@ src/main/
   ccswitch/           claude-settings.js（外科式改 env）、presets.js、providers.js（路由推導）、
                       models-scan.js、mcp.js、versions.js、credential.js、gateway/（server.js、oauth.js）
   codeusage/          scan.js（增量游標）、parsers.js（五家逐行）、pricing.js（單價＋RULES_VERSION）、index.js
-  native-probe.js     voiceink-probe.exe 的位置／找不到就退回 PowerShell（sysmon 與 screentime 共用）
+  native-probe.js     voiceink-probe.exe 的位置／找不到就退回 PowerShell 或 JS（sysmon、screentime、codeusage、explorer/size 共用）
   sysmon/             probe.ps1（退路；平常跑 voiceink-probe.exe sysmon）、metrics.js（純函式差值）、sampler.js、gpu.js、bench.js、
                       stress.js、sensors.js（提權 sidecar 雙向橋接）、sensors-task.js、fans.js、
                       oc.js（效能調整）、pawnio.js（代裝＋驗簽）、ipc.js
@@ -392,7 +392,7 @@ src/renderer/scripts/
 
 native/  dictation-hook/（WH_KEYBOARD_LL → resources/hook/）  sysmon-sensors/（→ resources/sensors/）
          explorer-shell/（IContextMenu + overlay → resources/shell/）
-         voiceink-probe/（Rust：系統監控取樣＋前景視窗觀測，取代兩支 PowerShell → resources/probe/）
+         voiceink-probe/（Rust：系統監控取樣＋前景視窗觀測，取代兩支 PowerShell；另有 usage-scan／dir-size／hook 子指令；第二支 voiceink-term.exe＝終端機宿主 → resources/probe/）
 scripts/ 測試與探針（指令表見 CLAUDE.md「驗證方式」），dev-sandbox.js ＝ npm run dev:sandbox
 ```
 
@@ -423,6 +423,22 @@ AGY 設定、終端機、聊天、語音輸入紀錄**刻意不進** `STORE_ALLO
 翻譯與 TTS 頁不在這組（維持全域 key）。
 
 ## 最近變更
+
+### 2026-09-25（v1.31.0）— 第二輪：終端機宿主改 Rust、常駐小程式瘦身、終端機少一層毛玻璃
+
+實機量（開 29.6 小時）：GPU 程序 621MB／平均 9% 單核、主畫面 renderer 6.5%、Telegram 四格約 700MB、終端機宿主工作集 277MB、5 顆 conhost。
+
+- **終端機宿主 → Rust `voiceink-term.exe`**：不再把 224MB 的 Electron 複製進 userData 當 Node 跑。私有 40.7→1.8MB、工作集 52→7MB、CPU 0.44→0.13s（同樣輸出 3000 行）。協定不變，找不到 exe 退回 Electron 版。
+- **常駐 sidecar**：熱鍵 .NET → `voiceink-probe hook`（33.7→7.1MB）；probe 改 GUI 子系統＋`nvidia-smi` detached，四顆 conhost 不見（合計約 50MB）。
+- **終端機那格拿掉毛玻璃**：底色不透明本來就看不到，截圖逐像素最大差 2/255；GPU 程序少約 24MB。
+- **量過不做**：全面拿掉毛玻璃（快速輸出時 CPU −31%、GPU −59MB，但文字會從灰階反鋸齒變 ClearType 彩邊）；Telegram 四格共用程序（−111MB，但要全域 `--process-per-site`，語音輸入的浮動提示會跟主視窗擠同一個程序、一格當掉四格一起白）。**這兩項使用者決定維持現狀**，別再提；整個 App 改 Tauri（WebView2 一樣是 Chromium）。
+
+### 2026-09-25 — 最重的兩段 JS 改成 Rust（沿用 voiceink-probe.exe）
+
+- 掃過整個專案挑 CPU 熱點：一次性 PowerShell、git、搜尋都不是瓶頸；真正卡的是**用量統計全量掃描**（2.8GB JSONL 在主程序 JSON.parse 28.5 秒）與**資料夾大小**（每檔一次 lstat，大資料夾 8 秒逾時只給「至少」）。
+- `usage-scan`：`usage.rs` 逐條照 `parsers.js`、多執行緒 → 1.3 秒；7.2 萬筆事件與全部游標跟 JS 逐筆一致。JS 端只剩收檔案、接游標與退路。
+- `dir-size`：`read_dir` 直接帶大小 → node_modules 0.2 秒、`C:\Program Files` 3.5 秒算完 21.5 萬檔（原本逾時停在 4.5 萬）；取消＝砍程序。
+- 其餘候選（專案全文搜尋 1.5s／1200 檔、AI 記錄、埠清單）量過都夠快，不動。
 
 ### 2026-09-19 — 系統監控常駐穩定、HF 儀表板與架構自適應
 
@@ -634,8 +650,8 @@ AGY 設定、終端機、聊天、語音輸入紀錄**刻意不進** `STORE_ALLO
   目錄 ACL 只給本人／SYSTEM／Administrators），封包是有上限的 JSON 行，壞封包直接斷線。
 - `before-quit` 只 `disconnect()`；已結束的終端機保留畫面（狀態 `exited`），
   明確刪除才 `forget`（結束程序、移除畫面），宿主沒有連線也沒有工作階段時 5 秒自關。
-- 管理員終端機沿用同一條路：宿主用 `configureRuntime()` 讓提權 host 也從那份執行環境啟動。
-- 舊版執行環境會在下次 `stageRuntime` 清掉（能用 `r+` 開啟該份 exe ＝沒人在跑），一份 248MB。
+- 管理員終端機沿用同一條路：宿主用 `configureRuntime()` 讓提權 host 也從那份執行環境啟動（Rust 版：提權的是同一支 `VoiceInkTerminalHost.exe --terminal-admin-host=`）。
+- 舊版執行環境會在下次 `stageRuntime` 清掉（能用 `r+` 開啟該份 exe ＝沒人在跑），Electron 版一份 248MB，Rust 版一支 568KB。
 
 ### 2026-09-07 — 終端機切換
 

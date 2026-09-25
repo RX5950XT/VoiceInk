@@ -25,15 +25,23 @@ function check(name, cond, extra) {
 }
 
 async function main() {
-  const exePath = hook.resolveExePath()
-  check('找得到 sidecar', Boolean(exePath), exePath || '沒有，先跑 npm run build:hook')
+  const command = hook.hookCommand()
+  const exePath = command.file
+  check('找得到 sidecar', Boolean(exePath), exePath || '沒有，先跑 npm run build:probe（或 build:hook）')
   if (!exePath) {
     process.exit(1)
   }
+  console.log(`    ${exePath} ${command.args.join(' ')}`)
 
   const events = []
   const started = Date.now()
-  const res = await hook.startHook({ onEvent: (kind) => {
+  let pid = 0
+  const spawnFn = (...args) => {
+    const child = require('child_process').spawn(...args)
+    pid = child.pid
+    return child
+  }
+  const res = await hook.startHook({ spawnFn, onEvent: (kind) => {
     events.push(kind)
     if (live) console.log(`    [${new Date().toLocaleTimeString()}] ${kind}`)
   } })
@@ -48,9 +56,10 @@ async function main() {
 
   res.stop?.()
   await new Promise((resolve) => setTimeout(resolve, 800))
-  const { execSync } = require('child_process')
-  const alive = execSync('tasklist /FI "IMAGENAME eq VoiceInkHook.exe" /NH', { encoding: 'utf8' })
-  check('停止後沒有留下孤兒程序', !alive.includes('VoiceInkHook.exe'), alive.trim())
+  // 認 pid 不認映像名：Rust 版跟系統監控的取樣器同一支 voiceink-probe.exe
+  let alive = true
+  try { process.kill(pid, 0) } catch { alive = false }
+  check('停止後沒有留下孤兒程序', pid > 0 && !alive, `pid ${pid}`)
 
   console.log(`\n${passed} passed, ${failed} failed`)
   process.exit(failed === 0 ? 0 : 1)

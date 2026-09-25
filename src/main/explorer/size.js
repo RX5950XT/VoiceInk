@@ -5,8 +5,13 @@
  *
  * 不跟著 symlink／junction 走；同一時間只算一個，新請求會取消舊的。
  * 路徑過 `paths.resolveExisting`，讀檔用 `raw-fs`。
+ *
+ * 呼叫端給 `exe`（voiceink-probe.exe）就走原生版 `dir-size`（native/voiceink-probe/src/dirsize.rs）：
+ * Windows 列目錄本身就帶大小，不必每個檔案 lstat 一次。實測 node_modules 1.6 萬檔 2.6s → 0.2s，
+ * `C:\Program Files` JS 8 秒逾時只算到 4.5 萬檔 → 原生 3.5 秒算完 21.5 萬檔。規則跟這裡的 `walk` 一樣。
  */
 
+const { spawn } = require('child_process')
 const fs = require('../raw-fs')
 const fsp = require('../raw-fs').promises
 const path = require('path')
@@ -14,6 +19,8 @@ const paths = require('./paths')
 
 /** 超過就停：約等於一個中型 node_modules，再大的只報「至少」。 */
 const MAX_FILES = 50_000
+/** 原生版的上限：實際上由 MAX_MS 決定停在哪 */
+const NATIVE_MAX_FILES = 10_000_000
 /** 32 層已超過一般專案；再深多半是循環或異常巢狀。 */
 const MAX_DEPTH = 32
 /** 詳情面板不該空轉十幾秒；SSD 上 5 萬筆約 1–2 秒，8 秒是 HDD／網路的上限。 */
@@ -162,13 +169,83 @@ async function walk(full, depth, state) {
 }
 
 /**
+ * 原生版：`P bytes files dirs` 進度、`D bytes files dirs incomplete reason` 結束、`E read` 根目錄讀不到。
+ * 取消＝砍程序（`job.kill`）。回 false ＝ 根本沒跑起來（例如 exe 被刪），交回 JS `walk`。
+ * @param {string} exe
+ * @param {string} full
+ * @param {any} state
+ * @returns {Promise<boolean>}
+ */
+function walkNative(exe, full, state) {
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const settle = (fn, value) => {
+      if (settled) return
+      settled = true
+      state.job.kill = null
+      fn(value)
+    }
+    let child
+    try {
+      child = spawn(exe, ['dir-size', full, String(state.maxFiles), String(state.maxDepth), String(state.maxMs)], {
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'ignore']
+      })
+    } catch {
+      resolve(false)
+      return
+    }
+    state.job.kill = () => child.kill()
+    let finished = false
+    let rootFailed = false
+    let pending = ''
+    const apply = (line) => {
+      const [tag, bytes, files, dirs, incomplete, reason] = line.trim().split(' ')
+      if (tag === 'E') rootFailed = true
+      if (tag !== 'P' && tag !== 'D') return
+      state.bytes = Number(bytes) || 0
+      state.files = Number(files) || 0
+      state.dirs = Number(dirs) || 0
+      if (tag === 'P') return emitProgress(state, false)
+      finished = true
+      if (incomplete === '1') {
+        state.incomplete = true
+        state.reason = reason || 'read'
+      }
+    }
+    child.stdout.setEncoding('utf8')
+    child.stdout.on('data', (chunk) => {
+      pending += chunk
+      let index
+      while ((index = pending.indexOf('\n')) >= 0) {
+        apply(pending.slice(0, index))
+        pending = pending.slice(index + 1)
+      }
+    })
+    child.on('error', () => settle(resolve, finished))
+    child.on('close', () => {
+      if (rootFailed) return settle(reject, paths.fail('READ_FAILED', '沒有權限讀這個資料夾'))
+      // 被取消或中途當掉：已經數到的留著，標成不完整
+      if (!finished) markIncomplete(state, state.job.cancelled ? 'cancel' : 'read')
+      return settle(resolve, true)
+    })
+  })
+}
+
+/** @param {{ cancelled: boolean, kill?: (() => void) | null }} job */
+function cancelJob(job) {
+  job.cancelled = true
+  if (job.kill) job.kill()
+}
+
+/**
  * @param {unknown} token
  * @returns {boolean}
  */
 function folderSizeCancel(token) {
   if (!current) return true
   const tok = typeof token === 'string' ? sanitizeToken(token) : ''
-  if (!tok || current.token === tok) current.cancelled = true
+  if (!tok || current.token === tok) cancelJob(current)
   return true
 }
 
@@ -194,6 +271,7 @@ function doneEmpty(full, job, onProgress) {
 }
 
 function newState(full, job, input) {
+  const fileCap = input.exe ? NATIVE_MAX_FILES : MAX_FILES
   return {
     path: full,
     job,
@@ -205,7 +283,7 @@ function newState(full, job, input) {
     seen: 0,
     started: Date.now(),
     lastEmit: 0,
-    maxFiles: clamp(input.maxFiles, MAX_FILES, 1, MAX_FILES),
+    maxFiles: clamp(input.maxFiles, fileCap, 1, fileCap),
     maxDepth: clamp(input.maxDepth, MAX_DEPTH, 0, 64),
     maxMs: clamp(input.maxMs, MAX_MS, 100, 60_000),
     onProgress: input.onProgress
@@ -219,11 +297,12 @@ function newState(full, job, input) {
  *   maxFiles?: number,
  *   maxDepth?: number,
  *   maxMs?: number,
+ *   exe?: string,
  *   onProgress?: (info: object) => void
- * }} [opts]
+ * }} [opts] `exe` 給 voiceink-probe.exe 的路徑就走原生版
  */
 async function folderSize(dirPath, token, opts) {
-  if (current) current.cancelled = true
+  if (current) cancelJob(current)
   const job = { token: sanitizeToken(token), cancelled: false }
   current = job
   const input = opts && typeof opts === 'object' ? opts : {}
@@ -244,7 +323,8 @@ async function folderSize(dirPath, token, opts) {
   if (st.isSymbolicLink()) return doneEmpty(full, job, input.onProgress)
   const state = newState(full, job, input)
   try {
-    await walk(full, 0, state)
+    const native = input.exe ? await walkNative(input.exe, full, state) : false
+    if (!native) await walk(full, 0, state)
   } finally {
     if (job.cancelled) {
       state.incomplete = true

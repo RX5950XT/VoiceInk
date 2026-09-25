@@ -21,6 +21,7 @@ const recycle = require('./recycle')
 const places = require('./places')
 const shellExt = require('./shell')
 const size = require('./size')
+const nativeProbe = require('../native-probe')
 const operations = require('./operations')
 
 /** @type {(channel: string, payload: any) => void} */
@@ -405,6 +406,7 @@ function shellRelease(token) {
 
 function folderSize(dirPath, token) {
   return size.folderSize(dirPath, token, {
+    exe: nativeProbe.resolveProbeExe(),
     onProgress: (info) => emit('explorer:folderSizeProgress', info)
   })
 }

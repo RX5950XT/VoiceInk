@@ -11,6 +11,9 @@
  * 一律交給 `hotkey.createMachine`，兩條路徑共用同一個狀態機。
  *
  * 協定（sidecar 的 stdout，一行一個）：`READY` / `D` / `U` / `E`
+ *
+ * **優先用 Rust 版 `voiceink-probe.exe hook`**（native/voiceink-probe/src/hook.rs，同一份協定）：
+ * .NET 那支光 runtime 就佔 30MB 級的工作集，Rust 版個位數 MB。找不到才退回 .NET 那支。
  */
 
 const path = require('path')
@@ -47,6 +50,18 @@ function resolveExePath(deps = {}) {
 }
 
 /**
+ * 要 spawn 什麼：有 Rust 版就 `voiceink-probe.exe hook`，否則 .NET 那支。
+ * @param {{ exePath?: string, resourcesPath?: string, probeExe?: string }} [deps]
+ * @returns {{ file: string, args: string[] }}
+ */
+function hookCommand(deps = {}) {
+  if (deps.exePath) return { file: deps.exePath, args: [] }
+  const probe = deps.probeExe ?? require('../native-probe').resolveProbeExe({ resourcesPath: deps.resourcesPath })
+  if (probe) return { file: probe, args: ['hook'] }
+  return { file: resolveExePath(deps), args: [] }
+}
+
+/**
  * 把 sidecar 拉起來。
  *
  * @param {{ onEvent: (kind: 'down'|'up'|'escape') => void,
@@ -54,7 +69,7 @@ function resolveExePath(deps = {}) {
  * @returns {Promise<{ ok: boolean, error?: string, stop?: () => void }>}
  */
 async function startHook(deps) {
-  const exePath = deps.exePath || resolveExePath(deps)
+  const { file: exePath, args } = hookCommand(deps)
   if (!exePath) return { ok: false, error: 'HOOK_EXE_MISSING' }
   const spawnFn = deps.spawnFn || spawn
   const onEvent = typeof deps.onEvent === 'function' ? deps.onEvent : () => {}
@@ -93,7 +108,7 @@ async function startHook(deps) {
     try {
       // stdin 要保持開著：sidecar 靠 stdin 的 EOF 知道我們關掉了，才不會變成
       // 「攔著全機鍵盤的孤兒程序」
-      proc = spawnFn(exePath, [], { stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true })
+      proc = spawnFn(exePath, args, { stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true })
     } catch (err) {
       console.error('[dictation] 啟動熱鍵 sidecar 失敗:', err?.message || err)
       resolve(false)
@@ -170,6 +185,7 @@ async function startHook(deps) {
 
 module.exports = {
   resolveExePath,
+  hookCommand,
   startHook,
   READY_TIMEOUT_MS,
   MAX_RESTARTS

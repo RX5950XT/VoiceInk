@@ -9,6 +9,7 @@
  * 真的要看提權有沒有生效，跑起來的 shell 會印自己的完整性等級（提權時是 High）。
  *
  * 用法：node scripts/probe-terminal-admin.js
+ *       VOICEINK_TERM_HOST=native node scripts/probe-terminal-admin.js（改測 Rust 版 voiceink-term.exe）
  */
 
 'use strict'
@@ -74,7 +75,11 @@ async function main() {
   })
   await new Promise((resolve) => server.listen(PIPE, resolve))
 
-  const child = spawn(ELECTRON, [ROOT, `--terminal-admin-host=${PIPE}`], {
+  const native = process.env.VOICEINK_TERM_HOST === 'native'
+    ? require(path.join(ROOT, 'src/main/native-probe.js')).resolveProbeExe({ name: 'voiceink-term.exe' })
+    : ''
+  if (process.env.VOICEINK_TERM_HOST === 'native' && !native) throw new Error('找不到 voiceink-term.exe，先跑 npm run build:probe')
+  const child = spawn(native || ELECTRON, native ? [`--terminal-admin-host=${PIPE}`] : [ROOT, `--terminal-admin-host=${PIPE}`], {
     stdio: 'ignore',
     windowsHide: true
   })

@@ -38,9 +38,9 @@ npm run dev:sandbox      # 沙箱實例：不干擾你正在用的那份，但�
 npm run electron:pack    # 免安裝預覽 → dist/win-unpacked/VoiceInk.exe（UI／功能改完必跑；自動打到專案外→驗 asar→同步→刪外部輸出）
 npm run electron:build   # 完整打包：NSIS 安裝檔＋ win-unpacked → dist/
 npm run build:sensors    # 系統監控提權感測器 sidecar（需 .NET 8 SDK）→ resources/sensors/
-npm run build:hook       # 語音輸入原生熱鍵 sidecar（需 .NET 8 SDK）→ resources/hook/
+npm run build:hook       # 語音輸入熱鍵的 .NET 退路（需 .NET 8 SDK）→ resources/hook/；平常跑 voiceink-probe.exe hook
 npm run build:shell      # 檔案總管殼層 sidecar（需 .NET 8 SDK）→ resources/shell/
-npm run build:probe      # 系統監控取樣＋使用時長觀測（Rust，需 cargo）→ resources/probe/
+npm run build:probe      # Rust（需 cargo）：voiceink-probe.exe（系統監控／使用時長／用量掃描／資料夾大小／熱鍵）＋ voiceink-term.exe（終端機宿主）→ resources/probe/
 ```
 
 `resources/sensors/`、`resources/hook/`、`resources/shell/`、`resources/probe/` 不進版控（沒建置也打得起來，只是那兩個功能降級；shell 沒建＝右鍵少 7-Zip／WinRAR、沒有 Drive 綠勾；probe 沒建＝退回兩支 PowerShell，常駐多吃約 250MB）。
@@ -312,7 +312,8 @@ tag 要與 `package.json` 的 version 一致。
 - **排隊的輸出要接成一段再寫**：AI CLI 串流一秒上百個小封包，逐段 `await term.write()` ＝每段排一次 timer；
   合併時 `seq <= 目前` 的片段仍然要丟掉（快照重疊）。`fitCurrent` 欄列數沒變就不要往 main 送 resize，
   ResizeObserver 也要合併到下一幀。
-- **PTY 不在 App 裡**：`terminal/host.js` 是獨立宿主，執行環境（Electron exe ＋ node-pty ＋ 七支 host 檔）整套複製到 `<userData>/terminal-host/runtime-<內容雜湊>/`——安裝目錄的檔案被更新覆寫時，跑著的 shell 才不會被拖下水。`before-quit` 只 `disconnect()`，**不可以改回 `killAll()`**。
+- **PTY 不在 App 裡**：宿主是獨立程序，執行環境複製到 `<userData>/terminal-host/runtime-<內容雜湊>/`——安裝目錄的檔案被更新覆寫時，跑著的 shell 才不會被拖下水。`before-quit` 只 `disconnect()`，**不可以改回 `killAll()`**。
+- **宿主優先用 Rust 版 `voiceink-term.exe`**（`native/voiceink-probe/src/bin/voiceink-term/`，568KB，複製過去一樣叫 `VoiceInkTerminalHost.exe`）；找不到才退回「Electron exe ＋ node-pty ＋ 七支 host 檔」那套（`VOICEINK_TERM_HOST=electron` 可強制）。協定一個字都沒改，`host.rs`／`status.rs`／`shell.rs`／`admin.rs` 是 `host.js`／`status.js`／`pty.js`＋`store.js`／`admin*.js` 的逐條翻譯——**改終端機行為要兩邊一起改**，回歸 `test-terminal-host.js`（黑箱協定，走哪一版看有沒有 exe）＋ `VOICEINK_TERM_HOST=native node scripts/probe-terminal-admin.js`＋`cargo test`。實測私有 40.7MB → 1.8MB、工作集 52MB → 7MB（實機長跑到 277MB）、第一個終端機 1.3s → 0.8s。兩個坑：ConPTY 只能關一次（kill 與程序結束都會關，重複關整顆程序直接掛）；具名管道一律 overlapped（同步 handle 上讀寫會互相排隊）。
 - **宿主活得比 App 久＝終端機那一側的修正裝了也沒生效**：更新只換安裝目錄，跑著的宿主
   還是舊的執行環境，`pty.js`／`status.js`／`store.js` 的改動要等它重開才算數。實測使用者
   的宿主從 Ctrl+G 橋接還沒存在的那一版一路活著，連發三版都「裝了跟沒裝一樣」，而且
@@ -321,7 +322,7 @@ tag 要與 `package.json` 的 version 一致。
   **舊宿主沒有這個欄位，缺欄位就是舊版**。重開一律用 auth 回報的 pid 直接收（舊宿主不
   認得新的 op），沒有跑著的 shell 就自動重開，有的話問過使用者再收。
   回歸 `test-terminal.js` 的 [宿主版本] ＋ `probe-terminal-host-version.js`（問真的活著的那個）。
-- **一份執行環境 248MB**：`stageRuntime` 每次改版就多一份，舊的要清掉（能用 `r+` 開啟該份 exe ＝沒人在跑）；建到一半失敗要把 staging 整個刪掉。
+- **Electron 版一份執行環境 248MB**（Rust 版只有一支 exe）：`stageRuntime` 每次改版就多一份，舊的要清掉（能用 `r+` 開啟該份 exe ＝沒人在跑）；建到一半失敗要把 staging 整個刪掉。
 - **系統工具一律指名 `%SystemRoot%\System32`**：PATH 上常擺著 Git Bash 的 MSYS `whoami.exe`／`icacls.exe`，裸名會抓錯那支（libuv 的搜尋順序只看 PATH，不含 System32），症狀是「PowerShell 跑得過、Git Bash 跑不過」。
 - 已結束的終端機**保留畫面**（`finished` map），狀態是 `exited` 不是 `stopped`；`stopped` ＝這次還沒開過。明確刪除（`forget`）才真的收掉，宿主也才會閒置自關。
 - **切回一格終端機一定要重新對欄列數**：`openSession` 走 `fitAndSync` 不是 `fitPane`
@@ -558,6 +559,8 @@ tag 要與 `package.json` 的 version 一致。
 - **nvidia-smi 的看門狗要從 spawn 那一刻就武裝**：只在「收到第一行讀數」之後才設的話，卡在啟動（一行都沒吐）就永遠等不到重開；子程序 `close`／`error` 時要把它收掉，不然重啟計時與看門狗會疊在一起。回歸 `test-sysmon-gpu-lifecycle.js`。
 - **NVMe 的 S.M.A.R.T. 不必提權**，但開實體磁碟時 `dwDesiredAccess` **一定要給 0**；`Data Units Read/Written` 的單位是 1000 × 512 bytes；`0 K` 是「感測器不存在」。
 - **取樣器與使用時長觀測優先用 `voiceink-probe.exe`（Rust，`native/voiceink-probe`）**，找不到才退回 `probe.ps1`／`observer.ps1`（`src/main/native-probe.js`）。兩邊**協定與每一列的格式完全一樣**（`metrics.js` 不知道對面換了人），所以改任何一邊都要跑 `probe-native-probe-parity.js`（static 逐列比對、tick／detail／observer 對欄位）。實測常駐 261MB → 4.4MB、背景 CPU 6.2% → 0.1%、開著頁面 7.0% → 1.1%。程序清單改走 `NtQuerySystemInformation`（名稱不帶 `#1` 後綴，metrics 本來就剝）、網路走 `GetAdaptersAddresses`＋`GetIfEntry2`；記憶體／磁碟／GPU **仍走 `Win32_PerfRawData_*`**。ps1 與它們的 `asarUnpack` 要留著當退路。
+- **同一支 `voiceink-probe.exe` 還有兩個一次性子指令**，找不到 exe 一樣退回 JS、結果不變：`usage-scan <claude|codex|grok>`（用量統計的 JSONL 逐行解析，`codeusage/scan.js#runNative`；本機 2.8GB 全量 28.5s → 1.3s，而且不在主程序上 JSON.parse）與 `dir-size`（檔案頁的資料夾大小，`explorer/size.js#walkNative`；node_modules 2.6s → 0.2s，上限改由 8 秒決定）。`usage.rs` 是 `parsers.js` 的逐條翻譯——**改任何一邊都要跑 `probe-usage-native-parity.js`**（真實記錄逐筆比事件與游標，再把 `test-code-usage.js` 走原生跑一次；原生退回 JS 會被算成失敗）；動 `dirsize.rs`／`size.js` 跑 `probe-dir-size-native.js`。改完 Rust 記得 `npm run build:probe`。
+- **`voiceink-probe.exe` 是 GUI 子系統**（`#![windows_subsystem]`）：只靠 stdio 管道說話，主控台程式每叫起一次 Windows 就多掛一顆隱形 conhost.exe（實機 5 顆、各約 8MB）。`nvidia-smi` 改 `detached: true` 同理。檔案總管殼層 sidecar **刻意不改**：它會執行右鍵選單的命令，那些命令叫起的主控台程式原本共用那顆隱形 conhost，拿掉就會跳黑窗。語音輸入熱鍵優先走 `voiceink-probe.exe hook`（`hook.rs`，.NET 版 33.7MB → 7.1MB），回歸 `probe-dictation-hook.js`（認 pid 不認映像名）＋ `cargo test`（回呼的吞鍵規則）。
 - `probe.ps1` 要有 UTF-8 BOM ＋ `AutoFlush`；**probe 裡不可以相信 `$env:*`**（被 spawn 的子程序沒有）；static 框裡不准查 `Win32_Tpm`（未提權卡 5.2 秒）；網路卡走 `Win32_NetworkAdapter` 不用 `Get-NetAdapter`。
 - **資料列一律往後加欄位、解析端逐格取值**（不要插在中間）；SMBIOS 佔位字串統一在 `metrics.clean()` 清掉；groups 的 rows 值不能給空字串（整列會塌成 0 高）。
 - 感測器 sidecar：只有它提權（不是整個 App）、版本鎖 `0.9.7-pre728`、斷線／卡住**一直重拉**（指數退避，經 `ensureSensors`；讀數穩定 60s 才把間隔歸零）；**自動啟用只能放在進系統監控頁時**（開機那條只走排程工作）；PawnIO 由 App 代裝但要驗 Authenticode（不釘 SHA-256），靜默安裝參數是 `-install -silent`；殭屍 sidecar 要用 `Invoke-CimMethod ... Terminate` 才殺得掉。
@@ -613,14 +616,14 @@ tag 要與 `package.json` 的 version 一致。
 | 範圍 | 指令 |
 |---|---|
 | 開發沙箱 | `probe-dev-sandbox.js`（**實測**沙箱讀得到你的模型與供應商，而你正在用的那份一個位元組都沒動；動 `dev-sandbox.js` 前後都要跑）|
-| 檔案總管 | `test-explorer.js`（路徑守衛＋自種暫存目錄）＋ `e2e-explorer-cdp.js`（暫存 user-data-dir，**不點第一列**）＋ `probe-explorer-uffs.js`（機器上真有 `uffs` 才打真搜尋）＋ `e2e-explorer-drag.js`（拖出去交給 OS 的內容，假 sender）＋ `test-explorer-shell.js`（殼層選單去重／sidecar 協定）＋ `probe-explorer-shell.js`（真 IContextMenu：7-Zip／WinRAR／傳送到、Drive 綠勾） |
+| 檔案總管 | `test-explorer.js`（路徑守衛＋自種暫存目錄）＋ `e2e-explorer-cdp.js`（暫存 user-data-dir，**不點第一列**）＋ `probe-explorer-uffs.js`（機器上真有 `uffs` 才打真搜尋）＋ `e2e-explorer-drag.js`（拖出去交給 OS 的內容，假 sender）＋ `test-explorer-shell.js`（殼層選單去重／sidecar 協定）＋ `probe-explorer-shell.js`（真 IContextMenu：7-Zip／WinRAR／傳送到、Drive 綠勾）＋ `probe-dir-size-native.js`（原生資料夾大小 vs JS、取消、根目錄讀不到） |
 | 專案工作區 | `test-workspace.js`／`-nav`／`-ui`／`-state`／`-perf` ＋ `e2e-workspace-cdp.js`（暫存 user-data-dir ＋自種專案）；動 Monaco 前後跑 `probe-workspace-monaco.js`，動 PDF 前跑 `probe-workspace-pdf.js`；動編輯器／diff／預覽／專案切換前後跑 `probe-workspace-perf.js`（**打包版**開 1.4MB／4 萬行的檔，數 `createModel` 有沒有重做、量輸入法游標位置、驗專案隔離）；動大檔開關與記憶體前後跑 `probe-workspace-bigfile.js`（**打包版**量 1.4MB／4 萬行的開檔毫秒數、並排變更毫秒數，以及關掉之後堆積回不回得去、預覽的 iframe 有沒有被收掉） |
 | 終端機 | `test-terminal.js` ＋ `test-terminal-ui.js`（輸出合併、輸入法對位）＋ `probe-terminal-flicker.js`（**會叫到最前面**：DOM vs WebGL 量游標重建與 textarea 抖動）＋ `probe-terminal-upgrade.js`（**打包版**驗 WebGL／Unicode 11／字級／搜尋／分割／OSC 標題與 cwd）＋ `probe-terminal-ime.js`（**打包版**真的走一次 Chromium 輸入法組字）＋ `e2e-terminal.js`（真 ConPTY）＋ `e2e-terminal-cdp.js` ＋ `test-terminal-host.js`（獨立宿主）＋ `test-terminal-links.js` ＋ `probe-terminal-links.js`（真 xterm 座標，`npx electron`） ＋ `probe-terminal-editor.js`（Ctrl+G 的 $EDITOR 橋接：真的把那支 batch 跑起來，量它會不會卡住、送出與取消放不放得走）＋ `probe-terminal-mouse.js`（`npx electron`：CLI 開的滑鼠回報有沒有被擋掉，含沒掛的對照組） ＋ `e2e-terminal-copy-cdp.js`（**打包版**：一般 PowerShell 裡拖曳選取、Ctrl+C／右鍵複製、OSC 8 連結不跳 confirm） ＋ `probe-terminal-host-version.js`（唯讀：問這台機器上真的跑著的宿主是哪一份執行環境、還活著幾個 shell——「更新了卻沒生效」先跑這支）；動宿主或 `build.files`／`asarUnpack` 前後跑 `probe-terminal-restart.js`（**打包版**真的關 App、覆寫安裝檔再開回來）；管理員 `probe-terminal-admin.js`（免 UAC）／`probe-terminal-admin-elevate.js`（**跳一次 UAC**）；動 `foreground.js` 前後跑 `probe-terminal-foreground.js`（**會開／關記事本**，重現「記事本已經開著」再開第二次）；動配色或桌布前後跑 `probe-terminal-background.js`（**打包版**量桌布那一層畫不畫得出來、字有沒有被 opacity 一起壓掉、拿掉圖之後底色回不回得到不透明）|
 | 聊天／Markdown | `e2e-chat.js`（mock SSE）＋ `e2e-chat-cdp.js` ＋ `test-markdown.js` |
 | HF模型 | `test-hfmodels.js` ＋ `probe-hf-router.js`（動 runtime 前跑）／`probe-hf-hub.js`／`probe-hf-detail.js`（打真 HF）＋ `e2e-hfmodels.js` ＋ `e2e-hf-cdp.js` |
 | CC代理／閘道 | `test-ccswitch.js` ＋ `e2e-ccswitch-cdp.js`；端點 `probe-ccswitch-endpoints.js`／模型 `probe-ccswitch-models.js`／Codex 參數 `probe-ccswitch-codex.js`；閘道 `test-ccswitch-gateway.js` ＋ `e2e-ccswitch-gateway.js` |
 | AGY | `test-agy-mappers.js` ＋ `e2e-agy.js`（mock）＋ `e2e-agy-cdp.js`；動映射表／端點順序前跑 `probe-agy-upstream.js`，動 `runAgyCli` 前跑 `probe-agy-nudge.js` |
-| 用量統計 | `test-code-usage.js` ＋ `e2e-code-usage.js`（真的讀本機記錄）＋ `probe-code-usage-audit.js`（不經 codeusage 重算對帳）；畫面在 `e2e-usage-cdp.js` 的後半（CC代理的子分頁）|
+| 用量統計 | `test-code-usage.js` ＋ `e2e-code-usage.js`（真的讀本機記錄）＋ `probe-code-usage-audit.js`（不經 codeusage 重算對帳）＋ `probe-usage-native-parity.js`（原生 usage-scan 與 JS 逐筆比對）；畫面在 `e2e-usage-cdp.js` 的後半（CC代理的子分頁）|
 | 額度 | `test-usage.js` ＋ `test-claude-auth.js`（Claude 續期的鎖／CAS，假家目錄）＋ `e2e-usage.js` ＋ `e2e-usage-cdp.js`（工作區底下那條：顯示設定、排序、詳情、自動同步）；動端點或解析前後跑 `probe-usage-endpoints.js`（打真上游）；動續期前後跑 `probe-claude-refresh.js --force`（**會真的續你的 Claude 登入**）|
 | 系統監控 | `test-sysmon.js` ＋ `e2e-sysmon.js` ＋ `e2e-sysmon-cdp.js` ＋ `probe-sysmon-stress.js`（實機量有沒有壓到）＋ `e2e-sysmon-sensors.js`（**跳 UAC**）|
 | 風扇／效能調整 | `test-sysmon-fans.js` ＋ `e2e-sysmon-fans-cdp.js`（不接管真風扇）＋ `probe-sysmon-fans.js`／`probe-sensors-task.js`（**跳 UAC**）；`test-sysmon-oc.js` ＋ `e2e-sysmon-oc-cdp.js`（不按套用）|

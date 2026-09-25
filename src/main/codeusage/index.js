@@ -209,6 +209,8 @@ function jsonlSources() {
   return [
     {
       provider: 'claude',
+      // 有 voiceink-probe.exe 就走原生解析（usage.rs），規則與 parsers.js 一致
+      native: 'claude',
       roots: [path.join(home, '.claude', 'projects')],
       match: (name) => name.endsWith('.jsonl'),
       parseLine: parsers.parseClaudeLine,
@@ -218,6 +220,7 @@ function jsonlSources() {
     },
     {
       provider: 'codex',
+      native: 'codex',
       roots: [
         path.join(home, '.codex', 'sessions'),
         path.join(home, '.codex', 'archived_sessions')
@@ -230,6 +233,7 @@ function jsonlSources() {
     },
     {
       provider: 'grok',
+      native: 'grok',
       roots: [
         path.join(home, '.grok', 'sessions'),
         path.join(home, '.grok', 'archived_sessions')

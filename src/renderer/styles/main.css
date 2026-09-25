@@ -6108,6 +6108,10 @@ h6.md-h { font-size: 14px; }
    底色由 `term-themes.js` 依選到的配色寫進 `--term-theme-bg`（沒設定過就退回主題色）。 */
 .term-host {
   background: var(--term-theme-bg, var(--term-bg));
+  /* 底色不透明，毛玻璃根本看不到，卻讓 xterm 每一幀都多一趟模糊運算。
+     截圖逐像素比對：拿掉前後最大差 2/255；快速輸出時 GPU 程序記憶體少約 24MB。 */
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 /* 桌布自己一層，鋪在 xterm 底下。

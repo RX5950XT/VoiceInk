@@ -4,15 +4,26 @@
 //!   stdout 吐 `#B <cmd> <seq>` … `#E <cmd> <seq>` 框住的資料塊。**協定與每一列的格式都跟 ps1 一樣**，
 //!   `sampler.js`／`metrics.js` 不必知道對面換了人。
 //! - `voiceink-probe observer` ＝ `src/main/screentime/observer.ps1`：每秒一列前景視窗 JSON。
+//! - `voiceink-probe usage-scan <claude|codex|grok>` ＝ 用量統計的 JSONL 逐行解析（`codeusage/scan.js`）。
+//! - `voiceink-probe dir-size <path> …` ＝ 檔案頁的資料夾大小（`explorer/size.js`）。
+//! - `voiceink-probe hook [--key 0xA5]` ＝ 語音輸入的全域熱鍵（取代 .NET 的 VoiceInkHook.exe，見 hook.rs）。
+//!
+//! GUI 子系統：只靠 stdio 管道跟 main 講話，不需要主控台——主控台程式每叫起一次，
+//! Windows 就多掛一顆隱形的 conhost.exe。
 //!
 //! 不接受任何來自 renderer 的字串：指令只有固定幾個，全由 main 送。
 
+#![windows_subsystem = "windows"]
+
 mod detail;
+mod dirsize;
+mod hook;
 mod inventory;
 mod observer;
 mod procs;
 mod smart;
 mod tick;
+mod usage;
 mod util;
 
 use std::io::{BufRead, Write};
@@ -84,11 +95,15 @@ fn sysmon() {
 }
 
 fn main() {
-    match std::env::args().nth(1).as_deref() {
+    let args: Vec<String> = std::env::args().collect();
+    match args.get(1).map(String::as_str) {
         Some("observer") => observer::run(),
         Some("sysmon") => sysmon(),
+        Some("usage-scan") => std::process::exit(usage::run(args.get(2).map_or("", String::as_str))),
+        Some("dir-size") => std::process::exit(dirsize::run(&args[2..])),
+        Some("hook") => std::process::exit(hook::run(&args[2..])),
         _ => {
-            eprintln!("usage: voiceink-probe sysmon|observer");
+            eprintln!("usage: voiceink-probe sysmon|observer|usage-scan|dir-size");
             std::process::exit(2);
         }
     }

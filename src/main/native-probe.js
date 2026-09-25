@@ -15,15 +15,17 @@ const path = require('path')
 const EXE_NAME = 'voiceink-probe.exe'
 
 /**
- * @param {{ resourcesPath?: string, projectRoot?: string }} [deps]
+ * @param {{ resourcesPath?: string, projectRoot?: string, name?: string }} [deps]
+ *   `name` 換成同一個 crate 的另一支（`voiceink-term.exe`＝終端機宿主）
  * @returns {string} 找不到回空字串
  */
 function resolveProbeExe(deps = {}) {
   const resourcesPath = deps.resourcesPath ?? process.resourcesPath ?? ''
   const projectRoot = deps.projectRoot ?? path.join(__dirname, '..', '..')
+  const name = deps.name || EXE_NAME
   const candidates = [
-    resourcesPath ? path.join(resourcesPath, 'probe', EXE_NAME) : '',
-    path.join(projectRoot, 'resources', 'probe', EXE_NAME)
+    resourcesPath ? path.join(resourcesPath, 'probe', name) : '',
+    path.join(projectRoot, 'resources', 'probe', name)
   ].filter(Boolean)
   return candidates.find((candidate) => {
     try {

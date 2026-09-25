@@ -17,7 +17,9 @@
 
 const fs = require('fs')
 const path = require('path')
+const { spawn } = require('child_process')
 const { StringDecoder } = require('string_decoder')
+const nativeProbe = require('../native-probe')
 
 /** 只掃這麼多天內修改過的檔案 */
 const SCAN_WINDOW_DAYS = 90
@@ -137,6 +139,8 @@ async function streamFile(file, offset, parseLine, state, onEvent) {
  *   整個 session 的用量算兩次（實測重現）。key 必須跟著檔案走：Codex 與
  *   Claude 用檔名（唯一 UUID），Grok 用上一層資料夾名（session UUID，
  *   檔名一律叫 updates.jsonl 不能用）。省略時退回絕對路徑（相容舊行為）。
+ * @param {string} [source.native] 原生解析器名稱（`claude`／`codex`／`grok`）；有 voiceink-probe.exe 時
+ *   改走 `runNative`，`parseLine` 只剩退路用途
  * @param {Record<string, { offset: number, mtimeMs: number, seen?: string[] }>} cursors 就地更新
  * @param {(event: object) => void} onEvent
  * @param {number} sinceMs
@@ -149,7 +153,8 @@ async function scanSource(source, cursors, onEvent, sinceMs) {
     await collectFiles(root, source.match, sinceMs, files)
   }
 
-  let scannedBytes = 0
+  /** @type {Array<{ file: string, key: string, offset: number, state: object }>} */
+  const jobs = []
   for (const file of files) {
     const key = source.keyOf ? `${source.provider}:${source.keyOf(file)}` : file
     const previous = cursors[key]
@@ -172,26 +177,27 @@ async function scanSource(source, cursors, onEvent, sinceMs) {
       }
       continue
     }
+    jobs.push({ file, key, offset, state: restoreState(source.newState(), rewound ? null : previous) })
+  }
 
-    const state = source.newState()
-    // 模型名要跨次留著：Codex 只在 `session_meta`／`turn_context` 寫一次模型，
-    // 而增量掃描下一次只讀新附加的那一段——那幾行早就被上一次讀掉了，
-    // 不把它接回來，同一個 session 之後的每一筆用量都會變成 `unknown`（實測 7.8 萬筆）
-    if (!rewound && previous && typeof previous.model === 'string') state.model = previous.model
-    // 「還在重播母 thread 的歷史」同理要跨次留著：檔案還在寫的時候可能掃到重播的一半，
-    // 下一次不接回來的話，剩下那半份重播就會被當成新用量收進去（而且記成 unknown）
-    if (!rewound && previous && previous.replay === true) state.replay = true
-    if (!rewound && previous && previous.isFork === true) state.isFork = true
-    if (!rewound && previous && Number.isFinite(previous.sessionStartMs)) state.sessionStartMs = previous.sessionStartMs
-    if (!rewound && previous && Number.isFinite(previous.lastTotalTokens)) state.lastTotalTokens = previous.lastTotalTokens
-    if (!rewound && previous && Array.isArray(previous.seen) && state.seen instanceof Set) {
-      for (const id of previous.seen) {
-        if (typeof id === 'string') state.seen.add(id)
-      }
+  // 原生版一次吃整批檔案；跑不起來（沒 build、當掉）就整批退回 JS，結果一樣只是慢
+  const exe = source.native && jobs.length ? nativeProbe.resolveProbeExe() : ''
+  const results = exe ? await runNative(exe, source.native, jobs) : null
+
+  let scannedBytes = 0
+  for (let i = 0; i < jobs.length; i += 1) {
+    const job = jobs[i]
+    let next
+    let state = job.state
+    if (results) {
+      next = results[i].next
+      state = results[i].state
+      for (const event of results[i].events) onEvent(event)
+    } else {
+      next = await streamFile(job.file, job.offset, source.parseLine, state, onEvent)
     }
-    const next = await streamFile(file, offset, source.parseLine, state, onEvent)
-    scannedBytes += Math.max(0, next - offset)
-    cursors[key] = {
+    scannedBytes += Math.max(0, next - job.offset)
+    cursors[job.key] = {
       offset: next,
       mtimeMs: Date.now(),
       model: String(state.model || ''),
@@ -199,13 +205,97 @@ async function scanSource(source, cursors, onEvent, sinceMs) {
       isFork: state.isFork === true,
       sessionStartMs: Number(state.sessionStartMs || 0),
       lastTotalTokens: Number(state.lastTotalTokens || 0),
-      seen: state.seen instanceof Set ? [...state.seen] : [],
+      seen: seenList(state.seen),
       // 穩定 key 不是路徑，清游標時要另外知道檔案在哪
-      path: file
+      path: job.file
     }
   }
 
   return { files: files.length, scannedBytes }
+}
+
+/**
+ * 把上一次的跨行狀態接回來（`previous` 為 null ＝ 整份重讀，從空白開始）。
+ *
+ * 模型名要跨次留著：Codex 只在 `session_meta`／`turn_context` 寫一次模型，
+ * 而增量掃描下一次只讀新附加的那一段——那幾行早就被上一次讀掉了，
+ * 不把它接回來，同一個 session 之後的每一筆用量都會變成 `unknown`（實測 7.8 萬筆）。
+ * 「還在重播母 thread 的歷史」同理要跨次留著：檔案還在寫的時候可能掃到重播的一半，
+ * 下一次不接回來的話，剩下那半份重播就會被當成新用量收進去（而且記成 unknown）。
+ * @param {object} state
+ * @param {object | null | undefined} previous
+ * @returns {object}
+ */
+function restoreState(state, previous) {
+  if (!previous) return state
+  if (typeof previous.model === 'string') state.model = previous.model
+  if (previous.replay === true) state.replay = true
+  if (previous.isFork === true) state.isFork = true
+  if (Number.isFinite(previous.sessionStartMs)) state.sessionStartMs = previous.sessionStartMs
+  if (Number.isFinite(previous.lastTotalTokens)) state.lastTotalTokens = previous.lastTotalTokens
+  if (Array.isArray(previous.seen) && state.seen instanceof Set) {
+    for (const id of previous.seen) {
+      if (typeof id === 'string') state.seen.add(id)
+    }
+  }
+  return state
+}
+
+/** @param {unknown} seen JS 版是 Set、原生版回陣列 */
+function seenList(seen) {
+  if (seen instanceof Set) return [...seen]
+  return Array.isArray(seen) ? seen.filter((id) => typeof id === 'string') : []
+}
+
+/**
+ * `voiceink-probe usage-scan <parser>`（native/voiceink-probe/src/usage.rs）：同一份解析規則，
+ * 但幾 GB 的 JSON.parse 不在主程序上跑、而且多執行緒。實測本機 2.8GB 全量 28.5s → 1.3s。
+ * 任何失敗都回 null（並留 log），呼叫端整批退回 JS 的 `streamFile`。
+ *
+ * @param {string} exe
+ * @param {string} parser
+ * @param {Array<{ file: string, offset: number, state: object }>} jobs
+ * @returns {Promise<Array<{ next: number, state: object, events: object[] }> | null>}
+ */
+function runNative(exe, parser, jobs) {
+  return new Promise((resolve) => {
+    const fallback = (why) => {
+      console.warn(`[codeusage] 原生掃描失敗，改用 JS：${why}`)
+      resolve(null)
+    }
+    let child
+    try {
+      child = spawn(exe, ['usage-scan', parser], { windowsHide: true })
+    } catch (error) {
+      fallback(error && error.message)
+      return
+    }
+    const out = []
+    let err = ''
+    child.stdout.on('data', (chunk) => out.push(chunk))
+    child.stderr.on('data', (chunk) => { err = (err + chunk).slice(-500) })
+    child.on('error', (error) => fallback(error && error.message))
+    child.on('close', (code) => {
+      if (code !== 0) return fallback(`exit ${code} ${err}`)
+      let results
+      try {
+        results = JSON.parse(Buffer.concat(out).toString('utf8'))
+      } catch (error) {
+        return fallback(error.message)
+      }
+      const valid = Array.isArray(results) && results.length === jobs.length && results.every((r) => (
+        r && Number.isFinite(r.next) && r.state && typeof r.state === 'object' && Array.isArray(r.events)
+      ))
+      return valid ? resolve(results) : fallback('結果格式不符')
+    })
+    // 子程序先掛掉時這裡會 EPIPE；原因由上面的 close（exit code ＋ stderr）回報
+    child.stdin.on('error', () => {})
+    child.stdin.end(JSON.stringify(jobs.map((job) => ({
+      file: job.file,
+      offset: job.offset,
+      state: { ...job.state, seen: seenList(job.state.seen) }
+    }))))
+  })
 }
 
 /**
