@@ -1973,6 +1973,8 @@ registerSysmonIpc({
     stressStatus: (...args) => loadSysmon().stressStatus(...args),
     diskBench: (...args) => loadSysmon().diskBench(...args),
     cancelDiskBench: (...args) => loadSysmon().cancelDiskBench(...args),
+    diskTree: (...args) => loadSysmon().diskTree(...args),
+    diskTreeCancel: (...args) => loadSysmon().diskTreeCancel(...args),
     // 風扇控制（identifier 由 main 對照即時通道清單驗過，見 sysmon/fans.js）
     fanList: (...args) => loadSysmon().fanList(...args),
     fanEnable: (...args) => loadSysmon().fanEnable(...args),

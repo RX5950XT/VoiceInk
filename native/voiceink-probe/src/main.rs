@@ -6,6 +6,7 @@
 //! - `voiceink-probe observer` ＝ `src/main/screentime/observer.ps1`：每秒一列前景視窗 JSON。
 //! - `voiceink-probe usage-scan <claude|codex|grok>` ＝ 用量統計的 JSONL 逐行解析（`codeusage/scan.js`）。
 //! - `voiceink-probe dir-size <path> …` ＝ 檔案頁的資料夾大小（`explorer/size.js`）。
+//! - `voiceink-probe disk-tree <path> …` ＝ 系統監控的磁碟空間（`sysmon/disktree.js`）。
 //! - `voiceink-probe hook [--key 0xA5]` ＝ 語音輸入的全域熱鍵（取代 .NET 的 VoiceInkHook.exe，見 hook.rs）。
 //!
 //! GUI 子系統：只靠 stdio 管道跟 main 講話，不需要主控台——主控台程式每叫起一次，
@@ -17,6 +18,7 @@
 
 mod detail;
 mod dirsize;
+mod disktree;
 mod hook;
 mod inventory;
 mod observer;
@@ -101,9 +103,10 @@ fn main() {
         Some("sysmon") => sysmon(),
         Some("usage-scan") => std::process::exit(usage::run(args.get(2).map_or("", String::as_str))),
         Some("dir-size") => std::process::exit(dirsize::run(&args[2..])),
+        Some("disk-tree") => std::process::exit(disktree::run(&args[2..])),
         Some("hook") => std::process::exit(hook::run(&args[2..])),
         _ => {
-            eprintln!("usage: voiceink-probe sysmon|observer|usage-scan|dir-size");
+            eprintln!("usage: voiceink-probe sysmon|observer|usage-scan|dir-size|disk-tree|hook");
             std::process::exit(2);
         }
     }

@@ -5439,6 +5439,9 @@ label.chat-model-flag {
 /* 訊息常常帶檔案清單或 git 的原因，換行要留著 */
 .dialog-desc-multiline {
   white-space: pre-line;
+  overflow-wrap: anywhere;
+  max-height: 46vh;
+  overflow-y: auto;
 }
 
 .simple-dialog-body {
@@ -9454,6 +9457,392 @@ h6.md-h { font-size: 14px; }
   .stime-split { grid-template-columns: 1fr; }
   .stime-cat-row { grid-template-columns: 10px minmax(0, 1fr) 88px; }
   .stime-cat-pct { display: none; }
+}
+
+/* ── 磁碟空間 ───────────────────────────────────────────────────── */
+
+.disk-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.disk-drives {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+.disk-drive {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "name meta" "bar bar";
+  gap: 3px 10px;
+  min-width: 168px;
+  max-width: 240px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--surface-glass);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.disk-drive:hover { background: var(--surface-hover); }
+
+.disk-drive.is-on {
+  border-color: var(--accent-primary);
+  background: var(--accent-soft);
+}
+
+.disk-drive-name {
+  grid-area: name;
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.disk-drive-meta {
+  grid-area: meta;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.disk-drive-track {
+  grid-area: bar;
+  display: block;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--surface-hover);
+  overflow: hidden;
+}
+
+.disk-drive-bar {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent-primary);
+}
+
+.disk-drive.is-tight .disk-drive-bar { background: var(--danger); }
+
+.disk-modes { flex: 0 0 auto; }
+
+.disk-filter {
+  width: 168px;
+  max-width: 100%;
+  height: 32px;
+}
+
+.disk-progress {
+  flex: 1 1 180px;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.disk-note {
+  margin: 0 0 10px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.disk-crumb-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.disk-crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.disk-crumb,
+.disk-crumb-sep {
+  font-size: 13px;
+}
+
+.disk-crumb {
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent-primary);
+  font: inherit;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+.disk-crumb:hover { background: var(--surface-hover); }
+
+.disk-crumb:disabled {
+  color: var(--text-primary);
+  font-weight: 600;
+  cursor: default;
+}
+
+.disk-crumb-sep { color: var(--text-tertiary); }
+
+.disk-hint {
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 24px;
+}
+
+.disk-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 14px;
+  align-items: start;
+}
+
+.disk-map-card,
+.disk-card {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--surface-glass);
+  box-shadow: var(--shadow-sm);
+}
+
+.disk-map-host {
+  position: relative;
+  height: min(640px, 62vh);
+  min-height: 320px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--disk-gap);
+}
+
+.disk-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+}
+
+.disk-canvas[hidden] { display: none; }
+
+.disk-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.disk-tip {
+  position: absolute;
+  z-index: 2;
+  max-width: min(340px, 78%);
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--surface-glass-strong);
+  box-shadow: var(--shadow-sm);
+  pointer-events: none;
+}
+
+.disk-tip[hidden] { display: none; }
+
+.disk-tip p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-primary);
+}
+
+.disk-tip-path,
+.disk-tip-meta { color: var(--text-secondary); }
+
+.disk-tip-path { font-family: var(--font-mono); font-size: 11px; }
+
+.disk-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.disk-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.disk-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  border: 1px solid var(--border-color);
+  background: var(--disk-other);
+}
+
+.disk-swatch.is-code { background: var(--disk-code); }
+.disk-swatch.is-doc { background: var(--disk-doc); }
+.disk-swatch.is-image { background: var(--disk-image); }
+.disk-swatch.is-video { background: var(--disk-video); }
+.disk-swatch.is-audio { background: var(--disk-audio); }
+.disk-swatch.is-archive { background: var(--disk-archive); }
+.disk-swatch.is-bin { background: var(--disk-bin); }
+.disk-swatch.is-cache { background: var(--disk-cache); }
+.disk-swatch.is-dir { background: var(--disk-dir); }
+
+.disk-swatch.is-hatch {
+  background-image: repeating-linear-gradient(-45deg, transparent 0 3px, rgba(0, 0, 0, 0.28) 3px 4px);
+}
+
+.disk-side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  position: sticky;
+  top: 8px;
+}
+
+.disk-card h2 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.disk-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.disk-card-head h2 { margin: 0; }
+
+.disk-card-meta {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.disk-empty-inline {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.disk-sel-name {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.disk-sel-meta,
+.disk-sel-extra {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.disk-sel-path {
+  margin: 6px 0 0;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.disk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.disk-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 280px;
+  overflow: auto;
+}
+
+.disk-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.disk-row:hover { background: var(--surface-hover); }
+.disk-row.is-on { background: var(--accent-soft); }
+
+.disk-row-name {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.disk-row-meta {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.disk-card .btn-danger { margin-top: 10px; }
+
+.disk-drive:focus-visible,
+.disk-row:focus-visible,
+.disk-crumb:focus-visible,
+.disk-modes .sysmon-tab:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+@media (max-width: 900px) {
+  .disk-layout { grid-template-columns: 1fr; }
+  .disk-side { position: static; }
+  .disk-map-host { height: 420px; }
+}
+
+@media (max-width: 640px) {
+  .disk-map-host { height: 320px; }
+  .disk-filter { width: 100%; }
 }
 
 /* ===== Claude Code 工作台 ===== */

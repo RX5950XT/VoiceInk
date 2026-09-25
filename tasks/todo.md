@@ -1,3 +1,19 @@
+# 2026-09-25（二）— 系統監控加「磁碟空間」子分頁（類似 disktree）
+
+- [x] Rust `voiceink-probe disk-tree`：一次掃完、bottom-up 修剪（每層留前 200、太小併「其他」）、輸出單行 JSON
+- [x] main `sysmon/disktree.js`＋IPC＋main 白名單＋preload（三份清單）
+- [x] renderer：磁碟清單、squarified treemap（類型上色、快取 hatch）、放大／麵包屑、大小／檔案數、名稱篩選
+- [x] 側欄：選取詳情、最大檔案、標記 → 檢閱 → 丟資源回收筒（不做永久刪除）
+- [x] 測試：cargo test、test-sysmon-disktree、test-disk-treemap、打包版 CDP 實測
+  - [x] `scripts/e2e-sysmon-disk-cdp.js`：子分頁、掃描總量、treemap 點擊／Backspace、檔案數與篩選、回收筒、深淺色截圖、console error（17 passed）
+
+## Review
+
+- 實作交給 Grok CLI（grok-4.7 high）分後端／前端／CDP／平行化四批，這邊規劃、審 code、驗收
+- 整顆 C: 單執行緒 180 秒逾時 → 改平行＋列舉 8 秒逾時（Containers\Layers 有一層會卡死 FindFirstFile），60 秒內掃完 223 萬檔
+- 驗收時抓到：淺色截圖太早拍（主題過場）、磁碟清單與工具列擠同一排 → 分兩排；CDP 收尾順序讓 nvidia-smi 變孤兒佔住埠（新舊兩支 e2e 都修）
+- 驗證：cargo test 21＋11、test-sysmon-disktree 49、test-disk-treemap、test-sysmon 188、page-lifecycle、sensor-groups 全過；electron:pack asar 驗證過；e2e-sysmon-disk-cdp 17（連跑兩次、零孤兒）、e2e-sysmon-cdp 114 全過
+
 # 2026-09-25 — 檔案頁補齊跟 Windows 檔案總管的差距
 
 - [x] 內容／權限：App 選單加「內容」＋ Alt+Enter，走殼層 `properties` 動詞（Windows 原生內容視窗，含「安全性」分頁）；殼層那份不再重複列

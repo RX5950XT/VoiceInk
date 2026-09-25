@@ -6,7 +6,7 @@
  * renderer 拿不到任何路徑、指令或 SQL：它只能送「開始／停止」「換取樣間隔」「結束這個 pid」，
  * 其餘（PowerShell 腳本、nvidia-smi 參數、taskkill 參數、測速目錄）全部固定在這一層。
  *
- * 三顆子程序都要記得收（比照終端機那條教訓）：probe.ps1、nvidia-smi、感測器 sidecar。
+ * 常駐的三顆（probe、nvidia-smi、感測器）與磁碟掃描那顆都要記得收。
  * `before-quit` 少收一顆就會留在工作管理員裡。
  */
 
@@ -21,6 +21,8 @@ const { createFanEngine } = require('./fans')
 const { createOcEngine } = require('./oc')
 const pawnio = require('./pawnio')
 const metrics = require('./metrics')
+const { createDiskTree } = require('./disktree')
+const { resolveProbeExe } = require('../native-probe')
 
 const INTERVAL_KEYS = Object.freeze(Object.keys(INTERVALS))
 const KILL_TIMEOUT_MS = 10_000
@@ -58,6 +60,12 @@ function createSysmonService(deps = {}) {
   const stress = createStressRunner()
   const fans = createFanEngine({ sensors })
   const oc = createOcEngine({ sensors })
+  const disks = createDiskTree({
+    exe: Object.hasOwn(deps, 'diskTreeExe') ? deps.diskTreeExe : resolveProbeExe(),
+    emit: (payload) => emit(payload),
+    spawnFn: deps.diskTreeSpawn,
+    statFn: deps.diskTreeStat
+  })
 
   /** @type {(payload: any) => void} */
   let emit = () => {}
@@ -286,6 +294,10 @@ function createSysmonService(deps = {}) {
     },
     cancelDiskBench,
 
+    /** 掃一顆磁碟或一個資料夾。路徑在 disktree.js 裡驗過才會真的啟動。 */
+    diskTree(rootPath) { return disks.scan(rootPath) },
+    diskTreeCancel() { disks.cancel(); return true },
+
     /**
      * 設定與路徑注入。`packaged` 決定能不能安裝「免 UAC 啟動」的排程工作
      * （開發版的執行檔在可寫目錄，註冊成提權工作等於留後門）。
@@ -374,7 +386,7 @@ function createSysmonService(deps = {}) {
     },
 
     /**
-     * before-quit 用：三顆子程序全收。
+     * before-quit 用：常駐的三顆，外加磁碟掃描那顆。
      * **風扇與效能調整都要排在 sensors.stop() 之前**——先斷線就交不回去。
      * @returns {Promise<void>}
      */
@@ -384,6 +396,7 @@ function createSysmonService(deps = {}) {
       sampler.stop()
       gpu.stop()
       stress.shutdown()
+      disks.stop()
       cancelDiskBench()
       return Promise.resolve(sensors.stop()).catch(() => undefined)
     }

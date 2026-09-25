@@ -14,6 +14,7 @@ import { initCustomSelects, syncCustomSelects } from './custom-select.js'
 import { showFanPanel, hideFanPanel } from './sysmon-fans.js'
 import { showOcPanel, hideOcPanel, onOcSample } from './sysmon-oc.js'
 import { showScreentimePanel, hideScreentimePanel } from './sysmon-screentime.js'
+import { showDiskPanel, hideDiskPanel } from './sysmon-disk.js'
 
 const HISTORY = 120
 const ROW_HEIGHT = 30
@@ -2608,6 +2609,8 @@ function switchSubtab(name) {
   else hideOcPanel()
   if (name === 'screentime') showScreentimePanel()
   else hideScreentimePanel()
+  if (name === 'disk') showDiskPanel()
+  else hideDiskPanel()
 }
 
 // ===== 生命週期 =====
@@ -2889,6 +2892,7 @@ export function cooldownSysmonPage() {
   hideFanPanel()
   hideOcPanel()
   hideScreentimePanel()
+  hideDiskPanel()
   // 壓力測試跑在 main，離開分頁不主動收的話它會在背景一直燒到 5 分鐘上限
   electronAPI.sysmon.cpuStress(false, 1)
   electronAPI.sysmon.memStress(false, 1)

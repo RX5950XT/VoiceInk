@@ -41,6 +41,21 @@
   --warning: #e0a83d;
   --danger: #e86960;
 
+  /* 磁碟空間 treemap：深色底上用淺塊，字色由對比挑 ink／paper */
+  --disk-code: #7eb6ea;
+  --disk-cache: #e2b15a;
+  --disk-video: #d58bd0;
+  --disk-image: #6dceab;
+  --disk-audio: #8eb0f2;
+  --disk-doc: #9ec9d6;
+  --disk-archive: #e0b56a;
+  --disk-bin: #ee8d86;
+  --disk-other: #a8b0ad;
+  --disk-dir: #3e515a;
+  --disk-gap: #101416;
+  --disk-ink: #142026;
+  --disk-paper: #f4f1e8;
+
   --bg-primary: rgba(13, 16, 18, 0.82);
   --bg-secondary: var(--surface-glass);
   --bg-tertiary: var(--surface-subtle);
@@ -113,6 +128,20 @@
   --success: #1b7048;
   --warning: #8a5a08;
   --danger: #a33d38;
+
+  --disk-code: #1f5f8a;
+  --disk-cache: #8a5a08;
+  --disk-video: #7a3470;
+  --disk-image: #1b6b42;
+  --disk-audio: #2e4088;
+  --disk-doc: #2f5c6e;
+  --disk-archive: #7a5410;
+  --disk-bin: #8e342f;
+  --disk-other: #4e595c;
+  --disk-dir: #c5d2ce;
+  --disk-gap: #e3eae7;
+  --disk-ink: #142026;
+  --disk-paper: #f4f1e8;
 
   --bg-primary: rgba(238, 243, 240, 0.86);
   --bg-secondary: var(--surface-glass);

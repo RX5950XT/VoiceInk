@@ -101,6 +101,14 @@ function registerSysmonIpc({ ipcMain, service, isMainSender }) {
   ipcMain.handle('sysmon:cancelDiskBench', (event) => (
     invoke(event, () => { service.cancelDiskBench(); return true })
   ))
+
+  // 磁碟空間：renderer 送絕對路徑，存在與否與是不是資料夾在 disktree.js 驗
+  ipcMain.handle('sysmon:diskTree', (event, rootPath) => (
+    invoke(event, () => service.diskTree(rootPath))
+  ))
+  ipcMain.handle('sysmon:diskTreeCancel', (event) => (
+    invoke(event, () => { service.diskTreeCancel(); return true })
+  ))
 }
 
 module.exports = { registerSysmonIpc }

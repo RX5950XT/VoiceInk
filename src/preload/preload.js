@@ -471,6 +471,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** @param {{ drive: string, sizeMb: number }} req renderer 只送磁碟代號，路徑由 main 組 */
     diskBench: (req) => ipcRenderer.invoke('sysmon:diskBench', req || {}),
     cancelDiskBench: () => ipcRenderer.invoke('sysmon:cancelDiskBench'),
+    /** 掃一顆磁碟或一個資料夾的空間樹。path 必須是絕對路徑，main 會再驗一次 */
+    diskTree: (rootPath) => ipcRenderer.invoke('sysmon:diskTree', rootPath),
+    diskTreeCancel: () => ipcRenderer.invoke('sysmon:diskTreeCancel'),
     // 風扇控制：只送 identifier 與數字，main 會對照即時通道清單驗過
     fanList: () => ipcRenderer.invoke('sysmon:fanList'),
     fanEnable: (on) => ipcRenderer.invoke('sysmon:fanEnable', on === true),

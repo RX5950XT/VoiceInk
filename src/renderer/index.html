@@ -1151,6 +1151,8 @@
                   aria-selected="false" aria-controls="sysmon-fans">風扇控制</button>
                 <button type="button" class="sysmon-tab" data-subtab="oc" role="tab"
                   aria-selected="false" aria-controls="sysmon-oc">效能調整</button>
+                <button type="button" class="sysmon-tab" data-subtab="disk" role="tab"
+                  aria-selected="false" aria-controls="sysmon-disk">磁碟空間</button>
               </nav>
 
               <!--
@@ -1407,6 +1409,85 @@
                     <div id="ocCpuSliders" class="oc-sliders"></div>
                   </section>
                   <div id="ocGpuHost" class="oc-gpu-host"></div>
+                </div>
+              </div>
+
+              <!-- 磁碟空間：磁碟清單、squarified treemap、標記後丟進資源回收筒 -->
+              <div id="sysmon-disk" class="sysmon-panel" role="tabpanel">
+                <div class="disk-bar">
+                  <div id="diskDrives" class="disk-drives" role="list">
+                    <p class="disk-empty-inline">讀取中</p>
+                  </div>
+                  <button type="button" id="diskPick" class="btn btn-secondary btn-sm">選擇資料夾…</button>
+                  <div class="sysmon-tabs disk-modes" id="diskModes" role="tablist" aria-label="量測方式">
+                    <button type="button" class="sysmon-tab active" data-disk-mode="size" role="tab" aria-selected="true">大小</button>
+                    <button type="button" class="sysmon-tab" data-disk-mode="count" role="tab" aria-selected="false">檔案數</button>
+                  </div>
+                  <input id="diskFilter" class="input disk-filter" type="search" placeholder="篩選名稱"
+                    aria-label="篩選名稱" autocomplete="off" spellcheck="false" />
+                  <span id="diskProgress" class="disk-progress" role="status" aria-live="polite"></span>
+                  <button type="button" id="diskCancel" class="btn btn-secondary btn-sm" hidden>取消</button>
+                </div>
+                <p id="diskNote" class="disk-note hidden" role="status"></p>
+                <div class="disk-crumb-row">
+                  <nav id="diskCrumbs" class="disk-crumbs" aria-label="路徑"></nav>
+                  <span class="disk-hint">右鍵回上層</span>
+                </div>
+                <div class="disk-layout">
+                  <section class="disk-map-card" aria-label="空間分布">
+                    <div id="diskMapHost" class="disk-map-host">
+                      <p id="diskEmpty" class="disk-empty">還沒掃描</p>
+                      <canvas id="diskCanvas" class="disk-canvas" hidden aria-label="磁碟空間圖"></canvas>
+                      <div id="diskTip" class="disk-tip" hidden role="tooltip"></div>
+                    </div>
+                    <ul class="disk-legend">
+                      <li><i class="disk-swatch is-code"></i>程式碼</li>
+                      <li><i class="disk-swatch is-doc"></i>文件</li>
+                      <li><i class="disk-swatch is-image"></i>圖片</li>
+                      <li><i class="disk-swatch is-video"></i>影片</li>
+                      <li><i class="disk-swatch is-audio"></i>音樂</li>
+                      <li><i class="disk-swatch is-archive"></i>壓縮檔</li>
+                      <li><i class="disk-swatch is-bin"></i>執行檔</li>
+                      <li><i class="disk-swatch is-cache is-hatch"></i>快取</li>
+                      <li><i class="disk-swatch is-dir"></i>資料夾</li>
+                      <li><i class="disk-swatch is-other"></i>其他</li>
+                    </ul>
+                  </section>
+                  <aside class="disk-side" aria-label="詳細資料">
+                    <section class="disk-card" aria-labelledby="diskSelTitle">
+                      <h2 id="diskSelTitle">選取</h2>
+                      <div id="diskSelected" class="disk-selected">
+                        <p id="diskSelEmpty" class="disk-empty-inline">尚未選取</p>
+                        <div id="diskSelBody" class="disk-sel-body hidden">
+                          <p id="diskSelName" class="disk-sel-name"></p>
+                          <p id="diskSelMeta" class="disk-sel-meta"></p>
+                          <p id="diskSelPath" class="disk-sel-path"></p>
+                          <p id="diskSelExtra" class="disk-sel-extra hidden"></p>
+                          <div class="disk-actions">
+                            <button type="button" id="diskReveal" class="btn btn-secondary btn-sm">在檔案總管顯示</button>
+                            <button type="button" id="diskMark" class="btn btn-secondary btn-sm">標記刪除</button>
+                            <button type="button" id="diskRescan" class="btn btn-secondary btn-sm" hidden>掃描這個資料夾</button>
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+                    <section class="disk-card" aria-labelledby="diskLargeTitle">
+                      <h2 id="diskLargeTitle">最大的檔案</h2>
+                      <div id="diskLargest" class="disk-list">
+                        <p class="disk-empty-inline">還沒掃描</p>
+                      </div>
+                    </section>
+                    <section class="disk-card" aria-labelledby="diskMarkedTitle">
+                      <header class="disk-card-head">
+                        <h2 id="diskMarkedTitle">已標記</h2>
+                        <span id="diskMarkedSum" class="disk-card-meta"></span>
+                      </header>
+                      <div id="diskMarked" class="disk-list">
+                        <p class="disk-empty-inline">尚未標記</p>
+                      </div>
+                      <button type="button" id="diskTrash" class="btn btn-danger btn-sm" hidden>檢閱並丟到資源回收筒</button>
+                    </section>
+                  </aside>
                 </div>
               </div>
             </div>

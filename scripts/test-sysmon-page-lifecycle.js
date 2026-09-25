@@ -20,7 +20,8 @@ const context = {
   }, store: { get: async () => true } },
   showFanPanel: () => activePanels.add('fans'), hideFanPanel: () => activePanels.delete('fans'),
   showOcPanel: () => activePanels.add('oc'), hideOcPanel: () => activePanels.delete('oc'),
-  showScreentimePanel: () => activePanels.add('screentime'), hideScreentimePanel: () => activePanels.delete('screentime')
+  showScreentimePanel: () => activePanels.add('screentime'), hideScreentimePanel: () => activePanels.delete('screentime'),
+  showDiskPanel: () => activePanels.add('disk'), hideDiskPanel: () => activePanels.delete('disk')
 }
 vm.createContext(context)
 vm.runInContext(`${source}
@@ -32,7 +33,7 @@ vm.runInContext(`${source}
 
 async function main() {
   let failed = 0
-  for (const panel of ['fans', 'oc', 'screentime']) {
+  for (const panel of ['fans', 'oc', 'screentime', 'disk']) {
     context.api.seed(panel)
     activePanels.add(panel)
     try {

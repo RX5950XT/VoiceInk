@@ -6,13 +6,20 @@
 ## 專案概況
 
 VoiceInk：Windows Electron AI 工作台。Vanilla JS + Vite（無前端框架），Electron 43.4.1 ＋ Node.js 22。
-目前版本 **v1.31.0**（最重的幾段改 Rust：終端機宿主 `voiceink-term.exe`、用量掃描、資料夾大小、語音輸入熱鍵；常駐 sidecar 不再掛 conhost；前版 v1.30.0 主程序同步 I/O 改非同步＋逾時修「沒有回應」、全專案 UX 稽核、檔案頁排序／範圍切換／欄寬、終端機快捷鍵；再前 v1.29.0 語音轉文字頁多了錄音機、即時字幕留逐字稿紀錄；再前 v1.28.1 Telegram 切回來不再卡；再前 v1.25.0：檔案總管雙欄右欄變成真的能用、操作中心收進狀態列且同名時可覆蓋、
+目前版本 **v1.32.0**（系統監控多「磁碟空間」子分頁（仿 disktree，Rust 平行掃描＋treemap）、檔案頁補齊內容視窗與 ZIP 瀏覽；前版 v1.31.0 最重的幾段改 Rust：終端機宿主 `voiceink-term.exe`、用量掃描、資料夾大小、語音輸入熱鍵；常駐 sidecar 不再掛 conhost；前版 v1.30.0 主程序同步 I/O 改非同步＋逾時修「沒有回應」、全專案 UX 稽核、檔案頁排序／範圍切換／欄寬、終端機快捷鍵；再前 v1.29.0 語音轉文字頁多了錄音機、即時字幕留逐字稿紀錄；再前 v1.28.1 Telegram 切回來不再卡；再前 v1.25.0：檔案總管雙欄右欄變成真的能用、操作中心收進狀態列且同名時可覆蓋、
 資料夾監看不再漏事件；前版終端機 PATH 不再被 Ctrl+G 橋接蓋掉；再前檢查更新改走鏡像）。
 
 nav 十頁：聊天（預設，**專案工作區與終端機都在同一頁**）｜Telegram（官方網頁版 `web.telegram.org/a` 放進 `<webview>`，可並排多開最多 4 格（沒存過開 2 格；每格卡 600px，Web A 一律手機版版面）、共用 `persist:telegram`，每格頂端細列 ✕ 關／最右格 ＋ 再開，每格停的聊天室存 store `telegramPanes`（不用 localStorage：結束走 `app.exit()` 會掉最後幾秒的寫入）；`telegram-page.js`，第一次點才建）｜檔案｜CC代理（`data-page` 仍是 `ccswitch`）｜
 AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定。額度不再是一頁：收成工作區主區最下面那條，用量統計在 CC代理。
 
 ## 架構
+
+### 系統監控加「磁碟空間」子分頁（2026-09-25）
+
+- 仿 disktree：上方磁碟清單（點一顆就掃）＋「選擇資料夾…」；squarified treemap（canvas，依類型上色、快取資料夾斜線）、點進去放大、麵包屑／Backspace／右鍵回上層、「大小｜檔案數」、名稱篩選；右側選取詳情、最大的檔案、已標記 → 確認（列完整路徑）→ 丟資源回收筒。
+- 掃描：Rust `voiceink-probe disk-tree`（`native/voiceink-probe/src/disktree.rs`，平行）→ main `sysmon/disktree.js`（驗路徑、同時只一個、進度走 `sysmon:event` 的 `diskTreeProgress`）→ `sysmon:diskTree`／`diskTreeCancel`。整顆 C:（223 萬檔）約 45–60 秒、JSON 約 600KB。
+- renderer：`sysmon-disk.js`（面板）＋ `disk-treemap.js`（純函式，node 可測）；測試鉤子 `window.__diskScan`／`__diskView`。
+- 測試：`cargo test`、`test-sysmon-disktree.js`（49）、`test-disk-treemap.js`、`e2e-sysmon-disk-cdp.js`（17，打包版）。
 
 ### 檔案頁補齊 Windows 檔案總管：內容視窗、ZIP 瀏覽（2026-09-25）
 

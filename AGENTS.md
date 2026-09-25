@@ -19,7 +19,7 @@ nav：聊天（預設，**工作區與終端機同一頁**）｜Telegram（官�
 | 檔案 | 整機檔案總管（`src/main/explorer/`）；瀏覽本機資料夾；檔名搜尋走 UFFS（MFT），不自己 walk 整碟 |
 | HF模型 | 在 HF 搜 GGUF → 下載 → llama-server **router 模式** 一顆程序管全部模型 → 出現在聊天選單 |
 | CC代理 | `src/main/ccswitch/`：供應商 tile 改 `~/.claude/settings.json` 的 `env`／MCP／CLI 版本／用量統計；非 Anthropic 格式經本機閘道轉協議 |
-| 系統監控 | `probe.ps1` 常駐取樣器＋`nvidia-smi`；六子頁（總覽／使用時長／處理程序／壓力測試／風扇控制／效能調整），感測器走提權 sidecar |
+| 系統監控 | `probe.ps1` 常駐取樣器＋`nvidia-smi`；七子頁（總覽／使用時長／處理程序／壓力測試／風扇控制／效能調整／磁碟空間），感測器走提權 sidecar |
 | 額度／用量統計 | 額度＝七家官方端點（`usage.json`），畫在工作區主區最下面那條（`quota-bar.js`，看得到時每分鐘自動同步）；用量統計＝掃五家 CLI 本機記錄算 token／花費（`code-usage.json`），在 CC代理的子分頁；兩件事 |
 | AGY 反代 | Antigravity 憑證 → OpenAI／Anthropic 端點；只綁 127.0.0.1＋強制金鑰 |
 | ASR／翻譯／TTS | 本地 sherpa（CPU）／llama-server（GPU）或雲端；翻譯 local（LinguaForge）／cloud；TTS 走 Edge TTS |
@@ -579,6 +579,8 @@ tag 要與 `package.json` 的 version 一致。
 - 效能調整：安全方向跟風扇**相反**（卡住要還原出廠）；硬上限 main 與 sidecar 兩邊都夾；≥95°C 立刻還原；**開機不自動套用**；不做 I2C／RTCore；V/F 寫入 `frequencyDeltaKHz` 要 ×2；CDP 測試**不准按套用**。
 - 走勢圖兩條線各自縮放要各標各的 Y 軸；**讀不到值不可以用 0 佔位**；儀表顯示實際讀數不是牆。
 - 壓力測試放 main 不放 renderer（V8 對整個 process 的 ArrayBuffer 約 8GB 上限），停止時 `kill` 子程序；GPU 壓測三件事一起才壓得滿（1080p 後端解析度、畫進離屏 framebuffer、只用 `readPixels` 計時）；測試期間才 `setBackgroundThrottling(false)`；離開頁面要自己收 CPU／記憶體壓測。
+- **磁碟空間**：`voiceink-probe disk-tree` 平行掃（共用工作佇列、執行緒上限 16）；每層留前 200、小於總量 1/20000 併「其他」、超過 12 層不列子項（`t:1`）。**列舉要放背景執行緒並設 8 秒逾時**：`C:\ProgramData\Microsoft\Windows\Containers\Layers` 有一層的 `FindFirstFile` 會永遠卡住，單執行緒時整趟掃描停在那。刪除只走 `explorer.removeEntry`（回收筒，main 擋系統路徑），不做永久刪除。沒有 probe 不退回 JS（整碟太慢）。
+- **CDP 測試收尾要先 `taskkill /F /T`（同步）再 `child.kill()`**：反過來的話主程序先死、樹就斷了，detached 的 `nvidia-smi` 會活下來抱著繼承到的 CDP 埠，下一輪「等不到主視窗」。
 - 使用時長：同一份 Tai 庫與寫入規則、第一次拷進 `<userData>/screentime/`（不跟還在跑的 Tai 搶）；外掛協定寫死 `ws://127.0.0.1:8908`；**有 `LIMIT` 的清單不可以拿來算總數**。
 
 ### UI／CSS
@@ -631,7 +633,7 @@ tag 要與 `package.json` 的 version 一致。
 | AGY | `test-agy-mappers.js` ＋ `e2e-agy.js`（mock）＋ `e2e-agy-cdp.js`；動映射表／端點順序前跑 `probe-agy-upstream.js`，動 `runAgyCli` 前跑 `probe-agy-nudge.js` |
 | 用量統計 | `test-code-usage.js` ＋ `e2e-code-usage.js`（真的讀本機記錄）＋ `probe-code-usage-audit.js`（不經 codeusage 重算對帳）＋ `probe-usage-native-parity.js`（原生 usage-scan 與 JS 逐筆比對）；畫面在 `e2e-usage-cdp.js` 的後半（CC代理的子分頁）|
 | 額度 | `test-usage.js` ＋ `test-claude-auth.js`（Claude 續期的鎖／CAS，假家目錄）＋ `e2e-usage.js` ＋ `e2e-usage-cdp.js`（工作區底下那條：顯示設定、排序、詳情、自動同步）；動端點或解析前後跑 `probe-usage-endpoints.js`（打真上游）；動續期前後跑 `probe-claude-refresh.js --force`（**會真的續你的 Claude 登入**）|
-| 系統監控 | `test-sysmon.js` ＋ `e2e-sysmon.js` ＋ `e2e-sysmon-cdp.js` ＋ `probe-sysmon-stress.js`（實機量有沒有壓到）＋ `e2e-sysmon-sensors.js`（**跳 UAC**）|
+| 系統監控 | `test-sysmon.js` ＋ `e2e-sysmon.js` ＋ `e2e-sysmon-cdp.js` ＋ `probe-sysmon-stress.js`（實機量有沒有壓到）＋ `e2e-sysmon-sensors.js`（**跳 UAC**）；磁碟空間 `test-sysmon-disktree.js` ＋ `test-disk-treemap.js` ＋ `e2e-sysmon-disk-cdp.js` ＋ `cargo test` |
 | 風扇／效能調整 | `test-sysmon-fans.js` ＋ `e2e-sysmon-fans-cdp.js`（不接管真風扇）＋ `probe-sysmon-fans.js`／`probe-sensors-task.js`（**跳 UAC**）；`test-sysmon-oc.js` ＋ `e2e-sysmon-oc-cdp.js`（不按套用）|
 | 使用時長 | `test-screentime.js` ＋ `e2e-screentime-cdp.js`（**不關使用者的 Tai**）|
 | 語音輸入 | `test-dictation.js` ＋ `e2e-dictation.js`（insert 是 stub）＋ `e2e-dictation-cdp.js`；動整理 prompt 前後跑 `probe-dictation-cleanup.js`（**打使用者設定裡那顆雲端整理模型**：錯字有沒有修、條列有沒有換行、長篇有沒有分段；userData 指到暫存，不碰真字典）；熱鍵 `probe-dictation-hook.js`／`probe-uiohook.js`／`probe-dictation-latency.js`／`probe-dictation-live.js`（**會搶焦點**）|

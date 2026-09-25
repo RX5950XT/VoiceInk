@@ -14,7 +14,7 @@
  * `npx electron scripts/e2e-sysmon.js` 用它自己 spawn 的子程序覆蓋。
  * 會改到 `sysmonInterval`／`sysmonSort`／`sysmonSensors` 三個 store key，開頭讀下來、finally 寫回。
  */
-const { spawn } = require('child_process')
+const { spawn, spawnSync } = require('child_process')
 const path = require('path')
 const { tempDir, removeTree } = require('./lib/test-temp')
 const os = require('os')
@@ -718,11 +718,12 @@ async function main() {
       }
     }
     cdp?.close()
-    try { child.kill() } catch { /* ignore */ }
-    // 只殺自己 spawn 的那棵樹；禁止 /IM VoiceInk.exe（會關掉使用者的安裝版）
+    // 只殺自己 spawn 的那棵樹；禁止 /IM VoiceInk.exe（會關掉使用者的安裝版）。
+    // 要趁主程序還活著整棵殺（同步等完）：先 kill 主程序樹就斷了，detached 的 nvidia-smi 會活下來抱著 CDP 埠
     if (child.pid) {
-      try { spawn('taskkill', ['/F', '/T', '/PID', String(child.pid)], { stdio: 'ignore' }) } catch { /* ignore */ }
+      try { spawnSync('taskkill', ['/F', '/T', '/PID', String(child.pid)], { stdio: 'ignore' }) } catch { /* ignore */ }
     }
+    try { child.kill() } catch { /* ignore */ }
     // 暫存資料夾清掉（Windows 釋放 SQLite 較慢，有限重試）
     for (let i = 0; i < 5; i += 1) {
       try { removeTree(USER_DATA_DIR); break } catch { await sleep(600) }
