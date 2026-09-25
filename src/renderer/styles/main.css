@@ -11850,6 +11850,26 @@ h6.md-h { font-size: 14px; }
   color: var(--text-primary);
 }
 
+/* 第三排：左邊是跟著選取變的檔案操作，右邊是新增／篩選／排序／檢視。
+   橫捲只給 #exCmdBar，不能放在整排上——篩選面板是 absolute，會被 overflow 裁掉。 */
+.ex-cmdrow {
+  display: flex;
+  align-items: center;
+  gap: 6px 8px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border-color);
+  user-select: none;
+}
+
+.ex-cmdrow > .ex-cmdbar {
+  flex: 1 1 320px;
+  min-width: 0;
+  padding: 0;
+  border-bottom: 0;
+}
+
 .ex-cmdbar {
   display: flex;
   align-items: center;

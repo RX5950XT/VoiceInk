@@ -1314,7 +1314,7 @@ console.log('\n[T] git worktree 的解析與分支名白名單')
     await fsp.writeFile(path.join(dir, 'gone.txt'), 'bye\n', 'utf8')
     await runGit(['add', '-A'])
     await runGit(['commit', '-m', 'init'])
-    // 一個改（+2 −1）、一個刪（−1）、一個全新未追蹤（不會有數字）
+    // 一個改（+2 −1）、一個刪（−1）、一個全新未追蹤（沒標 index '?' 就不數）
     await fsp.writeFile(path.join(dir, 'a.txt'), '1\n2b\n3\n4\n', 'utf8')
     await fsp.rm(path.join(dir, 'gone.txt'))
     await fsp.writeFile(path.join(dir, 'new.txt'), 'hi\n', 'utf8')
@@ -1322,8 +1322,17 @@ console.log('\n[T] git worktree 的解析與分支名白名單')
     await git.attachLineCounts(dir, rows)
     ok('改過的檔案數得出增刪', rows[0].added === 2 && rows[0].removed === 1, JSON.stringify(rows[0]))
     ok('刪掉的檔案算全部刪除', rows[1].removed === 1 && rows[1].added === 0, JSON.stringify(rows[1]))
-    ok('未追蹤的沒有數字', rows[2].added === undefined, JSON.stringify(rows[2]))
+    ok('沒標未追蹤就不自己數', rows[2].added === undefined, JSON.stringify(rows[2]))
     ok('空清單不跑 git', await git.attachLineCounts(dir, []) === undefined)
+
+    // 一半暫存、一半沒暫存：兩列各算各的，不可以兩列都印 diff HEAD 的總數
+    await runGit(['add', 'a.txt'])
+    await fsp.writeFile(path.join(dir, 'a.txt'), '1\n2b\n3\n4\n5\n', 'utf8')
+    const split = [{ path: 'a.txt', index: 'M', worktree: 'M' }, { path: 'new.txt', index: '?', worktree: '?' }]
+    await git.attachLineCounts(dir, split)
+    ok('暫存區那列只算已暫存的部分', split[0].stagedAdded === 2 && split[0].stagedRemoved === 1, JSON.stringify(split[0]))
+    ok('變更那列只算還沒暫存的部分', split[0].added === 1 && split[0].removed === 0, JSON.stringify(split[0]))
+    ok('未追蹤的新檔算整份新增', split[1].added === 1 && split[1].removed === 0, JSON.stringify(split[1]))
 
     const logged = await new Promise((resolve, reject) => {
       execFile('git', [

@@ -276,7 +276,9 @@ function gitRowLayoutChecks() {
     && /textContent === '變更'/.test(fs.readFileSync(path.join(ROOT, 'scripts/e2e-workspace-cdp.js'), 'utf8')))
   check('變更清單會畫總增刪', /paintGitChangesStat\(/.test(workspacePage))
   check('分組標題也帶該組總增刪',
-    /function gitGroup[\s\S]*gitLineTotals\(files\)/.test(workspacePage))
+    /function gitGroup[\s\S]*gitLineTotals\(files\.map\(\(f\) => gitSideLines\(f, side\)\)\)/.test(workspacePage))
+  check('每列依暫存／未暫存取對的行數', /gitLineCounts\(gitSideLines\(file, side\)\)/.test(workspacePage))
+  check('檔案樹點改過的檔案預設開檢視變更', /is-changed'\) \{\s*void openDiffTab\(project, entry\.rel, Boolean\(status\.staged\), \{ keepOpenView: true \}\)/.test(workspacePage))
 }
 
 /**

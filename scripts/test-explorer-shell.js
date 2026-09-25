@@ -55,7 +55,7 @@ console.log('\n[A] 殼層選單去重')
   ok('留下 7-Zip', out.some((i) => i.label === '7-Zip' && i.children && i.children.length === 1))
   ok('留下 WinRAR', out.some((i) => i.label === 'WinRAR'))
   ok('留下傳送到子選單', out.some((i) => i.label === '傳送到' && i.children && i.children[0].label === '文件'))
-  ok('留下內容', out.some((i) => i.verb === 'properties'))
+  ok('內容由 App 自己那項負責，殼層不重複列', !out.some((i) => i.verb === 'properties'))
   ok('開頭結尾沒有分隔線', !out[0].sep && !out[out.length - 1].sep)
   const seps = out.filter((i) => i.sep).length
   ok('連續分隔線收成一條', seps <= 2)

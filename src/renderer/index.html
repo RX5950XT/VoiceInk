@@ -676,6 +676,7 @@
                   <button type="button" id="exBackBtn" class="btn-icon" title="上一頁" aria-label="上一頁" disabled>←</button>
                   <button type="button" id="exForwardBtn" class="btn-icon" title="下一頁" aria-label="下一頁" disabled>→</button>
                   <button type="button" id="exUpBtn" class="btn-icon" title="上一層" aria-label="上一層">↑</button>
+                  <button type="button" id="exRefreshBtn" class="btn-icon" title="重新整理（F5）" aria-label="重新整理">⟳</button>
                 </div>
                 <div class="ex-pathbar" id="exPathBar" title="點一下可輸入路徑">
                   <nav id="exCrumbs" class="ex-crumbs" aria-label="目前路徑"></nav>
@@ -689,6 +690,9 @@
                 </div>
                 <button type="button" id="exScopeBtn" class="btn-icon ex-second-scope"
                         aria-pressed="true" title="搜尋整機檔案" aria-label="搜尋範圍：整機">🌐</button>
+              </header>
+              <div class="ex-cmdrow">
+                <div class="ex-cmdbar" id="exCmdBar" role="toolbar" aria-label="檔案操作"></div>
                 <details class="ex-search-filters" id="exSearchFilters">
                   <summary>篩選</summary>
                   <div class="ex-search-filter-popover">
@@ -725,8 +729,7 @@
                   <button type="button" id="exDualBtn" class="btn btn-secondary btn-sm" aria-pressed="false">雙欄</button>
                   <button type="button" id="exDetailToggleBtn" class="btn btn-secondary btn-sm" aria-pressed="true">收合詳情</button>
                 </div>
-              </header>
-              <div class="ex-cmdbar" id="exCmdBar" role="toolbar" aria-label="檔案操作"></div>
+              </div>
               <div class="ex-body">
                 <aside class="ex-sidebar" id="exSidebar">
                   <div class="ex-side-head">

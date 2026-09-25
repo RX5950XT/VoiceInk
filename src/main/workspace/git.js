@@ -247,30 +247,77 @@ async function status(projectId) {
 /**
  * 把「這個檔案改了幾行」補到 status 的每一筆上（面板每一列右邊那個 `+12 −3`）。
  *
- * 一次 `diff --numstat HEAD` 就夠：它算的是**工作區相對 HEAD**，剛好等於使用者眼裡
- * 「這個檔案跟上一次提交差多少」，暫存與未暫存的加起來一起算。
+ * **暫存區與變更要分開算**：同一個檔案可以一半已暫存、一半還沒——舊版兩列都印
+ * `diff HEAD` 的總數，兩列加起來變兩倍，而且跟點進去看到的差異對不上。
+ * - `stagedAdded`／`stagedRemoved`＝`diff --cached`（上一次提交 → 暫存區），給「暫存區」那列
+ * - `added`／`removed`＝`diff`（暫存區 → 工作區），給「變更」那列
+ * - 未追蹤的新檔整份都是新增：自己數行（git 不 diff 它）
  *
- * 三件事刻意不做：
- * - **未追蹤的檔案沒有數字**（git 不會 diff 它，硬要算就得自己讀檔數行——那是整包新檔，
- *   數字也沒有意義）。
- * - 全新的 repo 還沒有 HEAD，`diff HEAD` 會失敗——**當成沒有數字，不是錯誤**。
- * - 一定要 `--no-renames`（見 `parseNumstat`：帶改名偵測會多一格，欄位整排錯位）。
+ * 全新的 repo 沒有 HEAD 也跑得動（`--cached` 會跟空樹比）；任何一條失敗都當成沒有數字，不是錯誤。
+ * 一定要 `--no-renames`（見 `parseNumstat`：帶改名偵測會多一格，欄位整排錯位）。
  *
  * @param {string} cwd
- * @param {Array<{ path: string, added?: number, removed?: number, binary?: boolean }>} files
+ * @param {Array<{ path: string, index?: string, added?: number, removed?: number, binary?: boolean, stagedAdded?: number, stagedRemoved?: number, stagedBinary?: boolean }>} files
  * @returns {Promise<void>}
  */
 async function attachLineCounts(cwd, files) {
   if (!files.length) return
-  const res = await run(cwd, ['diff', '--numstat', '-z', '--no-renames', 'HEAD', '--'])
-  if (res.code !== 0) return
-  const byPath = new Map(parseNumstat(res.stdout).map((entry) => [entry.path, entry]))
+  const [staged, worktree] = await Promise.all([
+    run(cwd, ['diff', '--cached', '--numstat', '-z', '--no-renames', '--']),
+    run(cwd, ['diff', '--numstat', '-z', '--no-renames', '--'])
+  ])
+  const mapOf = (res) => new Map(res.code === 0 ? parseNumstat(res.stdout).map((e) => [e.path, e]) : [])
+  const stagedBy = mapOf(staged)
+  const worktreeBy = mapOf(worktree)
   for (const file of files) {
-    const stat = byPath.get(file.path)
-    if (!stat) continue
-    file.added = stat.additions
-    file.removed = stat.deletions
-    file.binary = stat.binary
+    const s = stagedBy.get(file.path)
+    if (s) {
+      file.stagedAdded = s.additions
+      file.stagedRemoved = s.deletions
+      file.stagedBinary = s.binary
+    }
+    const w = worktreeBy.get(file.path)
+    if (w) {
+      file.added = w.additions
+      file.removed = w.deletions
+      file.binary = w.binary
+    }
+  }
+  await countUntracked(cwd, files)
+}
+
+/** 未追蹤的檔案最多數幾個、單檔多大以內才數（每次存檔都會重跑 status） */
+const MAX_UNTRACKED_COUNT = 200
+const MAX_UNTRACKED_BYTES = 1024 * 1024
+
+/**
+ * 未追蹤檔案的行數＝整份的行數（跟 git 對新檔的 numstat 同一種算法）。
+ * 太大、讀不到、含 NUL（二進位）的不數；資料夾（`dir/`）也不數。
+ * ponytail: 逐檔循序讀，上限 200 檔 × 1MB；要更多再改成 git 的 --intent-to-add 那條。
+ *
+ * @param {string} cwd
+ * @param {Array<{ path: string, index?: string, added?: number, removed?: number, binary?: boolean }>} list
+ */
+async function countUntracked(cwd, list) {
+  const untracked = list.filter((f) => f.index === '?' && !f.path.endsWith('/')).slice(0, MAX_UNTRACKED_COUNT)
+  for (const file of untracked) {
+    try {
+      const full = files.resolveIn(cwd, file.path)
+      const st = await fsp.stat(full)
+      if (!st.isFile() || st.size > MAX_UNTRACKED_BYTES) continue
+      const buf = await fsp.readFile(full)
+      if (buf.subarray(0, 8000).includes(0)) {
+        file.binary = true
+        continue
+      }
+      let lines = 0
+      for (const byte of buf) if (byte === 10) lines += 1
+      if (buf.length && buf[buf.length - 1] !== 10) lines += 1
+      file.added = lines
+      file.removed = 0
+    } catch {
+      // 讀不到（剛被刪、在專案外）就不給數字
+    }
   }
 }
 

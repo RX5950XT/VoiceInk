@@ -23,6 +23,8 @@ const shellExt = require('./shell')
 const size = require('./size')
 const nativeProbe = require('../native-probe')
 const operations = require('./operations')
+const zipOps = require('./zip-ops')
+const zip = require('./zip')
 
 /** @type {(channel: string, payload: any) => void} */
 let emit = () => {}
@@ -79,15 +81,24 @@ function saveState(patch) {
 }
 const listDrives = () => drives.listDrives()
 const driveInfo = () => drives.driveInfo()
-const listDir = (dirPath, opts) => {
+const listDir = async (dirPath, opts) => {
   // 「本機」是虛擬位置，沒有檔案清單（renderer 自己畫首頁）。
   if (drives.isThisPc(dirPath)) {
     return { path: drives.THIS_PC, entries: [], offset: 0, limit: 0, total: 0, hasMore: false, truncated: false }
   }
-  return recycle.isRecyclePath(dirPath) ? files.listRecycle(opts) : files.listDir(dirPath, opts)
+  if (recycle.isRecyclePath(dirPath)) return files.listRecycle(opts)
+  // 壓縮檔（本身或裡面的資料夾）當資料夾列，唯讀
+  const zipped = await zipOps.zipOf(dirPath)
+  if (zipped) return zipOps.list(zipped, opts)
+  return files.listDir(dirPath, opts)
 }
-const preview = (filePath) => files.preview(filePath)
-const readMarkdown = (filePath) => files.readMarkdown(filePath)
+/** 壓縮檔裡的檔案先解到暫存，其餘照原路徑（預覽／Markdown／大圖都吃真的檔案） */
+async function realFile(filePath) {
+  const inner = await zipOps.innerOf(filePath)
+  return inner ? zipOps.realPath(inner) : filePath
+}
+const preview = async (filePath) => files.preview(await realFile(filePath))
+const readMarkdown = async (filePath) => files.readMarkdown(await realFile(filePath))
 
 /**
  * 大預覽要用的網址。**不回 data: URI**：那會把整個檔案 base64 過一次 IPC，
@@ -98,11 +109,14 @@ const readMarkdown = (filePath) => files.readMarkdown(filePath)
  * @param {unknown} filePath
  * @returns {{ url: string, path: string }}
  */
-function mediaUrl(filePath) {
-  const full = paths.resolveExisting(filePath)
+async function mediaUrl(filePath) {
+  const full = paths.resolveExisting(await realFile(filePath))
   return { url: require('../workspace/media').localUrlFor(full), path: full }
 }
-const inspect = (filePath) => files.inspect(filePath)
+const inspect = async (filePath) => {
+  const inner = await zipOps.innerOf(filePath)
+  return inner ? zipOps.inspect(inner) : files.inspect(filePath)
+}
 
 async function savePlaces(raw) {
   const incoming = places.sanitizePlaces(raw)
@@ -152,6 +166,7 @@ async function addPlace(raw) {
 async function removePlace(rawId) {
   const id = String(rawId || '').trim()
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw paths.fail('BAD_PATH', '路徑不合法')
+  if (id === places.PINNED_ID) throw paths.fail('BAD_PATH', '資源回收筒固定在側欄')
   const builtins = await defaultPlaces()
   const builtinIds = new Set(builtins.map((b) => b.id))
   const stored = await snapshotPlaces()
@@ -205,7 +220,23 @@ async function pickFolder() {
   return { path: paths.resolveAbs(result.filePaths[0]) }
 }
 
-function resolvePath(raw, seen = new Set()) {
+/**
+ * 路徑列輸入／捷徑目的地。壓縮檔裡的路徑磁碟上不存在，另外問 `zipOps`。
+ * @param {unknown} raw
+ */
+async function resolvePath(raw) {
+  try {
+    return resolveLocal(raw)
+  } catch (error) {
+    if (error?.code !== 'NOT_FOUND') throw error
+    const inner = await zipOps.innerOf(typeof raw === 'string' ? raw.trim() : raw)
+    if (!inner) throw error
+    const st = await zip.stat(inner.archive, inner.inner)
+    return { path: inner.full, dir: st.dir, parent: st.dir ? inner.full : paths.parentOf(inner.full) }
+  }
+}
+
+function resolveLocal(raw, seen = new Set()) {
   const text = typeof raw === 'string' ? raw.trim() : ''
   if (!text) throw paths.fail('BAD_PATH', '路徑不合法')
   if (text === '本機' || drives.isThisPc(text)) {
@@ -226,7 +257,7 @@ function resolvePath(raw, seen = new Set()) {
       throw paths.fail('NOT_FOUND', '讀不到這個捷徑')
     }
     if (!target) throw paths.fail('NOT_FOUND', '找不到捷徑目的地')
-    return resolvePath(target, seen)
+    return resolveLocal(target, seen)
   }
   let st
   try {
@@ -306,8 +337,17 @@ async function uffsEnsure(raw) {
  * @param {unknown} target
  */
 async function openPath(target) {
+  const zipped = await zipOps.zipOf(target)
+  if (zipped) {
+    // 點 .zip 或壓縮檔裡的資料夾＝走進去；裡面的檔案解到暫存再用預設程式開
+    const st = zipped.inner ? await zip.stat(zipped.archive, zipped.inner) : { dir: true }
+    if (st.dir) return { path: zipped.full, dir: true, parent: zipped.full }
+    const err = await shell.openPath(await zipOps.realPath(zipped))
+    if (err) throw paths.fail('OPEN_FAILED', '打不開')
+    return true
+  }
   const full = paths.resolveExisting(target)
-  const resolved = resolvePath(full)
+  const resolved = resolveLocal(full)
   if (resolved.dir) return resolved
   const err = await shell.openPath(full)
   if (err) throw paths.fail('OPEN_FAILED', '打不開')
@@ -316,7 +356,7 @@ async function openPath(target) {
 
 async function fileIcon(target, opts) {
   const full = paths.resolveExisting(target)
-  const resolved = resolvePath(full)
+  const resolved = resolveLocal(full)
   const wantThumb = Boolean(opts && typeof opts === 'object' && opts.thumb === true)
   if (wantThumb) {
     try {
@@ -381,7 +421,9 @@ async function startDrag(list, sender) {
   const files = []
   for (const item of (Array.isArray(list) ? list : []).slice(0, 100)) {
     try {
-      files.push(paths.resolveExisting(item))
+      // 壓縮檔裡的先解到暫存：OS 的拖放只認磁碟上真的檔案
+      const inner = await zipOps.innerOf(item)
+      files.push(inner ? await zipOps.realPath(inner) : paths.resolveExisting(item))
     } catch {
       // 清單畫出來之後被刪掉的，跳過就好
     }
@@ -435,13 +477,17 @@ function reveal(target) {
  * @param {unknown} items
  * @param {unknown} mode
  */
-function setClipboard(items, mode) {
+async function setClipboard(items, mode) {
   if (!Array.isArray(items)) throw paths.fail('BAD_PATH', '路徑不合法')
   const next = []
+  let zipped = false
   for (const item of items.slice(0, 50)) {
-    next.push(paths.resolveExisting(item))
+    const inner = await zipOps.innerOf(item)
+    zipped = zipped || Boolean(inner)
+    next.push(inner ? inner.full : paths.resolveExisting(item))
   }
-  clip = { mode: mode === 'cut' ? 'cut' : 'copy', paths: next }
+  // 壓縮檔裡是唯讀的：剪下一律當複製（貼上＝解壓縮）
+  clip = { mode: mode === 'cut' && !zipped ? 'cut' : 'copy', paths: next }
   return { count: clip.paths.length, mode: clip.mode }
 }
 
@@ -453,12 +499,20 @@ async function paste(toDir) {
   if (!clipboard.paths.length) throw paths.fail('EMPTY', '剪貼簿是空的')
   const trashed = recycle.isRecyclePath(toDir)
   if (trashed && clipboard.mode !== 'cut') throw paths.fail('BAD_PATH', '不能複製進資源回收筒')
+  if (!trashed) await zipOps.assertWritable(toDir)
   const destination = trashed ? toDir : paths.resolveExisting(toDir)
+  // 從壓縮檔複製出來的＝解壓縮到這裡；其餘照一般複製／搬移走操作中心
+  const zippedPaths = []
+  const sources = []
+  for (const item of clipboard.paths) ((await zipOps.innerOf(item)) ? zippedPaths : sources).push(item)
+  const extracted = zippedPaths.length ? (await zipOps.extract(zippedPaths, destination)).paths : []
+  if (!sources.length) return { trashed, paths: extracted, status: 'completed', items: [] }
   const result = await operations.run({
     mode: trashed ? 'trash' : clipboard.mode === 'cut' ? 'move' : 'copy',
     destination,
-    sources: clipboard.paths
+    sources
   })
+  if (extracted.length) result.paths = extracted.concat(result.paths || [])
   if (clipboard.mode === 'cut' && clip === clipboard) {
     const completed = new Set(result.items.filter((item) => item.status === 'completed').map((item) => item.source))
     clip = { ...clipboard, paths: clipboard.paths.filter((item) => !completed.has(item)) }
@@ -479,6 +533,7 @@ async function dropEntries(items, toDir, mode) {
     if (mode === 'copy') throw paths.fail('BAD_PATH', '不能複製進資源回收筒')
     return operationResult(await operations.run({ mode: 'trash', destination: toDir, sources: slice }), { trashed: true })
   }
+  await zipOps.assertWritable(toDir)
   const dest = paths.resolveExisting(toDir)
   return operationResult(await operations.run({
     mode: mode === 'copy' ? 'copy' : 'move',
@@ -513,6 +568,7 @@ const setOperationPolicy = (opts) => operations.setCollisionPolicy(opts)
  */
 function watchDir(dirPath) {
   if (recycle.isRecyclePath(dirPath)) return { watching: false, path: recycle.RECYCLE_CWD }
+  if (zip.looksZip(dirPath)) return { watching: false, path: dirPath }
   return watch.start(dirPath, (payload) => {
     files.invalidateListCache(payload.path)
     emit('explorer:changed', payload)
@@ -522,7 +578,7 @@ function watchDir(dirPath) {
 function watchDirs(dirPaths) {
   const list = Array.isArray(dirPaths) ? dirPaths : []
   const specs = list
-    .filter((dirPath) => !recycle.isRecyclePath(dirPath) && !drives.isThisPc(dirPath))
+    .filter((dirPath) => !recycle.isRecyclePath(dirPath) && !drives.isThisPc(dirPath) && !zip.looksZip(dirPath))
     .map((dirPath) => ({
       path: dirPath,
       send: (payload) => {
@@ -532,6 +588,8 @@ function watchDirs(dirPaths) {
     }))
   return watch.startMany(specs)
 }
+
+const extract = (items, toDir) => zipOps.extract(items, toDir)
 
 function unwatch() {
   watch.stop()
@@ -549,6 +607,7 @@ module.exports = {
   connectShare,
   pickFolder,
   resolvePath,
+  extract,
   createShortcut,
   listDrives,
   driveInfo,

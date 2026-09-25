@@ -689,6 +689,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     connectShare: (spec) => ipcRenderer.invoke('explorer:connectShare', spec),
     pickFolder: () => ipcRenderer.invoke('explorer:pickFolder'),
     resolvePath: (target) => ipcRenderer.invoke('explorer:resolvePath', target),
+    /** 解壓縮：items 是 .zip 本身或壓縮檔裡的項目；toDir 省略＝解到壓縮檔旁邊 */
+    extract: (items, toDir) => ipcRenderer.invoke('explorer:extract', items, toDir),
     createShortcut: (target, toDir) => ipcRenderer.invoke('explorer:createShortcut', target, toDir),
     listDrives: () => ipcRenderer.invoke('explorer:listDrives'),
     driveInfo: () => ipcRenderer.invoke('explorer:driveInfo'),

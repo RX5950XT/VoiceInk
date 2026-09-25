@@ -160,6 +160,8 @@ const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 's
 
 let started = false
 let cwd = ''
+/** 左欄停在壓縮檔裡時＝那個 .zip 的路徑（listDir 回的 `archive`）；唯讀 */
+let cwdArchive = ''
 let view = 'list'
 /** 目前的方格圖示大小（Ctrl+滾輪改它，存進 `explorer.json`） */
 let tile = DEFAULT_TILE
@@ -221,6 +223,7 @@ let tabSeq = 0
 /** 右欄是獨立狀態；左欄沿用上面的既有單欄流程。 */
 const secondPane = {
   cwd: THIS_PC,
+  archive: '',
   history: [THIS_PC],
   histIndex: 0,
   entries: [],
@@ -430,6 +433,31 @@ function activeInRecycle() {
 }
 
 /** @param {'left' | 'right'} which */
+function paneArchive(which) {
+  return which === 'right' && dualPane ? secondPane.archive : cwdArchive
+}
+
+/** @param {'left' | 'right'} which */
+function paneInZip(which) {
+  return Boolean(paneArchive(which))
+}
+
+/**
+ * 壓縮檔裡是唯讀的。main 也會擋，這裡先講清楚——不然按了才看到一句「找不到這個檔案」。
+ * @param {object[]} [items] 有給就看項目本身；沒給看作用欄停在哪
+ */
+function blockInZip(items) {
+  const hit = items ? items.some((item) => item && item.zip) : paneInZip(activePane)
+  if (hit) showToast('壓縮檔裡是唯讀的，請先解壓縮', 'error')
+  return hit
+}
+
+/** @param {object} item */
+function isZipFile(item) {
+  return Boolean(item && !item.dir && !item.zip && /\.zip$/i.test(item.name || ''))
+}
+
+/** @param {'left' | 'right'} which */
 function paneInRecycle(which) {
   return which !== 'right' && inRecycle()
 }
@@ -516,6 +544,7 @@ function bindOnce() {
   $('exBackBtn')?.addEventListener('click', () => goHistory(-1))
   $('exForwardBtn')?.addEventListener('click', () => goHistory(1))
   $('exUpBtn')?.addEventListener('click', goUp)
+  $('exRefreshBtn')?.addEventListener('click', () => void refreshAfterMutate())
   $('exNewFolderBtn')?.addEventListener('click', newFolder)
   $('exNewFileBtn')?.addEventListener('click', newFile)
   $('exEmptyBinBtn')?.addEventListener('click', () => void emptyBin())
@@ -1633,6 +1662,7 @@ async function loadSecond(dirPath, opts = {}) {
   paintSecondPane()
   if (pathKey(dirPath) === THIS_PC) {
     secondPane.cwd = THIS_PC
+    secondPane.archive = ''
     secondPane.entries = []
     secondPane.total = 0
     secondPane.loadedOffsets = new Set()
@@ -1656,6 +1686,7 @@ async function loadSecond(dirPath, opts = {}) {
       return false
     }
     secondPane.cwd = data.path
+    secondPane.archive = data.archive || ''
     secondPane.entries = mergeBrowsePage([], data, 0).entries
     secondPane.total = Number(data.total) || secondPane.entries.filter(Boolean).length
     secondPane.loadedOffsets = new Set([Number(data.offset) || 0])
@@ -2043,6 +2074,14 @@ function paintCmdBarInto(bar, which) {
     addCmd(bar, which, '清空', () => void emptyBin())
     return
   }
+  if (paneInZip(which)) {
+    addCmd(bar, which, '開啟', () => void openEntry(items[0]), { disabled: !one })
+    addCmd(bar, which, '複製', () => void clipboard(items, 'copy'), { disabled: !has })
+    addCmd(bar, which, '複製路徑', () => copyPaths(items), { disabled: !has })
+    addCmd(bar, which, '解壓縮到…', () => void extractTo(items), { disabled: !has })
+    addCmd(bar, which, '全部解壓縮', () => void extractItems([paneArchive(which)]))
+    return
+  }
   addCmd(bar, which, '開啟', () => void openEntry(items[0]), { disabled: !one })
   addCmd(bar, which, '顯示位置', () => void revealItems(items), { disabled: !has })
   addCmd(bar, which, '複製路徑', () => copyPaths(items), { disabled: !has })
@@ -2052,6 +2091,8 @@ function paintCmdBarInto(bar, which) {
   addCmd(bar, which, '重新命名', () => void renameItem(items[0]), { disabled: !one })
   addCmd(bar, which, '批次改名', () => void batchRenameItems(items), { disabled: items.length < 2 })
   addCmd(bar, which, '刪除', () => void deleteItems(items), { disabled: !has, danger: true })
+  if (has && items.every(isZipFile)) addCmd(bar, which, '全部解壓縮', () => void extractItems(items.map((i) => i.path)))
+  addCmd(bar, which, '內容', () => void showProperties(items))
 }
 
 /**
@@ -2289,6 +2330,7 @@ async function closeTab(id) {
 async function loadHome(opts = {}) {
   const seq = ++navSeq
   cwd = THIS_PC
+  cwdArchive = ''
   entries = []
   directoryTotal = 0
   loadedOffsets = new Set()
@@ -2401,6 +2443,7 @@ async function loadDir(dirPath, opts = {}) {
     return false
   }
   cwd = data.path
+  cwdArchive = data.archive || ''
   navTarget = cwd
   entries = mergeBrowsePage([], data, 0).entries
   directoryTotal = Number(data.total) || entries.filter(Boolean).length
@@ -2548,8 +2591,9 @@ function paintRecycleChrome() {
   const folderBtn = $('exNewFolderBtn')
   const fileBtn = $('exNewFileBtn')
   const emptyBtn = $('exEmptyBinBtn')
-  if (folderBtn) folderBtn.hidden = rec || home
-  if (fileBtn) fileBtn.hidden = rec || home
+  const zipped = paneInZip(activePane)
+  if (folderBtn) folderBtn.hidden = rec || home || zipped
+  if (fileBtn) fileBtn.hidden = rec || home || zipped
   const up = $('exUpBtn')
   if (up) up.disabled = inHome()
   if (emptyBtn) emptyBtn.hidden = !rec
@@ -2779,6 +2823,8 @@ function copyPaths(items) {
 }
 
 async function clipboard(items, mode) {
+  // 壓縮檔裡剪不走：一律當複製，貼上＝解壓縮（main 也照這樣存）
+  if (mode === 'cut' && items.some((item) => item.zip)) mode = 'copy'
   try {
     lastClip = { mode, paths: items.map((i) => i.path) }
     await call(
@@ -2788,6 +2834,69 @@ async function clipboard(items, mode) {
     showToast(mode === 'cut' ? '已剪下' : '已複製')
   } catch {
     // toast 已顯示
+  }
+}
+
+/**
+ * @param {string[]} list .zip 本身或壓縮檔裡的項目
+ * @param {string} [toDir] 省略＝解到壓縮檔旁邊
+ */
+async function extractItems(list, toDir) {
+  if (!list.length) return
+  showToast('解壓縮中…')
+  try {
+    const done = await call(electronAPI.explorer.extract(list, toDir), '解壓縮失敗')
+    const count = (done && done.paths && done.paths.length) || 0
+    showToast(count ? `已解壓縮 ${count} 項` : '已解壓縮')
+    await refreshAfterMutate()
+  } catch {
+    // toast 已顯示
+  }
+}
+
+/** @param {object[]} items */
+async function extractTo(items) {
+  let picked
+  try {
+    picked = await call(electronAPI.explorer.pickFolder(), '選不到資料夾')
+  } catch {
+    return
+  }
+  if (picked && picked.path) await extractItems(items.map((item) => item.path), picked.path)
+}
+
+/** 殼層選單裡找某個動詞（「內容」＝properties），子選單也找。 */
+function findShellVerb(items, verb) {
+  for (const item of Array.isArray(items) ? items : []) {
+    if (String(item.verb || '').toLowerCase() === verb) return item
+    const kid = findShellVerb(item.children, verb)
+    if (kid) return kid
+  }
+  return null
+}
+
+/**
+ * Windows 原生的「內容」視窗（含「安全性」分頁＝權限）。沒選東西＝目前這個資料夾。
+ * 走殼層的 properties 動詞，跟檔案總管按 Alt+Enter 是同一個視窗。
+ * @param {object[]} items
+ */
+async function showProperties(items) {
+  const folder = activeCwd()
+  if (activeInRecycle() || pathKey(folder) === THIS_PC || blockInZip(items.length ? items : undefined)) return
+  let token = 0
+  try {
+    const res = await electronAPI.explorer.shellMenu({ paths: items.map((item) => item.path), dir: folder })
+    token = Number(res && res.ok && res.data && res.data.token) || 0
+    const node = token ? findShellVerb(res.data.items, 'properties') : null
+    if (!node) {
+      showToast(token ? '這個項目沒有「內容」' : '叫不出內容視窗（殼層元件沒有建置）', 'error')
+      return
+    }
+    await electronAPI.explorer.shellInvoke(token, node.cmd, folder)
+  } catch {
+    showToast('叫不出內容視窗', 'error')
+  } finally {
+    if (token) void electronAPI.explorer.shellRelease(token)
   }
 }
 
@@ -2807,7 +2916,7 @@ async function refreshAfterMutate() {
 
 async function pasteHere() {
   const target = activeCwd()
-  if (!target || pathKey(target) === THIS_PC) return
+  if (!target || pathKey(target) === THIS_PC || blockInZip()) return
   try {
     const done = await call(electronAPI.explorer.paste(target), '貼上失敗')
     const landed = (done && done.paths) || []
@@ -2823,7 +2932,7 @@ async function pasteHere() {
 
 async function newFolder() {
   const target = activeCwd()
-  if (activeInRecycle() || pathKey(target) === THIS_PC) return
+  if (activeInRecycle() || pathKey(target) === THIS_PC || blockInZip()) return
   const name = await askInput('新增資料夾', { placeholder: '資料夾名稱' })
   if (!name) return
   try {
@@ -2836,7 +2945,7 @@ async function newFolder() {
 
 async function newFile() {
   const target = activeCwd()
-  if (activeInRecycle() || pathKey(target) === THIS_PC) return
+  if (activeInRecycle() || pathKey(target) === THIS_PC || blockInZip()) return
   const name = await askInput('新增檔案', { placeholder: '檔案名稱' })
   if (!name) return
   try {
@@ -2848,6 +2957,7 @@ async function newFile() {
 }
 
 async function renameItem(item) {
+  if (!item || blockInZip([item])) return
   const name = await askInput('重新命名', { value: item.name })
   if (!name || name === item.name) return
   try {
@@ -2864,7 +2974,7 @@ async function renameItem(item) {
 }
 
 function batchRenameItems(items) {
-  if (!Array.isArray(items) || items.length < 2 || inRecycle()) return
+  if (!Array.isArray(items) || items.length < 2 || inRecycle() || blockInZip(items)) return
   const dialog = document.createElement('dialog')
   dialog.className = 'app-dialog ex-batch-dialog'
   const title = document.createElement('h2')
@@ -3024,7 +3134,7 @@ function showBatchRenameResult(results, revert) {
 }
 
 async function deleteItems(items, opts = {}) {
-  if (!items.length) return
+  if (!items.length || blockInZip(items)) return
   const permanent = Boolean(opts.permanent) || inRecycle()
   const desc = items.length === 1 ? items[0].name : `${items.length} 個項目`
   const title = permanent ? '永久刪除？無法還原' : '移到資源回收筒？'
@@ -3074,15 +3184,20 @@ async function emptyBin() {
 
 function openContextMenu(e, items, dir) {
   const request = ++contextMenuSeq
-  const navigation = navSeq
+  // 等殼層項目的期間換到別的資料夾才作廢；同一個資料夾被背景重讀（監看、解壓縮完）不算，
+  // 以前比的是 navSeq，剛好碰上重讀時選單就安靜地不出來
+  const startCwd = pathKey(activeCwd())
   const at = { x: e.clientX, y: e.clientY }
   const recycle = activeInRecycle()
+  // 壓縮檔裡的路徑磁碟上不存在，殼層選單叫不起來，只給 App 自己那份
+  const zipView = paneInZip(activePane)
+  const archive = paneArchive(activePane)
   const extended = Boolean(e.shiftKey)
   const folder = dir || activeCwd()
   void (async () => {
     let shellItems = []
     let token = 0
-    if (!recycle && folder && folder !== THIS_PC) {
+    if (!recycle && !zipView && folder && folder !== THIS_PC) {
       try {
         const res = await electronAPI.explorer.shellMenu({
           paths: items.map((item) => item.path).filter(Boolean),
@@ -3097,12 +3212,13 @@ function openContextMenu(e, items, dir) {
         // sidecar 沒建置就只顯示 App 自己的項目
       }
     }
-    if (request !== contextMenuSeq || navigation !== navSeq || !$('page-explorer')?.classList.contains('active')) {
+    if (request !== contextMenuSeq || pathKey(activeCwd()) !== startCwd || !$('page-explorer')?.classList.contains('active')) {
       if (token) void electronAPI.explorer.shellRelease(token)
       return
     }
     showExplorerMenu(at, {
       recycle,
+      zip: zipView,
       items,
       showHidden,
       shell: shellItems,
@@ -3137,7 +3253,12 @@ function openContextMenu(e, items, dir) {
         newFolder: () => void newFolder(),
         newFile: () => void newFile(),
         toggleHidden: () => void toggleHidden(),
-        refresh: () => void refreshAfterMutate()
+        refresh: () => void refreshAfterMutate(),
+        extractTo: () => void extractTo(items),
+        extractAll: zipView
+          ? () => void extractItems([archive])
+          : (items.length && items.every(isZipFile) ? () => void extractItems(items.map((i) => i.path)) : null),
+        properties: () => void showProperties(items)
       }
     })
   })()
@@ -3213,9 +3334,10 @@ function openPlaceMenu(e, item) {
   const menu = [
     { label: '開啟', onSelect: () => void navigate(item.path) },
     { label: '在新分頁開啟', onSelect: () => void newTab(item.path) },
-    { label: '重新命名', onSelect: () => void renamePlace(item) },
-    { label: '從側欄移除', onSelect: () => void dropPlace(item.id) }
+    { label: '重新命名', onSelect: () => void renamePlace(item) }
   ]
+  // 資源回收筒強制釘選（main 的 removePlace 也會擋）
+  if (pathKey(item.path) !== RECYCLE_CWD) menu.push({ label: '從側欄移除', onSelect: () => void dropPlace(item.id) })
   showMenu({ x: e.clientX, y: e.clientY }, menu)
 }
 
@@ -3560,6 +3682,11 @@ function onPageKey(e) {
   if (e.key === 'F5') {
     e.preventDefault()
     void refreshAfterMutate()
+    return
+  }
+  if (e.key === 'Enter' && e.altKey) {
+    e.preventDefault()
+    void showProperties(selectedEntries())
     return
   }
   if (e.key === 'Enter') {

@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.IO;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 
 namespace VoiceInkShell
 {
@@ -13,11 +15,18 @@ namespace VoiceInkShell
     /// 免得留下孤兒程序抓著殼層擴充不放。
     ///
     /// 整支跑在 STA：殼層擴充是 COM Apartment-threaded，MTA 下有的會直接失敗。
+    ///
+    /// **主執行緒一定要跑訊息迴圈**：stdin 在背景執行緒讀。以前主執行緒整天卡在
+    /// `ReadLine`，殼層開在別的執行緒的東西（「內容」視窗、部分擴充的對話框）要跨執行緒
+    /// 叫回這個 STA 時永遠等不到人接——`InvokeCommand` 回報成功，視窗卻從來沒出現。
     /// </summary>
     internal static class Program
     {
         private static readonly Dictionary<int, ShellMenu> Live = new Dictionary<int, ShellMenu>();
         private static int _nextToken = 1;
+        private static readonly ConcurrentQueue<string> Inbox = new ConcurrentQueue<string>();
+        private static readonly AutoResetEvent Arrived = new AutoResetEvent(false);
+        private static volatile bool _ended;
 
         [STAThread]
         private static int Main()
@@ -27,14 +36,45 @@ namespace VoiceInkShell
             StreamWriter writer = new StreamWriter(stdout, new UTF8Encoding(false)) { AutoFlush = true };
             StreamReader reader = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false));
             writer.WriteLine("READY");
-            string line;
-            while ((line = reader.ReadLine()) != null)
+            Thread input = new Thread(() =>
             {
-                if (line.Length == 0) continue;
-                writer.WriteLine(Handle(line));
+                string read;
+                while ((read = reader.ReadLine()) != null)
+                {
+                    Inbox.Enqueue(read);
+                    Arrived.Set();
+                }
+                _ended = true;
+                Arrived.Set();
+            }) { IsBackground = true };
+            input.Start();
+            IntPtr[] handles = { Arrived.SafeWaitHandle.DangerousGetHandle() };
+            while (true)
+            {
+                uint woke = Native.MsgWaitForMultipleObjectsEx(1, handles, Native.INFINITE, Native.QS_ALLINPUT, Native.MWMO_INPUTAVAILABLE);
+                if (woke == Native.WAIT_OBJECT_0)
+                {
+                    string line;
+                    while (Inbox.TryDequeue(out line))
+                    {
+                        if (line.Length > 0) writer.WriteLine(Handle(line));
+                    }
+                    if (_ended && Inbox.IsEmpty) break;
+                }
+                Pump();
             }
             foreach (ShellMenu menu in Live.Values) menu.Dispose();
             return 0;
+        }
+
+        private static void Pump()
+        {
+            MSG msg;
+            while (Native.PeekMessageW(out msg, IntPtr.Zero, 0, 0, Native.PM_REMOVE))
+            {
+                Native.TranslateMessage(ref msg);
+                Native.DispatchMessageW(ref msg);
+            }
         }
 
         private static string Handle(string line)

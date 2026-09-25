@@ -1854,6 +1854,7 @@ registerExplorerIpc({
     connectShare: (...args) => loadExplorer().connectShare(...args),
     pickFolder: (...args) => loadExplorer().pickFolder(...args),
     resolvePath: (...args) => loadExplorer().resolvePath(...args),
+    extract: (...args) => loadExplorer().extract(...args),
     createShortcut: (...args) => loadExplorer().createShortcut(...args),
     listDrives: (...args) => loadExplorer().listDrives(...args),
     driveInfo: (...args) => loadExplorer().driveInfo(...args),

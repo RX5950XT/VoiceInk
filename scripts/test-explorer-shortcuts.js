@@ -29,7 +29,7 @@ function link(name, target) {
     assert.equal(result.path, root, '資料夾捷徑要回傳內部導航目的地')
     assert.equal(result.dir, true)
     assert.equal(launched.length, 0, '不得呼叫原生開啟')
-    assert.equal(explorer.resolvePath(shortcut).path, root, '路徑列共用解析')
+    assert.equal((await explorer.resolvePath(shortcut)).path, root, '路徑列共用解析')
     assert.deepEqual(await explorer.fileIcon(shortcut), { folder: true }, '資料夾捷徑不能誤用磁碟圖示')
     const chained = link('chain', shortcut)
     assert.equal((await explorer.openPath(chained)).path, root)

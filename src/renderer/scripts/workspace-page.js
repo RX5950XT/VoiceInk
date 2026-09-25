@@ -943,6 +943,12 @@ function buildTreeRow(project, entry, depth) {
       void openWithSystem(project.id, entry.rel)
       return
     }
+    // 改過（還沒提交）的檔案預設開「檢視變更」；新檔／衝突仍開編輯器（前者沒東西可比，後者要改衝突標記）
+    const status = treeStatusInfo(entry)
+    if (status?.className === 'is-changed') {
+      void openDiffTab(project, entry.rel, Boolean(status.staged), { keepOpenView: true })
+      return
+    }
     void openEditorTab(project, entry.rel)
   })
   return row
@@ -1747,7 +1753,7 @@ function gitLineCounts(file) {
   if (!added && !removed) return null
   const wrap = document.createElement('span')
   wrap.className = 'ws-git-lines'
-  wrap.title = `新增 ${added} 行、刪除 ${removed} 行（跟上一次提交比）`
+  wrap.title = file.title || `新增 ${added} 行、刪除 ${removed} 行`
   if (added) {
     const plus = document.createElement('span')
     plus.className = 'ws-git-added'
@@ -1764,7 +1770,22 @@ function gitLineCounts(file) {
 }
 
 /**
- * 一組檔案的總增刪。二進位與沒有數字的（未追蹤）不算。
+ * 某一列該看哪一份行數：「暫存區」看 `diff --cached`，其餘（變更／未追蹤／衝突）看工作區那份。
+ * main 那邊分開算（`git.attachLineCounts`），同一個檔案出現在兩組時各印各的。
+ *
+ * @param {{ added?: number, removed?: number, binary?: boolean, stagedAdded?: number, stagedRemoved?: number, stagedBinary?: boolean }} file
+ * @param {'staged' | 'worktree' | 'untracked' | 'conflict'} side
+ */
+function gitSideLines(file, side) {
+  if (side === 'staged') {
+    return { added: file.stagedAdded, removed: file.stagedRemoved, binary: file.stagedBinary, title: '已暫存的增刪（跟上一次提交比）' }
+  }
+  const title = side === 'untracked' ? '新檔案的行數' : '還沒暫存的增刪'
+  return { added: file.added, removed: file.removed, binary: file.binary, title }
+}
+
+/**
+ * 一組檔案的總增刪。二進位與沒有數字的不算。
  * 兩個都是 0 就回 null，呼叫端不要畫「+0 −0」。
  *
  * @param {Array<{ added?: number, removed?: number, binary?: boolean }>} files
@@ -1790,7 +1811,8 @@ function paintGitChangesStat(files) {
   const host = el.gitChangesStat
   if (!host) return
   host.replaceChildren()
-  const totals = gitLineTotals(files)
+  // 已暫存＋未暫存＋新檔全部加起來，跟下面各列的數字對得上
+  const totals = gitLineTotals(files.flatMap((f) => [gitSideLines(f, 'staged'), gitSideLines(f, f.index === '?' ? 'untracked' : 'worktree')]))
   const counts = totals ? gitLineCounts(totals) : null
   if (!counts) {
     host.hidden = true
@@ -1840,7 +1862,7 @@ function gitRow(project, file, side, ambiguous) {
     name.appendChild(parent)
   }
   row.append(badge, name)
-  const counts = gitLineCounts(file)
+  const counts = gitLineCounts(gitSideLines(file, side))
   if (counts) row.appendChild(counts)
   row.addEventListener('click', () => void openDiffTab(project, file.path, side === 'staged'))
 
@@ -2323,7 +2345,7 @@ function gitGroup(files, side, project, host, ambiguous) {
   count.textContent = String(files.length)
   count.title = `${files.length} 個檔案`
   head.append(label, count)
-  const totals = gitLineTotals(files)
+  const totals = gitLineTotals(files.map((f) => gitSideLines(f, side)))
   const totalCounts = totals ? gitLineCounts(totals) : null
   if (totalCounts) head.appendChild(totalCounts)
 

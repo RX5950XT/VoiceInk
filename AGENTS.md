@@ -174,8 +174,11 @@ tag 要與 `package.json` 的 version 一致。
 - **開分頁的每一次 await 之後都要核對 `projectSwitch`，回來還要再 `findTab` 一次**；改名／搬檔後要 `retargetTabs`（分頁 id 內嵌相對路徑，不接的話存檔會把舊檔重新建出來）。
 - `git status` 用 `--porcelain=v2 -b -z`；欄位是**位置**決定的，改名（`2`）那型後面還跟著一格原檔名。衝突（`u`）要自成一組。`git log` 的欄位分隔用 `%x1f`，**不能跟 `-z` 混用**；`for-each-ref` **不吃 `%x1f`**。展開看檔案用的就是 `--numstat` 那幾列（上限 `MAX_LOG_FILES`），要帶 `--no-renames` 與 `-c core.quotepath=false`（改名路徑與中文檔名才點得開）。
 - 跟分支比要比 `merge-base` 不是分支頂端；`--numstat` 一定要配 `--no-renames`。切到非 git 專案時 `renderGit` 的提早 return **要把工作樹、分支下拉、審閱清單三塊都清乾淨**。
-- **Git 面板列上的 `+新增 −刪除` 來自 `status()` 多跑的一次 `diff --numstat -z --no-renames HEAD`**：
-  未追蹤的檔案沒有數字（git 不 diff 它），**全新的 repo 還沒有 HEAD，那一跑會失敗——當成沒數字，不是錯誤**。
+- **Git 面板列上的 `+新增 −刪除` 暫存區與變更分開算**（`attachLineCounts`）：「暫存區」列＝`diff --cached`
+  （`stagedAdded`／`stagedRemoved`）、「變更」列＝`diff`（`added`／`removed`），**不可以兩列都用 `diff HEAD`**
+  （一半暫存的檔案兩列會各印一次總數）；未追蹤的新檔 main 自己數行（200 檔 × 1MB 上限）。任一條 git 失敗＝沒數字，不是錯誤。
+- **檔案樹點「改過」的檔案（`is-changed`）預設開檢視變更**；新檔／衝突仍開編輯器。已經開著的分頁用
+  `keepOpenView` 停在原本那一面，不把正在編輯的分頁翻成 diff。
 - **篩選框只重畫不重問 main**（`paintGitFiles` 吃 `lastGitStatus`）：每打一個字跑一次 `git status`
   在大 repo 上是好幾百毫秒的子程序，輸入會整個卡住。換專案要把 `gitFilter`／`lastGitStatus` 一起清掉。
 - **`.ws-git-name` 的 `textContent` 是「檔名＋所在資料夾」兩段接起來**（面板只有 280px，整條路徑會把
@@ -210,10 +213,13 @@ tag 要與 `package.json` 的 version 一致。
 
 ### 檔案總管
 
-- **跟工作區檔案樹是兩件事**：聊天頁右側仍是 `{ projectId, relPath }` + `workspace/files.js` 的 `resolveIn`。整機那頁走 `explorer/paths.js` 的 `resolveAbs`，放行 `^[A-Za-z]:\` 與嚴格 UNC（`\\伺服器\分享`，主機名／IPv4），不收 `\\.\`／`\\?\`／named pipe／ADS。資源回收筒是虛擬位置 `recyclebin`（不是 UNC）。側欄位置存 `explorer.json` 的 `places`（可隱藏內建、加自訂／NAS）；`net use` 對應磁碟代號時不帶密碼、不透傳 stderr。
+- **跟工作區檔案樹是兩件事**：聊天頁右側仍是 `{ projectId, relPath }` + `workspace/files.js` 的 `resolveIn`。整機那頁走 `explorer/paths.js` 的 `resolveAbs`，放行 `^[A-Za-z]:\` 與嚴格 UNC（`\\伺服器\分享`，主機名／IPv4），不收 `\\.\`／`\\?\`／named pipe／ADS。資源回收筒是虛擬位置 `recyclebin`（不是 UNC）。側欄位置存 `explorer.json` 的 `places`（可隱藏內建、加自訂／NAS）；**資源回收筒強制釘選**（`places.PINNED_ID`：`mergePlaces` 無視 hidden、`removePlace` 拒絕、右鍵不給移除）；`net use` 對應磁碟代號時不帶密碼、不透傳 stderr。
 - **整機搜尋不准自己 walk C:\\**：檔名搜尋只代跑本機 `uffs`（NTFS MFT）。pattern 拒 `>` regex 與以 `-` 開頭的參數。進檔案頁自動下載並跳一次 UAC 裝 Access Broker、拉起 daemon；開機不跳 UAC。使用者按否就寫 `uffsAuto: false`，只留「啟用快速搜尋」。
 - **`uffs.exe` 不打進 asar**；只跑 `<userData>/uffs/`，不認 PATH／`%LOCALAPPDATA%\uffs`。zip checksum 缺或對不上就失敗。關 App **不停** UFFS daemon。刪／改名／搬移擋磁碟根目錄、`%SystemRoot%` 本身、使用者家目錄本身（`assertMutable`）；家目錄根層可以新增／貼上／還原子項（`assertCreatable` 只擋磁碟根與 Windows 目錄）。`resolveExisting` 回使用者路徑，刪 junction 不跟目標。清空回收筒不吃 list 的 2000 上限。預設刪除丟進系統資源回收筒（寫 `$I`／`$R`，Electron 裡走 `shell.trashItem`）；`{ permanent: true }` 才 `rm`。複製／搬移撞名產出 `name (2).ext`，不覆寫。CDP 暫存 userData 與沙箱的 `uffsAuto` 關掉，且忽略 `uffsEnsure({ force })`，避免自動化卡在 UAC。
 - 三份清單：`explorer/index.js` exports、`main.js` 的 `registerExplorerIpc` service、`preload.js` 的 `electronAPI.explorer`。回歸 `test-explorer.js` 的 [Q][Q2]。
+- **殼層 sidecar 的主執行緒一定要跑訊息迴圈**（`Program.cs`：stdin 在背景執行緒讀、主執行緒 `MsgWaitForMultipleObjectsEx`＋`PeekMessage`）。以前卡在 `ReadLine`，「內容」視窗那種開在別的執行緒、要回叫這個 STA 的東西 `InvokeCommand` 回報成功卻永遠不出來。「內容」＝App 自己的選單項目＋Alt+Enter，走殼層 `properties` 動詞（殼層那份不重複列）。回歸 `e2e-explorer-zip-cdp.js`。
+- **ZIP 是唯讀的虛擬資料夾**（`explorer/zip.js` 讀中央目錄＋`zip-ops.js` 接到門面）：路徑就是 `C:\x\a.zip\sub\f.txt`，`index.js` 每個入口先問 `zipOps.zipOf`。只支援 stored／deflate；entry 名稱含 `..`／絕對路徑整筆丟掉（zip-slip），解出量超過宣告大小或 CRC 不符就中止並刪半成品。開檔／拖出去／詳情解到 `tempRoot()`（測試用 `VOICEINK_ZIP_TEMP` 指到自己的暫存，不准寫進系統那份）；複製貼上＝解壓縮、剪下一律當複製；貼進／拖進壓縮檔回 `READ_ONLY`。renderer 看 listDir 回的 `archive` 決定唯讀介面（`blockInZip` 擋在刪除／改名／貼上／新增的函式本身）。回歸 `test-explorer-zip.js`。
+- **右鍵選單等殼層項目時只看「是不是換到別的資料夾」**，不看 `navSeq`：同一個資料夾被背景重讀（監看、解壓縮完）也會遞增 navSeq，選單會被安靜丟掉。
 - **右鍵「加入工作區專案」不另開 IPC**：沿用工作區的 `workspace:addDropped`（preload 的 `addFolders` 只把字串路徑送過去），main 端仍走 `store.create` 的全套驗證——路徑要存在、必須是資料夾、撞路徑回原本那筆。虛擬位置（本機首頁、資源回收筒）在 renderer 就擋掉。回歸 `test-explorer.js` 的 [S2] ＋ `e2e-explorer-cdp.js` 的 [C2]。
 - **列目錄要「先排序再截斷」，不是先截斷再排序**：`listDir` 舊版是
   `dirents.slice(0, MAX_ENTRIES)` 之後才 `sortEntries`，所以在 node_modules／Downloads

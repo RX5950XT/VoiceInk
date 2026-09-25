@@ -1975,12 +1975,13 @@ async function backToEditorTab(tab) {
  * @param {{ id: string, name: string }} proj
  * @param {string} relPath
  * @param {boolean} [staged]
+ * @param {{ keepOpenView?: boolean }} [opts] keepOpenView：已經開著就停在原本那一面（檔案樹點改過的檔案用，不打斷正在編輯的分頁）
  */
-export async function openDiffTab(proj, relPath, staged = false) {
+export async function openDiffTab(proj, relPath, staged = false, opts = {}) {
   // 這個檔案已經開著（不管停在哪一面）＝就地切換，不再開一個分頁
   const opened = findTab(`e:${proj.id}:${relPath}`)
   if (opened) {
-    if (opened.diffView && opened.staged === staged) await activate(opened.id)
+    if (opts.keepOpenView || (opened.diffView && opened.staged === staged)) await activate(opened.id)
     else await showDiffInEditorTab(opened, staged)
     return
   }

@@ -8,6 +8,8 @@ const paths = require('./paths')
 
 const RECYCLE_CWD = 'recyclebin'
 const THIS_PC = 'thispc'
+/** 資源回收筒固定在側欄：不能藏、不能移，舊存檔裡藏過的也照樣顯示。 */
+const PINNED_ID = 'recycle'
 const ID_OK = /^[A-Za-z0-9_-]{1,64}$/
 const MAX_PLACES = 40
 
@@ -59,7 +61,7 @@ function sanitizePlaces(raw) {
 }
 
 /**
- * 存檔順序優先；沒存過就用內建。hidden 的內建位置不出現。
+ * 存檔順序優先；沒存過就用內建。hidden 的內建位置不出現（資源回收筒例外）。
  * @param {unknown} stored
  * @param {Array<{ id: string, label: string, path: string }>} builtins
  */
@@ -73,12 +75,13 @@ function mergePlaces(stored, builtins) {
   for (const item of raw) {
     if (!item || !item.id) continue
     seen.add(item.id)
-    if (item.hidden) continue
+    if (item.hidden && item.id !== PINNED_ID) continue
     if (byId.has(item.id)) {
       out.push(byId.get(item.id))
       continue
     }
-    if (item.path) {
+    // 自訂的回收筒捷徑跟內建那格重複，內建那格一定在
+    if (item.path && item.path !== RECYCLE_CWD) {
       out.push({
         id: item.id,
         label: item.label || item.path,
@@ -106,6 +109,7 @@ function shareLabel(unc) {
 module.exports = {
   RECYCLE_CWD,
   THIS_PC,
+  PINNED_ID,
   MAX_PLACES,
   sanitizeLetter,
   sanitizePlaces,

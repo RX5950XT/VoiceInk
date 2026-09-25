@@ -23,6 +23,7 @@ function registerExplorerIpc({ ipcMain, service, isMainSender }) {
   ipcMain.handle('explorer:connectShare', (event, spec) => invoke(event, () => service.connectShare(spec)))
   ipcMain.handle('explorer:pickFolder', (event) => invoke(event, () => service.pickFolder()))
   ipcMain.handle('explorer:resolvePath', (event, target) => invoke(event, () => service.resolvePath(target)))
+  ipcMain.handle('explorer:extract', (event, items, toDir) => invoke(event, () => service.extract(items, toDir)))
   ipcMain.handle('explorer:createShortcut', (event, target, toDir) => (
     invoke(event, () => service.createShortcut(target, toDir))
   ))

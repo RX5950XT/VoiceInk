@@ -987,6 +987,10 @@ async function main() {
 
     // ===== [R] 尋找取代（Ctrl+F）與外部變更提示條 =====
     await cdp.eval(`document.querySelector('#wsTree .ws-tree-row[data-rel="README.md"]').click()`)
+    // README.md 前面存過＝改過的檔案，點下去預設是檢視變更；按「在編輯器開啟」切回編輯器
+    ok('[R] 改過的 README.md 點下去先開檢視變更',
+      await waitInPage(cdp, `document.getElementById('wsDiff')?.hidden === false`, 8000))
+    await cdp.eval(`document.getElementById('wsDiffOpenEditorBtn').click()`)
     // 重開的 .md 停在預覽，先切回編輯這一面
     await waitInPage(cdp, `document.getElementById('wsEditor').offsetHeight > 0`, 8000)
     await cdp.eval(`(() => {
@@ -1252,6 +1256,11 @@ async function main() {
     })()`)
     await waitInPage(cdp, `document.querySelector('#wsTree .ws-tree-row[data-rel="src/app.js"]')`, 8000)
     await cdp.eval(`document.querySelector('#wsTree .ws-tree-row[data-rel="src/app.js"]').click()`)
+    // app.js 有 git 時已經改過，點下去是檢視變更；切回編輯器再量高亮
+    if (hasGit) {
+      await waitInPage(cdp, `document.getElementById('wsDiff')?.hidden === false`, 8000)
+      await cdp.eval(`document.getElementById('wsDiffOpenEditorBtn').click()`)
+    }
     ok('[U] Monaco 真的接手了編輯器（textarea 收起來、Monaco 有高度）',
       await waitInPage(cdp,
         `document.getElementById('wsMonacoHost').offsetHeight > 0`
@@ -1301,14 +1310,11 @@ async function main() {
         && folderStatusInfo.text.includes('改') && folderStatusInfo.title.includes('app.js'),
       JSON.stringify(folderStatusInfo))
       await cdp.eval(`document.querySelector('${changedRow} .ws-tree-name')?.click()`)
-      ok('[V] 變更檔編輯器有未提交變更按鈕',
+      // app.js 在 [S] 已全部暫存、[U] 從 Git 面板開成 diff：點檔案樹就是切到那份變更
+      ok('[V] 點改過的檔案開檢視變更',
         await waitInPage(cdp,
-          `document.getElementById('wsEditorDiffBtn')?.offsetHeight > 0`
-          + ` && !document.getElementById('wsEditorDiffBtn')?.hidden`, 15000))
-      await cdp.eval(`document.getElementById('wsEditorDiffBtn')?.click()`)
-      ok('[V] 編輯器按鈕可以開未提交 Diff',
-        await waitInPage(cdp,
-          `document.getElementById('wsDiffTitle')?.textContent.includes('[工作區]')`, 15000))
+          `document.getElementById('wsDiff')?.hidden === false`
+          + ` && document.getElementById('wsDiffTitle')?.textContent.includes('app.js')`, 8000))
       await cdp.eval(`document.querySelector('.ws-right-tab[data-panel="files"]').click()`)
       await waitInPage(cdp, `document.querySelector('#wsTree .ws-tree-row[data-rel="README.md"]')`, 8000)
       await cdp.eval(`document.querySelector('.sidebar-mode[data-mode="chats"]').click()`)

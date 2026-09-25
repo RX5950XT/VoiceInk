@@ -22,7 +22,7 @@ async function main() {
     return { path: src }
   }
   try {
-    explorer.setClipboard(['a', 'b'], 'copy')
+    await explorer.setClipboard(['a', 'b'], 'copy')
     await explorer.paste('dest')
     assert.deepEqual(actions, ['copy:a', 'copy:b'], '貼上途中更換剪貼簿不能把複製變成搬移')
     actions.length = 0
@@ -36,7 +36,7 @@ async function main() {
       actions.push(src)
       return { path: src }
     }
-    explorer.setClipboard(['a', 'b'], 'cut')
+    await explorer.setClipboard(['a', 'b'], 'cut')
     await assert.rejects(explorer.paste('dest'), /blocked/)
     await explorer.paste('dest')
     assert.deepEqual(actions, ['a', 'b'], '部分搬移失敗後重試只處理剩餘檔案')

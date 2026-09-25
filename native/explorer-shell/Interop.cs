@@ -167,6 +167,19 @@ namespace VoiceInkShell
     }
 
     [StructLayout(LayoutKind.Sequential)]
+    internal struct MSG
+    {
+        public IntPtr hwnd;
+        public uint message;
+        public IntPtr wParam;
+        public IntPtr lParam;
+        public uint time;
+        public int ptX;
+        public int ptY;
+        public uint lPrivate;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
     internal struct SIZE
     {
         public int cx;
@@ -257,6 +270,19 @@ namespace VoiceInkShell
         public const int SIIGBF_INCACHEONLY = 0x00000010;
 
         [DllImport("ole32.dll")] public static extern int OleInitialize(IntPtr reserved);
+
+        // ---- 主執行緒的訊息迴圈（見 Program.Main） ----
+        public const uint INFINITE = 0xFFFFFFFF;
+        public const uint QS_ALLINPUT = 0x04FF;
+        public const uint MWMO_INPUTAVAILABLE = 0x0004;
+        public const uint WAIT_OBJECT_0 = 0;
+        public const uint PM_REMOVE = 0x0001;
+
+        [DllImport("user32.dll")]
+        public static extern uint MsgWaitForMultipleObjectsEx(uint count, IntPtr[] handles, uint timeout, uint wakeMask, uint flags);
+        [DllImport("user32.dll")] public static extern bool PeekMessageW(out MSG msg, IntPtr hwnd, uint min, uint max, uint remove);
+        [DllImport("user32.dll")] public static extern bool TranslateMessage(ref MSG msg);
+        [DllImport("user32.dll")] public static extern IntPtr DispatchMessageW(ref MSG msg);
 
         [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
         public static extern int SHParseDisplayName([MarshalAs(UnmanagedType.LPWStr)] string name, IntPtr bindCtx,

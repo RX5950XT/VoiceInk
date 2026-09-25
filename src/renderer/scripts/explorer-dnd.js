@@ -109,14 +109,14 @@ export function clearDrop() {
 
 /** 殼層也有、但 App 自己做過的動詞——再畫一次會變成兩份「開啟／複製」。 */
 export const SKIP_SHELL_VERBS = new Set([
-  'open', 'cut', 'copy', 'paste', 'pastelink', 'delete', 'rename', 'link', 'copyaspath'
+  'open', 'cut', 'copy', 'paste', 'pastelink', 'delete', 'rename', 'link', 'copyaspath', 'properties'
 ])
 
 const SKIP_SHELL_LABELS = new Set([
   '開啟', '打開', '剪下', '複製', '貼上', '刪除', '重新命名',
-  '複製路徑', '複製為路徑', '建立捷徑', '顯示更多選項',
+  '複製路徑', '複製為路徑', '建立捷徑', '顯示更多選項', '內容',
   'Open', 'Cut', 'Copy', 'Paste', 'Delete', 'Rename',
-  'Copy as path', 'Create shortcut', 'Show more options'
+  'Copy as path', 'Create shortcut', 'Show more options', 'Properties'
 ])
 
 function ownedLabel(label) {
@@ -168,8 +168,33 @@ function asMenuItems(items, invoke) {
 }
 
 /**
+ * 壓縮檔裡（唯讀）的右鍵選單：只有看、複製、解壓縮。
  * @param {{ x: number, y: number }} at
- * @param {{ recycle: boolean, items: object[], shell?: object[], invokeShell?: Function, onClose?: Function, actions: Record<string, () => void> }} spec
+ * @param {object[]} items
+ * @param {Record<string, (() => void) | null>} act
+ */
+function showZipMenu(at, items, act) {
+  const menu = []
+  if (items.length) {
+    menu.push({ label: '開啟', onSelect: act.open })
+    if (act.preview) menu.push({ label: '預覽（空白鍵）', onSelect: act.preview })
+    menu.push({ label: '複製', onSelect: act.copy })
+    if (act.copyPath) menu.push({ label: '複製路徑', onSelect: act.copyPath })
+    if (act.copyName) menu.push({ label: '複製名稱', onSelect: act.copyName })
+    menu.push({ sep: true })
+    menu.push({ label: '解壓縮到…', onSelect: act.extractTo })
+  }
+  if (act.extractAll) menu.push({ label: '全部解壓縮', onSelect: act.extractAll })
+  if (act.refresh) {
+    menu.push({ sep: true })
+    menu.push({ label: '重新整理', onSelect: act.refresh })
+  }
+  showMenu(at, menu)
+}
+
+/**
+ * @param {{ x: number, y: number }} at
+ * @param {{ recycle: boolean, zip?: boolean, items: object[], shell?: object[], invokeShell?: Function, onClose?: Function, actions: Record<string, () => void> }} spec
  */
 export function showExplorerMenu(at, spec) {
   const items = spec.items || []
@@ -184,6 +209,10 @@ export function showExplorerMenu(at, spec) {
     menu.push({ label: '清空資源回收筒', danger: true, onSelect: act.empty })
     if (act.refresh) menu.push({ label: '重新整理', onSelect: act.refresh })
     showMenu(at, menu)
+    return
+  }
+  if (spec.zip) {
+    showZipMenu(at, items, act)
     return
   }
   if (items.length) {
@@ -210,6 +239,11 @@ export function showExplorerMenu(at, spec) {
   if (items.length === 1) menu.push({ label: '重新命名', onSelect: act.rename })
   if (items.length > 1 && act.batchRename) menu.push({ label: '批次重新命名', onSelect: act.batchRename })
   if (items.length) menu.push({ label: '刪除', danger: true, onSelect: act.remove })
+  if (items.length && act.extractAll) {
+    menu.push({ sep: true })
+    menu.push({ label: '全部解壓縮', onSelect: act.extractAll })
+    if (act.extractTo) menu.push({ label: '解壓縮到…', onSelect: act.extractTo })
+  }
   if (!items.length) {
     menu.push({ label: '新增資料夾', onSelect: act.newFolder })
     menu.push({ label: '新增檔案', onSelect: act.newFile })
@@ -223,6 +257,7 @@ export function showExplorerMenu(at, spec) {
     menu.push({ sep: true })
     menu.push({ label: '重新整理', onSelect: act.refresh })
   }
+  if (act.properties) menu.push({ label: '內容（Alt+Enter）', onSelect: act.properties })
   if (spec.shell && spec.shell.length && typeof spec.invokeShell === 'function') {
     const extra = asMenuItems(spec.shell, spec.invokeShell)
     if (extra.length) {

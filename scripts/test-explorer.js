@@ -448,7 +448,7 @@ console.log('\n[J] 複製貼進回收筒不刪來源；剪下才丟（走 index.
   fs.writeFileSync(copied, 'copy-me')
   fs.writeFileSync(cut, 'cut-me')
   try {
-    explorer.setClipboard([copied], 'copy')
+    await explorer.setClipboard([copied], 'copy')
     await denies('複製貼進回收筒拒絕', () => explorer.paste(recycle.RECYCLE_CWD), 'BAD_PATH')
     ok('複製貼進回收筒來源還在', fs.existsSync(copied) && fs.readFileSync(copied, 'utf8') === 'copy-me')
     const binBefore = await files.listRecycle()
@@ -457,7 +457,7 @@ console.log('\n[J] 複製貼進回收筒不刪來源；剪下才丟（走 index.
     ))
     ok('複製貼進回收筒不進筒', !sneak)
 
-    explorer.setClipboard([cut], 'cut')
+    await explorer.setClipboard([cut], 'cut')
     const moved = await explorer.paste(recycle.RECYCLE_CWD)
     ok('剪下貼進回收筒來源沒了', !fs.existsSync(cut))
     ok('剪下貼進回收筒有回傳', Boolean(moved && moved.trashed && Array.isArray(moved.paths)))
@@ -468,7 +468,7 @@ console.log('\n[J] 複製貼進回收筒不刪來源；剪下才丟（走 index.
     ok('剪下貼進回收筒列得到', Boolean(hit), hit ? hit.recycleKey : `entries=${(binAfter.entries || []).length}`)
     if (hit) await files.restoreEntry(hit.recycleKey)
 
-    explorer.setClipboard([copied], 'copy')
+    await explorer.setClipboard([copied], 'copy')
     await denies('drop copy 進回收筒拒絕', () => explorer.dropEntries([copied], recycle.RECYCLE_CWD, 'copy'), 'BAD_PATH')
     ok('drop copy 進回收筒來源還在', fs.existsSync(copied))
   } catch (error) {
@@ -638,6 +638,12 @@ console.log('\n[P] 側欄位置消毒與合併')
     ok('隱藏的內建位置不出現', !merged.some((p) => p.id === 'home'))
     ok('順序跟存檔走', merged[0] && merged[0].id === 'desktop', merged[0] && merged[0].id)
     ok('NAS 留在合併結果', merged.some((p) => p.id === 'nas1'))
+    const pinned = placesMod.mergePlaces(placesMod.sanitizePlaces([
+      { id: 'recycle', hidden: true, path: 'recyclebin' },
+      { id: 'place-x', label: '回收', path: 'recyclebin' }
+    ]), builtins)
+    ok('資源回收筒強制釘選：藏過也會回來、不重複', pinned.filter((p) => p.path === 'recyclebin').length === 1 &&
+      pinned.some((p) => p.id === 'recycle'))
     ok('磁碟代號 A 合法', placesMod.sanitizeLetter('a') === 'A')
     await denies('磁碟代號不合法', () => placesMod.sanitizeLetter('1'), 'BAD_PATH')
     await denies('磁碟代號 C 不給對應', () => placesMod.sanitizeLetter('C'), 'BAD_PATH')
