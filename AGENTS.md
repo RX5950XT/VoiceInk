@@ -288,6 +288,12 @@ tag 要與 `package.json` 的 version 一致。
 ### 終端機
 
 - **忙碌判定不能只靠 OSC 133**（PSReadLine 會重送整份提示字元）：標記要帶 `Get-History` 的 id 且**比大小**，第一個看到的標記只是「現在這個提示字元」；也不能只靠靜默（AI CLI 是常駐 REPL）。兩者都要。
+- **顯示狀態＝宿主已結束 → Claude hook → 畫面 → 宿主靜默計時**（`term-agent.js` 的 `mergeState`）。hook 在 main（`terminal/claude-hooks.js`）：`voiceink-probe.exe claude-hook` 複製成 `<userData>/claude-hook/voiceink-claude-hook.exe`，把事件落到旁邊的 `events/`；shell 帶 `VOICEINK_TERMINAL_ID`（JS／Rust 宿主都要）。**hook exe 的 stdout 一個字都不能寫**（SessionStart／UserPromptSubmit 的 stdout 會進模型上下文），任何錯誤都 exit 0。
+- **Claude 被 Esc／Ctrl+C 中斷不送 `Stop`**（拒絕權限也一樣）：`claudeHooks.noteInput` 看到單獨的 `\x1b`／`\x03` 要把 working／waiting 收回 idle；只有 Enter 或選單單鍵才算「回答了」，xterm 自己送的焦點／滑鼠回報不算。
+- **`SessionStart` 的 `source=startup` 不可搶走已追蹤的 session**：Claude 在工具裡跑的巢狀 `claude -p` 會繼承同一個 `VOICEINK_TERMINAL_ID`。只有 `clear`／`resume` 才換。
+- **帶 `--user-data-dir`（預覽／CDP／e2e）不寫真的 `~/.claude/settings.json`**：command 會指向測完就刪的暫存 exe，使用者之後每次開 claude 都報 hook 錯誤。寫 settings 只動 command 含 `voiceink-claude-hook.exe` 的項目（Orca 那些原樣留著）。
+- **從 Claude Code 裡開 App 做驗收要先拿掉 `CLAUDECODE`／`CLAUDE_CODE_*`**：終端機會繼承，裡面的 claude 以為自己是子對話（「Transcript saving is off」、不存對話檔、送出卡住）。
+- **畫面規則要照真實畫面校正**（`scripts/fixtures/term-agent/`）：這台 Claude 2.1.283 的自訂狀態列會蓋掉 `esc to interrupt`，進行中改認「轉圈符號＋`ing…`」；轉圈符號單獨不能當證據（「✻ Baked for 7s」總結行也有）。
 - **xterm 6 自己畫捲軸（`.scrollbar.vertical`）**，但 `xterm.css` 的 `.xterm-viewport` 仍是 `overflow-y: scroll`：打包版會多畫一條原生捲軸疊在旁邊（開發版看不出來）。已設 `scrollbar-width: none`，不要拿掉。
 - 終端機的按鍵攔截（`attachCustomKeyEventHandler`）要對 App 層快捷鍵（Ctrl+Tab、Ctrl+Shift+T／W）回 `false`，不然 xterm 吃掉、工作區收不到。
 - **狀態變動只能就地改那一列，不可 `renderList()` 重建**（待確認的刪除鈕與改名輸入框掛在 DOM 上 → 跑著的終端機刪不掉）。

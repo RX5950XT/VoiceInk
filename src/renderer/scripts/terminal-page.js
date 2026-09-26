@@ -7,6 +7,7 @@ import { bindImeCaret, syncImeCaret } from './term-ime.js'
 import { blockMouseReporting } from './term-mouse.js'
 import { bindTermCopy, handleCopyKey } from './term-copy.js'
 import { applyAppearance, normalizeAppearance, DEFAULT_TERM_BG_OPACITY } from './term-themes.js'
+import { detectScreen, mergeState, viewportLines } from './term-agent.js'
 import {
   initWsTabs, showSurface, trackTerminal, paintTerminalTab, currentProjectId
 } from './ws-tabs.js'
@@ -77,6 +78,17 @@ let visibleIds = []
 /** 跑完但使用者不在看的階段 */
 const unread = new Set()
 
+/** 畫面判斷的 debounce。Claude 重畫很密，每幀都掃一次沒有必要。 */
+const SCREEN_MS = 300
+/** @type {Map<string, ReturnType<typeof setTimeout>>} */
+const screenTimers = new Map()
+/**
+ * hook 狀態（`onAgent`／`list().agent`）。沒接上或沒帶這個欄位就是沒有，
+ * 顯示退回畫面，再退回宿主的靜默計時。
+ * @type {Map<string, 'working' | 'waiting' | 'idle' | null>}
+ */
+const agentById = new Map()
+
 /** @type {ResizeObserver | null} */
 let resizeObserver = null
 
@@ -114,7 +126,7 @@ function showError(message) {
  * @returns {string}
  */
 function stateLabel(item) {
-  return terminalStatusLabel(item)
+  return terminalStatusLabel({ ...item, state: viewOf(item) })
 }
 
 /**
@@ -136,7 +148,7 @@ function pushTabState(id) {
   if (!item) return
   paintTerminalTab(id, {
     title: displayTitle(item),
-    state: item.state,
+    state: viewOf(item),
     stateLabel: stateLabel(item),
     admin: Boolean(item.admin),
     // 前景 shell 報到哪就顯示哪（OSC 7）；沒報過才退回開起來時的那個目錄
@@ -146,10 +158,143 @@ function pushTabState(id) {
   })
 }
 
+/** 側欄與分頁看到的是合併後的狀態，宿主原值留在 `item.state` */
+function displayedItems() {
+  return items.map((item) => ({ ...item, state: viewOf(item) }))
+}
+
 /** 全部推一次（清單重讀之後） */
 function pushAllTabStates() {
-  setTerminalStatuses(items)
+  setTerminalStatuses(displayedItems())
   for (const item of items) pushTabState(item.id)
+}
+
+/**
+ * @param {unknown} state
+ * @returns {'working' | 'waiting' | 'idle' | null}
+ */
+function asAgent(state) {
+  if (state === 'working' || state === 'waiting' || state === 'idle') return state
+  return null
+}
+
+/**
+ * @param {string} id
+ * @param {unknown} state
+ */
+function rememberAgent(id, state) {
+  if (!id) return
+  agentById.set(id, asAgent(state))
+}
+
+/**
+ * @param {{ id: string, agent?: string | null }} item
+ * @returns {'working' | 'waiting' | 'idle' | null}
+ */
+function hookOf(item) {
+  if (!item) return null
+  if (agentById.has(item.id)) return agentById.get(item.id) ?? null
+  return asAgent(item.agent)
+}
+
+/**
+ * 沒開過 xterm 的工作階段不看畫面（scrollback 不在 renderer）。
+ * @param {{ id: string, screen?: string | null }} item
+ * @returns {'working' | 'waiting' | 'idle' | null}
+ */
+function screenOf(item) {
+  if (!item || !panes.has(item.id)) return null
+  return asAgent(item.screen)
+}
+
+/**
+ * @param {{ id: string, state?: string, agent?: string | null, screen?: string | null } | undefined} item
+ * @returns {string}
+ */
+function viewOf(item) {
+  if (!item) return 'stopped'
+  return mergeState({ host: item.state, hook: hookOf(item), screen: screenOf(item) })
+}
+
+/**
+ * 「人在看這一格」：並排的每一格都算，主區被聊天蓋住就不算。
+ * @param {string} id
+ * @returns {boolean}
+ */
+function isWatching(id) {
+  return visibleIds.includes(id)
+    && document.getElementById('page-chat')?.classList.contains('active')
+    && !document.getElementById('termMain')?.classList.contains('hidden')
+    && !hostEl?.classList.contains('hidden')
+}
+
+/**
+ * 從運行中掉到閒置或等人，才亮未讀、才通知工作區重讀 Git。
+ * waiting 本身一直畫在分頁上，跟人在不在看無關。
+ * @param {string} id
+ * @param {string | null} prev
+ */
+function publishView(id, prev) {
+  const item = items.find((entry) => entry.id === id)
+  if (!item) return
+  const next = viewOf(item)
+  if (prev === 'running' && (next === 'idle' || next === 'waiting')) {
+    if (!isWatching(id)) unread.add(id)
+    document.dispatchEvent(new CustomEvent('ws:terminal-idle', { detail: { id } }))
+  }
+  pushTabState(id)
+  setTerminalStatuses(displayedItems())
+}
+
+/**
+ * @param {import('@xterm/xterm').Terminal} term
+ * @returns {'working' | 'waiting' | 'idle' | null}
+ */
+function readScreen(term) {
+  return detectScreen(viewportLines(term?.buffer?.active, term?.rows || 0))
+}
+
+/**
+ * @param {string} id
+ */
+function scanScreen(id) {
+  const item = items.find((entry) => entry.id === id)
+  if (!item) return
+  const entry = panes.get(id)
+  const screen = entry ? readScreen(entry.term) : null
+  if ((item.screen ?? null) === screen) return
+  const prev = viewOf(item)
+  item.screen = screen
+  publishView(id, prev)
+}
+
+/**
+ * @param {string} id
+ */
+function scheduleScreenScan(id) {
+  const pending = screenTimers.get(id)
+  if (pending) clearTimeout(pending)
+  screenTimers.set(id, setTimeout(() => {
+    screenTimers.delete(id)
+    scanScreen(id)
+  }, SCREEN_MS))
+}
+
+/**
+ * `onStatus` 會先拆掉 event；有的訂閱把 event 留在第一個參數。兩邊都接。
+ * @param {{ id?: string, state?: string | null } | null | undefined} payload
+ * @param {{ id?: string, state?: string | null } | null | undefined} [extra]
+ */
+function onAgent(payload, extra) {
+  const body = payload && typeof payload.id === 'string' ? payload
+    : extra && typeof extra.id === 'string' ? extra
+      : null
+  if (!body) return
+  const item = items.find((entry) => entry.id === body.id)
+  const prev = item ? viewOf(item) : null
+  rememberAgent(body.id, body.state)
+  if (!item || viewOf(item) === prev) return
+  publishView(body.id, prev)
 }
 
 /**
@@ -173,6 +318,7 @@ export async function renameTerminalSession(id, title) {
 export async function deleteTerminalSession(id) {
   await call(electronAPI.terminal.delete(id), '刪除失敗')
   disposePane(id)
+  agentById.delete(id)
   unread.delete(id)
   if (currentId === id) currentId = ''
   await reloadList()
@@ -455,6 +601,8 @@ function createPane(id) {
   // ——使用者說的「選取文字自動複製壞掉」就是這個（見 `term-mouse.js`）。
   blockMouseReporting(term)
   term.open(pane)
+  // 寫完一幀再看畫面底部（Claude 想很久時宿主的靜默計時會誤判成做完）
+  term.onWriteParsed(() => scheduleScreenScan(id))
   const webgl = attachRenderer(term)
   registerTermLinks(term, id)
   initTerminalDrop(pane, term, id)
@@ -625,6 +773,11 @@ export function isTerminalSplit(id) {
  * @param {string} id
  */
 function disposePane(id) {
+  const timer = screenTimers.get(id)
+  if (timer) clearTimeout(timer)
+  screenTimers.delete(id)
+  const item = items.find((entry) => entry.id === id)
+  if (item) item.screen = null
   const entry = panes.get(id)
   if (!entry) return
   panes.delete(id)
@@ -691,6 +844,7 @@ async function openSession(id, isActive = () => true) {
       entry.seq = snapshot.seq
       entry.ready = true
       await drainOutput(entry)
+      scanScreen(id)
     } catch {
       const active = isCurrent()
       disposePane(id)
@@ -915,8 +1069,22 @@ async function createSession() {
 // ===== 生命週期 =====
 
 async function reloadList() {
+  const prevView = new Map(items.map((item) => [item.id, viewOf(item)]))
+  const prevScreen = new Map(items.map((item) => [item.id, item.screen ?? null]))
   const next = await call(electronAPI.terminal.list(), '讀取終端機清單失敗')
   items = Array.isArray(next) ? next : []
+  for (const item of items) {
+    item.screen = panes.has(item.id) ? (prevScreen.get(item.id) ?? null) : null
+    if (Object.prototype.hasOwnProperty.call(item, 'agent')) rememberAgent(item.id, item.agent)
+  }
+  for (const item of items) {
+    const prev = prevView.get(item.id)
+    const nextView = viewOf(item)
+    if (prev === 'running' && (nextView === 'idle' || nextView === 'waiting')) {
+      if (!isWatching(item.id)) unread.add(item.id)
+      document.dispatchEvent(new CustomEvent('ws:terminal-idle', { detail: { id: item.id } }))
+    }
+  }
   pushAllTabStates()
   checkHostRuntime()
 }
@@ -957,11 +1125,17 @@ async function checkHostRuntime() {
  * @returns {Promise<void>}
  */
 function writeOutput(entry, data) {
+  const id = entry.pane?.dataset?.id || ''
+  const arm = () => { if (id) scheduleScreenScan(id) }
   if (document.hidden && typeof entry.term._core?._writeBuffer?.writeSync === 'function') {
     entry.term._core._writeBuffer.writeSync(data)
+    arm()
     return Promise.resolve()
   }
-  return new Promise((resolve) => entry.term.write(data, resolve))
+  return new Promise((resolve) => entry.term.write(data, () => {
+    arm()
+    resolve()
+  }))
 }
 
 /**
@@ -1013,31 +1187,16 @@ function onStatus(payload) {
     void reloadList().catch(() => {})
     return
   }
-  const wasRunning = item.state === 'running'
+  const prev = viewOf(item)
   item.state = payload.state
   item.exitCode = payload.exitCode
   // 前景程式自己報的標題與工作目錄。**空的不要蓋回去**：清單只送「現在知道的」，
   // 收到一次空值就把好不容易撈到的標題洗掉，分頁名字會一直閃。
   if (payload.osTitle) item.osTitle = payload.osTitle
   if (payload.liveCwd) item.liveCwd = payload.liveCwd
-  // 跑完的當下不在看它 → 亮未讀點（這是「哪個代理做完了」的提示）。
-  // 「不在看」包含兩種：看的是別的工作階段，或終端機主區沒開著
-  // （聊天跟終端機同頁：主區顯示對話時＝人不在終端機）。
-  // 主區顯示的是對話時 `termMain` 被藏起來（`termHost` 自己不會變），少這一條的話
-  // 人在對話裡，背景終端機跑完永遠不亮未讀點。
-  // 並排時每一格都看得到，不是只有作用中那格才算「在看」
-  const watching = visibleIds.includes(payload.id)
-    && document.getElementById('page-chat')?.classList.contains('active')
-    && !document.getElementById('termMain')?.classList.contains('hidden')
-    && !hostEl?.classList.contains('hidden')
-  if (wasRunning && payload.state !== 'running' && !watching) unread.add(payload.id)
-  // 指令跑完了（多半是 agent 收工）→ 讓工作區重讀一次 Git 狀態。
-  // 用事件不用 import：terminal-page 不該知道右側欄長什麼樣子。
-  if (wasRunning && payload.state !== 'running') {
-    document.dispatchEvent(new CustomEvent('ws:terminal-idle', { detail: { id: payload.id } }))
-  }
-  pushTabState(payload.id)
-  setTerminalStatuses(items)
+  // 未讀與 Git 重讀看的是合併後的狀態（畫面／hook 還說在跑就不算做完）。
+  // 「在不在看」的定義在 `isWatching`。
+  publishView(payload.id, prev)
 }
 
 export function initTerminalPage() {
@@ -1090,6 +1249,7 @@ export function initTerminalPage() {
 
   electronAPI.terminal.onData(onData)
   electronAPI.terminal.onStatus(onStatus)
+  electronAPI.terminal.onAgent?.(onAgent)
 
   // Ctrl+G：CLI 要開編輯器改提示詞。main 那邊把它導到 App 自己的編輯分頁
   // （見 `terminal/editor-bridge.js`），這裡只負責把分頁開出來。

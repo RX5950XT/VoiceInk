@@ -1,0 +1,8 @@
+ ▐▛███▛█   Claude Code v2.1.283
+                               ▝▜██████▀  Sonnet 5 with low effort · Claude Pro
+                                                                                ▝▝   ▝▝   ~\AppData\Local\Temp
+\voiceink-tests\term-agent-probe-44704
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+❯ Try "fix lint errors"

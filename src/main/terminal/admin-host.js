@@ -78,7 +78,7 @@ function run(pipeName) {
           cols: clampDim(msg.cols, 1000, 80),
           rows: clampDim(msg.rows, 500, 24),
           cwd: store.normalizeCwd(msg.cwd),
-          env: shellEnvironment()
+          env: shellEnvironment('', '', id)
         })
       } catch {
         send({ ev: 'exit', id, code: 1 })

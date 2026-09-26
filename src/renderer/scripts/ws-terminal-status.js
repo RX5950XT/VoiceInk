@@ -3,6 +3,7 @@ let sessions = []
 
 export function terminalStatusLabel(item) {
   if (item.state === 'running') return '運行中'
+  if (item.state === 'waiting') return '等你回答'
   if (item.state === 'idle') {
     if (item.exitCode === null || item.exitCode === undefined) return '暫無輸出'
     return item.exitCode === 0 ? '已完成' : `指令失敗 · ${item.exitCode}`

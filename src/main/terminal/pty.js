@@ -214,7 +214,7 @@ function spawnSession(meta, cols, rows, editor, editorDir) {
       cols,
       rows,
       cwd: meta.cwd,
-      env: shellEnvironment(editor, editorDir)
+      env: shellEnvironment(editor, editorDir, meta.id)
     })
 
   /** @type {LiveSession} */
@@ -232,7 +232,8 @@ function spawnSession(meta, cols, rows, editor, editorDir) {
   }
   live.set(meta.id, session)
 
-  const command = (store.PRESETS[meta.preset] || store.PRESETS.shell).command
+  // 重開後沒有活著的 pty 才會進到這裡。合法的 Claude 對話 id 改打 `claude --resume <uuid>`。
+  const command = store.startupCommand(meta.preset, meta.claudeSessionId)
   let presetSent = !command
   term.onData((chunk) => {
     absorb(session, chunk)
@@ -367,8 +368,9 @@ function openSessionWithMeta(meta, cols, rows, editor, editorDir) {
  *
  * @param {string} [editor]
  * @param {string} [editorDir]
+ * @param {string} [terminalId] 工作階段 id，給 Claude hook 的 `VOICEINK_TERMINAL_ID`
  */
-function shellEnvironment(editor, editorDir) {
+function shellEnvironment(editor, editorDir, terminalId) {
   const env = { ...process.env, TERM: 'xterm-256color' }
   delete env.ELECTRON_RUN_AS_NODE
   delete env.ELECTRON_NO_ASAR
@@ -378,6 +380,9 @@ function shellEnvironment(editor, editorDir) {
     const folder = safeEditorDir(editorDir)
     if (folder) prependPath(env, folder)
   }
+  // 不合法就連繼承來的也拿掉，免得子程序沿用別的分頁的 id。
+  if (store.isSessionId(terminalId)) env.VOICEINK_TERMINAL_ID = terminalId
+  else delete env.VOICEINK_TERMINAL_ID
   return env
 }
 

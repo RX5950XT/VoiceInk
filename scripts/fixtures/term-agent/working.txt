@@ -1,0 +1,12 @@
+ ▐▛███▛█   Claude Code v2.1.283
+                               ▝▜██████▀  Sonnet 5 with low effort · Claude Pro
+                                                                                ▝▝   ▝▝   ~\AppData\Local\Temp
+\voiceink-tests\term-agent-probe-44704
+
+❯ Explain the water cycle in eight short sentences. Do not use tools.
+  Explain the water cycle in eight short sentences. Do not use tools.
+❯ Try "fix lint errors"
+✶ Concocting… ink:low] C:\Users\rx595\AppData\Local\Temp\voiceink-tests\term-agent-probe-44704─ctx:0/1000000──
+──⏸ manual mode on
+                                                                                             ○ low · /effort
+                                                                                                         /rc

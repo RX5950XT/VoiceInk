@@ -5,8 +5,9 @@
  *
  * 這是整個 cc-switch 功能裡唯一會動到「App 之外的使用者真實資料」的地方，所以規矩比別處嚴：
  *
- * 1. **只動 `env` 裡我們自己管的那幾個鍵**（`MANAGED_ENV_KEYS`）。使用者的 `hooks`、
+ * 1. **`applyEnv` 只動 `env` 裡我們自己管的那幾個鍵**（`MANAGED_ENV_KEYS`）。使用者的 `hooks`、
  *    `enabledPlugins`、`statusLine`、`permissions`、`model` 通通原樣留著。
+ *    hooks 另走 `applyHooks`：只加／更新 command 含 `voiceink-claude-hook.exe` 的那幾筆。
  *    上游 cc-switch 是把整份 settings.json 換成供應商的設定（SSOT 模型），照抄過來
  *    等於使用者換一次供應商就把自己的 hooks 與外掛清單全部弄丟。
  * 2. **切換時先清掉前一家留下的鍵**：A 家有 `ANTHROPIC_API_KEY`、B 家用
@@ -313,6 +314,124 @@ function readManagedEnv() {
   return { exists, path: settingsPath(), env, baseUrl: baseUrlOf(env) }
 }
 
+// ===== Claude hooks（只動我們自己的那幾筆）=====
+
+/** command 裡有這個檔名才算我們的 hook，Orca 那些一個字都不碰。 */
+const HOOK_MARKER = 'voiceink-claude-hook.exe'
+
+/**
+ * 事件與 matcher。沒寫 matcher 的就是「全部」（Claude 省略 matcher ＝ 全收）。
+ * PermissionRequest 要明寫 `*`，PreToolUse 只接會把人卡住的那兩個工具。
+ */
+const HOOK_SPECS = Object.freeze([
+  { name: 'SessionStart' },
+  { name: 'UserPromptSubmit' },
+  { name: 'PermissionRequest', matcher: '*' },
+  { name: 'Notification' },
+  { name: 'Stop' },
+  { name: 'StopFailure' },
+  { name: 'SessionEnd' },
+  { name: 'PreToolUse', matcher: 'AskUserQuestion|ExitPlanMode' }
+])
+
+const HOOK_EVENT_NAMES = Object.freeze(HOOK_SPECS.map((spec) => spec.name))
+
+/**
+ * @param {unknown} hook
+ * @returns {boolean}
+ */
+function isOurHook(hook) {
+  return Boolean(hook && typeof hook === 'object' && typeof hook.command === 'string' && hook.command.includes(HOOK_MARKER))
+}
+
+/**
+ * @param {{ name: string, matcher?: string }} spec
+ * @param {string} command
+ * @returns {{ matcher?: string, hooks: Array<{ type: string, command: string, timeout: number }> }}
+ */
+function ourGroup(spec, command) {
+  const hook = { type: 'command', command, timeout: 5 }
+  return spec.matcher ? { matcher: spec.matcher, hooks: [hook] } : { hooks: [hook] }
+}
+
+/**
+ * 一個事件底下：別人的群組原樣留著；我們的收成剛好一筆。
+ * @param {unknown} existing
+ * @param {{ name: string, matcher?: string }} spec
+ * @param {string} command
+ * @returns {unknown}
+ */
+function mergeEvent(existing, spec, command) {
+  const want = ourGroup(spec, command)
+  if (existing == null) return [want]
+  if (!Array.isArray(existing)) return existing
+  const kept = []
+  let placed = false
+  for (const group of existing) {
+    if (!group || typeof group !== 'object' || Array.isArray(group) || !Array.isArray(group.hooks)) {
+      kept.push(group)
+      continue
+    }
+    const others = group.hooks.filter((hook) => !isOurHook(hook))
+    if (others.length === group.hooks.length) {
+      kept.push(group)
+      continue
+    }
+    if (others.length > 0) {
+      kept.push({ ...group, hooks: others })
+      continue
+    }
+    if (placed) continue
+    kept.push(JSON.stringify(group) === JSON.stringify(want) ? group : want)
+    placed = true
+  }
+  if (!placed) kept.push(want)
+  return kept
+}
+
+/**
+ * 純函式。不改輸入。`hooks` 不是物件時原樣退回，呼叫端自己決定不寫。
+ * @param {unknown} settings
+ * @param {string} command
+ * @returns {Record<string, unknown>}
+ */
+function mergeHooks(settings, command) {
+  const base = settings && typeof settings === 'object' && !Array.isArray(settings) ? settings : {}
+  if (base.hooks != null && (typeof base.hooks !== 'object' || Array.isArray(base.hooks))) return { ...base }
+  const current = base.hooks && typeof base.hooks === 'object' ? base.hooks : {}
+  const hooks = { ...current }
+  for (const spec of HOOK_SPECS) hooks[spec.name] = mergeEvent(current[spec.name], spec, command)
+  return { ...base, hooks }
+}
+
+/**
+ * 備份後寫回。讀不到或不是合法 JSON 就不寫（readSettings 會拋）。
+ * 檔案不存在時 readSettings 回 {}，這時會新建一份只含我們的 hooks。
+ * @param {string} command
+ * @returns {{ ok: true, changed: boolean } | { ok: false, reason: string }}
+ */
+function applyHooks(command) {
+  if (typeof command !== 'string' || !command.includes(HOOK_MARKER)) return { ok: false, reason: 'BAD_COMMAND' }
+  let settings
+  try {
+    settings = readSettings()
+  } catch (error) {
+    return { ok: false, reason: error.code || 'SETTINGS_READ_FAILED' }
+  }
+  if (settings.hooks != null && (typeof settings.hooks !== 'object' || Array.isArray(settings.hooks))) {
+    return { ok: false, reason: 'HOOKS_SHAPE' }
+  }
+  const next = mergeHooks(settings, command)
+  if (JSON.stringify(settings) === JSON.stringify(next)) return { ok: true, changed: false }
+  try {
+    backupSettings()
+    writeSettings(next)
+  } catch (error) {
+    return { ok: false, reason: error.code || 'SETTINGS_WRITE_FAILED' }
+  }
+  return { ok: true, changed: true }
+}
+
 module.exports = {
   MANAGED_ENV_KEYS,
   MAX_BACKUPS,
@@ -333,5 +452,10 @@ module.exports = {
   writeSettings,
   backupSettings,
   applyEnv,
-  readManagedEnv
+  readManagedEnv,
+  HOOK_MARKER,
+  HOOK_SPECS,
+  HOOK_EVENT_NAMES,
+  mergeHooks,
+  applyHooks
 }

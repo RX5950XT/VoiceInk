@@ -2163,6 +2163,18 @@ app.whenReady().then(() => {
 
   createMainWindow()
   bootLog('window created')
+  // Claude hooks：複製執行檔、寫 settings、補處理 App 關著時積下的事件。不擋視窗出來。
+  // 帶 --user-data-dir 的（預覽／CDP／e2e）不寫真的 ~/.claude/settings.json：
+  // 寫進去的 command 指向暫存 userData，測完一刪，使用者每次開 claude 都會報 hook 錯誤。
+  setImmediate(() => {
+    try {
+      require('./terminal/claude-hooks').start(app.getPath('userData'), (payload) => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('terminal:agent', payload)
+      }, { writeSettings: !userDataDir })
+    } catch (err) {
+      console.error('[claude-hook] start failed:', err && err.code ? err.code : 'START_FAILED')
+    }
+  })
   migrateLoginItemName()
   initStore()
     .then(() => {
@@ -2261,6 +2273,7 @@ app.on('before-quit', (e) => {
   isQuitting = true
   // 終端機由獨立宿主持有；更新／結束 App 只斷線，明確關閉分頁才結束程序。
   if (terminalMod) terminalMod.disconnect()
+  try { require('./terminal/claude-hooks').stop() } catch { /* 沒裝過 */ }
   // 檔案總管只收自己的 fs.watch；UFFS daemon 是整機索引，關 App 不停它。
   // 殼層 sidecar 要一起收：它抓著 IContextMenu COM 物件，不放會留程序。
   if (explorerMod) {

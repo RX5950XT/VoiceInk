@@ -33,7 +33,8 @@ const SHELLS = {
 const PRESETS = {
   shell: { label: '純 shell', command: '' },
   claude: { label: 'Claude Code', command: 'claude' },
-  codex: { label: 'Codex CLI', command: 'codex' },
+  // ponytail: Codex 的 Windows 背景 daemon 會彈出工具視窗；上游修好後可恢復共用 daemon。
+  codex: { label: 'Codex CLI', command: 'codex --no-daemon' },
   opencode: { label: 'OpenCode', command: 'opencode' },
   agy: { label: 'Antigravity CLI', command: 'agy' },
   grok: { label: 'Grok CLI', command: 'grok' }
@@ -41,6 +42,12 @@ const PRESETS = {
 
 const DEFAULT_SHELL = 'pwsh'
 const DEFAULT_PRESET = 'shell'
+
+/** 跟宿主 `valid_id` 同一條。hook 與環境變數只收這個形狀。 */
+const SESSION_ID_RE = /^[A-Za-z0-9_-]{1,80}$/
+/** Claude Code 的 session id：8-4-4-4-12 十六進位。 */
+const CLAUDE_SESSION_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const MAX_CLAUDE_TRANSCRIPT = 1024
 
 /**
  * 這個工作階段屬於哪個專案（`workspaces.json` 的 `w_...`）。**可選**——
@@ -121,6 +128,51 @@ function normalizePreset(key) {
 }
 
 /**
+ * @param {unknown} value
+ * @returns {boolean}
+ */
+function isSessionId(value) {
+  return typeof value === 'string' && SESSION_ID_RE.test(value)
+}
+
+/**
+ * @param {unknown} value
+ * @returns {boolean}
+ */
+function isClaudeSessionId(value) {
+  return typeof value === 'string' && CLAUDE_SESSION_RE.test(value)
+}
+
+/**
+ * 對話檔必須是磁碟機開頭的絕對路徑，而且檔名就是 `<sessionId>.jsonl`。
+ * @param {unknown} value
+ * @param {string} sessionId
+ * @returns {boolean}
+ */
+function isClaudeTranscript(value, sessionId) {
+  if (!isClaudeSessionId(sessionId) || typeof value !== 'string') return false
+  if (!value || value.length > MAX_CLAUDE_TRANSCRIPT) return false
+  if (/[\u0000-\u001f]/.test(value)) return false
+  const slash = value.replace(/\\/g, '/')
+  if (!/^[A-Za-z]:\//.test(slash)) return false
+  if (slash.split('/').includes('..')) return false
+  return slash.endsWith(`/${sessionId}.jsonl`)
+}
+
+/**
+ * 開新 shell 時要打進去的第一行。Claude 且帶著合法對話 id 才接回，其餘照固定表。
+ * @param {unknown} preset
+ * @param {unknown} sessionId
+ * @returns {string}
+ */
+function startupCommand(preset, sessionId) {
+  const key = normalizePreset(preset)
+  const base = PRESETS[key].command
+  if (key === 'claude' && isClaudeSessionId(sessionId)) return `claude --resume ${sessionId}`
+  return base
+}
+
+/**
  * 工作目錄：必須真的是個目錄，否則退回家目錄。renderer 給什麼都不能直接信。
  * @param {unknown} value
  * @returns {string}
@@ -180,7 +232,7 @@ function sanitizeAll(raw) {
     const shell = normalizeShell(item.shell)
     const preset = normalizePreset(item.preset)
     const cwd = normalizeCwd(item.cwd)
-    out.push({
+    const row = {
       id,
       title: normalizeTitle(item.title, defaultTitle(preset, cwd)),
       // 使用者自己改過名字：前景程式報的標題（OSC 0/2）就不准再蓋掉它
@@ -191,7 +243,14 @@ function sanitizeAll(raw) {
       admin: item.admin === true,
       projectId: normalizeProjectId(item.projectId),
       createdAt: Number.isFinite(item.createdAt) ? item.createdAt : Date.now()
-    })
+    }
+    // 重開後要接回的 Claude 對話。兩個都合法才留，少一個就不要讓宿主去 --resume。
+    const claudeSessionId = isClaudeSessionId(item.claudeSessionId) ? item.claudeSessionId : ''
+    if (claudeSessionId && isClaudeTranscript(item.claudeTranscript, claudeSessionId)) {
+      row.claudeSessionId = claudeSessionId
+      row.claudeTranscript = item.claudeTranscript
+    }
+    out.push(row)
     if (out.length >= MAX_SESSIONS) break
   }
   return out
@@ -314,6 +373,33 @@ function get(id) {
   })
 }
 
+/**
+ * 採用 SessionStart 時把對話 id 與 jsonl 路徑寫進這一筆。不合法就清掉，不要留半套。
+ * @param {string} id
+ * @param {string} sessionId
+ * @param {string} transcript
+ * @returns {Promise<boolean>}
+ */
+function setClaudeSession(id, sessionId, transcript) {
+  return withStore(async () => {
+    const items = await readAll()
+    let found = false
+    const next = items.map((item) => {
+      if (item.id !== id) return item
+      found = true
+      if (!isClaudeSessionId(sessionId) || !isClaudeTranscript(transcript, sessionId)) {
+        const rest = { ...item }
+        delete rest.claudeSessionId
+        delete rest.claudeTranscript
+        return rest
+      }
+      return { ...item, claudeSessionId: sessionId, claudeTranscript: transcript }
+    })
+    if (found) await writeAll(next)
+    return found
+  })
+}
+
 module.exports = {
   MAX_SESSIONS,
   MAX_TITLE,
@@ -324,6 +410,10 @@ module.exports = {
   resolveExe,
   normalizeShell,
   normalizePreset,
+  isSessionId,
+  isClaudeSessionId,
+  isClaudeTranscript,
+  startupCommand,
   normalizeProjectId,
   normalizeCwd,
   normalizeTitle,
@@ -333,5 +423,6 @@ module.exports = {
   get,
   create,
   rename,
-  remove
+  remove,
+  setClaudeSession
 }

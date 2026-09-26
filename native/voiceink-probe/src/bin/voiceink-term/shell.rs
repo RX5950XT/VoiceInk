@@ -24,8 +24,9 @@ pub const PS_INTEGRATION: &str = concat!(
 );
 
 const SHELLS: [(&str, &str); 3] = [("pwsh", "pwsh.exe"), ("powershell", "powershell.exe"), ("cmd", "cmd.exe")];
+// ponytail: Codex 的 Windows 背景 daemon 會彈出工具視窗；上游修好後可恢復共用 daemon。
 const PRESETS: [(&str, &str); 6] =
-    [("shell", ""), ("claude", "claude"), ("codex", "codex"), ("opencode", "opencode"), ("agy", "agy"), ("grok", "grok")];
+    [("shell", ""), ("claude", "claude"), ("codex", "codex --no-daemon"), ("opencode", "opencode"), ("agy", "agy"), ("grok", "grok")];
 
 static EXE_CACHE: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
 
@@ -70,6 +71,44 @@ pub fn preset_command(key: Option<&str>) -> &'static str {
     PRESETS.iter().find(|(k, _)| Some(*k) == key).map_or("", |(_, cmd)| *cmd)
 }
 
+/// `store.js` 的 `isClaudeSessionId`：8-4-4-4-12 的十六進位，大小寫都收。
+pub fn is_claude_session_id(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 36 {
+        return false;
+    }
+    let groups = [8usize, 4, 4, 4, 12];
+    let mut index = 0;
+    for (nth, len) in groups.iter().enumerate() {
+        if nth > 0 {
+            if bytes.get(index) != Some(&b'-') {
+                return false;
+            }
+            index += 1;
+        }
+        for _ in 0..*len {
+            if !bytes.get(index).is_some_and(|b| b.is_ascii_hexdigit()) {
+                return false;
+            }
+            index += 1;
+        }
+    }
+    index == bytes.len()
+}
+
+/// 沒有活著的 pty、要新開 shell 時的第一行。Claude 且 meta 有合法對話 id 才接回。
+pub fn startup_command(key: Option<&str>, session_id: &str) -> String {
+    if key == Some("claude") && is_claude_session_id(session_id) {
+        return format!("claude --resume {session_id}");
+    }
+    preset_command(key).to_string()
+}
+
+/// `host.rs` 的 `valid_id`。環境變數只放這一種，免得把路徑送進子程序。
+pub fn valid_terminal_id(id: &str) -> bool {
+    (1..=80).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
 pub fn home_dir() -> String {
     std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".into())
 }
@@ -102,8 +141,12 @@ pub fn shell_command(key: &str) -> (String, Vec<String>) {
     (exe, args)
 }
 
-/// pty.js 的 `shellEnvironment`：宿主自己的環境＋TERM；Ctrl+G 的編輯器橋接要接手時才動 EDITOR／VISUAL／PATH
-pub fn shell_environment(editor: &str, editor_dir: &str) -> Vec<(String, String)> {
+/// pty.js 的 `shellEnvironment`：宿主自己的環境＋TERM；Ctrl+G 的編輯器橋接要接手時才動 EDITOR／VISUAL／PATH。
+///
+/// `terminal_id` 寫進 `VOICEINK_TERMINAL_ID`，Claude 的 hook 才知道事件屬於哪個分頁。
+/// 這支 exe 的內容雜湊就是宿主版本（`host-runtime.js` 的 `runtimeName`）：舊宿主不會帶這個
+/// 變數，App 連上時認得出來，不用為此改協定版號。
+pub fn shell_environment(editor: &str, editor_dir: &str, terminal_id: &str) -> Vec<(String, String)> {
     let mut env: Vec<(String, String)> = std::env::vars_os()
         .map(|(k, v)| (k.to_string_lossy().into_owned(), v.to_string_lossy().into_owned()))
         // `=C:` 這種每個磁碟機的工作目錄變數 Node 的 process.env 也不給
@@ -118,6 +161,11 @@ pub fn shell_environment(editor: &str, editor_dir: &str) -> Vec<(String, String)
         if !folder.is_empty() {
             prepend_path(&mut env, &folder);
         }
+    }
+    if valid_terminal_id(terminal_id) {
+        set_var(&mut env, "VOICEINK_TERMINAL_ID", terminal_id);
+    } else {
+        env.retain(|(k, _)| !k.eq_ignore_ascii_case("VOICEINK_TERMINAL_ID"));
     }
     env
 }
@@ -187,5 +235,23 @@ mod tests {
         assert_eq!(safe_editor_dir("C:\\x\\other"), "");
         assert_eq!(safe_editor_dir("relative\\editor-bridge"), "");
         assert_eq!(safe_editor_dir("C:\\a;b\\editor-bridge"), "");
+    }
+
+    #[test]
+    fn terminal_id_and_resume() {
+        let env = shell_environment("", "", "t_abc-1");
+        let hit = env.iter().find(|(k, _)| k == "VOICEINK_TERMINAL_ID").map(|(_, v)| v.as_str());
+        assert_eq!(hit, Some("t_abc-1"));
+        let bad = shell_environment("", "", "../x");
+        assert!(bad.iter().all(|(k, _)| !k.eq_ignore_ascii_case("VOICEINK_TERMINAL_ID")));
+        let id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        assert!(is_claude_session_id(id));
+        assert!(!is_claude_session_id("not-a-uuid"));
+        assert!(!is_claude_session_id(&format!("{id};calc")));
+        assert_eq!(startup_command(Some("claude"), id), format!("claude --resume {id}"));
+        assert_eq!(startup_command(Some("claude"), "not-a-uuid"), "claude");
+        assert_eq!(startup_command(Some("claude"), ""), "claude");
+        assert_eq!(startup_command(Some("codex"), id), "codex --no-daemon");
+        assert_eq!(startup_command(Some("nope"), id), "");
     }
 }

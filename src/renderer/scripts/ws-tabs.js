@@ -366,7 +366,7 @@ function renderTabs() {
     open.appendChild(label)
     if (tab.kind === 'terminal') {
       const status = document.createElement('span')
-      status.className = 'ws-tab-status-label'
+      status.className = tab.state === 'waiting' ? 'ws-tab-status-label is-waiting' : 'ws-tab-status-label'
       status.textContent = tab.stateLabel || '已停止'
       open.appendChild(status)
     }
@@ -972,7 +972,10 @@ export function paintTerminalTab(id, meta) {
     const led = open.querySelector('.ws-tab-state')
     if (led) led.className = `ws-tab-state ws-tab-state-${tab.state}`
     const status = open.querySelector('.ws-tab-status-label')
-    if (status) status.textContent = tab.stateLabel
+    if (status) {
+      status.textContent = tab.stateLabel
+      status.classList.toggle('is-waiting', tab.state === 'waiting')
+    }
     const label = open.querySelector('.ws-tab-label')
     if (label && renamingId !== id) label.textContent = shortTitle(tab.title)
     open.querySelector('.ws-tab-unread')?.remove()

@@ -7,6 +7,7 @@ const foreground = require('./foreground')
 const editorBridge = require('./editor-bridge')
 const clipboardImage = require('./clipboard-image')
 const background = require('./background')
+const claudeHooks = require('./claude-hooks')
 const { HostClient } = require('./host-client')
 
 /** 複製上限：scrollback 5000 列 × 寬螢幕也到不了這麼多，擋的是 renderer 亂送 */
@@ -34,6 +35,8 @@ function forward(event, payload) {
   if (event !== 'terminal:status') { emit(event, payload); return }
   const { title, cwd, ...rest } = payload
   if (cwd) links.noteCwd(payload.id, cwd)
+  // shell 提示字元回來（exitCode 從 null 變數字）或 pty 結束：Claude 已經不在了，含當掉沒送 SessionEnd。
+  claudeHooks.noteStatus(payload)
   emit(event, { ...rest, osTitle: title || '', liveCwd: cwd || '' })
 }
 
@@ -62,7 +65,8 @@ async function listSessions() {
       state: state?.state || 'stopped',
       exitCode: state?.exitCode ?? null,
       osTitle: state?.title || '',
-      liveCwd: state?.cwd || ''
+      liveCwd: state?.cwd || '',
+      agent: claudeHooks.agentOf(item.id)
     }
   })
 }
@@ -79,7 +83,9 @@ async function openSession(id, cols, rows) {
   // 接不接手在這裡決定，宿主拿到空字串就完全不動 EDITOR／VISUAL。
   const editor = bridgeTakesOver() ? editorBridge.shimCommand() : ''
   const editorDir = editor ? editorBridge.shimDir() : ''
-  const snapshot = await getClient().request('open', { sessionId: meta.id, meta, cols, rows, editor, editorDir }, true)
+  // 對話檔不在就拿掉 claudeSessionId，宿主才不會打出 `claude --resume` 然後報找不到。
+  const safe = await claudeHooks.prepareResume(meta)
+  const snapshot = await getClient().request('open', { sessionId: safe.id, meta: safe, cols, rows, editor, editorDir }, true)
   if (snapshot?.cwd) links.noteCwd(meta.id, snapshot.cwd)
   return snapshot
 }
@@ -120,7 +126,10 @@ async function deleteSession(id) {
 
 function writeSession(id, data) {
   if (typeof data !== 'string' || !data) return false
-  return getClient().request('write', { sessionId: String(id || ''), data: data.slice(0, terminal.MAX_WRITE_CHARS) })
+  const key = String(id || '')
+  // 回答了提問 → working；Esc／Ctrl+C 中斷 → idle（中斷不會有 Stop hook）。
+  claudeHooks.noteInput(key, data)
+  return getClient().request('write', { sessionId: key, data: data.slice(0, terminal.MAX_WRITE_CHARS) })
 }
 
 module.exports = {

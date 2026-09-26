@@ -8,6 +8,7 @@
 //! - `voiceink-probe dir-size <path> …` ＝ 檔案頁的資料夾大小（`explorer/size.js`）。
 //! - `voiceink-probe disk-tree <path> …` ＝ 系統監控的磁碟空間（`sysmon/disktree.js`）。
 //! - `voiceink-probe hook [--key 0xA5]` ＝ 語音輸入的全域熱鍵（取代 .NET 的 VoiceInkHook.exe，見 hook.rs）。
+//! - `voiceink-probe claude-hook` ＝ Claude Code 的 hook。stdin 收事件、寫到 exe 旁邊的 events/，**stdout 保持空白**。
 //!
 //! GUI 子系統：只靠 stdio 管道跟 main 講話，不需要主控台——主控台程式每叫起一次，
 //! Windows 就多掛一顆隱形的 conhost.exe。
@@ -16,6 +17,7 @@
 
 #![windows_subsystem = "windows"]
 
+mod claude_hook;
 mod detail;
 mod dirsize;
 mod disktree;
@@ -105,8 +107,9 @@ fn main() {
         Some("dir-size") => std::process::exit(dirsize::run(&args[2..])),
         Some("disk-tree") => std::process::exit(disktree::run(&args[2..])),
         Some("hook") => std::process::exit(hook::run(&args[2..])),
+        Some("claude-hook") => std::process::exit(claude_hook::run()),
         _ => {
-            eprintln!("usage: voiceink-probe sysmon|observer|usage-scan|dir-size|disk-tree|hook");
+            eprintln!("usage: voiceink-probe sysmon|observer|usage-scan|dir-size|disk-tree|hook|claude-hook");
             std::process::exit(2);
         }
     }

@@ -70,7 +70,7 @@ pub struct Session {
     pub cols: i64,
     pub rows: i64,
     pub pid: Option<u32>,
-    preset: &'static str,
+    preset: String,
     preset_sent: bool,
     pub shell: String,
     pub cwd: String,
@@ -164,7 +164,7 @@ impl Host {
         let changed = before != (s.tracker.state, s.tracker.title.clone(), s.tracker.cwd.clone());
         let preset = (!s.preset_sent).then(|| {
             s.preset_sent = true;
-            s.preset
+            s.preset.clone()
         });
         if !hub.flush_pending {
             hub.flush_pending = true;
@@ -212,7 +212,7 @@ impl Host {
 
     fn spawn_pty(self: &Arc<Self>, id: &str, shell_key: &str, cwd: &str, cols: i64, rows: i64, editor: &str, editor_dir: &str) -> Result<(Backend, u32, u64), ()> {
         let (exe, args) = shell::shell_command(shell_key);
-        let env = shell::shell_environment(editor, editor_dir);
+        let env = shell::shell_environment(editor, editor_dir, id);
         let pty = Pty::spawn(&exe, &args, cwd, &env, cols as u16, rows as u16).map_err(|_| ())?;
         let generation = self.next_gen.fetch_add(1, Ordering::Relaxed);
         let io = Arc::new(PtyIo { hpc: Mutex::new(Some(pty.hpc())), input: pty.input(), process: pty.process });
@@ -260,7 +260,11 @@ impl Host {
                 return Err(());
             }
             let shell_key = shell::normalize_shell(meta.get("shell").and_then(Value::as_str));
-            let preset = shell::preset_command(meta.get("preset").and_then(Value::as_str));
+            // 沒有活著的 pty 才會走到這裡（重開 App／宿主之後點回來）。合法的對話 id 改接回。
+            let preset = shell::startup_command(
+                meta.get("preset").and_then(Value::as_str),
+                meta.get("claudeSessionId").and_then(Value::as_str).unwrap_or(""),
+            );
             let cwd = shell::normalize_cwd(meta.get("cwd").and_then(Value::as_str));
             let is_admin = meta.get("admin") == Some(&Value::Bool(true));
             let (backend, pid, generation) = if is_admin {
@@ -279,8 +283,8 @@ impl Host {
                 cols: c,
                 rows: r,
                 pid,
-                preset,
                 preset_sent: preset.is_empty(),
+                preset,
                 shell: shell_key,
                 cwd,
             };

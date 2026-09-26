@@ -230,6 +230,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
       const handler = (_event, payload) => callback(payload)
       ipcRenderer.on('terminal:status', handler)
       return () => ipcRenderer.removeListener('terminal:status', handler)
+    },
+    /**
+     * Claude hook 歸約出的狀態。`state: null`＝這個終端機目前沒有 hook 追蹤中的 Claude。
+     * @param {(payload: { id: string, state: 'working'|'waiting'|'idle'|null }) => void} handler
+     * @returns {() => void}
+     */
+    onAgent: (handler) => {
+      const wrapped = (_event, payload) => handler(payload)
+      ipcRenderer.on('terminal:agent', wrapped)
+      return () => ipcRenderer.removeListener('terminal:agent', wrapped)
     }
   },
 

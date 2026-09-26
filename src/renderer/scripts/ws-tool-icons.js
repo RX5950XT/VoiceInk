@@ -113,6 +113,8 @@ const ICONS = {
   'state-done': { d: ['M3.6 8.4 6.6 11.4 12.4 4.8'] },
   'state-fail': { d: ['M4.6 4.6 11.4 11.4', 'M11.4 4.6 4.6 11.4'] },
   'state-idle': { d: ['M8 3.4a4.6 4.6 0 1 1 0 9.2 4.6 4.6 0 0 1 0-9.2Z'] },
+  // 等人回答：驚嘆號。轉圈是還在跑，空心圓是閒著，這個是停下來等你。
+  'state-waiting': { d: ['M8 2.8v6.2', 'M8 12.2h.01'] },
   'state-exited': { d: ['M4.8 4.8h6.4v6.4H4.8Z'] }
 }
 
@@ -166,6 +168,7 @@ export function terminalStateIcon(item) {
  */
 export function stateIconName(item) {
   if (item?.state === 'running') return 'state-running'
+  if (item?.state === 'waiting') return 'state-waiting'
   if (item?.state === 'idle') {
     if (item.exitCode === null || item.exitCode === undefined) return 'state-idle'
     return item.exitCode === 0 ? 'state-done' : 'state-fail'

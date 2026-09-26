@@ -726,3 +726,27 @@ Review：
 - [x] AI 記錄標題不再兩行截斷；main 端標題上限 80 → 500 字；「接續」疊到標頭右邊，標題吃滿寬度
 - Review：`test-workspace-ui` 185、`test-workspace` 276、`e2e-workspace-cdp` 183、`e2e-terminal-cdp` 59 全過；打包版截圖確認標題無截斷、按鈕不壓字
 - [x] 對話記錄工具列加「複製路徑」：main 的 `sessionDetail` 多回 `file`（`findSessionFile` 驗過屬於這個專案）；工具列按鈕不折行、標題與附註改省略號並放 `title`
+
+# 2026-09-26 — VoiceInk 啟動 Codex CLI 彈出外部終端機
+
+- [x] 查明 Codex CLI 0.157.1 的 Windows daemon 行為，確認 `--no-daemon` 可用
+- [x] 將 JS／Rust 的 Codex 預設指令改為 `codex --no-daemon`；實際 ConPTY 啟動與設定警告檢查通過
+- [x] 修正實際安裝的 npm Codex `bin/codex.js`，Windows 自動補 `--no-daemon`（不重複補旗標）；原檔已備份為 `codex.js.bak-20260926-190841`
+- [x] 實測普通 `codex` 在 ConPTY 啟動後帶 `--no-daemon`；version、既有旗標、exec/resume/app-server help 全過
+- [ ] 本回覆完成後只重接 Codex 對話 `01a0dd4f-1666-7c20-bfb4-cad301a0daa7`，保留其他三個終端機；執行結果見 `C:/Users/rx595/.codex/codex-no-daemon-migration.json`
+- 注意：npm 更新會覆蓋本機 launcher 修正；VoiceInk 原始碼的啟動旗標仍保留作為應用程式端修正。診斷命令已改走 `tty: true` 的 ConPTY，避免 daemon 的非 PTY shell 彈窗。
+- Review：`test-terminal.js` 103/103、Rust `voiceink-term` 11/11、`test-terminal-host.js` 通過；`build:probe`、`electron:pack` 通過。打包版 `e2e-terminal-cdp.js` 中途被工具中斷，未取得完整通過結果；其隔離宿主與暫存資料已清理。
+
+# 2026-09-27 — 終端機借鑑 Pebrel：Claude 狀態判定＋hooks＋重開接回
+
+- [x] A（Grok）：`voiceink-probe claude-hook`、`claude-hooks.js`（安裝 exe／settings、監看、歸約）、`VOICEINK_TERMINAL_ID`（JS／Rust 宿主）、`claude --resume`
+- [x] B（Grok）：`term-agent.js`（畫面規則＋`mergeState`）、分頁「等你回答」、真實畫面 fixture
+- [x] 驗收修正：Esc／Ctrl+C 中斷回 idle（中斷不送 Stop）、焦點／滑鼠回報不算回答；`--user-data-dir` 不寫真的 settings；真 claude 測試改成 `VOICEINK_LIVE_CLAUDE=1` 才跑
+- Review：`test-claude-hooks` 68、`test-term-agent` 全過、`test-terminal` 105、`test-terminal-ui` 12、`test-workspace-ui` 183、`test-terminal-links` 125、`test-terminal-host`（Rust／JS）全過、`cargo test` 25＋12；打包版＋真 Claude 驗收 11/11 ＋ 重開接回 2/2
+
+# 2026-09-27 — 發行 v1.35.0
+
+- [x] 重跑 Claude hooks、終端機、工作區與 Rust 回歸；重建 probe sidecar
+- [x] 更新預覽包並跑隔離的 packaged terminal CDP
+- [x] 同步 package.json、README、CONTEXT 版本，建置正式安裝檔
+- [ ] 驗證安裝檔、latest.yml、blockmap，提交並發布 GitHub Release

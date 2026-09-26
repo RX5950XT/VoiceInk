@@ -316,7 +316,7 @@ fn spawn_elevated<F: Fn(Value) + Send + 'static>(id: &str, msg: &Value, terms: &
         let send = send.clone();
         move |v: Value| (send.lock().unwrap())(v)
     };
-    let pty = match Pty::spawn(&exe, &args, &cwd, &shell::shell_environment("", ""), c as u16, r as u16) {
+    let pty = match Pty::spawn(&exe, &args, &cwd, &shell::shell_environment("", "", id), c as u16, r as u16) {
         Ok(p) => p,
         Err(_) => return post(json!({ "ev": "exit", "id": id, "code": 1 })),
     };

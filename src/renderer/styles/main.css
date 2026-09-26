@@ -2443,10 +2443,19 @@ option:disabled:checked {
   background-color: var(--success);
 }
 
+/* 權限提問／等人：跟運行中的綠、閒置的灰分開。深淺色都用同一顆 --warning。 */
+.ws-tab-state-waiting {
+  background-color: var(--warning);
+}
+
 .ws-tab-status-label {
   flex: none;
   font-size: 11px;
   color: var(--text-secondary);
+}
+
+.ws-tab-status-label.is-waiting {
+  color: var(--warning);
 }
 
 /* 開著的終端機：每顆一個小晶片＝「哪一家 CLI」＋「現在在幹嘛」，一律只放圖示。 */
@@ -2485,6 +2494,10 @@ option:disabled:checked {
 
 .ws-status-icon.state-running {
   color: var(--accent-primary);
+}
+
+.ws-status-icon.state-waiting {
+  color: var(--warning);
 }
 
 .ws-status-icon.state-done {

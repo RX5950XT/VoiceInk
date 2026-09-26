@@ -278,6 +278,11 @@ console.log('\n[pty 參數]')
   ok('shellCommand 的 PowerShell 帶注入字串', pty.shellCommand('pwsh').args.includes(pty.PS_INTEGRATION))
   ok('shellCommand 的 cmd 不帶參數', pty.shellCommand('cmd').args.length === 0)
   ok('shellCommand 認不得的 key 退回 cmd', pty.shellCommand('../../evil.exe').args.length === 0)
+
+  const withId = pty.shellEnvironment('', '', 't_abc')
+  ok('shell 帶 VOICEINK_TERMINAL_ID', withId.VOICEINK_TERMINAL_ID === 't_abc')
+  const badId = pty.shellEnvironment('', '', '../x')
+  ok('不合法的終端機 id 不進環境', badId.VOICEINK_TERMINAL_ID === undefined)
 }
 
 // ===== 管理員終端機 =====

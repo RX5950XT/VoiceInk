@@ -6,13 +6,22 @@
 ## 專案概況
 
 VoiceInk：Windows Electron AI 工作台。Vanilla JS + Vite（無前端框架），Electron 43.4.1 ＋ Node.js 22。
-目前版本 **v1.33.1**（Telegram 卡在「等待網路連線」或格子當掉會自己全部重載、當機原因記到 `crash.log`、Grok／Antigravity 額度 token 過期會代跑 CLI 自動續期、使用時長記得到 VoiceInk 自己；前版 v1.33.0 系統監控強制結束權限不足會跳 UAC、Telegram 多開一格一格載且 ✕ 會交棒；前版 v1.32.0 系統監控多「磁碟空間」子分頁（仿 disktree，Rust 平行掃描＋treemap）、檔案頁補齊內容視窗與 ZIP 瀏覽；前版 v1.31.0 最重的幾段改 Rust：終端機宿主 `voiceink-term.exe`、用量掃描、資料夾大小、語音輸入熱鍵；常駐 sidecar 不再掛 conhost；前版 v1.30.0 主程序同步 I/O 改非同步＋逾時修「沒有回應」、全專案 UX 稽核、檔案頁排序／範圍切換／欄寬、終端機快捷鍵；再前 v1.29.0 語音轉文字頁多了錄音機、即時字幕留逐字稿紀錄；再前 v1.28.1 Telegram 切回來不再卡；再前 v1.25.0：檔案總管雙欄右欄變成真的能用、操作中心收進狀態列且同名時可覆蓋、
+目前版本 **v1.35.0**（終端機新增 Claude Code 狀態與重開接回；檔案頁支援本機磁碟插拔更新與手機網頁瀏覽；前版 v1.34.0 工作區檔案可就地新增、改名並內建瀏覽器；Telegram 卡在「等待網路連線」或格子當掉會自己全部重載、當機原因記到 `crash.log`、Grok／Antigravity 額度 token 過期會代跑 CLI 自動續期、使用時長記得到 VoiceInk 自己；前版 v1.33.0 系統監控強制結束權限不足會跳 UAC、Telegram 多開一格一格載且 ✕ 會交棒；前版 v1.32.0 系統監控多「磁碟空間」子分頁（仿 disktree，Rust 平行掃描＋treemap）、檔案頁補齊內容視窗與 ZIP 瀏覽；前版 v1.31.0 最重的幾段改 Rust：終端機宿主 `voiceink-term.exe`、用量掃描、資料夾大小、語音輸入熱鍵；常駐 sidecar 不再掛 conhost；前版 v1.30.0 主程序同步 I/O 改非同步＋逾時修「沒有回應」、全專案 UX 稽核、檔案頁排序／範圍切換／欄寬、終端機快捷鍵；再前 v1.29.0 語音轉文字頁多了錄音機、即時字幕留逐字稿紀錄；再前 v1.28.1 Telegram 切回來不再卡；再前 v1.25.0：檔案總管雙欄右欄變成真的能用、操作中心收進狀態列且同名時可覆蓋、
 資料夾監看不再漏事件；前版終端機 PATH 不再被 Ctrl+G 橋接蓋掉；再前檢查更新改走鏡像）。
 
 nav 十頁：聊天（預設，**專案工作區與終端機都在同一頁**）｜Telegram（官方網頁版 `web.telegram.org/a` 放進 `<webview>`，可並排多開最多 4 格（沒存過開 2 格；每格卡 600px，Web A 一律手機版版面）、共用 `persist:telegram`，一格載完等 1.5 秒才載下一格（同時開會有好幾格拿同一把金鑰一起連），每格頂端細列 ✕ 關（先導到 `about:blank` 再拿掉：直接拿掉 webview 不觸發 beforeunload，關到 Web A 的主分頁其他格會全斷）／最右格 ＋ 再開，每格停的聊天室存 store `telegramPanes`（不用 localStorage：結束走 `app.exit()` 會掉最後幾秒的寫入）；`telegram-page.js`，第一次點才建）｜檔案｜CC代理（`data-page` 仍是 `ccswitch`）｜
 AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定。額度不再是一頁：收成工作區主區最下面那條，用量統計在 CC代理。
 
 ## 架構
+
+### 終端機看得懂 Claude 在忙／等你／做完，重開後接回對話（2026-09-27）
+
+- **Claude hooks**：App 啟動時把 `voiceink-probe.exe claude-hook` 複製成 `<userData>/claude-hook/voiceink-claude-hook.exe`，並在 `~/.claude/settings.json` 掛 8 個事件（只動自己那幾筆）。shell 帶 `VOICEINK_TERMINAL_ID`，hook 把事件落到 `claude-hook/events/`，`terminal/claude-hooks.js` 監看、歸約成 working／waiting／idle，送 `terminal:agent`；`terminal:list` 多 `agent`。
+- **看畫面備援**（`term-agent.js`）：沒有 hook 時讀 xterm 目前這一面判斷；規則是資料表（目前只有 Claude），fixture 在 `scripts/fixtures/term-agent/`。
+- **分頁新狀態「等你回答」**（`--warning` 色、驚嘆號圖示）；未讀點與 Git 重讀改看合併後的狀態。
+- **接回**：採用 SessionStart 時把 `claudeSessionId`／`claudeTranscript` 存進 `terminals.json`；沒有活著的 pty 時（App／宿主重開、重開機），`claude` preset 且對話檔還在就打 `claude --resume <id>`。
+- 測試：`test-claude-hooks.js`（`VOICEINK_LIVE_CLAUDE=1` 才真的叫 claude）、`test-term-agent.js`；打包版＋真 Claude 驗收走過 idle→運行中→等你回答→Esc→閒置、Stop、SessionEnd、重開接回。
+- 宿主的 exe 雜湊變了：更新後舊宿主會被判成舊版，要重開宿主（或開新終端機）`VOICEINK_TERMINAL_ID` 才會生效。
 
 ### 系統監控強制結束可提升權限；Telegram 多開穩定（2026-09-26）
 
