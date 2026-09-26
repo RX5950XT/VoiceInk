@@ -465,15 +465,6 @@ function shutdown() {
 }
 
 /**
- * @param {unknown} target
- */
-function reveal(target) {
-  const full = paths.resolveExisting(target)
-  shell.showItemInFolder(full)
-  return true
-}
-
-/**
  * @param {unknown} items
  * @param {unknown} mode
  */
@@ -631,7 +622,6 @@ module.exports = {
   shellInvoke,
   shellRelease,
   shutdown,
-  reveal,
   setClipboard,
   paste,
   dropEntries,

@@ -6,7 +6,7 @@
  * 錄好的檔可以直接「轉錄」＝交給檔案轉錄子分頁（main 端 ffmpeg 讀得了 webm）。
  */
 
-import { showToast, electronAPI, cleanIpcError } from './app.js'
+import { showToast, electronAPI, cleanIpcError, openInFilesPage } from './app.js'
 import { askConfirm } from './app-dialog.js'
 
 /** 64kbps opus：200MB 上限約 7 小時，語音清楚 */
@@ -50,7 +50,7 @@ function bindOnce() {
   $('recStartBtn').addEventListener('click', start)
   $('recStopBtn').addEventListener('click', () => stop())
   $('recOpenFolderBtn').addEventListener('click', () => {
-    call(electronAPI.sttArchive.openRecordings()).catch((e) => showToast(cleanIpcError(e), 'error'))
+    call(electronAPI.sttArchive.openRecordings()).then((dir) => openInFilesPage(dir)).catch((e) => showToast(cleanIpcError(e), 'error'))
   })
   $('recList').addEventListener('click', onListClick)
 }

@@ -527,7 +527,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     remove: (id) => ipcRenderer.invoke('hfmodels:remove', id),
     /** 走系統對話框選 .gguf（沒有路徑參數） */
     import: () => ipcRenderer.invoke('hfmodels:import'),
-    /** 在檔案總管開模型資料夾（使用者要自己把 gguf 拖進去） */
+    /** 模型資料夾的路徑（renderer 用 App 的檔案頁開，使用者要自己把 gguf 拖進去） */
     openFolder: () => ipcRenderer.invoke('hfmodels:openFolder'),
     /** 手動拖檔進去之後重新掃描 */
     rescan: () => ipcRenderer.invoke('hfmodels:rescan'),
@@ -720,7 +720,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     shellMenu: (spec) => ipcRenderer.invoke('explorer:shellMenu', spec),
     shellInvoke: (token, cmd, dir) => ipcRenderer.invoke('explorer:shellInvoke', token, cmd, dir),
     shellRelease: (token) => ipcRenderer.invoke('explorer:shellRelease', token),
-    reveal: (target) => ipcRenderer.invoke('explorer:reveal', target),
     setClipboard: (items, mode) => ipcRenderer.invoke('explorer:setClipboard', items, mode),
     paste: (toDir) => ipcRenderer.invoke('explorer:paste', toDir),
     dropEntries: (items, toDir, mode) => ipcRenderer.invoke('explorer:dropEntries', items, toDir, mode),

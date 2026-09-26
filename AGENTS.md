@@ -204,6 +204,7 @@ tag 要與 `package.json` 的 version 一致。
 - 內建瀏覽器是 `<webview>`：`webviewTag` **只開在主視窗**、guest 不掛 preload、popup 在 app 層用 `web-contents-created` ＋ `setWindowOpenHandler` 收斂。網址正規化要先照原樣解析、**協定不是 http(s) 才**補 `http://`（`localhost:5173` 會被當成協定）。本機 HTML 預覽用 `srcdoc` ＋ `sandbox="allow-scripts"`，**不給 `allow-same-origin`**。
   **每個分頁一顆 webview**（共用一顆切回來整頁重載，「上一頁」會走進別的分頁的歷史）；UA 的 `display: flex` 壓得過 `[hidden]`，要自己寫 `webview[hidden] { display: none }`。工具列只有一組，背景分頁的 `did-start-loading` 不准改正在看的那一頁。關掉分頁／移除專案才 `pruneBrowserGuests`；**換專案要停放**（`projectId`＋分頁 id），切回來不重載、不用再按前往。
 - **檢視變更不新開分頁**：同一個檔案（id `e:`）就地把 `kind` 換成 `diff` 並設 `diffView`。存檔時 `kind` 仍要寫 `editor`，否則下次開專案草稿接不回來。
+- **檔案樹新增／改名是就地輸入框**（`inline-edit.js`，F2 也能改名；「檔案」頁共用同一支），不跳對話框。打字期間 `renderTree` 對同一專案直接略過（監看重畫會拆掉輸入框），打完一律再 `renderTree` 補回；換專案就放棄那一格。
 - **檔案樹執行**：`.exe`／`.lnk` 走 `workspace:openEntry`（`resolveExisting`，只收專案內）；`.cmd`／`.ps1` 開終端機跑。`.js`／`.py` 點下去仍開編輯器。三份清單要有 `openEntry`。
 - **Git 動作鈕**：側欄拖到 180px 時要 `flex-wrap`，按鈕不准 `min-width: 0`（縮了字會溢出疊在一起）。
 - 分頁拖曳是 pointer 跟手＋FLIP（不是 HTML5 DnD），transform 只吃 X、讓位距離用量出來的 gap、要加 `scrollLeft` 變化量；檔案樹的拖曳**刻意**用 HTML5 DnD（兩邊取捨不同，不要統一）。切分頁的 click 掛在 `.ws-tab-open` 不是 `.ws-tab`。
@@ -217,9 +218,11 @@ tag 要與 `package.json` 的 version 一致。
 - **整機搜尋不准自己 walk C:\\**：檔名搜尋只代跑本機 `uffs`（NTFS MFT）。pattern 拒 `>` regex 與以 `-` 開頭的參數。進檔案頁自動下載並跳一次 UAC 裝 Access Broker、拉起 daemon；開機不跳 UAC。使用者按否就寫 `uffsAuto: false`，只留「啟用快速搜尋」。
 - **`uffs.exe` 不打進 asar**；只跑 `<userData>/uffs/`，不認 PATH／`%LOCALAPPDATA%\uffs`。zip checksum 缺或對不上就失敗。關 App **不停** UFFS daemon。刪／改名／搬移擋磁碟根目錄、`%SystemRoot%` 本身、使用者家目錄本身（`assertMutable`）；家目錄根層可以新增／貼上／還原子項（`assertCreatable` 只擋磁碟根與 Windows 目錄）。`resolveExisting` 回使用者路徑，刪 junction 不跟目標。清空回收筒不吃 list 的 2000 上限。預設刪除丟進系統資源回收筒（寫 `$I`／`$R`，Electron 裡走 `shell.trashItem`）；`{ permanent: true }` 才 `rm`。複製／搬移撞名產出 `name (2).ext`，不覆寫。CDP 暫存 userData 與沙箱的 `uffsAuto` 關掉，且忽略 `uffsEnsure({ force })`，避免自動化卡在 UAC。
 - 三份清單：`explorer/index.js` exports、`main.js` 的 `registerExplorerIpc` service、`preload.js` 的 `electronAPI.explorer`。回歸 `test-explorer.js` 的 [Q][Q2]。
+- **「開資料夾／顯示位置」一律用 App 的檔案頁**（renderer 的 `openInFilesPage(path, 'file'|'dir')`），不叫 `shell.showItemInFolder`／`shell.openPath(資料夾)`：main 只驗路徑、回絕對路徑。從別頁開過去**開新分頁**（同資料夾已有分頁就切過去），不蓋掉使用者原本那頁。工作區、編輯器、磁碟空間、錄音機、模型、HF、使用時長都走這條。回歸 `e2e-workspace-cdp.js` 的 [I]。
 - **殼層 sidecar 的主執行緒一定要跑訊息迴圈**（`Program.cs`：stdin 在背景執行緒讀、主執行緒 `MsgWaitForMultipleObjectsEx`＋`PeekMessage`）。以前卡在 `ReadLine`，「內容」視窗那種開在別的執行緒、要回叫這個 STA 的東西 `InvokeCommand` 回報成功卻永遠不出來。「內容」＝App 自己的選單項目＋Alt+Enter，走殼層 `properties` 動詞（殼層那份不重複列）。回歸 `e2e-explorer-zip-cdp.js`。
 - **ZIP 是唯讀的虛擬資料夾**（`explorer/zip.js` 讀中央目錄＋`zip-ops.js` 接到門面）：路徑就是 `C:\x\a.zip\sub\f.txt`，`index.js` 每個入口先問 `zipOps.zipOf`。只支援 stored／deflate；entry 名稱含 `..`／絕對路徑整筆丟掉（zip-slip），解出量超過宣告大小或 CRC 不符就中止並刪半成品。開檔／拖出去／詳情解到 `tempRoot()`（測試用 `VOICEINK_ZIP_TEMP` 指到自己的暫存，不准寫進系統那份）；複製貼上＝解壓縮、剪下一律當複製；貼進／拖進壓縮檔回 `READ_ONLY`。renderer 看 listDir 回的 `archive` 決定唯讀介面（`blockInZip` 擋在刪除／改名／貼上／新增的函式本身）。回歸 `test-explorer-zip.js`。
 - **右鍵選單等殼層項目時只看「是不是換到別的資料夾」**，不看 `navSeq`：同一個資料夾被背景重讀（監看、解壓縮完）也會遞增 navSeq，選單會被安靜丟掉。
+- **新增／改名是就地輸入框**（`inline-edit.js`）：新增照檔案總管先建「新增資料夾」／「新文字文件.txt」（撞名往下編號），再直接進入改名，Esc＝保留預設名。打字期間 `inlineEditing` 讓 `paintList`／`paintSecondPane`／`paintSidebar` 直接略過（重畫會拆掉輸入框、監看與虛擬捲動都會觸發），打完一律補畫。回歸 `e2e-explorer-dual-cdp.js` 的 [1][3]。
 - **右鍵「加入工作區專案」不另開 IPC**：沿用工作區的 `workspace:addDropped`（preload 的 `addFolders` 只把字串路徑送過去），main 端仍走 `store.create` 的全套驗證——路徑要存在、必須是資料夾、撞路徑回原本那筆。虛擬位置（本機首頁、資源回收筒）在 renderer 就擋掉。回歸 `test-explorer.js` 的 [S2] ＋ `e2e-explorer-cdp.js` 的 [C2]。
 - **列目錄要「先排序再截斷」，不是先截斷再排序**：`listDir` 舊版是
   `dirents.slice(0, MAX_ENTRIES)` 之後才 `sortEntries`，所以在 node_modules／Downloads

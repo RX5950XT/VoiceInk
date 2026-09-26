@@ -233,19 +233,11 @@ function createScreentimeService(deps = {}) {
     return { saved: true, fileName: path.basename(out), rows: table.rows.length }
   }
 
+  /** 資料夾路徑；renderer 用 App 的「檔案」頁開，不叫系統檔案總管 */
   function openFolder() {
     const dir = dbMod.destDir(userDataPath)
     fs.mkdirSync(dir, { recursive: true })
-    const { shell } = require('electron')
-    return shell.openPath(dir).then((msg) => {
-      if (msg) {
-        const err = new Error('open failed')
-        err.code = 'SCREENTIME_FOLDER'
-        err.userMessage = '打不開資料夾'
-        throw err
-      }
-      return { dirName: 'screentime' }
-    })
+    return { dir }
   }
 
   function emptyCards() {

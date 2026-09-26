@@ -125,10 +125,9 @@ async function listFiles(projectId) {
   return search.listFiles(await rootOf(projectId))
 }
 
+/** 專案內某個路徑的絕對路徑（驗過存在）；renderer 拿去用 App 的「檔案」頁開。 */
 async function reveal(projectId, relPath) {
-  const full = files.resolveExisting(await rootOf(projectId), relPath)
-  shell.showItemInFolder(full)
-  return true
+  return files.resolveExisting(await rootOf(projectId), relPath)
 }
 
 /**

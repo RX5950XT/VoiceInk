@@ -1878,7 +1878,6 @@ registerExplorerIpc({
     shellMenu: (...args) => loadExplorer().shellMenu(...args),
     shellInvoke: (...args) => loadExplorer().shellInvoke(...args),
     shellRelease: (...args) => loadExplorer().shellRelease(...args),
-    reveal: (...args) => loadExplorer().reveal(...args),
     setClipboard: (...args) => loadExplorer().setClipboard(...args),
     paste: (...args) => loadExplorer().paste(...args),
     dropEntries: (...args) => loadExplorer().dropEntries(...args),
@@ -2075,8 +2074,7 @@ registerDictationIpc({
 sttArchive.configure({ userDataPath: app.getPath('userData') })
 sttArchive.registerSttArchiveIpc({
   ipcMain,
-  isMainSender: assertMainWindowSender,
-  openPath: (dir) => shell.openPath(dir)
+  isMainSender: assertMainWindowSender
 })
 
 // ===== 本機 token 用量統計 =====

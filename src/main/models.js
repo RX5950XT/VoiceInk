@@ -2,7 +2,7 @@
  * VoiceInk - 本地模型下載與管理（Main Process）
  */
 
-const { app, shell } = require('electron')
+const { app } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const fsp = require('fs/promises')
@@ -371,16 +371,16 @@ function assertUnderModelsRoot(dir) {
 }
 
 /**
- * 在檔案總管中開啟模型資料夾
+ * 模型資料夾的路徑（不存在就先建）。由 renderer 用 App 自己的「檔案」頁開，不叫系統檔案總管。
  * @param {string} [key] 省略則開 models 根目錄；否則必須是 registry 內 key
+ * @returns {Promise<string>}
  */
 async function openFolder(key) {
   if (key && !MODELS[key]) throw new Error(`未知的模型: ${key}`)
   const dir = key ? modelDir(key) : modelsRoot()
   assertUnderModelsRoot(dir)
   await fsp.mkdir(dir, { recursive: true })
-  await shell.openPath(dir)
-  return true
+  return dir
 }
 
 module.exports = {

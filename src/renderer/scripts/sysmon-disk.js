@@ -3,7 +3,7 @@
  * 檔名與路徑一律 textContent。
  */
 
-import { electronAPI } from './app.js'
+import { electronAPI, openInFilesPage } from './app.js'
 import { askConfirm, showAlert } from './app-dialog.js'
 import {
   baseName, categorize, chainTo, findChain, formatBytes, fullPath, isReclaimable,
@@ -471,10 +471,8 @@ async function trashEach(items) {
 async function revealSelected() {
   const path = fullPath(chainOf(state.selected))
   if (!path) return
-  let res
-  try { res = await electronAPI.explorer.reveal(path) }
-  catch { res = { ok: false, error: { message: '開不了這個位置' } } }
-  if (!res?.ok) await showAlert('開不了這個位置', { desc: res?.error?.message || '在檔案總管顯示失敗' })
+  try { await openInFilesPage(path, 'file') }
+  catch (error) { await showAlert('開不了這個位置', { desc: error?.message || '在檔案頁顯示失敗' }) }
 }
 
 function onMode(event) {

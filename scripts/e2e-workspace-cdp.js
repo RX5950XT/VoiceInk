@@ -5,11 +5,11 @@
  *  [B] 檔案總管列得出檔案、展得開資料夾
  *  [C] 點檔案開編輯器分頁 → 改內容 → 存檔真的落到磁碟
  *  [D] `.md` 預覽真的跑過 markdown.js（畫面上有 .md-h 節點）
- *  [D2] 圖片預覽（data: URI）、中鍵關分頁、「在檔案總管開啟」按鈕
+ *  [D2] 圖片預覽（data: URI）、中鍵關分頁、「在檔案頁開啟」按鈕
  *  [E] Git 面板讀得到分支與未提交的變更
  *  [F] 瀏覽器分頁只吃 http(s)
  *  [H] 專案內搜尋：找得到、點一下開檔並跳到那一行
- *  [I] 檔案樹右鍵：新增／改名／刪除真的落到磁碟
+ *  [I] 檔案樹右鍵：新增／改名／刪除真的落到磁碟；空白處右鍵、就地新增／改名（F2）、「在檔案頁開啟」開新分頁
  *  [J] 埠號面板列得出本機在聽的埠
  *  [K] PDF 預覽真的畫出 canvas（Electron 沒有內建檢視器，見 probe-workspace-pdf.js）
  *  [L] 分頁右鍵選單與拖曳排序
@@ -140,6 +140,16 @@ async function waitDisk(check, timeoutMs = 8000) {
     await sleep(300)
   }
   return false
+}
+
+/** 等 Node 端的條件成立（量磁碟用） */
+async function waitFor(check, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (check()) return true
+    await new Promise((r) => setTimeout(r, 100))
+  }
+  return check()
 }
 
 async function waitInPage(cdp, expression, timeoutMs = 20000) {
@@ -450,7 +460,7 @@ async function main() {
     ok('[D2] 中鍵關得掉分頁',
       await waitInPage(cdp,
         `![...document.querySelectorAll('#wsTabStrip .ws-tab-open')].some((b) => b.title.includes('pic.png'))`, 5000))
-    ok('[D2] 「在檔案總管開啟」按鈕在（刻意不點，那會搶前景焦點）',
+    ok('[D2] 「在檔案頁開啟」按鈕在',
       await cdp.eval(`document.getElementById('wsFilesRevealBtn')?.offsetHeight > 0`))
 
     // 回到 README.md：後面的 [E] 假設它是作用中的分頁
@@ -740,6 +750,83 @@ async function main() {
       return r.ok === false
     })()`)
     ok('[I] 刪不掉專案根目錄', rootGuard === true && fs.existsSync(PROJECT_DIR))
+
+    // 檔案樹空白處右鍵：新增／改名都是就地打字（不跳對話框）；「在檔案頁開啟」開 App 檔案頁的新分頁
+    const blankMenuAt = `(() => {
+      const tree = document.getElementById('wsTree')
+      const r = tree.getBoundingClientRect()
+      tree.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.bottom - 5 }))
+      return [...document.querySelectorAll('.ws-menu-item')].map((b) => b.textContent)
+    })()`
+    const pickMenu = (label) => cdp.eval(`[...document.querySelectorAll('.ws-menu-item')].find((b) => b.textContent === ${JSON.stringify(label)})?.click()`)
+    const typeInline = (value, key = 'Enter') => cdp.eval(`(() => {
+      const input = document.querySelector('#wsPanelFiles .inline-edit-input')
+      if (!input) return false
+      input.value = ${JSON.stringify(value)}
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, bubbles: true }))
+      return true
+    })()`)
+    const inlineShown = `document.activeElement?.classList.contains('inline-edit-input') && !document.querySelector('dialog[open]')`
+
+    const blankMenu = await cdp.eval(blankMenuAt)
+    ok('[I] 空白處右鍵有新增檔案／資料夾／重新命名專案',
+      ['新增檔案', '新增資料夾', '重新命名專案', '在檔案頁開啟'].every((t) => blankMenu.includes(t)), JSON.stringify(blankMenu))
+    await pickMenu('新增資料夾')
+    ok('[I] 新增資料夾是就地輸入框（沒有對話框）', await waitInPage(cdp, inlineShown, 5000))
+    await typeInline('inline-dir')
+    ok('[I] 就地新增資料夾真的落到磁碟',
+      await waitFor(() => fs.existsSync(path.join(PROJECT_DIR, 'inline-dir')), 5000)
+      && await waitInPage(cdp, `[...document.querySelectorAll('#wsTree .ws-tree-row')].some((r) => r.dataset.rel === 'inline-dir')`, 5000))
+
+    await cdp.eval(`(() => {
+      const row = [...document.querySelectorAll('#wsTree .ws-tree-row')].find((r) => r.dataset.rel === 'inline-dir')
+      row.focus()
+      row.dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', bubbles: true }))
+    })()`)
+    ok('[I] F2 就地改名，輸入框帶原名',
+      await waitInPage(cdp, `${inlineShown} && document.activeElement.value === 'inline-dir'`, 5000))
+    await typeInline('inline-dir2')
+    ok('[I] 就地改名真的落到磁碟',
+      await waitFor(() => fs.existsSync(path.join(PROJECT_DIR, 'inline-dir2')) && !fs.existsSync(path.join(PROJECT_DIR, 'inline-dir')), 5000))
+
+    await cdp.eval(blankMenuAt)
+    await pickMenu('新增檔案')
+    await waitInPage(cdp, inlineShown, 5000)
+    await typeInline('should-not-exist.txt', 'Escape')
+    ok('[I] Esc 取消新增：不建檔、那一列收掉',
+      await waitInPage(cdp, `!document.querySelector('#wsTree .ws-tree-row.is-editing')`, 5000)
+      && !fs.existsSync(path.join(PROJECT_DIR, 'should-not-exist.txt')))
+    await cdp.eval(`window.electronAPI.workspace.removeEntry('${PROJECT_ID}', 'inline-dir2')`)
+
+    const want = JSON.stringify(PROJECT_DIR.toLowerCase())
+    const exState = `({ page: document.querySelector('.page.active')?.id, tabs: document.querySelectorAll('#exTabStrip .ex-tab').length, crumb: ([...document.querySelectorAll('#exCrumbs .ex-crumb')].pop()?.title || '').toLowerCase() })`
+    const backToWorkspace = async () => {
+      await cdp.eval(`document.querySelector('.nav-tab[data-page="chat"]').click()`)
+      await waitInPage(cdp, `document.getElementById('wsTree')?.offsetHeight > 0`, 5000)
+    }
+    await cdp.eval(blankMenuAt)
+    await pickMenu('在檔案頁開啟')
+    ok('[I] 「在檔案頁開啟」切到 App 的檔案頁並進到專案資料夾',
+      await waitInPage(cdp, `(${exState}).page === 'page-explorer' && (${exState}).crumb === ${want}`, 10000),
+      JSON.stringify(await cdp.eval(exState)))
+    const exTabsBefore = (await cdp.eval(exState)).tabs
+    await backToWorkspace()
+    await cdp.eval(`(() => {
+      const row = [...document.querySelectorAll('#wsTree .ws-tree-row')].find((r) => r.dataset.rel === 'src')
+      row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }))
+    })()`)
+    await pickMenu('在檔案頁顯示')
+    const srcWant = JSON.stringify(path.join(PROJECT_DIR, 'src').toLowerCase())
+    ok('[I] 另一個資料夾開成新分頁，不蓋掉原本那頁',
+      await waitInPage(cdp, `(${exState}).crumb === ${srcWant} && (${exState}).tabs === ${exTabsBefore + 1}`, 10000),
+      JSON.stringify(await cdp.eval(exState)))
+    await backToWorkspace()
+    await cdp.eval(blankMenuAt)
+    await pickMenu('在檔案頁開啟')
+    ok('[I] 同一個資料夾已經有分頁就切過去，不重複開',
+      await waitInPage(cdp, `(${exState}).crumb === ${want} && (${exState}).tabs === ${exTabsBefore + 1}`, 10000),
+      JSON.stringify(await cdp.eval(exState)))
+    await backToWorkspace()
 
     // ===== [I2] 從外面拖檔案進檔案樹 =====
     {

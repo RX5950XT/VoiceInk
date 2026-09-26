@@ -160,16 +160,26 @@ async function gotoSecond(cdp, dir) {
   await sleep(600)
 }
 
-/** 把 app-dialog 的輸入框填一填按確定。 */
-function fillDialog(cdp, value) {
+/** 就地改名的輸入框（新增／改名都不跳對話框）：出現在哪一欄、目前帶的值 */
+function inlineState(cdp) {
   return cdp.eval(`(() => {
-    const dialog = document.querySelector('dialog[open]')
-    if (!dialog) return false
-    const input = dialog.querySelector('input')
+    const input = document.activeElement
+    if (!input || !input.classList.contains('inline-edit-input')) return null
+    return {
+      value: input.value,
+      pane: input.closest('#exSecondList') ? 'right' : input.closest('#exList') ? 'left' : input.closest('#exPlaces') ? 'places' : 'other',
+      dialog: !!document.querySelector('dialog[open]')
+    }
+  })()`)
+}
+
+/** 在就地輸入框打字，按 Enter（或 Esc）結束。 */
+function fillInline(cdp, value, key = 'Enter') {
+  return cdp.eval(`(() => {
+    const input = document.activeElement
+    if (!input || !input.classList.contains('inline-edit-input')) return false
     input.value = ${json(value)}
-    input.dispatchEvent(new Event('input', { bubbles: true }))
-    const ok = [...dialog.querySelectorAll('button')].find((b) => /確定|建立|新增|前往|OK/.test(b.textContent))
-    ;(ok || dialog.querySelector('form button')).click()
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: ${json(key)}, bubbles: true }))
     return true
   })()`)
 }
@@ -224,10 +234,33 @@ let child
   assert(/3 個項目/.test(single.status) && !/^右欄：/.test(single.status), '狀態列還是左欄的', json(single.status))
   assert(single.paste === true && single.dualHidden === true, '貼上鈕可按、右欄收著', json(single))
   await cdp.eval(`document.getElementById('exNewFolderBtn').click()`)
-  await waitFor(() => cdp.eval(`!!document.querySelector('dialog[open] input')`), 8_000, '新增資料夾對話框')
-  await fillDialog(cdp, '左欄建的')
+  const leftInline = await waitFor(() => inlineState(cdp), 8_000, '新增資料夾的就地輸入框')
+  assert(leftInline.pane === 'left' && leftInline.value === '新增資料夾' && !leftInline.dialog,
+    '新增資料夾：先建「新增資料夾」再就地改名，沒有對話框', json(leftInline))
+  assert(fs.existsSync(path.join(LEFT, '新增資料夾')), '「新增資料夾」已先建好（跟檔案總管一樣）')
+  await fillInline(cdp, '左欄建的')
   await sleep(2_000)
-  assert(fs.existsSync(path.join(LEFT, '左欄建的')), '新增資料夾建在左欄')
+  assert(fs.existsSync(path.join(LEFT, '左欄建的')) && !fs.existsSync(path.join(LEFT, '新增資料夾')), '就地改名後資料夾建在左欄')
+
+  await cdp.eval(`document.getElementById('exNewFileBtn').click()`)
+  const fileInline = await waitFor(() => inlineState(cdp), 8_000, '新增檔案的就地輸入框')
+  assert(fileInline.value === '新文字文件.txt', '新增檔案先建「新文字文件.txt」', json(fileInline))
+  await fillInline(cdp, 'ignored', 'Escape')
+  await sleep(1_500)
+  assert(fs.existsSync(path.join(LEFT, '新文字文件.txt')) && !fs.existsSync(path.join(LEFT, 'ignored')),
+    'Esc＝保留預設名稱（跟檔案總管一樣）')
+  await cdp.eval(`(() => {
+    const row = [...document.querySelectorAll('#exList .ex-row')].find((r) => r.dataset.name === '新文字文件.txt')
+    row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    document.getElementById('exList').focus()
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', bubbles: true }))
+  })()`)
+  const f2 = await waitFor(() => inlineState(cdp), 8_000, 'F2 就地改名')
+  assert(f2.value === '新文字文件.txt' && f2.pane === 'left', 'F2 在那一列就地改名', json(f2))
+  await fillInline(cdp, '改過名.txt')
+  await sleep(1_500)
+  assert(fs.existsSync(path.join(LEFT, '改過名.txt')) && !fs.existsSync(path.join(LEFT, '新文字文件.txt')), 'F2 改名落到磁碟')
+  fs.rmSync(path.join(LEFT, '改過名.txt'), { force: true })
   await cdp.eval(`(() => { document.querySelector('#exList .ex-row').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 300, clientY: 300 })); return true })()`)
   assert(await waitFor(() => cdp.eval(`document.querySelectorAll('.ws-menu').length`), 8_000, '左欄右鍵').catch(() => 0), '左欄右鍵選單照舊')
   await cdp.eval(`document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`)
@@ -271,8 +304,9 @@ let child
   console.log('\n[3] 新增與側欄導覽跟著作用欄')
   const rightPath = await cdp.eval(`(document.getElementById('exSecondCrumbs') || {}).dataset.path || ''`)
   await cdp.eval(`document.getElementById('exNewFolderBtn').click()`)
-  await waitFor(() => cdp.eval(`!!document.querySelector('dialog[open] input')`), 8_000, '對話框')
-  await fillDialog(cdp, '從右欄建的')
+  const rightInline = await waitFor(() => inlineState(cdp), 8_000, '右欄就地輸入框')
+  assert(rightInline.pane === 'right', '右欄作用時，輸入框開在右欄', json(rightInline))
+  await fillInline(cdp, '從右欄建的')
   await sleep(2_500)
   assert(fs.existsSync(path.join(rightPath, '從右欄建的')), '新增資料夾建在右欄', rightPath)
   const before = await cdp.eval(`({ left: (document.querySelector('#exTabStrip .ex-tab.is-active') || {}).dataset?.path || '', right: (document.getElementById('exSecondCrumbs') || {}).dataset.path || '' })`)
@@ -280,6 +314,27 @@ let child
   await sleep(2_000)
   const after = await cdp.eval(`({ left: (document.querySelector('#exTabStrip .ex-tab.is-active') || {}).dataset?.path || '', right: (document.getElementById('exSecondCrumbs') || {}).dataset.path || '' })`)
   assert(after.left === before.left && after.right !== before.right, '側欄導覽只動右欄', json({ before, after }))
+
+  // 側欄位置改名也是就地打字
+  const openPlaceRename = async () => {
+    await cdp.eval(`(() => {
+      const item = document.querySelector('#exPlaces .ex-side-item')
+      item.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 60, clientY: 200 }))
+    })()`)
+    await waitFor(() => cdp.eval(`document.querySelectorAll('.ws-menu-item').length`), 8_000, '位置右鍵')
+    await cdp.eval(`[...document.querySelectorAll('.ws-menu-item')].find((b) => b.textContent === '重新命名').click()`)
+    return waitFor(() => inlineState(cdp), 8_000, '位置就地改名')
+  }
+  const placeInline = await openPlaceRename()
+  assert(placeInline.pane === 'places' && !placeInline.dialog, '側欄位置就地改名，沒有對話框', json(placeInline))
+  const oldLabel = placeInline.value
+  await fillInline(cdp, 'E2E 位置')
+  await waitFor(() => cdp.eval(`document.querySelector('#exPlaces .ex-side-item .ex-side-label')?.textContent === 'E2E 位置'`), 8_000, '位置改名生效')
+  passed += 1
+  console.log('  PASS 位置改名生效')
+  await openPlaceRename()
+  await fillInline(cdp, oldLabel)
+  await sleep(800)
 
   console.log('\n[4] 大資料夾的洞')
   await gotoSecond(cdp, BIG)

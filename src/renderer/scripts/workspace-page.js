@@ -1,4 +1,4 @@
-import { electronAPI, showToast, setChatPaneMode } from './app.js'
+import { electronAPI, showToast, setChatPaneMode, openInFilesPage } from './app.js'
 import { createListReorder } from './list-reorder.js'
 import { askConfirm, askInput, showAlert } from './app-dialog.js'
 import { terminalStatuses } from './ws-terminal-status.js'
@@ -24,6 +24,7 @@ import {
   openWithSystem
 } from './ws-tabs.js'
 import { showMenu } from './ws-menu.js'
+import { editInline, isInlineEditing, cancelInlineEdit } from './inline-edit.js'
 import { gitStatusShared, invalidateGitStatus } from './ws-git-status.js'
 import { openQuickOpen, isOpen as isQuickOpenOpen } from './ws-quickopen.js'
 
@@ -231,7 +232,7 @@ function buildListItem(item) {
   title.textContent = item.name
 
   // 路徑刻意不畫在側欄上：一個專案就是一個標題，剩下的空間留給終端機狀態。
-  // 完整路徑滑到標題上就看得到（右鍵選單裡也有「在檔案總管開啟」）。
+  // 完整路徑滑到標題上就看得到（檔案樹上方也有「在檔案頁開啟」）。
   title.title = item.path
 
   const status = document.createElement('span')
@@ -714,6 +715,11 @@ function treeStatusInfo(entry) {
  * 一次只展開一層：真的去 `listDir` 那一層，不預先遞迴（大 repo 會卡好幾秒）。
  */
 async function renderTree(project = currentProject(), seq = projectSeq) {
+  // 有一格正在就地打字：同一個專案就先不重畫（打完會自己重畫），換專案則放棄那一格
+  if (isInlineEditing()) {
+    if (project?.id === treeProjectId) return
+    cancelInlineEdit()
+  }
   const request = ++treeSeq
   if (!isCurrentProject(project, seq) || !el.tree) return
   // 換專案才清空——不然會點到上一個專案的列。同一個專案只就地改動：
@@ -1357,6 +1363,14 @@ function onTreeKeydown(event) {
       event.preventDefault()
       current.click()
       return
+    case 'F2': {
+      const project = currentProject()
+      const rel = current?.dataset.rel
+      if (!project || !rel) return
+      event.preventDefault()
+      void renameEntry(project, { rel, name: rel.split('/').pop() || rel, dir: current.dataset.dir === '1' })
+      return
+    }
     default:
   }
 }
@@ -1440,13 +1454,67 @@ function openTreeMenu(project, entry, event) {
   ]
   showMenu({ x: event.clientX, y: event.clientY }, [
     ...run,
-    { label: '新增檔案…', onSelect: () => void createEntry(project, parent, false) },
-    { label: '新增資料夾…', onSelect: () => void createEntry(project, parent, true) },
-    { label: '改名…', onSelect: () => void renameEntry(project, entry) },
+    { label: '新增檔案', onSelect: () => void createEntry(project, parent, false) },
+    { label: '新增資料夾', onSelect: () => void createEntry(project, parent, true) },
+    { label: '重新命名（F2）', onSelect: () => void renameEntry(project, entry) },
     { label: '複製相對路徑', onSelect: () => void copyPath(entry.rel) },
-    { label: '在檔案總管顯示', onSelect: () => void revealEntry(project, entry.rel) },
+    { label: '在檔案頁顯示', onSelect: () => void revealEntry(project, entry.rel, entry.dir) },
     { label: `刪除「${entry.name}」`, danger: true, onSelect: () => void removeEntry(project, entry) }
   ])
+}
+
+/**
+ * 檔案樹空白處（列以外）的右鍵選單：東西一律建在專案根目錄。
+ * @param {MouseEvent} event
+ */
+function openTreeBlankMenu(event) {
+  if (/** @type {HTMLElement} */ (event.target).closest?.('.ws-tree-row')) return
+  const project = currentProject()
+  if (!project) return
+  event.preventDefault()
+  setSelection([])
+  showMenu({ x: event.clientX, y: event.clientY }, [
+    { label: '新增檔案', onSelect: () => void createEntry(project, '', false) },
+    { label: '新增資料夾', onSelect: () => void createEntry(project, '', true) },
+    { label: '重新命名專案', onSelect: () => void renameProjectInline(project) },
+    { label: '重新整理', onSelect: () => void renderTree() },
+    { sep: true },
+    { label: '複製專案路徑', onSelect: () => void copyPath(project.path) },
+    { label: '在檔案頁開啟', onSelect: () => void revealProject() }
+  ])
+}
+
+/** 就地改檔案樹上方那個專案名稱 @param {{ id: string, name: string }} project */
+async function renameProjectInline(project) {
+  if (!el.filesProject) return
+  const name = await editInline(el.filesProject, { value: project.name, label: '專案名稱' })
+  try {
+    if (name) {
+      await call(electronAPI.workspace.renameProject(project.id, name.slice(0, 60)), '改名失敗')
+      await reloadList()
+    }
+  } catch {
+    // call() 已經提示過了
+  }
+  await renderTree()
+}
+
+/**
+ * 新東西要插在哪一塊：根目錄＝整棵樹；子資料夾先展開，插在它的子節點最前面。
+ * @param {{ id: string }} project
+ * @param {string} relDir
+ * @param {number} seq
+ * @returns {Promise<HTMLElement | null>}
+ */
+async function folderHost(project, relDir, seq) {
+  if (!relDir) return el.tree
+  const find = () => treeRows().find((row) => row.dataset.rel === relDir)
+  if (find()?.getAttribute('aria-expanded') !== 'true') {
+    expanded.add(relDir)
+    await renderTree(project, seq)
+  }
+  const row = find()
+  return row && isCurrentProject(project, seq) ? takeChildren(row) : null
 }
 
 /**
@@ -1455,9 +1523,28 @@ function openTreeMenu(project, entry, event) {
  * @param {boolean} dir
  */
 async function createEntry(project, relDir, dir) {
-  const name = await askInput(dir ? '新資料夾的名稱' : '新檔案的名稱', { confirmText: '建立' })
-  if (name === null) return
   const seq = projectSeq
+  const host = await folderHost(project, relDir, seq)
+  if (!host) return
+  // 先畫一列空白的，就地打名字（比照檔案總管，不跳對話框）
+  const depth = relDir ? relDir.split('/').length : 0
+  const row = document.createElement('div')
+  row.className = dir ? 'ws-tree-row is-dir is-editing' : 'ws-tree-row is-editing'
+  row.style.paddingLeft = `${8 + depth * 12}px`
+  const caret = document.createElement('span')
+  caret.className = 'ws-tree-caret'
+  caret.textContent = dir ? '▸' : ''
+  const slot = document.createElement('span')
+  slot.className = 'ws-tree-name'
+  row.append(caret, slot)
+  host.prepend(row)
+  row.scrollIntoView({ block: 'nearest' })
+  const name = await editInline(slot, { label: dir ? '新資料夾的名稱' : '新檔案的名稱' })
+  row.remove()
+  if (name === null) {
+    await renderTree(project, seq)
+    return
+  }
   try {
     const made = await call(
       electronAPI.workspace.createEntry(project.id, relDir, name, dir),
@@ -1468,7 +1555,8 @@ async function createEntry(project, relDir, dir) {
     await renderTree(project, seq)
     if (isCurrentProject(project, seq) && !made.dir) await openEditorTab(project, made.rel)
   } catch {
-    // call() 已經提示過了
+    // call() 已經提示過了；補上打字期間延後的重畫
+    void renderTree(project, seq)
   }
 }
 
@@ -1477,9 +1565,15 @@ async function createEntry(project, relDir, dir) {
  * @param {{ name: string, rel: string }} entry
  */
 async function renameEntry(project, entry) {
-  const name = await askInput('新的名稱', { value: entry.name, confirmText: '改名' })
-  if (name === null || name === entry.name) return
+  const row = treeRows().find((item) => item.dataset.rel === entry.rel)
+  const slot = /** @type {HTMLElement | null} */ (row?.querySelector('.ws-tree-name') || null)
+  if (!slot) return
   const seq = projectSeq
+  const name = await editInline(slot, { value: entry.name, selectBase: !entry.dir, label: '新的名稱' })
+  if (name === null) {
+    await renderTree(project, seq)
+    return
+  }
   try {
     const renamed = await call(electronAPI.workspace.renameEntry(project.id, entry.rel, name), '改名失敗')
     // 開著的分頁要跟著換到新路徑，不然存檔會把舊名字重新建出來
@@ -1488,7 +1582,8 @@ async function renameEntry(project, entry) {
     expanded.delete(entry.rel)
     await renderTree(project, seq)
   } catch {
-    // call() 已經提示過了
+    // call() 已經提示過了；補上打字期間延後的重畫
+    void renderTree(project, seq)
   }
 }
 
@@ -1566,12 +1661,15 @@ async function copyPath(rel) {
 }
 
 /**
+ * 用 App 的「檔案」頁開：資料夾進去，檔案進上一層並選起來。路徑仍由 main 驗過才給。
  * @param {{ id: string }} project
  * @param {string} rel
+ * @param {boolean} [dir]
  */
-async function revealEntry(project, rel) {
+async function revealEntry(project, rel, dir = true) {
   try {
-    await call(electronAPI.workspace.reveal(project.id, rel), '開不了這個位置')
+    const full = await call(electronAPI.workspace.reveal(project.id, rel), '開不了這個位置')
+    await openInFilesPage(full, dir ? 'dir' : 'file')
   } catch {
     // call() 已經提示過了
   }
@@ -1692,15 +1790,10 @@ async function renderPorts(seq = projectSeq) {
   }
 }
 
-/** 在系統檔案總管裡開這個專案（relPath 空字串＝專案根目錄，路徑仍由 main 解析）。 */
+/** 用 App 的「檔案」頁開這個專案的根目錄。 */
 async function revealProject() {
   const project = currentProject()
-  if (!project) return
-  try {
-    await call(electronAPI.workspace.reveal(project.id, ''), '開不了這個資料夾')
-  } catch {
-    // call() 已經提示過了
-  }
+  if (project) await revealEntry(project, '', true)
 }
 
 // ===== Git =====
@@ -2837,6 +2930,7 @@ export function initWorkspacePage() {
     btn.addEventListener('click', () => setPanel(/** @type {HTMLElement} */ (btn).dataset.panel))
   })
   document.getElementById('wsFilesRevealBtn')?.addEventListener('click', () => void revealProject())
+  el.tree?.addEventListener('contextmenu', openTreeBlankMenu)
   document.getElementById('wsFilesRefreshBtn')?.addEventListener('click', () => void renderTree())
   document.getElementById('wsGitRefreshBtn')?.addEventListener('click', () => void renderGit())
   // 篩選只動畫面，不重問 main（狀態已經在手上了，但重畫最省事也最不會不同步）

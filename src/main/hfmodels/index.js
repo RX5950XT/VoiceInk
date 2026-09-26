@@ -701,15 +701,13 @@ async function pickAndImport() {
 }
 
 /**
- * 在檔案總管開啟模型資料夾（使用者要手動把 gguf 拖進去）
+ * 模型資料夾的路徑（使用者要手動把 gguf 拖進去）；renderer 用 App 的「檔案」頁開。
  * @returns {Promise<string>}
  */
 async function openModelsDir() {
-  const { shell } = require('electron')
   const fs = require('fs')
   const dir = library.root()
   fs.mkdirSync(dir, { recursive: true })
-  await shell.openPath(dir)
   return dir
 }
 

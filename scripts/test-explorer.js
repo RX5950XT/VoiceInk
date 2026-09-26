@@ -638,6 +638,11 @@ console.log('\n[P] 側欄位置消毒與合併')
     ok('隱藏的內建位置不出現', !merged.some((p) => p.id === 'home'))
     ok('順序跟存檔走', merged[0] && merged[0].id === 'desktop', merged[0] && merged[0].id)
     ok('NAS 留在合併結果', merged.some((p) => p.id === 'nas1'))
+    const renamed = placesMod.mergePlaces(placesMod.sanitizePlaces([
+      { id: 'desktop', label: '我的桌面', path: 'C:\\Users\\x\\Desktop' }
+    ]), builtins)
+    ok('內建位置改過的名稱會生效（路徑仍照內建）',
+      renamed.some((p) => p.id === 'desktop' && p.label === '我的桌面' && p.path === 'C:\\Users\\x\\Desktop'))
     const pinned = placesMod.mergePlaces(placesMod.sanitizePlaces([
       { id: 'recycle', hidden: true, path: 'recyclebin' },
       { id: 'place-x', label: '回收', path: 'recyclebin' }

@@ -3739,6 +3739,42 @@ body:has(.ws-monaco .find-widget.visible) .workbench-hover-container {
   overflow-wrap: anywhere;
 }
 
+/* 就地新增／改名：檔名那一格撐滿整列，輸入框才有地方打字 */
+.ws-tree-name:has(> .inline-edit-input) {
+  flex: 1;
+}
+
+.inline-edit-input {
+  font-size: inherit;
+  font-weight: normal;
+}
+
+/* 「檔案」頁就地改名：檔名那格撐滿；方格檢視置中、跟格子一樣寬 */
+.ex-row-label:has(> .inline-edit-input) {
+  flex: 1;
+  min-width: 0;
+  overflow: visible;
+}
+
+.ex-row-label > .inline-edit-input {
+  width: 100%;
+}
+
+.ex-list.is-grid .ex-row-label:has(> .inline-edit-input) {
+  display: block;
+  width: 100%;
+  overflow: visible;
+}
+
+.ex-list.is-grid .inline-edit-input {
+  text-align: center;
+}
+
+.ex-side-label:has(> .inline-edit-input) {
+  flex: 1;
+  min-width: 0;
+}
+
 .ws-tree-status {
   flex: none;
   min-width: 16px;

@@ -181,9 +181,9 @@ function deleteTranscript(id) {
 // ===== IPC =====
 
 /**
- * @param {{ ipcMain: any, isMainSender: (event: any) => boolean, openPath: (dir: string) => Promise<string> }} deps
+ * @param {{ ipcMain: any, isMainSender: (event: any) => boolean }} deps
  */
-function registerSttArchiveIpc({ ipcMain, isMainSender, openPath }) {
+function registerSttArchiveIpc({ ipcMain, isMainSender }) {
   const invoke = makeInvoke({
     isMainSender,
     forbidden: '僅主視窗可操作錄音與字幕紀錄',
@@ -194,7 +194,7 @@ function registerSttArchiveIpc({ ipcMain, isMainSender, openPath }) {
   ipcMain.handle('sttArchive:appendRecording', (e, name, bytes) => invoke(e, () => appendRecording(name, bytes)))
   ipcMain.handle('sttArchive:readRecording', (e, name) => invoke(e, () => readRecording(name)))
   ipcMain.handle('sttArchive:deleteRecording', (e, name) => invoke(e, () => deleteRecording(name)))
-  ipcMain.handle('sttArchive:openRecordings', (e) => invoke(e, () => openPath(dirOf('recordings'))))
+  ipcMain.handle('sttArchive:openRecordings', (e) => invoke(e, () => dirOf('recordings')))
   ipcMain.handle('sttArchive:transcripts', (e) => invoke(e, () => listTranscripts()))
   ipcMain.handle('sttArchive:appendTranscript', (e, id, entry) => invoke(e, () => appendTranscript(id, entry)))
   ipcMain.handle('sttArchive:readTranscript', (e, id) => invoke(e, () => readTranscript(id)))

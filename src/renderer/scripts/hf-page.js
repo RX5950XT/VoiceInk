@@ -9,7 +9,7 @@
  * 錯誤訊息都是 HF 上任何人都能填的字串。
  */
 
-import { electronAPI, showToast, cleanIpcError } from './app.js'
+import { electronAPI, showToast, cleanIpcError, openInFilesPage } from './app.js'
 import { renderMarkdown } from './markdown.js'
 import { startDash, stopDash } from './hf-dash.js'
 
@@ -1001,7 +1001,10 @@ export function start() {
       const rows = await call(electronAPI.hfmodels.rescan())
       if (rows) { libraryRows = rows; refreshLibrary(); showToast('已重新掃描', 'success') }
     })
-    $('hfOpenFolderBtn')?.addEventListener('click', () => call(electronAPI.hfmodels.openFolder()))
+    $('hfOpenFolderBtn')?.addEventListener('click', async () => {
+      const dir = await call(electronAPI.hfmodels.openFolder())
+      if (dir) await openInFilesPage(dir)
+    })
     $('hfImportBtn')?.addEventListener('click', async () => {
       const result = await call(electronAPI.hfmodels.import())
       if (result) { showToast(`已匯入 ${result.id}`, 'success'); refreshLibrary() }

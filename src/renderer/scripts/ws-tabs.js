@@ -1,4 +1,4 @@
-import { electronAPI, showToast, setChatPaneMode } from './app.js'
+import { electronAPI, showToast, setChatPaneMode, openInFilesPage } from './app.js'
 import { renderMarkdown } from './markdown.js'
 import { showMenu } from './ws-menu.js'
 import { askInput } from './app-dialog.js'
@@ -3326,7 +3326,10 @@ export function initWsTabs() {
   el.unsupportedReveal?.addEventListener('click', () => {
     const tab = findTab(activeId)
     if (!tab || tab.kind !== 'editor' || !tab.projectId || !tab.relPath) return
-    void electronAPI.workspace.reveal(tab.projectId, tab.relPath)
+    void electronAPI.workspace.reveal(tab.projectId, tab.relPath).then((res) => {
+      if (res?.ok) return openInFilesPage(res.data, 'file')
+      showToast(res?.error?.message || '開不了這個位置', 'error')
+    })
   })
 
   el.editorToChatBtn?.addEventListener('click', selectionToChat)

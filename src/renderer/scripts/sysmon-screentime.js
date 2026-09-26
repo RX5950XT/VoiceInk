@@ -3,7 +3,7 @@
  * 使用者字串一律 textContent，零 innerHTML。
  */
 
-import { electronAPI } from './app.js'
+import { electronAPI, openInFilesPage, showToast } from './app.js'
 
 const state = {
   inited: false,
@@ -329,7 +329,10 @@ function bind() {
     })
   })
   $('stimeFolder')?.addEventListener('click', () => {
-    electronAPI.screentime.openFolder()
+    void electronAPI.screentime.openFolder().then((res) => {
+      if (res?.ok) return openInFilesPage(res.data?.dir)
+      showToast(res?.error?.message || '打不開資料夾', 'error')
+    })
   })
 }
 

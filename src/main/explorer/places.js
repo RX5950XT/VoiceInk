@@ -77,7 +77,9 @@ function mergePlaces(stored, builtins) {
     seen.add(item.id)
     if (item.hidden && item.id !== PINNED_ID) continue
     if (byId.has(item.id)) {
-      out.push(byId.get(item.id))
+      // 內建位置的路徑照內建的走，名稱可以被使用者改掉（右鍵「重新命名」）
+      const builtin = byId.get(item.id)
+      out.push(item.label ? { ...builtin, label: item.label } : builtin)
       continue
     }
     // 自訂的回收筒捷徑跟內建那格重複，內建那格一定在

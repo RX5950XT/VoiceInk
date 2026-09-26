@@ -6,6 +6,7 @@
 
 import { electronAPI, showToast, switchPage, setSidebarMode } from './app.js'
 import { askConfirm, askInput } from './app-dialog.js'
+import { editInline } from './inline-edit.js'
 import { showMenu } from './ws-menu.js'
 import { createListReorder } from './list-reorder.js'
 import { paintDetail as paintDetailPane } from './explorer-detail.js'
@@ -159,6 +160,8 @@ function normalizeRightPaneState(raw) {
 const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'svg'])
 
 let started = false
+/** 就地改名中（清單、右欄、側欄都先別重畫，重畫會把輸入框拆掉） */
+let inlineEditing = false
 let cwd = ''
 /** 左欄停在壓縮檔裡時＝那個 .zip 的路徑（listDir 回的 `archive`）；唯讀 */
 let cwdArchive = ''
@@ -882,6 +885,7 @@ function entryId(entry) {
 }
 
 function paintSidebar(nextPlaces, nextDisks) {
+  if (inlineEditing) return
   const here = pathKey(cwd)
   paintSideList($('exPlaces'), (nextPlaces || []).map((p) => ({
     id: p.id,
@@ -927,6 +931,7 @@ function paintSideList(host, items) {
       btn.appendChild(grip)
     }
     const name = document.createElement('span')
+    name.className = 'ex-side-label'
     name.textContent = item.label
     btn.appendChild(name)
     if (item.meta) {
@@ -970,6 +975,8 @@ function paintList() {
     return
   }
   marqueePaintMissed = false
+  // 就地改名中不重畫：重畫會把輸入框拆掉。打完 renameItem 會自己補畫。
+  if (inlineEditing) return
   // replaceChildren() 會把 scrollTop 清成 0，所以要先把位置記下來再重畫。
   const scrollTop = host.scrollTop
   const home = inHome() && !inSearch()
@@ -1395,7 +1402,7 @@ async function runSecondSearch(query) {
 function paintSecondPane() {
   const pane = $('exSecondPane')
   const list = $('exSecondList')
-  if (!pane || !list) return
+  if (!pane || !list || inlineEditing) return
   pane.hidden = !dualPane
   const handle = $('exSecondResizer')
   if (handle) handle.hidden = !dualPane
@@ -2804,14 +2811,12 @@ async function openEntry(entry) {
   }
 }
 
+/** 「顯示位置」：在這一頁裡進到它所在的資料夾並選起來（搜尋結果最常用） */
 async function revealItems(items) {
   const first = items[0]
-  if (!first) return
-  try {
-    await call(electronAPI.explorer.reveal(first.path), '找不到這個檔案')
-  } catch {
-    // toast 已顯示
-  }
+  if (!first?.path) return
+  pendingOpen = { target: parentOf(first.path), select: first.path }
+  await consumePendingOpen()
 }
 
 function copyPaths(items) {
@@ -2930,36 +2935,123 @@ async function pasteHere() {
   }
 }
 
-async function newFolder() {
-  const target = activeCwd()
-  if (activeInRecycle() || pathKey(target) === THIS_PC || blockInZip()) return
-  const name = await askInput('新增資料夾', { placeholder: '資料夾名稱' })
-  if (!name) return
-  try {
-    await call(electronAPI.explorer.createEntry(target, name, true), '建不了資料夾')
-    await refreshAfterMutate()
-  } catch {
-    // toast 已顯示
-  }
+/** 新增資料夾：跟檔案總管一樣先建好「新增資料夾」，接著直接進入改名 */
+function newFolder() {
+  return newEntry(true)
 }
 
-async function newFile() {
-  const target = activeCwd()
-  if (activeInRecycle() || pathKey(target) === THIS_PC || blockInZip()) return
-  const name = await askInput('新增檔案', { placeholder: '檔案名稱' })
-  if (!name) return
-  try {
-    await call(electronAPI.explorer.createEntry(target, name, false), '建不了檔案')
-    await refreshAfterMutate()
-  } catch {
-    // toast 已顯示
-  }
+/** 新增檔案：先建「新文字文件.txt」，接著直接進入改名 */
+function newFile() {
+  return newEntry(false)
 }
 
+/**
+ * @param {boolean} dir
+ */
+async function newEntry(dir) {
+  const target = activeCwd()
+  if (activeInRecycle() || pathKey(target) === THIS_PC || blockInZip()) return
+  const base = dir ? '新增資料夾' : '新文字文件'
+  const ext = dir ? '' : '.txt'
+  const fallback = dir ? '建不了資料夾' : '建不了檔案'
+  let made = null
+  // 撞名就往下編號，跟檔案總管的「新增資料夾 (2)」一樣
+  for (let n = 1; n <= 50 && !made; n += 1) {
+    const name = n === 1 ? `${base}${ext}` : `${base} (${n})${ext}`
+    const res = await electronAPI.explorer.createEntry(target, name, dir)
+    if (res?.ok) made = res.data
+    else if (res?.error?.code !== 'EXISTS') {
+      showToast(res?.error?.message || fallback, 'error')
+      return
+    }
+  }
+  if (!made?.path) {
+    showToast(fallback, 'error')
+    return
+  }
+  await refreshAfterMutate()
+  const name = made.path.split(/[\\/]/).pop() || ''
+  selectInActivePane(made.path, name)
+  await renameItem({ name, path: made.path, dir })
+}
+
+/**
+ * 在作用中那一欄把這一項選起來（新增／改名完要看得到是哪一個）。
+ * @param {string} full
+ * @param {string} name
+ */
+function selectInActivePane(full, name) {
+  if (rightActive()) {
+    secondPane.selected = new Set([full])
+    secondPane.anchor = full
+    paintSecondPane()
+  } else {
+    const id = inSearch() ? full : name
+    selected = new Set([id])
+    anchor = id
+    paintList()
+  }
+  paintStatus()
+  paintCmdBar()
+}
+
+/**
+ * 畫面上這一項的檔名格。虛擬清單還沒畫到的話，先照位置捲過去再畫一次。
+ * @param {{ path: string }} item
+ * @returns {HTMLElement | null}
+ */
+function labelSlotFor(item) {
+  const left = $('exList')
+  const right = $('exSecondList')
+  const find = (host) => [...(host?.querySelectorAll('.ex-row') || [])]
+    .find((row) => /** @type {HTMLElement} */ (row).dataset.path === item.path)
+  const order = rightActive() ? [right, left] : [left, right]
+  let row = order.map(find).find(Boolean)
+  if (!row) {
+    const useRight = rightActive() && dualPane
+    const rows = useRight ? secondRows() : listed()
+    const host = useRight ? right : left
+    const index = rows.findIndex((entry) => entry?.path === item.path)
+    if (index < 0 || !host) return null
+    const top = Math.max(0, index * 34 - host.clientHeight / 2)
+    host.scrollTop = top
+    if (useRight) {
+      secondPane.scrollTop = top
+      paintSecondPane()
+    } else {
+      paintList()
+    }
+    row = find(host)
+  }
+  row?.scrollIntoView({ block: 'nearest' })
+  return /** @type {HTMLElement | null} */ (row?.querySelector('.ex-row-label') || null)
+}
+
+function repaintAfterInline() {
+  paintList()
+  if (dualPane) paintSecondPane()
+  paintSidebar(places, disks)
+}
+
+/**
+ * 就地改名：檔名那格直接變輸入框，Enter／點別處＝確定、Esc＝取消（F2 同一支）。
+ * @param {{ name: string, path: string, dir?: boolean }} item
+ */
 async function renameItem(item) {
   if (!item || blockInZip([item])) return
-  const name = await askInput('重新命名', { value: item.name })
-  if (!name || name === item.name) return
+  const slot = labelSlotFor(item)
+  if (!slot) return
+  inlineEditing = true
+  let name = null
+  try {
+    name = await editInline(slot, { value: item.name, selectBase: !item.dir, label: '新的名稱' })
+  } finally {
+    inlineEditing = false
+  }
+  if (!name) {
+    repaintAfterInline()
+    return
+  }
   try {
     const done = await call(electronAPI.explorer.renameEntry(item.path, name), '改名失敗')
     if (done && done.path) {
@@ -2968,8 +3060,10 @@ async function renameItem(item) {
       ))
     }
     await refreshAfterMutate()
+    if (done?.path) selectInActivePane(done.path, name)
   } catch {
     // toast 已顯示
+    repaintAfterInline()
   }
 }
 
@@ -3349,15 +3443,32 @@ function openPlaceAddMenu(e) {
   ])
 }
 
+/** 側欄位置就地改名（跟檔案一樣直接在那一格打字） */
 async function renamePlace(item) {
-  const name = await askInput('重新命名位置', { value: item.label })
-  if (!name || name === item.label) return
+  const slot = /** @type {HTMLElement | null} */ (
+    [...document.querySelectorAll('#exPlaces .ex-side-item')]
+      .find((btn) => /** @type {HTMLElement} */ (btn).dataset.id === item.id)
+      ?.querySelector('.ex-side-label') || null
+  )
+  if (!slot) return
+  inlineEditing = true
+  let name = null
+  try {
+    name = await editInline(slot, { value: item.label, label: '位置名稱' })
+  } finally {
+    inlineEditing = false
+  }
+  if (!name) {
+    repaintAfterInline()
+    return
+  }
   const next = places.map((p) => (p.id === item.id ? { ...p, label: name } : p))
   try {
     places = await call(electronAPI.explorer.savePlaces(next), '改不了名字')
     paintSidebar(places, disks)
   } catch {
     // toast 已顯示
+    repaintAfterInline()
   }
 }
 
@@ -3800,7 +3911,8 @@ async function ensureUffs(opts = {}) {
 let pendingOpen = null
 
 /**
- * 終端機畫面上的路徑：資料夾就進這一層，檔案進上一層並選起來。
+ * 從別頁（終端機路徑、工作區、錄音機…）開過來：**開一個新分頁**，不蓋掉使用者原本那頁；
+ * 已經有分頁停在同一個資料夾就切過去。資料夾就進這一層，檔案進上一層並選起來。
  * @param {string} full
  * @param {'file' | 'dir'} [kind]
  */
@@ -3809,7 +3921,7 @@ export async function openExplorerPath(full, kind = 'dir') {
   if (!raw) return
   const isFile = kind === 'file'
   const target = isFile ? parentOf(raw) : raw
-  pendingOpen = { target, select: isFile ? raw : '' }
+  pendingOpen = { target, select: isFile ? raw : '', newTab: true }
   switchPage('explorer')
 }
 
@@ -3826,7 +3938,13 @@ async function consumePendingOpen() {
   const job = pendingOpen
   pendingOpen = null
   if (!job?.target) return
-  await navigate(job.target)
+  if (job.newTab) {
+    const same = tabs.find((tab) => pathKey(tab.id === activeId ? cwd : tab.cwd) === pathKey(job.target))
+    if (same) await switchTab(same.id)
+    else await newTab(job.target)
+  } else {
+    await navigate(job.target)
+  }
   if (!job.select) return
   selected = new Set([job.select])
   anchor = job.select
@@ -3867,7 +3985,7 @@ export async function refreshExplorerPage() {
     }
     setView(view)
     paintSidebar(places, disks)
-    if (!tabs.length) await newTab(boot.lastPath || THIS_PC)
+    if (!tabs.length && !job) await newTab(boot.lastPath || THIS_PC)
     else if (!job) await loadDir(cwd, { silent: true, keepSelection: true })
     if (dualPane && !job) {
       const restored = restoreSecondPaneState()

@@ -119,6 +119,17 @@ async function loadExplorerPage() {
   return explorerPage
 }
 
+/**
+ * 用 App 自己的「檔案」頁開一個本機路徑，不叫系統檔案總管。
+ * @param {string} full 絕對路徑
+ * @param {'file' | 'dir'} [kind] 'file'＝進上一層並選起來；'dir'＝進這一層
+ */
+export async function openInFilesPage(full, kind = 'dir') {
+  if (!full || typeof full !== 'string') return
+  const page = await loadExplorerPage()
+  await page.openExplorerPath(full, kind)
+}
+
 /** @type {typeof import('./hf-page.js') | null} */
 let hfPage = null
 
@@ -190,7 +201,7 @@ export const electronAPI = window.electronAPI || {
     download: async () => { throw new Error('僅 Electron 環境可用') },
     cancel: async () => true,
     delete: async () => ({ models: {}, root: '' }),
-    openFolder: async () => true,
+    openFolder: async () => '',
     onProgress: () => {}
   },
   engine: {
@@ -318,7 +329,6 @@ export const electronAPI = window.electronAPI || {
     renameEntry: async () => { throw new Error('僅 Electron 環境可用') },
     removeEntry: async () => { throw new Error('僅 Electron 環境可用') },
     openPath: async () => true,
-    reveal: async () => true,
     setClipboard: async () => ({ count: 0, mode: 'copy' }),
     paste: async () => ({ paths: [] }),
     watch: async () => ({ watching: false, path: '' }),
@@ -1071,10 +1081,12 @@ function bindSettingsControls() {
   refreshGpuEnvBtn?.addEventListener('click', () => refreshGpuCapabilityUi(true))
 
   // 模型管理
-  document.getElementById('openModelsFolderBtn')?.addEventListener('click', () => {
-    electronAPI.models.openFolder()
-  })
-  modelsPathText?.addEventListener('click', () => electronAPI.models.openFolder())
+  const openModelsFolder = async (key) => {
+    try { await openInFilesPage(await electronAPI.models.openFolder(key)) }
+    catch (error) { showToast(cleanIpcError(error), 'error') }
+  }
+  document.getElementById('openModelsFolderBtn')?.addEventListener('click', () => void openModelsFolder())
+  modelsPathText?.addEventListener('click', () => void openModelsFolder())
   electronAPI.models.onProgress(onModelProgress)
 }
 
@@ -1743,7 +1755,10 @@ function renderModelItem(model) {
     actions.appendChild(actionBtn('取消', 'btn-secondary', () => electronAPI.models.cancel(model.key)))
     progress.classList.remove('hidden')
   } else if (model.downloaded) {
-    actions.appendChild(actionBtn('📂', 'btn-secondary', () => electronAPI.models.openFolder(model.key)))
+    actions.appendChild(actionBtn('📂', 'btn-secondary', () => {
+      electronAPI.models.openFolder(model.key).then((dir) => openInFilesPage(dir))
+        .catch((error) => showToast(cleanIpcError(error), 'error'))
+    }))
     const deleteBtn = actionBtn('刪除', 'btn-secondary', async () => {
       // 就地二次確認：模型動輒 1～2.7GB，誤點就要重新下載
       if (deleteBtn.dataset.armed !== '1') {
