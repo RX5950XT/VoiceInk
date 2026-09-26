@@ -749,4 +749,5 @@ Review：
 - [x] 重跑 Claude hooks、終端機、工作區與 Rust 回歸；重建 probe sidecar
 - [x] 更新預覽包並跑隔離的 packaged terminal CDP
 - [x] 同步 package.json、README、CONTEXT 版本，建置正式安裝檔
-- [ ] 驗證安裝檔、latest.yml、blockmap，提交並發布 GitHub Release
+- [x] 驗證安裝檔、latest.yml、blockmap，提交並發布 GitHub Release
+- Review：`test-claude-hooks` 68、`test-term-agent` 全過、`test-terminal` 105、`test-terminal-ui` 12、`test-workspace-ui` 183、`test-terminal-links` 125、`test-terminal-host` 全過、`cargo test` 25＋12；`electron:pack` 比對 246 支 src、packaged terminal CDP 59；`electron:build` 成功；安裝檔 SHA-512 與 `latest.yml` 相符，GitHub 三個資產的 SHA-256 與本機相符，Release 為 Latest。
