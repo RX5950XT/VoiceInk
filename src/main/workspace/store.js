@@ -15,8 +15,6 @@
 const fs = require('../raw-fs')
 const path = require('path')
 
-/** 最多幾個專案 */
-const MAX_PROJECTS = 20
 /** 名稱長度上限 */
 const MAX_NAME = 60
 
@@ -94,7 +92,6 @@ function sanitizeAll(raw) {
       if (sanitized) entry.tabsState = sanitized
     }
     out.push(entry)
-    if (out.length >= MAX_PROJECTS) break
   }
   return out
 }
@@ -216,12 +213,6 @@ function get(id) {
 function create(req) {
   return withStore(async () => {
     const items = await readAll()
-    if (items.length >= MAX_PROJECTS) {
-      const error = new Error('PROJECT_LIMIT')
-      error.code = 'PROJECT_LIMIT'
-      error.userMessage = `專案最多 ${MAX_PROJECTS} 個，請先移除一些`
-      throw error
-    }
     const full = normalizePath(req?.path)
     if (!pathExists(full)) {
       const error = new Error('BAD_PATH')
@@ -248,7 +239,7 @@ function create(req) {
 /**
  * 從拖放加入專案。路徑來自 OS 的 drop（preload 的 webUtils.getPathForFile），
  * 每一筆仍走 `create` 的全套驗證：解析成絕對路徑、必須是存在的目錄、
- * 已存在就略過、上限照樣拋。回 `{ added, skipped, firstId }` 給 UI 選中第一個新專案。
+ * 已存在就略過。回 `{ added, skipped, firstId }` 給 UI 選中第一個新專案。
  * @param {unknown} paths
  */
 async function addDropped(paths) {
@@ -272,9 +263,8 @@ async function addDropped(paths) {
         added.push(view)
         known.add(keyOf(view.path))
       }
-    } catch (error) {
-      // 不是目錄、不存在 → 略過；上限是使用者要知道的事，照樣拋
-      if (error && error.code === 'PROJECT_LIMIT') throw error
+    } catch {
+      // 不是目錄、不存在 → 略過
       skipped += 1
     }
   }
@@ -361,7 +351,6 @@ function getTabsState(id) {
 }
 
 module.exports = {
-  MAX_PROJECTS,
   MAX_NAME,
   MAX_DRAFT_CHARS,
   normalizePath,

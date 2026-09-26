@@ -261,7 +261,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     addFolders: (paths) => (
       ipcRenderer.invoke(
         'workspace:addDropped',
-        (Array.isArray(paths) ? paths : []).filter((p) => typeof p === 'string' && p.trim()).slice(0, 20)
+        (Array.isArray(paths) ? paths : []).filter((p) => typeof p === 'string' && p.trim())
       )
     ),
     renameProject: (id, name) => ipcRenderer.invoke('workspace:renameProject', id, name),

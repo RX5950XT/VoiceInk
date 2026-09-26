@@ -831,7 +831,7 @@ async function main() {
     const many = store.sanitizeAll(
       Array.from({ length: 40 }, (_, i) => ({ id: `p${i}`, path: `D:\\P${i}` }))
     )
-    ok('超過上限截斷', many.length === store.MAX_PROJECTS)
+    ok('專案數量不設上限', many.length === 40)
 
     // 資料夾暫時找不到（隨身碟拔掉）不可以整筆丟掉——插回去就沒了
     const missing = store.sanitizeAll([{ id: 'm', path: 'D:\\definitely-not-here-12345' }])
