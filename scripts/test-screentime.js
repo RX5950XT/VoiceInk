@@ -176,9 +176,9 @@ async function main() {
     dbMod.closeDb(db)
   })
 
-  await check('忽略系統行程與 Tai／VoiceInk', () => {
+  await check('忽略系統行程與 Tai，但記 VoiceInk 自己', () => {
     assert.strictEqual(util.isIgnoredName('Tai'), true)
-    assert.strictEqual(util.isIgnoredName('VoiceInk'), true)
+    assert.strictEqual(util.isIgnoredName('VoiceInk'), false)
     assert.strictEqual(util.isIgnoredName('dwm'), true)
     assert.strictEqual(util.isIgnoredName('msedge'), false)
     assert.strictEqual(util.isIgnoredName('explorer'), false)

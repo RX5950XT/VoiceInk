@@ -6,7 +6,7 @@
  */
 
 const IGNORE_NAMES = new Set([
-  'Tai', 'VoiceInk', 'electron', 'SearchHost', 'Taskmgr', 'ApplicationFrameHost',
+  'Tai', 'electron', 'SearchHost', 'Taskmgr', 'ApplicationFrameHost',
   'dwm', 'DWM', 'ShellExperienceHost', 'StartMenuExperienceHost', 'TextInputHost',
   'SystemSettings', 'LockApp', 'SearchApp', 'Video.UI', 'Idle', 'System',
   'Registry', 'csrss', 'smss', 'wininit', 'services', 'lsass', 'svchost',
