@@ -1,5 +1,6 @@
 'use strict'
 
+const { spawn } = require('child_process')
 const fs = require('fs/promises')
 const {
   PROVIDER_IDS,
@@ -327,6 +328,26 @@ function publicError(error) {
   return { code: 'USAGE_FAILED', message: '額度資料處理失敗' }
 }
 
+/**
+ * 叫 CLI 自己續期：跑一個會驗證登入的輕量指令（如 `grok models`／`agy models`），
+ * CLI 會照它自己的協定換新 token、處理 refresh token 輪替並寫回憑證，VoiceInk 只讀。
+ * 結果不看：呼叫端重讀憑證、比對 token 有沒有換，才算數。
+ * @param {string} exe @param {string[]} args
+ */
+function runCliRefresh(exe, args, timeoutMs = 30_000) {
+  return new Promise((resolve) => {
+    if (!exe) return resolve()
+    let child
+    try {
+      child = spawn(exe, args, { windowsHide: true, stdio: 'ignore', timeout: timeoutMs })
+    } catch {
+      return resolve()
+    }
+    child.once('error', () => resolve())
+    child.once('close', () => resolve())
+  })
+}
+
 module.exports = {
   UsageError,
   createBaseAccount,
@@ -338,5 +359,6 @@ module.exports = {
   readJwtClaims,
   fetchJson,
   publicError,
-  resetRateLimitsForTests
+  resetRateLimitsForTests,
+  runCliRefresh
 }

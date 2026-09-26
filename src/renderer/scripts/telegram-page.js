@@ -18,9 +18,21 @@ const MAX_PANES = 4
 // 選不出來就「先連再說」。幾格同時開會有好幾格拿同一把金鑰一起連，Web A 本來只預期分頁一個一個開
 const SETTLE_MS = 1500
 const LOAD_TIMEOUT_MS = 10000
+// Web A 多開時只有「主分頁」連線，其他格的收發都靠它；它只在 beforeunload 交棒，沒有心跳。
+// 主分頁當掉或連線狀態卡死，其他格永遠不知道，就一直停在「等待網路連線」、收不到新訊息。
+// 救法是全部格子先卸載（各自送出交棒通知）再一格一格載回來，讓 Web A 重新選主分頁。
+const WATCH_EVERY_MS = 20000
+const STUCK_MS = 60000
+// 全部重載之間至少隔這麼久：網路真的不通時不要每分鐘重載一次
+const RELOAD_ALL_GAP_MS = 5 * 60 * 1000
+// 在格子裡跑：連得上網，卻顯示「等待網路連線」（左欄的提示框，或聊天室標題下的狀態字）
+const STUCK_PROBE = `navigator.onLine && !!(document.getElementById('ConnectionStatusOverlay') ||
+  [...document.querySelectorAll('.MiddleHeader .status')].some((el) => /等待網路|等待网络|waiting for network/i.test(el.textContent)))`
 
 let initialized = false
 let loadChain = Promise.resolve()
+let stuckSince = 0
+let lastReloadAllAt = 0
 
 /** 只收 Telegram 網頁版自己的網址；設定檔壞掉或被改過就回首頁 */
 function safeUrl(value) {
@@ -68,8 +80,8 @@ function barButton(className, text, label, onClick) {
   return btn
 }
 
-/** 格子先放上去，網址排隊一格一格載（理由見 SETTLE_MS） */
-function loadInTurn(view, url) {
+/** 排隊一格一格載（理由見 SETTLE_MS）；start 負責真的開始載 */
+function queueLoad(view, start) {
   loadChain = loadChain.then(() => new Promise((resolve) => {
     const done = () => {
       clearTimeout(timer)
@@ -77,8 +89,41 @@ function loadInTurn(view, url) {
     }
     const timer = setTimeout(done, LOAD_TIMEOUT_MS)
     view.addEventListener('did-finish-load', done, { once: true })
-    view.setAttribute('src', url)
+    Promise.resolve().then(start).catch(done)
   }))
+}
+
+/** 格子先放上去，網址排隊載 */
+function loadInTurn(view, url) {
+  queueLoad(view, () => view.setAttribute('src', url))
+}
+
+/** 全部格子先卸載再一格一格載回原本的聊天室（理由見 WATCH_EVERY_MS 上面） */
+async function reloadAll(why) {
+  if (Date.now() - lastReloadAllAt < RELOAD_ALL_GAP_MS) return
+  lastReloadAllAt = Date.now()
+  stuckSince = 0
+  console.warn('[telegram] 全部格子重載:', why)
+  const views = [...frame().querySelectorAll('webview')]
+  const urls = views.map((view) => view.dataset.src)
+  await Promise.allSettled(views.map((view) => view.loadURL('about:blank')))
+  views.forEach((view, index) => queueLoad(view, () => view.loadURL(urls[index])))
+}
+
+async function watchStuck() {
+  let stuck = false
+  for (const view of frame().querySelectorAll('webview')) {
+    try {
+      if (await view.executeJavaScript(STUCK_PROBE)) stuck = true
+    } catch { /* 還沒載好或正在重載 */ }
+  }
+  if (!stuck) {
+    stuckSince = 0
+  } else if (!stuckSince) {
+    stuckSince = Date.now()
+  } else if (Date.now() - stuckSince >= STUCK_MS) {
+    reloadAll('卡在等待網路連線')
+  }
 }
 
 /**
@@ -124,11 +169,17 @@ function addPane(url) {
   view.setAttribute('allowpopups', '')
   view.dataset.src = url
   const remember = (event) => {
-    view.dataset.src = safeUrl(/** @type {any} */ (event).url)
+    const url = /** @type {any} */ (event).url
+    if (url === 'about:blank') return // 關格子、全部重載時的過渡頁，不是使用者停的聊天室
+    view.dataset.src = safeUrl(url)
     save()
   }
   view.addEventListener('did-navigate', remember)
   view.addEventListener('did-navigate-in-page', remember)
+  // 當掉的若是主分頁，其他格收不到交棒通知，只重載這一格也會被它們帶回死掉的主分頁
+  view.addEventListener('render-process-gone', (event) => {
+    reloadAll(`格子的程序不見了（${/** @type {any} */ (event).details?.reason || 'unknown'}）`)
+  })
 
   pane.append(bar, view)
   frame().appendChild(pane)
@@ -141,4 +192,5 @@ export async function refreshTelegramPage() {
   if (initialized || !frame()) return
   initialized = true
   ;(await loadSaved()).forEach(addPane)
+  setInterval(watchStuck, WATCH_EVERY_MS)
 }

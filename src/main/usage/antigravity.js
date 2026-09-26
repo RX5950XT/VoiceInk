@@ -239,6 +239,35 @@ async function fetchLoadCodeAssist(token, fetchImpl, log) {
   return { project: '', tier: '' }
 }
 
+/** 叫 agy CLI 自己續期；跟 AGY 反代共用同一個冷卻與 in-flight，兩邊不會各開一個 agy（晚載避免循環 require） */
+function renewViaAgyCli(env) {
+  return require('../agy/credential').renewViaCli(env)
+}
+
+/**
+ * 換一顆新 access token：有設 OAuth client 就自己換；沒有（一般情況）就叫 agy 續期再重讀憑證。
+ * 換不到回空字串。
+ */
+async function renewAccessToken(credential, { env, fetchImpl, log, readCredential, renewViaCli }) {
+  try {
+    const fresh = await refreshAccessToken(credential.refreshToken, env, fetchImpl)
+    if (fresh) {
+      log('antigravity: access token refreshed')
+      return fresh
+    }
+  } catch (error) {
+    log(`antigravity: refresh failed ${error.status ? `HTTP ${error.status}` : error.code}`)
+  }
+  await renewViaCli(env)
+  const next = parseCredential((await readCredential()) || '')
+  if (!next || next.accessToken === credential.accessToken) {
+    log('antigravity: refresh unavailable')
+    return ''
+  }
+  log('antigravity: token refreshed via agy CLI')
+  return next.accessToken
+}
+
 function projectBodies(project) {
   return project ? [{ project }, {}] : [{}]
 }
@@ -282,7 +311,8 @@ async function syncAntigravity({
   nowMs = Date.now(),
   fetchImpl,
   log = () => {},
-  readCredential = readAntigravityCredential
+  readCredential = readAntigravityCredential,
+  renewViaCli = renewViaAgyCli
 }) {
   const account = createBaseAccount('antigravity', nowMs)
   const rawCredential = await readCredential()
@@ -293,21 +323,13 @@ async function syncAntigravity({
     return normalizeAccount(account)
   }
 
+  const renewDeps = { env, fetchImpl, log, readCredential, renewViaCli }
   let token = credential.accessToken
   let refreshed = false
   if (tokenIsStale(credential.expiry, nowMs)) {
-    try {
-      const fresh = await refreshAccessToken(credential.refreshToken, env, fetchImpl)
-      if (fresh) {
-        token = fresh
-        refreshed = true
-        log('antigravity: access token refreshed')
-      } else {
-        log('antigravity: refresh unavailable')
-      }
-    } catch (error) {
-      log(`antigravity: refresh failed ${error.status ? `HTTP ${error.status}` : error.code}`)
-    }
+    const fresh = await renewAccessToken(credential, renewDeps)
+    refreshed = true
+    if (fresh) token = fresh
   }
 
   try {
@@ -316,9 +338,9 @@ async function syncAntigravity({
       quota = await syncQuota(token, fetchImpl, log)
     } catch (error) {
       if (error.status !== 401 || refreshed) throw error
-      const fresh = await refreshAccessToken(credential.refreshToken, env, fetchImpl)
-      if (!fresh) throw error
       refreshed = true
+      const fresh = await renewAccessToken(credential, renewDeps)
+      if (!fresh) throw error
       quota = await syncQuota(fresh, fetchImpl, log)
     }
     // 這裡**不要**先 mergeExpectedWindows：補視窗是 usage/index.js 的工作，
@@ -331,10 +353,10 @@ async function syncAntigravity({
     log(`antigravity: quota failed ${error.status ? `HTTP ${error.status}` : error.code || 'unknown'}`)
     account.status = 'connected'
     account.accuracy = 'estimated'
-    account.notes = error.status
-      ? `Antigravity 額度 API 暫時無法使用（HTTP ${error.status}）。`
-      : tokenIsStale(credential.expiry, nowMs) && !refreshed
-        ? 'Antigravity token 已過期，請在 Antigravity CLI 或 IDE 重新登入一次。'
+    account.notes = error.status === 401
+      ? 'Antigravity 登入已失效，自動續期也沒成功，請在 Antigravity 重新登入一次。'
+      : error.status
+        ? `Antigravity 額度 API 暫時無法使用（HTTP ${error.status}）。`
         : 'Antigravity 額度 API 暫時無法使用。'
     return normalizeAccount(account)
   }

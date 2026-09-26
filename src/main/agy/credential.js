@@ -162,6 +162,11 @@ function runAgyCli(exe) {
   })
 }
 
+/** 額度頁用：跟反代共用同一個冷卻與 in-flight。回傳值同 nudgeCli，呼叫端要自己重讀憑證 */
+function renewViaCli(env) {
+  return nudgeCli({ env: env || process.env, now: Date.now, runCli: runAgyCli })
+}
+
 class CredentialError extends Error {
   constructor(code, message) {
     super(message)
@@ -322,6 +327,7 @@ module.exports = {
   CredentialError,
   acquire,
   invalidateToken,
+  renewViaCli,
   reset,
   status
 }

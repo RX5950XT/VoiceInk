@@ -8,7 +8,8 @@ const {
   fetchJson,
   normalizeAccount,
   readJsonFile,
-  readJwtClaims
+  readJwtClaims,
+  runCliRefresh
 } = require('./shared')
 
 /**
@@ -82,18 +83,54 @@ function resolveAuthPath(homeDir, env) {
   return path.join(root, 'auth.json')
 }
 
-async function syncGrok({ homeDir, env = process.env, nowMs = Date.now(), fetchImpl, log = () => {} }) {
-  const account = createBaseAccount('grok', nowMs)
-  let auth
+/** Grok CLI 裝在 ~/.grok/bin；`grok models` 會順便把過期的 token 續好寫回 auth.json */
+function resolveGrokBin(homeDir, env) {
+  return path.join(
+    path.dirname(resolveAuthPath(homeDir, env)),
+    'bin',
+    process.platform === 'win32' ? 'grok.exe' : 'grok'
+  )
+}
+
+async function readGrokSession(homeDir, env) {
   try {
-    auth = await readJsonFile(resolveAuthPath(homeDir, env))
+    return parseGrokSession(await readJsonFile(resolveAuthPath(homeDir, env)))
   } catch {
+    return undefined
+  }
+}
+
+/** access token 只活 6 小時；看得到 exp 且剩不到 5 分鐘才算過期 */
+function grokTokenIsStale(token, nowMs) {
+  const exp = Number(readJwtClaims(token)?.exp)
+  return Number.isFinite(exp) && nowMs + 5 * 60 * 1000 >= exp * 1000
+}
+
+function fetchGrokBilling(session, fetchImpl) {
+  const headers = {
+    Authorization: `Bearer ${session.accessToken}`,
+    'X-XAI-Token-Auth': 'xai-grok-cli',
+    Accept: 'application/json'
+  }
+  if (session.userId) headers['x-userid'] = session.userId
+  return fetchJson(ENDPOINTS.grok, { fetchImpl, headers })
+}
+
+async function syncGrok({
+  homeDir,
+  env = process.env,
+  nowMs = Date.now(),
+  fetchImpl,
+  log = () => {},
+  refreshCli = runCliRefresh
+}) {
+  const account = createBaseAccount('grok', nowMs)
+  let session = await readGrokSession(homeDir, env)
+  if (session === undefined) {
     account.status = 'disconnected'
     account.notes = '找不到 Grok 登入憑證，請先執行 grok login。'
     return normalizeAccount(account)
   }
-
-  const session = parseGrokSession(auth)
   if (!session) {
     account.status = 'disconnected'
     account.notes = 'Grok auth.json 沒有有效 access token。'
@@ -102,15 +139,26 @@ async function syncGrok({ homeDir, env = process.env, nowMs = Date.now(), fetchI
   if (session.email) account.accountName = session.email
   else if (session.userId) account.accountName = session.userId
 
-  const headers = {
-    Authorization: `Bearer ${session.accessToken}`,
-    'X-XAI-Token-Auth': 'xai-grok-cli',
-    Accept: 'application/json'
+  let refreshed = false
+  const renew = async () => {
+    refreshed = true
+    await refreshCli(resolveGrokBin(homeDir, env), ['models'])
+    const next = await readGrokSession(homeDir, env)
+    if (!next || next.accessToken === session.accessToken) return false
+    session = next
+    log('grok: token refreshed via grok CLI')
+    return true
   }
-  if (session.userId) headers['x-userid'] = session.userId
+  if (grokTokenIsStale(session.accessToken, nowMs)) await renew()
 
   try {
-    const billing = await fetchJson(ENDPOINTS.grok, { fetchImpl, headers })
+    let billing
+    try {
+      billing = await fetchGrokBilling(session, fetchImpl)
+    } catch (error) {
+      if (error.status !== 401 || refreshed || !(await renew())) throw error
+      billing = await fetchGrokBilling(session, fetchImpl)
+    }
     const result = applyGrokBilling(billing, nowMs)
     result.accountName = account.accountName
     // billing 有回 subscriptionTier 就用它；沒有才退回 token 裡的數字 tier
@@ -121,9 +169,11 @@ async function syncGrok({ homeDir, env = process.env, nowMs = Date.now(), fetchI
     log(`grok: API failed ${error.status ? `HTTP ${error.status}` : error.code || 'unknown'}`)
     account.status = 'connected'
     account.accuracy = 'estimated'
-    account.notes = error.status
-      ? `Grok billing API 暫時無法使用（HTTP ${error.status}）。`
-      : 'Grok billing API 暫時無法使用。'
+    account.notes = error.status === 401
+      ? 'Grok 登入已失效，自動續期也沒成功，請執行一次 grok login。'
+      : error.status
+        ? `Grok billing API 暫時無法使用（HTTP ${error.status}）。`
+        : 'Grok billing API 暫時無法使用。'
     return normalizeAccount(account)
   }
 }

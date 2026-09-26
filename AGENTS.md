@@ -553,6 +553,9 @@ tag 要與 `package.json` 的 version 一致。
   refresh token 還是我們送出去那顆才寫）＋原子替換、其他欄位原樣保留。端點 `platform.claude.com/v1/oauth/token`、JSON body、client_id 都是從
   已安裝的 CLI 讀出來的；CLI 大改版時先跑 `probe-claude-refresh.js --force`（會真的續一次）。還沒到期卻 401 也要強制續一次再打。
   回歸 `test-claude-auth.js`。Codex 的 token 十天才過期，仍維持只讀。
+- **Grok（6 小時）與 Antigravity 的額度 token 靠代跑 CLI 續期，不自己寫回**：快過期或 401 就背景跑 `grok models`／`agy models`（CLI 會自己換新、寫回
+  `~/.grok/auth.json`／Credential Manager），再重讀、**確認 token 真的換了**才重打一次。agy 走 `agy/credential.js` 的 `renewViaCli`（跟反代共用冷卻）。
+  spawn 一定 `stdio: 'ignore'`（見 `CLI_SPAWN_OPTIONS`）。回歸 `test-usage.js` 的兩條「續期」測試。
 - **Claude 額度 API 的限流是看 User-Agent 分的**：`claude-code/…` 穩定 200，Node 預設的 `node`、`VoiceInk/…` 或任何別的名字打兩三下就一直 429（`retry-after: 0`，實測 2026-09-23）。`claude.js` 照 CLI 報 `claude-code/<版本>`（看前綴，舊版本號也過）。`fetchJson` 對 429 **不重試**，並把那個端點冷卻 2→4→…→30 分鐘（成功就清掉）；冷卻中直接回 `RATE_LIMITED` 不出門。soft cache 要連 `planName` 一起沿用（失敗那一輪的方案名是預設值）。
 - **Codex 重置次數**：`/wham/usage` 的 `rate_limit_reset_credits.available_count` > 0 才多打 `/wham/rate-limit-reset-credits` 拿到期時間。**兌換不直接打 HTTP**（consume 的 body 沒有文件，猜錯的代價是使用者的次數），走官方 `codex app-server`（stdio JSONL：`initialize` → `initialized` → `account/rateLimitResetCredit/consume` `{ creditId, idempotencyKey }`，schema 用 `codex app-server generate-json-schema` 產）。main 只收快取清單裡有的 creditId。**測試絕對不能真的兌換**（使用者的次數），`test-usage.js` 用假的 child。Claude、Grok 的 CLI 裡查不到同類 API。
 - Grok 的方案：billing 不回名字，access token 的 `tier` 是數字；**只有 1＝SuperGrok 有證據**（Grok CLI 自己的 log：`jwt_claim: "supergrok"`），其他數字照舊 `Tier N`，不要用猜的補表。

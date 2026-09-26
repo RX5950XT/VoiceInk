@@ -787,6 +787,65 @@ test('Antigravity 同步只回正規化額度且 refresh secret 不進結果或�
   }
 })
 
+test('Grok 401 時叫 grok CLI 續期、重讀 auth.json 再打一次', async () => {
+  const { syncGrok } = require('../src/main/usage/grok')
+  const homeDir = tempDir('voiceink-usage-grok-renew-')
+  const authPath = path.join(homeDir, '.grok', 'auth.json')
+  const writeKey = (key) => fs.writeFileSync(authPath, JSON.stringify({ a: { key, user_id: 'u' } }))
+  try {
+    fs.mkdirSync(path.join(homeDir, '.grok'))
+    writeKey('old-token')
+    const cli = []
+    const account = await syncGrok({
+      homeDir,
+      env: {},
+      nowMs: 0,
+      refreshCli: async (exe, args) => {
+        cli.push([path.basename(exe), ...args])
+        writeKey('new-token')
+      },
+      fetchImpl: async (_url, options) => options.headers.Authorization === 'Bearer new-token'
+        ? new Response('{"config":{"creditUsagePercent":10}}', { status: 200 })
+        : new Response('{}', { status: 401 }),
+      log: () => {}
+    })
+    assert.deepEqual(cli, [[process.platform === 'win32' ? 'grok.exe' : 'grok', 'models']])
+    assert.equal(account.windows[0].used, 10)
+  } finally {
+    removeTree(homeDir)
+  }
+})
+
+test('Antigravity 沒設 OAuth client 時改叫 agy 續期並用新 token', async () => {
+  const { syncAntigravity } = require('../src/main/usage/antigravity')
+  let current = 'old-access'
+  const cli = []
+  const account = await syncAntigravity({
+    env: { LOCALAPPDATA: path.join(os.tmpdir(), 'no-such-local') },
+    nowMs: Date.parse('2026-08-20T12:00:00Z'),
+    readCredential: async () => JSON.stringify({
+      token: { access_token: current, refresh_token: 'r', expiry: '2026-08-20T11:00:00Z' }
+    }),
+    renewViaCli: async (env) => {
+      cli.push(env.LOCALAPPDATA)
+      current = 'new-access'
+    },
+    fetchImpl: async (url, options) => {
+      if (options.headers.Authorization !== 'Bearer new-access') return new Response('{}', { status: 401 })
+      if (url.endsWith(':retrieveUserQuotaSummary')) {
+        return new Response(JSON.stringify({ groups: [{ displayName: 'Gemini', buckets: [
+          { bucketId: 'gemini-5h', window: '5h', remainingFraction: 0.25 }
+        ] }] }), { status: 200 })
+      }
+      return new Response('{}', { status: 200 })
+    },
+    log: () => {}
+  })
+  assert.deepEqual(cli, [path.join(os.tmpdir(), 'no-such-local')])
+  assert.equal(account.status, 'available')
+  assert.equal(account.windows.find((w) => w.id === 'antigravity-gemini-5h').used, 75)
+})
+
 test('usage settings 只保留合法 provider 與順序', () => {
   const { sanitizeSettings } = require('../src/main/usage/store')
   const input = {

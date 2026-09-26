@@ -2093,6 +2093,23 @@ registerCodeUsageIpc({
   isMainSender: assertMainWindowSender
 })
 
+// 任何一個畫面程序（主視窗、Telegram 等 webview）或 GPU 程序死掉都記一行到 userData/crash.log，
+// 不然事後只看得到「當機了」，查不到是 crash、OOM 還是被砍掉。
+// ponytail: 只追加不輪替，一行約 150 字，真的長到礙事再加輪替
+function logProcessGone(kind, details, where) {
+  const line = `${new Date().toISOString()} ${kind} reason=${details?.reason} exitCode=${details?.exitCode} ${where || ''}\n`
+  console.warn('[process-gone]', line.trim())
+  fs.promises.appendFile(path.join(app.getPath('userData'), 'crash.log'), line).catch(() => {})
+}
+app.on('render-process-gone', (_event, contents, details) => {
+  let where = ''
+  try { where = new URL(contents.getURL()).origin } catch { /* 空白頁 */ }
+  logProcessGone('renderer', details, where)
+})
+app.on('child-process-gone', (_event, details) => {
+  if (details.reason !== 'clean-exit') logProcessGone(details.type, details, details.name || '')
+})
+
 // webview guest 的 popup 走不到主視窗那條 attachWindowSecurity（那是掛在
 // 主視窗 webContents 上），一律在 app 層補上：http(s) 交給系統瀏覽器，其餘擋掉。
 app.on('web-contents-created', (_event, contents) => {
