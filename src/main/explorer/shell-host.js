@@ -142,9 +142,10 @@ async function startShell(deps = {}) {
 
   /**
    * @param {object} request
+   * @param {number} [timeoutMs] 手機（MTP）列大資料夾、複製大檔要比殼層選單久得多
    * @returns {Promise<{ ok: boolean, data?: object, error?: string }>}
    */
-  const send = (request) => new Promise((resolve) => {
+  const send = (request, timeoutMs = CALL_TIMEOUT_MS) => new Promise((resolve) => {
     if (dead) {
       resolve({ ok: false, error: 'SHELL_GONE' })
       return
@@ -155,7 +156,7 @@ async function startShell(deps = {}) {
       timer: setTimeout(() => {
         pending.delete(id)
         resolve({ ok: false, error: 'SHELL_TIMEOUT' })
-      }, CALL_TIMEOUT_MS)
+      }, timeoutMs)
     }
     if (entry.timer.unref) entry.timer.unref()
     pending.set(id, entry)

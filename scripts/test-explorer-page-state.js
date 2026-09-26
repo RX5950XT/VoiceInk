@@ -30,6 +30,7 @@ run('paintList=paintStatus=paintCrumbs=paintNav=paintSidebar=paintRecycleChrome=
   assert.equal(head.hidden, false, '切回清單必須恢復排序列')
   api.unwatch = async () => ({ ok: true })
   api.driveInfo = () => new Promise(resolve => { pending.drive = resolve })
+  api.listDevices = async () => ({ ok: true, data: [] })
   run("tabs = [{ id: 't1', cwd, history, histIndex }]; activeId = 't1'; tabSeq = 1")
   const home = run('newTab()')
   await Promise.resolve()

@@ -93,6 +93,7 @@ function bar(used) {
  *   host: HTMLElement,
  *   folders: Array<{ label: string, path: string }>,
  *   disks: Array<{ letter: string, path: string, label?: string, fs?: string, total?: number, free?: number, type?: number }>,
+ *   devices?: Array<{ name: string, path: string, type?: string }>,
  *   formatSize: (n: number) => string,
  *   onOpen: (path: string, newPage?: boolean) => void,
  *   bindDrop: (el: HTMLElement, path: string) => void
@@ -128,7 +129,13 @@ export function paintHomePane(spec) {
     }
     return btn
   }
-  if (local.length) host.appendChild(section('裝置和磁碟機', local.map(build)))
+  // 手機（`mtp:名稱`）：點進去一樣在 App 裡瀏覽。不收拖放——裝置那一層底下是儲存空間，放不了檔案
+  const phones = (spec.devices || []).map((dev) => card(
+    { icon: '📱', name: dev.name, sub: dev.type || '手機', path: dev.path },
+    onOpen,
+    () => {}
+  ).btn)
+  if (local.length || phones.length) host.appendChild(section('裝置和磁碟機', [...local.map(build), ...phones]))
   if (net.length) host.appendChild(section('網路位置', net.map(build)))
   if (!host.childElementCount) {
     const empty = document.createElement('p')

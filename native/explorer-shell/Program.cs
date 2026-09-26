@@ -96,6 +96,9 @@ namespace VoiceInkShell
                         case "menu": return Ok(id, w => Menu(root, w));
                         case "invoke": return Ok(id, w => Invoke(root, w));
                         case "release": return Ok(id, w => Release(root, w));
+                        case "mtpList": return Ok(id, w => Portable.List(root, w));
+                        case "mtpCopy": return Ok(id, w => Portable.Copy(root, w));
+                        case "mtpDelete": return Ok(id, w => Portable.Delete(root, w));
                         default: return Fail(id, "BAD_OP");
                     }
                 }

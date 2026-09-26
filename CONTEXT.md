@@ -23,6 +23,10 @@ AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定�
   main 的 `render-process-gone`／`child-process-gone` 記到 `userData/crash.log`。
 - **額度 token 自動續期**：Grok／Antigravity 過期或 401 時背景代跑 `grok models`／`agy models` 讓 CLI 自己續（見 AGENTS.md）。
 
+### 檔案頁「本機」跟著插拔更新、手機在 App 裡瀏覽（2026-09-27）
+
+- 插上／拔掉隨身碟或手機，本機首頁與側欄磁碟自己更新（WM_DEVICECHANGE，不輪詢）；手機顯示在「裝置和磁碟機」，點進去在 App 裡瀏覽（`mtp:Pixel 6a\內部共用儲存空間\…`，`explorer/mtp.js`＋殼層 sidecar 的 `Portable.cs`）：開檔／預覽、複製進出、永久刪除；不能改名、新增資料夾。細節見 AGENTS.md 檔案總管。
+
 ### 系統監控加「磁碟空間」子分頁（2026-09-25）
 
 - 仿 disktree：上方磁碟清單（點一顆就掃）＋「選擇資料夾…」；squarified treemap（canvas，依類型上色、快取資料夾斜線）、點進去放大、麵包屑／Backspace／右鍵回上層、「大小｜檔案數」、名稱篩選；右側選取詳情、最大的檔案、已標記 → 確認（列完整路徑）→ 丟資源回收筒。
@@ -744,6 +748,8 @@ AGY 設定、終端機、聊天、語音輸入紀錄**刻意不進** `STORE_ALLO
 | 2026-08-28~29 | 終端機分頁、常駐系統匣與開機自啟動、AGY token 自動續期、共用自訂下拉 |
 
 ## 已知取捨與未做
+
+- **Codex CLI 外部終端機視窗**：VoiceInk 的 Codex 預設已改 `codex --no-daemon`；本機 npm launcher 也已補同一旗標，普通 `codex` 的實際 ConPTY 啟動已驗證，不必重啟整個 VoiceInk host。原本的單一 Codex 對話另由背景助手在回覆完成後重接，結果見 `C:/Users/rx595/.codex/codex-no-daemon-migration.json`；npm 更新會覆蓋 launcher 的本機修正。
 
 - **轉換閘道只有 Codex 的請求形狀對真上游驗過**（`probe-ccswitch-codex.js`），SSE 回程與其餘四家仍是 mock 驗的。
 - **CDP 測試各自用暫存 `--user-data-dir`**：設定乾淨，但模型靠 junction 接回真的資料夾，需要資料的測試自己種。

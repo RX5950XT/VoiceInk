@@ -168,6 +168,33 @@ function asMenuItems(items, invoke) {
 }
 
 /**
+ * 手機裡的右鍵選單：看、複製出去、貼進來、永久刪除（改名／新增不做）。
+ * @param {{ x: number, y: number }} at
+ * @param {object[]} items
+ * @param {Record<string, (() => void) | null>} act
+ */
+function showPhoneMenu(at, items, act) {
+  const menu = []
+  if (items.length) {
+    menu.push({ label: '開啟', onSelect: act.open })
+    if (act.preview) menu.push({ label: '預覽（空白鍵）', onSelect: act.preview })
+    if (items.length === 1 && items[0].dir && act.openTab) menu.push({ label: '在新分頁開啟', onSelect: act.openTab })
+    menu.push({ label: '複製', onSelect: act.copy })
+    if (act.copyName) menu.push({ label: '複製名稱', onSelect: act.copyName })
+  }
+  menu.push({ label: '貼上', onSelect: act.paste })
+  if (items.length) {
+    menu.push({ sep: true })
+    menu.push({ label: '永久刪除', danger: true, onSelect: act.remove })
+  }
+  if (act.refresh) {
+    menu.push({ sep: true })
+    menu.push({ label: '重新整理', onSelect: act.refresh })
+  }
+  showMenu(at, menu)
+}
+
+/**
  * 壓縮檔裡（唯讀）的右鍵選單：只有看、複製、解壓縮。
  * @param {{ x: number, y: number }} at
  * @param {object[]} items
@@ -194,7 +221,7 @@ function showZipMenu(at, items, act) {
 
 /**
  * @param {{ x: number, y: number }} at
- * @param {{ recycle: boolean, zip?: boolean, items: object[], shell?: object[], invokeShell?: Function, onClose?: Function, actions: Record<string, () => void> }} spec
+ * @param {{ recycle: boolean, zip?: boolean, phone?: boolean, items: object[], shell?: object[], invokeShell?: Function, onClose?: Function, actions: Record<string, () => void> }} spec
  */
 export function showExplorerMenu(at, spec) {
   const items = spec.items || []
@@ -213,6 +240,10 @@ export function showExplorerMenu(at, spec) {
   }
   if (spec.zip) {
     showZipMenu(at, items, act)
+    return
+  }
+  if (spec.phone) {
+    showPhoneMenu(at, items, act)
     return
   }
   if (items.length) {

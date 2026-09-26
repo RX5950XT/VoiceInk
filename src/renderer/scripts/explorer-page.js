@@ -218,6 +218,8 @@ let places = []
 let disks = []
 /** @type {Array<{ letter: string, path: string, label: string, fs: string, total: number, free: number, type: number }>} */
 let diskInfo = []
+/** 插著的手機／相機（MTP，沒有磁碟代號） @type {Array<{ name: string, path: string, type: string }>} */
+let devices = []
 /** 分頁：一頁一條路徑與自己的上／下一頁歷史。切 nav 分頁回來要留著。 */
 /** @type {Array<{ id: string, cwd: string, history: string[], histIndex: number }>} */
 let tabs = []
@@ -445,11 +447,27 @@ function paneInZip(which) {
   return Boolean(paneArchive(which))
 }
 
+/** 手機（MTP）的路徑：`mtp:裝置名稱\…` @param {unknown} value */
+function isPhonePath(value) {
+  return /^mtp:/i.test(String(value || ''))
+}
+
+/** @param {'left' | 'right'} which */
+function paneInPhone(which) {
+  return isPhonePath(paneCwd(which))
+}
+
 /**
- * 壓縮檔裡是唯讀的。main 也會擋，這裡先講清楚——不然按了才看到一句「找不到這個檔案」。
+ * 壓縮檔裡是唯讀的；手機裡只能複製進出。main 也會擋，這裡先講清楚——不然按了才看到一句「找不到這個檔案」。
  * @param {object[]} [items] 有給就看項目本身；沒給看作用欄停在哪
+ * @param {{ phoneOk?: boolean }} [opts] phoneOk＝這個動作手機可以（貼上＝複製進手機、刪除）
  */
-function blockInZip(items) {
+function blockInZip(items, opts = {}) {
+  const phone = items ? items.some((item) => item && item.phone) : paneInPhone(activePane)
+  if (phone && !opts.phoneOk) {
+    showToast('手機裡不能改名或新增，只能複製進出與刪除', 'error')
+    return true
+  }
   const hit = items ? items.some((item) => item && item.zip) : paneInZip(activePane)
   if (hit) showToast('壓縮檔裡是唯讀的，請先解壓縮', 'error')
   return hit
@@ -688,6 +706,7 @@ function bindOnce() {
   })
   document.addEventListener('keydown', onPageKey)
   for (const type of ['mousedown', 'mouseup', 'auxclick']) document.addEventListener(type, onSideButton, true)
+  electronAPI.explorer.onDevicesChanged(() => void onDevicesChanged())
   electronAPI.explorer.onChanged((payload) => {
     if (!payload) return
     // 比的是「要去的資料夾」不是 cwd：正在切換的時候拿舊 cwd 重讀會把切換蓋回去
@@ -713,6 +732,17 @@ function crumbsOf(full) {
   if (!full) return []
   if (pathKey(full) === THIS_PC) return [{ label: '本機', path: THIS_PC }]
   if (pathKey(full) === RECYCLE_CWD) return [{ label: '資源回收筒', path: RECYCLE_CWD }]
+  if (isPhonePath(full)) {
+    // 本機 ▸ Pixel 6a ▸ 內部共用儲存空間 ▸ DCIM
+    const parts = full.slice(4).split('\\').filter(Boolean)
+    const out = [{ label: '本機', path: THIS_PC }]
+    let acc = 'mtp:'
+    parts.forEach((part, i) => {
+      acc += i ? `\\${part}` : part
+      out.push({ label: part, path: acc })
+    })
+    return out
+  }
   const norm = full.replace(/\//g, '\\')
   if (norm.startsWith('\\\\')) {
     const parts = norm.replace(/^\\+/, '').split('\\').filter(Boolean)
@@ -2013,7 +2043,7 @@ function paintStatus() {
   const extra = truncated ? '（已截斷）' : ''
   if (inHome() && !inSearch()) {
     const list = diskInfo.length ? diskInfo : disks
-    el.textContent = `${list.length} 個磁碟`
+    el.textContent = `${list.length} 個磁碟${devices.length ? `、${devices.length} 部裝置` : ''}`
     return
   }
   if (inSearch()) {
@@ -2087,6 +2117,15 @@ function paintCmdBarInto(bar, which) {
     addCmd(bar, which, '複製路徑', () => copyPaths(items), { disabled: !has })
     addCmd(bar, which, '解壓縮到…', () => void extractTo(items), { disabled: !has })
     addCmd(bar, which, '全部解壓縮', () => void extractItems([paneArchive(which)]))
+    return
+  }
+  if (paneInPhone(which)) {
+    // 手機只能複製進出、刪除（沒有回收筒＝永久）；裝置那一層底下是儲存空間，貼不進去
+    const deviceTop = !paneCwd(which).includes('\\')
+    addCmd(bar, which, '開啟', () => void openEntry(items[0]), { disabled: !one })
+    addCmd(bar, which, '複製', () => void clipboard(items, 'copy'), { disabled: !has })
+    addCmd(bar, which, '貼上', () => void pasteHere(), { disabled: deviceTop })
+    addCmd(bar, which, '永久刪除', () => void deleteItems(items), { disabled: !has || deviceTop, danger: true })
     return
   }
   addCmd(bar, which, '開啟', () => void openEntry(items[0]), { disabled: !one })
@@ -2355,6 +2394,13 @@ async function loadHome(opts = {}) {
   syncTab()
   paintTabs()
   if (!opts.silent) void electronAPI.explorer.saveState({ lastPath: THIS_PC, sort: sortBy, sortDesc })
+  refreshHomeInfo(seq)
+  if (dualPane) refreshExplorerWatches()
+  return true
+}
+
+/** 首頁的磁碟容量與插著的手機：各一支 PowerShell 一起跑，回來時還停在同一次導覽才畫。 */
+function refreshHomeInfo(seq) {
   void electronAPI.explorer.driveInfo().then((fresh) => {
     if (seq !== navSeq) return
     if (fresh && fresh.ok) {
@@ -2364,8 +2410,19 @@ async function loadHome(opts = {}) {
   }).catch(() => {
     if (seq === navSeq) showToast('讀不到磁碟容量', 'error')
   })
-  if (dualPane) refreshExplorerWatches()
-  return true
+  void electronAPI.explorer.listDevices().then((fresh) => {
+    if (seq !== navSeq || !fresh || !fresh.ok) return
+    devices = fresh.data || []
+    paintList()
+  }).catch((error) => console.warn('[explorer] 讀不到裝置', error))
+}
+
+/** 插拔隨身碟／手機（main 收到 WM_DEVICECHANGE）：側欄磁碟重讀，站在首頁就連卡片一起更新。 */
+async function onDevicesChanged() {
+  const fresh = await electronAPI.explorer.listDrives().catch(() => null)
+  if (fresh && fresh.ok) disks = fresh.data || []
+  paintSidebar(places, disks)
+  if (pathKey(navTarget || cwd) === THIS_PC && !inSearch()) refreshHomeInfo(navSeq)
 }
 
 function paintHome() {
@@ -2379,6 +2436,7 @@ function paintHome() {
       return key !== THIS_PC && key !== RECYCLE_CWD
     }),
     disks: diskInfo.length ? diskInfo : fallback,
+    devices,
     formatSize,
     onOpen: (target, newPage) => void (newPage ? newTab(target) : navigate(target)),
     bindDrop: (el, target) => bindDropTarget(el, () => target, (event, dest) => void handleDrop(event, dest))
@@ -2598,7 +2656,7 @@ function paintRecycleChrome() {
   const folderBtn = $('exNewFolderBtn')
   const fileBtn = $('exNewFileBtn')
   const emptyBtn = $('exEmptyBinBtn')
-  const zipped = paneInZip(activePane)
+  const zipped = paneInZip(activePane) || paneInPhone(activePane)
   if (folderBtn) folderBtn.hidden = rec || home || zipped
   if (fileBtn) fileBtn.hidden = rec || home || zipped
   const up = $('exUpBtn')
@@ -2829,7 +2887,7 @@ function copyPaths(items) {
 
 async function clipboard(items, mode) {
   // 壓縮檔裡剪不走：一律當複製，貼上＝解壓縮（main 也照這樣存）
-  if (mode === 'cut' && items.some((item) => item.zip)) mode = 'copy'
+  if (mode === 'cut' && items.some((item) => item.zip || item.phone)) mode = 'copy'
   try {
     lastClip = { mode, paths: items.map((i) => i.path) }
     await call(
@@ -2921,7 +2979,7 @@ async function refreshAfterMutate() {
 
 async function pasteHere() {
   const target = activeCwd()
-  if (!target || pathKey(target) === THIS_PC || blockInZip()) return
+  if (!target || pathKey(target) === THIS_PC || blockInZip(undefined, { phoneOk: true })) return
   try {
     const done = await call(electronAPI.explorer.paste(target), '貼上失敗')
     const landed = (done && done.paths) || []
@@ -3228,8 +3286,9 @@ function showBatchRenameResult(results, revert) {
 }
 
 async function deleteItems(items, opts = {}) {
-  if (!items.length || blockInZip(items)) return
-  const permanent = Boolean(opts.permanent) || inRecycle()
+  if (!items.length || blockInZip(items, { phoneOk: true })) return
+  // 手機沒有資源回收筒：刪了就沒了，照實問
+  const permanent = Boolean(opts.permanent) || inRecycle() || items.some((item) => item.phone)
   const desc = items.length === 1 ? items[0].name : `${items.length} 個項目`
   const title = permanent ? '永久刪除？無法還原' : '移到資源回收筒？'
   const ok = await askConfirm(title, { desc, confirmText: permanent ? '永久刪除' : '刪除', danger: true })
@@ -3285,13 +3344,15 @@ function openContextMenu(e, items, dir) {
   const recycle = activeInRecycle()
   // 壓縮檔裡的路徑磁碟上不存在，殼層選單叫不起來，只給 App 自己那份
   const zipView = paneInZip(activePane)
+  // 手機一樣沒有真路徑，殼層選單叫不起來
+  const phoneView = paneInPhone(activePane)
   const archive = paneArchive(activePane)
   const extended = Boolean(e.shiftKey)
   const folder = dir || activeCwd()
   void (async () => {
     let shellItems = []
     let token = 0
-    if (!recycle && !zipView && folder && folder !== THIS_PC) {
+    if (!recycle && !zipView && !phoneView && folder && folder !== THIS_PC) {
       try {
         const res = await electronAPI.explorer.shellMenu({
           paths: items.map((item) => item.path).filter(Boolean),
@@ -3313,6 +3374,7 @@ function openContextMenu(e, items, dir) {
     showExplorerMenu(at, {
       recycle,
       zip: zipView,
+      phone: phoneView,
       items,
       showHidden,
       shell: shellItems,

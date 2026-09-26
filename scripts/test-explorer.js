@@ -209,6 +209,23 @@ console.log('\n[F] 本機位置與磁碟')
   ok('磁碟資訊只接受有效磁碟代號', parsed.length === 2)
   ok('磁碟名稱與剩餘容量保留', parsed[0].label === '中文磁碟' && parsed[0].free === 40)
   ok('容量不接受負數或超過總量', parsed[1].total === 0 && parsed[1].free === 0)
+  const phone = '::{20D04FE0-3AEA-1069-A2D8-08002B30309D}\\\\\\?\\usb#vid_18d1&pid_4ee2&mi_00#9&34d0b06a&2&0000#{6ac27878-a6fa-4155-ba85-f98f491d4f33}'
+  const devs = drives.parseDevices(JSON.stringify([
+    { name: 'Pixel 6a', path: phone, type: '行動電話' },
+    { name: '怪', path: 'C:\\Windows' },
+    { name: '怪2', path: phone + ',/select' }
+  ]))
+  ok('裝置只接受「本機」底下的 MTP 路徑', devs.length === 1 && devs[0].name === 'Pixel 6a', JSON.stringify(devs))
+  ok('單台裝置（物件不是陣列）也讀得到', drives.parseDevices(JSON.stringify({ name: 'P', path: phone })).length === 1)
+  ok('沒有裝置（空字串）回空陣列', drives.parseDevices('').length === 0)
+  const mtp = require('../src/main/explorer/mtp')
+  const where = mtp.parse('mtp:Pixel 6a\\內部共用儲存空間\\DCIM\\')
+  ok('手機路徑拆成裝置＋一層層名稱', where.device === 'Pixel 6a' && where.segs.join('/') === '內部共用儲存空間/DCIM' && where.full === 'mtp:Pixel 6a\\內部共用儲存空間\\DCIM', JSON.stringify(where))
+  for (const bad of ['mtp:', 'mtp:x\\..\\y', 'mtp:x\\\\y', 'mtp:x\\a\u0001b', 'C:\\x']) {
+    let code = ''
+    try { mtp.parse(bad) } catch (error) { code = error.code }
+    ok(`手機路徑擋掉 ${JSON.stringify(bad)}`, code === 'BAD_PATH')
+  }
   const places = await drives.listPlaces()
   ok('至少有家目錄', places.some((p) => p.id === 'home' && fs.existsSync(p.path)), JSON.stringify(places.map((p) => p.id)))
   const disks = await drives.listDrives()

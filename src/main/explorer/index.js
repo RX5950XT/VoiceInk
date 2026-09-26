@@ -25,6 +25,7 @@ const nativeProbe = require('../native-probe')
 const operations = require('./operations')
 const zipOps = require('./zip-ops')
 const zip = require('./zip')
+const mtp = require('./mtp')
 
 /** @type {(channel: string, payload: any) => void} */
 let emit = () => {}
@@ -81,12 +82,15 @@ function saveState(patch) {
 }
 const listDrives = () => drives.listDrives()
 const driveInfo = () => drives.driveInfo()
+// 手機（MTP）：路徑是 `mtp:裝置名稱\…`，每個入口先問 `mtp.isMtp`（跟壓縮檔同一招）
+const listDevices = () => mtp.listDevices()
 const listDir = async (dirPath, opts) => {
   // 「本機」是虛擬位置，沒有檔案清單（renderer 自己畫首頁）。
   if (drives.isThisPc(dirPath)) {
     return { path: drives.THIS_PC, entries: [], offset: 0, limit: 0, total: 0, hasMore: false, truncated: false }
   }
   if (recycle.isRecyclePath(dirPath)) return files.listRecycle(opts)
+  if (mtp.isMtp(dirPath)) return mtp.list(dirPath, opts)
   // 壓縮檔（本身或裡面的資料夾）當資料夾列，唯讀
   const zipped = await zipOps.zipOf(dirPath)
   if (zipped) return zipOps.list(zipped, opts)
@@ -94,6 +98,7 @@ const listDir = async (dirPath, opts) => {
 }
 /** 壓縮檔裡的檔案先解到暫存，其餘照原路徑（預覽／Markdown／大圖都吃真的檔案） */
 async function realFile(filePath) {
+  if (mtp.isMtp(filePath)) return mtp.realPath(filePath)
   const inner = await zipOps.innerOf(filePath)
   return inner ? zipOps.realPath(inner) : filePath
 }
@@ -114,6 +119,7 @@ async function mediaUrl(filePath) {
   return { url: require('../workspace/media').localUrlFor(full), path: full }
 }
 const inspect = async (filePath) => {
+  if (mtp.isMtp(filePath)) return mtp.inspect(filePath)
   const inner = await zipOps.innerOf(filePath)
   return inner ? zipOps.inspect(inner) : files.inspect(filePath)
 }
@@ -225,6 +231,7 @@ async function pickFolder() {
  * @param {unknown} raw
  */
 async function resolvePath(raw) {
+  if (mtp.isMtp(typeof raw === 'string' ? raw.trim() : raw)) return mtp.resolve(raw.trim())
   try {
     return resolveLocal(raw)
   } catch (error) {
@@ -291,9 +298,13 @@ async function createShortcut(target, toDir) {
   if (!ok) throw paths.fail('CREATE_FAILED', '建不了捷徑')
   return { path: dest }
 }
-const createEntry = (dirPath, name, dir) => files.createEntry(dirPath, name, dir)
-const renameEntry = (target, name) => files.renameEntry(target, name)
-const removeEntry = (target, opts) => files.removeEntry(target, opts)
+/** 手機裡不能改名、新增：在這裡就擋掉，講清楚為什麼 */
+function writable(target) {
+  if (mtp.isMtp(target)) throw mtp.readOnly()
+}
+const createEntry = (dirPath, name, dir) => (writable(dirPath), files.createEntry(dirPath, name, dir))
+const renameEntry = (target, name) => (writable(target), files.renameEntry(target, name))
+const removeEntry = (target, opts) => (mtp.isMtp(target) ? mtp.remove(target) : files.removeEntry(target, opts))
 const restoreEntry = (key) => files.restoreEntry(key)
 const purgeEntry = (key) => files.purgeEntry(key)
 const emptyRecycle = () => files.emptyRecycle()
@@ -337,6 +348,7 @@ async function uffsEnsure(raw) {
  * @param {unknown} target
  */
 async function openPath(target) {
+  if (mtp.isMtp(target)) return mtp.openPath(target)
   const zipped = await zipOps.zipOf(target)
   if (zipped) {
     // 點 .zip 或壓縮檔裡的資料夾＝走進去；裡面的檔案解到暫存再用預設程式開
@@ -421,7 +433,11 @@ async function startDrag(list, sender) {
   const files = []
   for (const item of (Array.isArray(list) ? list : []).slice(0, 100)) {
     try {
-      // 壓縮檔裡的先解到暫存：OS 的拖放只認磁碟上真的檔案
+      // 壓縮檔裡／手機裡的先弄到暫存：OS 的拖放只認磁碟上真的檔案（手機的資料夾會被跳過）
+      if (mtp.isMtp(item)) {
+        files.push(await mtp.realPath(item))
+        continue
+      }
       const inner = await zipOps.innerOf(item)
       files.push(inner ? await zipOps.realPath(inner) : paths.resolveExisting(item))
     } catch {
@@ -473,11 +489,16 @@ async function setClipboard(items, mode) {
   const next = []
   let zipped = false
   for (const item of items.slice(0, 50)) {
+    if (mtp.isMtp(item)) {
+      zipped = true
+      next.push(mtp.parse(item).full)
+      continue
+    }
     const inner = await zipOps.innerOf(item)
     zipped = zipped || Boolean(inner)
     next.push(inner ? inner.full : paths.resolveExisting(item))
   }
-  // 壓縮檔裡是唯讀的：剪下一律當複製（貼上＝解壓縮）
+  // 壓縮檔裡、手機裡是唯讀的：剪下一律當複製（貼上＝解壓縮／從手機複製出來）
   clip = { mode: mode === 'cut' && !zipped ? 'cut' : 'copy', paths: next }
   return { count: clip.paths.length, mode: clip.mode }
 }
@@ -488,15 +509,23 @@ async function setClipboard(items, mode) {
 async function paste(toDir) {
   const clipboard = clip
   if (!clipboard.paths.length) throw paths.fail('EMPTY', '剪貼簿是空的')
+  // 貼進手機＝從電腦複製進去（剪下也只複製，電腦那份不刪）
+  if (mtp.isMtp(toDir)) return mtp.copyIn(clipboard.paths, toDir)
   const trashed = recycle.isRecyclePath(toDir)
   if (trashed && clipboard.mode !== 'cut') throw paths.fail('BAD_PATH', '不能複製進資源回收筒')
   if (!trashed) await zipOps.assertWritable(toDir)
   const destination = trashed ? toDir : paths.resolveExisting(toDir)
-  // 從壓縮檔複製出來的＝解壓縮到這裡；其餘照一般複製／搬移走操作中心
+  // 從壓縮檔複製出來的＝解壓縮到這裡；從手機來的走殼層複製；其餘照一般複製／搬移走操作中心
   const zippedPaths = []
+  const phonePaths = []
   const sources = []
-  for (const item of clipboard.paths) ((await zipOps.innerOf(item)) ? zippedPaths : sources).push(item)
+  for (const item of clipboard.paths) {
+    if (mtp.isMtp(item)) phonePaths.push(item)
+    else ((await zipOps.innerOf(item)) ? zippedPaths : sources).push(item)
+  }
+  if (phonePaths.length && trashed) throw paths.fail('BAD_PATH', '手機裡的檔案不能丟進資源回收筒')
   const extracted = zippedPaths.length ? (await zipOps.extract(zippedPaths, destination)).paths : []
+  if (phonePaths.length) await mtp.copyOut(phonePaths, destination)
   if (!sources.length) return { trashed, paths: extracted, status: 'completed', items: [] }
   const result = await operations.run({
     mode: trashed ? 'trash' : clipboard.mode === 'cut' ? 'move' : 'copy',
@@ -520,6 +549,8 @@ async function paste(toDir) {
 async function dropEntries(items, toDir, mode) {
   if (!Array.isArray(items)) throw paths.fail('BAD_PATH', '路徑不合法')
   const slice = items.slice(0, 50)
+  // 拖進手機一律是複製
+  if (mtp.isMtp(toDir)) return mtp.copyIn(slice, toDir)
   if (recycle.isRecyclePath(toDir)) {
     if (mode === 'copy') throw paths.fail('BAD_PATH', '不能複製進資源回收筒')
     return operationResult(await operations.run({ mode: 'trash', destination: toDir, sources: slice }), { trashed: true })
@@ -558,6 +589,7 @@ const setOperationPolicy = (opts) => operations.setCollisionPolicy(opts)
  * @param {unknown} dirPath
  */
 function watchDir(dirPath) {
+  if (mtp.isMtp(dirPath)) return { watching: false, path: dirPath }
   if (recycle.isRecyclePath(dirPath)) return { watching: false, path: recycle.RECYCLE_CWD }
   if (zip.looksZip(dirPath)) return { watching: false, path: dirPath }
   return watch.start(dirPath, (payload) => {
@@ -569,7 +601,7 @@ function watchDir(dirPath) {
 function watchDirs(dirPaths) {
   const list = Array.isArray(dirPaths) ? dirPaths : []
   const specs = list
-    .filter((dirPath) => !recycle.isRecyclePath(dirPath) && !drives.isThisPc(dirPath) && !zip.looksZip(dirPath))
+    .filter((dirPath) => !recycle.isRecyclePath(dirPath) && !drives.isThisPc(dirPath) && !zip.looksZip(dirPath) && !mtp.isMtp(dirPath))
     .map((dirPath) => ({
       path: dirPath,
       send: (payload) => {
@@ -602,6 +634,7 @@ module.exports = {
   createShortcut,
   listDrives,
   driveInfo,
+  listDevices,
   listDir,
   preview,
   readMarkdown,

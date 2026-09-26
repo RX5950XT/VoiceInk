@@ -900,6 +900,35 @@ async function main() {
     const info = await cdp.eval(`window.electronAPI.explorer.driveInfo()`)
     assert(info.ok && info.data.some(d => d.total > 0 && d.free >= 0 && d.free <= d.total), '真實磁碟容量讀取成功')
     await waitFor(() => cdp.eval(`!!document.querySelector('.ex-home-bar-fill')`), 12_000, '磁碟容量條')
+    // 插拔隨身碟／手機：直接對主視窗丟 WM_DEVICECHANGE(DBT_DEVNODES_CHANGED)，首頁要自己重畫
+    const devs = await cdp.eval(`window.electronAPI.explorer.listDevices()`)
+    assert(devs.ok && Array.isArray(devs.data), '讀得到裝置清單', JSON.stringify(devs))
+    assert(devs.data.every((d) => d.path.startsWith('mtp:')), '裝置路徑是 mtp:名稱', JSON.stringify(devs.data))
+    const bad = await cdp.eval(`window.electronAPI.explorer.listDir('mtp:x\\\\..')`)
+    assert(!bad.ok, '手機路徑不收 ..', JSON.stringify(bad))
+    await cdp.eval(`document.getElementById('exHome').replaceChildren()`)
+    // 測試視窗是藏著的（MainWindowHandle＝0），改列這個 pid 的所有頂層視窗逐一丟
+    const posted = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `Add-Type @'
+using System; using System.Runtime.InteropServices;
+public static class DevPing {
+  delegate bool EnumProc(IntPtr h, IntPtr l);
+  [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc f, IntPtr l);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll")] static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+  public static int Run(uint target) {
+    int n = 0;
+    EnumWindows((h, l) => { uint p; GetWindowThreadProcessId(h, out p); if (p == target && PostMessage(h, 0x219, (IntPtr)7, IntPtr.Zero)) n++; return true; }, IntPtr.Zero);
+    return n;
+  }
+}
+'@
+[DevPing]::Run(${child.pid})`], { windowsHide: true, encoding: 'utf8' }).trim()
+    assert(Number(posted) > 0, '丟得到 WM_DEVICECHANGE 給測試視窗', posted)
+    await waitFor(() => cdp.eval(`document.getElementById('exHome').childElementCount > 0`), 10_000, '裝置變動後首頁重畫')
+    for (const dev of devs.data) {
+      await waitFor(() => cdp.eval(`[...document.querySelectorAll('#exHome .ex-home-card')].some((n) => n.dataset.path === ${JSON.stringify(dev.path)})`),
+        10_000, `首頁畫出裝置 ${dev.name}`)
+    }
     const homeId = await cdp.eval(`document.querySelector('#exTabStrip .ex-tab.is-active').dataset.id`)
     await cdp.eval(`document.querySelector('.ex-home-card').dispatchEvent(new MouseEvent('auxclick', {button: 1, bubbles: true, cancelable: true}))`)
     await waitFor(() => cdp.eval(`document.querySelectorAll('#exTabStrip .ex-tab').length === 3 && document.querySelector('#exTabStrip .ex-tab.is-active').dataset.path !== 'thispc'`), 10_000, '首頁中鍵另開資料夾')

@@ -697,6 +697,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     createShortcut: (target, toDir) => ipcRenderer.invoke('explorer:createShortcut', target, toDir),
     listDrives: () => ipcRenderer.invoke('explorer:listDrives'),
     driveInfo: () => ipcRenderer.invoke('explorer:driveInfo'),
+    listDevices: () => ipcRenderer.invoke('explorer:listDevices'),
+    onDevicesChanged: (callback) => {
+      const handler = () => callback()
+      ipcRenderer.on('explorer:devicesChanged', handler)
+      return () => ipcRenderer.removeListener('explorer:devicesChanged', handler)
+    },
     listDir: (dirPath, opts) => ipcRenderer.invoke('explorer:listDir', dirPath, opts),
     preview: (filePath) => ipcRenderer.invoke('explorer:preview', filePath),
     readMarkdown: (filePath) => ipcRenderer.invoke('explorer:readMarkdown', filePath),

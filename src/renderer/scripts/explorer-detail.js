@@ -161,7 +161,8 @@ export async function paintDetail(opts) {
   const dl = document.createElement('dl')
   addFact(dl, '類型', (info && info.type) || (item.dir ? '資料夾' : '檔案'))
   addFact(dl, '位置', item.path)
-  const folder = Boolean(item.dir) && !opts.inRecycle
+  // 手機的資料夾不算大小：要把整棵樹從手機一層層列回來，幾千張照片要好幾分鐘
+  const folder = Boolean(item.dir) && !opts.inRecycle && !item.phone
   const sizeDdEl = addFact(dl, '大小', folder ? '計算中…' : (item.dir ? '資料夾' : opts.formatSize((info && info.size) || item.size)))
   addFact(dl, '建立', opts.formatTime((info && info.ctimeMs) || 0))
   addFact(dl, '修改', opts.formatTime((info && info.mtimeMs) || item.mtimeMs))

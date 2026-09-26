@@ -204,4 +204,50 @@ function capacity(raw) {
   return Number.isFinite(n) && n > 0 ? n : 0
 }
 
-module.exports = { THIS_PC, isThisPc, listPlaces, listDrives, driveInfo, parseDriveInfo, isDirSoon }
+/**
+ * 手機／相機（MTP）沒有磁碟代號，只存在於殼層的「本機」底下，路徑長這樣：
+ * `::{20D04FE0-…}\\\?\usb#vid_18d1&pid_4ee2…#{6ac27878-…}`（只給 explorer.exe 開）。
+ */
+const DEVICE_RE = /^::\{20D04FE0-3AEA-1069-A2D8-08002B30309D\}\\{3}\?\\[\w#&.{}~-]+$/i
+
+/** @param {unknown} raw */
+function isDevicePath(raw) {
+  return typeof raw === 'string' && raw.length <= 512 && DEVICE_RE.test(raw)
+}
+
+/**
+ * 「本機」底下不是檔案系統的裝置（插著的手機、相機）。
+ * @returns {Promise<Array<{ name: string, path: string, type: string }>>}
+ */
+function listDevices() {
+  const exe = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+  const script = '[Console]::OutputEncoding = [Text.UTF8Encoding]::new();'
+    + ' @((New-Object -ComObject Shell.Application).NameSpace(17).Items() | Where-Object { -not $_.IsFileSystem } |'
+    + ' ForEach-Object { @{ name = $_.Name; path = $_.Path; type = $_.Type } }) | ConvertTo-Json -Compress'
+  return new Promise((resolve) => {
+    execFile(exe, ['-NoProfile', '-NonInteractive', '-Command', script], {
+      windowsHide: true, encoding: 'utf8', timeout: 8000, maxBuffer: 256 * 1024
+    }, (error, out) => resolve(error ? [] : parseDevices(out)))
+  })
+}
+
+/** `ConvertTo-Json` 沒東西時回空字串、一台時回物件不是陣列。 @param {string} raw */
+function parseDevices(raw) {
+  let parsed = null
+  try {
+    parsed = JSON.parse(String(raw || '').trim() || 'null')
+  } catch {
+    return []
+  }
+  const list = Array.isArray(parsed) ? parsed : (parsed ? [parsed] : [])
+  return list.filter((item) => item && isDevicePath(item.path)).map((item) => ({
+    name: String(item.name || '裝置').slice(0, 128),
+    path: item.path,
+    type: String(item.type || '').slice(0, 64)
+  }))
+}
+
+module.exports = {
+  THIS_PC, isThisPc, listPlaces, listDrives, driveInfo, parseDriveInfo, isDirSoon,
+  listDevices, parseDevices
+}

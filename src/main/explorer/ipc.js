@@ -29,6 +29,7 @@ function registerExplorerIpc({ ipcMain, service, isMainSender }) {
   ))
   ipcMain.handle('explorer:listDrives', (event) => invoke(event, () => service.listDrives()))
   ipcMain.handle('explorer:driveInfo', (event) => invoke(event, () => service.driveInfo()))
+  ipcMain.handle('explorer:listDevices', (event) => invoke(event, () => service.listDevices()))
   ipcMain.handle('explorer:listDir', (event, dirPath, opts) => (
     invoke(event, () => service.listDir(dirPath, opts))
   ))
