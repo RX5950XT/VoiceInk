@@ -26,6 +26,78 @@ const { resolveProbeExe } = require('../native-probe')
 
 const INTERVAL_KEYS = Object.freeze(Object.keys(INTERVALS))
 const KILL_TIMEOUT_MS = 10_000
+// UAC 視窗要等使用者按，給寬一點
+const ELEVATED_KILL_TIMEOUT_MS = 120_000
+const UAC_CANCELLED = 1223
+const MAX_KILL_PIDS = 256
+
+function killError(code, userMessage) {
+  const err = new Error(code)
+  err.code = code
+  err.userMessage = userMessage
+  return err
+}
+
+/** @param {unknown} input 一個 pid 或 pid 陣列（IPC 邊界，當不可信） @returns {number[]} */
+function validateKillPids(input) {
+  const list = Array.isArray(input) ? input : [input]
+  if (list.length === 0 || list.length > MAX_KILL_PIDS) {
+    throw killError('SYSMON_BAD_PID', '無效的處理程序 ID')
+  }
+  const pids = list.map((pid) => {
+    const check = metrics.validateKillPid(pid)
+    if (!check.ok) throw killError('SYSMON_BAD_PID', check.reason)
+    if (check.pid === process.pid) throw killError('SYSMON_SELF', '不能從這裡結束 VoiceInk 自己')
+    return check.pid
+  })
+  return [...new Set(pids)]
+}
+
+/** EPERM 代表程序在、只是摸不到（例如系統管理員身分跑的） */
+function isPidAlive(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    return err.code === 'EPERM'
+  }
+}
+
+/**
+ * 用系統管理員跑 taskkill，回傳它的 exit code；UAC 被取消回 1223。
+ * args 只有驗過的整數 pid 與固定旗標，沒有使用者字串會進到這段 PowerShell。
+ * @param {string[]} args
+ */
+function elevatedKillScript(args) {
+  return `try { $p = Start-Process -FilePath 'taskkill.exe' -ArgumentList '${args.join(' ')}' `
+    + `-Verb RunAs -WindowStyle Hidden -Wait -PassThru; exit $p.ExitCode } catch { exit ${UAC_CANCELLED} }`
+}
+
+/** 跑一支指令等它結束，回 exit code；起不來或逾時丟結構化錯誤 */
+function runKill(spawnFn, file, args, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let child
+    try {
+      // stdio 全部 ignore：留著 stdin 管線會讓子程序等一個永遠不來的 EOF（AGY 那條教訓）
+      child = spawnFn(file, args, { windowsHide: true, stdio: 'ignore' })
+    } catch {
+      reject(killError('SYSMON_KILL_FAILED', '無法結束這個處理程序'))
+      return
+    }
+    const timer = setTimeout(() => {
+      try { child.kill() } catch { /* 已經結束了 */ }
+      reject(killError('SYSMON_KILL_TIMEOUT', '結束處理程序逾時'))
+    }, timeoutMs)
+    child.on('error', () => {
+      clearTimeout(timer)
+      reject(killError('SYSMON_KILL_FAILED', '無法結束這個處理程序'))
+    })
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      resolve(code)
+    })
+  })
+}
 
 /**
  * 每台螢幕的桌面配置。`electron` 在單元測試裡不一定 require 得到，失敗就當作沒有。
@@ -208,68 +280,36 @@ function createSysmonService(deps = {}) {
     /**
      * 結束工作。`taskkill` 不帶 /F 是送關閉訊息（工作管理員的「結束工作」），
      * 帶 /F /T 才是強制連子程序一起砍（「強制結束工作」）。
-     * @param {unknown} pid
+     * 強制結束時一般權限砍不掉的（系統管理員身分跑的程式），跳一次 UAC 用系統管理員再砍；
+     * 合併的那組（chrome ×30）一次送進來，才不會一個 pid 跳一次 UAC。
+     * @param {unknown} pidOrPids 一個 pid 或 pid 陣列
      * @param {unknown} force
      */
-    killProcess(pid, force) {
-      const check = metrics.validateKillPid(pid)
-      if (!check.ok) {
-        const err = new Error('invalid pid')
-        err.code = 'SYSMON_BAD_PID'
-        err.userMessage = check.reason
-        throw err
+    async killProcess(pidOrPids, force) {
+      const pids = validateKillPids(pidOrPids)
+      const forced = force === true
+      const args = pids.flatMap((pid) => ['/PID', String(pid)]).concat(forced ? ['/F', '/T'] : [])
+      const code = await runKill(spawnFn, 'taskkill.exe', args, KILL_TIMEOUT_MS)
+      const result = { pid: pids[0], pids, forced, elevated: false }
+      if (code === 0) return result
+      if (!forced) {
+        throw killError('SYSMON_KILL_DENIED', '結束失敗：程式沒有回應關閉要求，可以改用「強制結束工作」')
       }
-      if (check.pid === process.pid) {
-        const err = new Error('self')
-        err.code = 'SYSMON_SELF'
-        err.userMessage = '不能從這裡結束 VoiceInk 自己'
-        throw err
+      // /T 帶走的子程序、早就結束的 pid 都會讓 exit code 不是 0：看還活著的才需要提升權限
+      // （TerminateProcess 是非同步的，剛砍的要等一下才會真的不在）
+      await new Promise((r) => setTimeout(r, 300))
+      const alive = pids.filter(isPidAlive)
+      if (alive.length === 0) return result
+      const elevatedArgs = alive.flatMap((pid) => ['/PID', String(pid)]).concat(['/F', '/T'])
+      const elevatedCode = await runKill(spawnFn, 'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-Command', elevatedKillScript(elevatedArgs)], ELEVATED_KILL_TIMEOUT_MS)
+      if (elevatedCode === UAC_CANCELLED) {
+        throw killError('SYSMON_KILL_CANCELLED', '結束失敗：系統管理員授權被取消')
       }
-      const args = force === true
-        ? ['/PID', String(check.pid), '/F', '/T']
-        : ['/PID', String(check.pid)]
-
-      return new Promise((resolve, reject) => {
-        let child
-        try {
-          // stdio 全部 ignore：留著 stdin 管線會讓子程序等一個永遠不來的 EOF（AGY 那條教訓）
-          child = spawnFn('taskkill.exe', args, { windowsHide: true, stdio: 'ignore' })
-        } catch {
-          const err = new Error('spawn failed')
-          err.code = 'SYSMON_KILL_FAILED'
-          err.userMessage = '無法結束這個處理程序'
-          reject(err)
-          return
-        }
-        const timer = setTimeout(() => {
-          try { child.kill() } catch { /* 已經結束了 */ }
-          const err = new Error('timeout')
-          err.code = 'SYSMON_KILL_TIMEOUT'
-          err.userMessage = '結束處理程序逾時'
-          reject(err)
-        }, KILL_TIMEOUT_MS)
-        child.on('error', () => {
-          clearTimeout(timer)
-          const err = new Error('spawn failed')
-          err.code = 'SYSMON_KILL_FAILED'
-          err.userMessage = '無法結束這個處理程序'
-          reject(err)
-        })
-        child.on('close', (code) => {
-          clearTimeout(timer)
-          if (code === 0) {
-            resolve({ pid: check.pid, forced: force === true })
-            return
-          }
-          const err = new Error(`taskkill exit ${code}`)
-          err.code = 'SYSMON_KILL_DENIED'
-          // taskkill 的 exit code 不細分，最常見的就是權限不足或程序已經不在了
-          err.userMessage = force === true
-            ? '結束失敗：可能需要系統管理員權限，或這個處理程序已經結束'
-            : '結束失敗：程式沒有回應關閉要求，可以改用「強制結束工作」'
-          reject(err)
-        })
-      })
+      if (alive.some(isPidAlive)) {
+        throw killError('SYSMON_KILL_DENIED', '結束失敗：用系統管理員權限也結束不了（可能是受保護的系統處理程序）')
+      }
+      return { ...result, elevated: true }
     },
 
     /**

@@ -14,8 +14,13 @@ const HOME_URL = 'https://web.telegram.org/a/'
 const STORE_KEY = 'telegramPanes'
 // ponytail: 每格就是一整份 Web A（約 200–300MB），先卡 4 格；main 的 store:set 也卡 4
 const MAX_PANES = 4
+// 前一格載完再等一下才開下一格：Web A 靠 BroadcastChannel 在 100ms 內選出唯一連線的主分頁，
+// 選不出來就「先連再說」。幾格同時開會有好幾格拿同一把金鑰一起連，Web A 本來只預期分頁一個一個開
+const SETTLE_MS = 1500
+const LOAD_TIMEOUT_MS = 10000
 
 let initialized = false
+let loadChain = Promise.resolve()
 
 /** 只收 Telegram 網頁版自己的網址；設定檔壞掉或被改過就回首頁 */
 function safeUrl(value) {
@@ -63,6 +68,41 @@ function barButton(className, text, label, onClick) {
   return btn
 }
 
+/** 格子先放上去，網址排隊一格一格載（理由見 SETTLE_MS） */
+function loadInTurn(view, url) {
+  loadChain = loadChain.then(() => new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer)
+      setTimeout(resolve, SETTLE_MS)
+    }
+    const timer = setTimeout(done, LOAD_TIMEOUT_MS)
+    view.addEventListener('did-finish-load', done, { once: true })
+    view.setAttribute('src', url)
+  }))
+}
+
+/**
+ * 直接拿掉 webview 不會觸發頁面的 beforeunload：這格若是 Web A 負責連線的主分頁，
+ * 其他格收不到交棒通知、全部卡在連線中。先導到 about:blank 讓它正常卸載再拿掉。
+ */
+function closePane(pane, view) {
+  let removed = false
+  const remove = () => {
+    if (removed) return
+    removed = true
+    pane.remove()
+    save()
+    paintBars()
+  }
+  view.addEventListener('did-navigate', remove, { once: true })
+  setTimeout(remove, 1500)
+  try {
+    view.loadURL('about:blank').catch(remove)
+  } catch {
+    remove() // 還在排隊、沒載過的格子：沒有頁面要卸載
+  }
+}
+
 /** @param {string} url */
 function addPane(url) {
   const pane = document.createElement('div')
@@ -75,18 +115,13 @@ function addPane(url) {
       addPane(HOME_URL)
       save()
     }),
-    barButton('telegram-pane-close', '✕', '關掉這一格', () => {
-      pane.remove()
-      save()
-      paintBars()
-    })
+    barButton('telegram-pane-close', '✕', '關掉這一格', () => closePane(pane, view))
   )
 
   const view = document.createElement('webview')
   // partition 建了就不能改，要在插入前設好；popup（外部連結）由 main 轉系統瀏覽器
   view.setAttribute('partition', 'persist:telegram')
   view.setAttribute('allowpopups', '')
-  view.setAttribute('src', url)
   view.dataset.src = url
   const remember = (event) => {
     view.dataset.src = safeUrl(/** @type {any} */ (event).url)
@@ -98,6 +133,7 @@ function addPane(url) {
   pane.append(bar, view)
   frame().appendChild(pane)
   paintBars()
+  loadInTurn(view, url)
 }
 
 /** 第一次切進來才建：沒點過 Telegram 就不去連線 */

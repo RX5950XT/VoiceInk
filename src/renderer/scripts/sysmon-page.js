@@ -1879,8 +1879,8 @@ function askKill(force) {
   const n = proc?.count || 1
   desc.textContent = force
     ? (n > 1
-      ? `強制結束「${proc.name}」全部 ${n} 個處理程序（PID ${proc.pids.join('、')}），未存檔資料會遺失。`
-      : `強制結束「${proc?.name || pid}」（PID ${pid}）與子程序，未存檔資料會遺失。`)
+      ? `強制結束「${proc.name}」全部 ${n} 個處理程序（PID ${proc.pids.join('、')}），未存檔資料會遺失；權限不足會跳出系統管理員授權。`
+      : `強制結束「${proc?.name || pid}」（PID ${pid}）與子程序，未存檔資料會遺失；權限不足會跳出系統管理員授權。`)
     : `請「${proc?.name || pid}」（PID ${pid}）關閉，程式可存檔；不回應再用強制結束。`
   confirm.textContent = force ? '強制結束' : '結束'
   confirm.dataset.force = force ? '1' : ''
@@ -1896,16 +1896,8 @@ async function doKill() {
   const proc = state.rows.find((p) => p.pid === pid)
   const pids = proc?.pids?.length ? proc.pids : [pid]
   const force = confirm?.dataset.force === '1'
-  // 合併的那組（chrome ×30）強制結束帶 /T 會連子程序一起收，後面的 pid 早就不在了：
-  // 全部跑完、只要有一個成功就算成功
-  let okCount = 0
-  let res = { ok: true }
-  for (const id of pids) {
-    const one = await electronAPI.sysmon.kill(id, force)
-    if (one?.ok) okCount += 1
-    else res = one
-  }
-  if (okCount > 0) res = { ok: true }
+  // 合併的那組（chrome ×30）整組一次送：一般權限砍不掉要跳 UAC 時只跳一次
+  const res = await electronAPI.sysmon.kill(pids, force)
   if (res?.ok) {
     state.selectedPid = null
     updateKillButtons()

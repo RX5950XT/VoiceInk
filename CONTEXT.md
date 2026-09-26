@@ -6,13 +6,18 @@
 ## 專案概況
 
 VoiceInk：Windows Electron AI 工作台。Vanilla JS + Vite（無前端框架），Electron 43.4.1 ＋ Node.js 22。
-目前版本 **v1.32.0**（系統監控多「磁碟空間」子分頁（仿 disktree，Rust 平行掃描＋treemap）、檔案頁補齊內容視窗與 ZIP 瀏覽；前版 v1.31.0 最重的幾段改 Rust：終端機宿主 `voiceink-term.exe`、用量掃描、資料夾大小、語音輸入熱鍵；常駐 sidecar 不再掛 conhost；前版 v1.30.0 主程序同步 I/O 改非同步＋逾時修「沒有回應」、全專案 UX 稽核、檔案頁排序／範圍切換／欄寬、終端機快捷鍵；再前 v1.29.0 語音轉文字頁多了錄音機、即時字幕留逐字稿紀錄；再前 v1.28.1 Telegram 切回來不再卡；再前 v1.25.0：檔案總管雙欄右欄變成真的能用、操作中心收進狀態列且同名時可覆蓋、
+目前版本 **v1.33.0**（系統監控強制結束權限不足會跳 UAC、Telegram 多開一格一格載且 ✕ 會交棒；前版 v1.32.0 系統監控多「磁碟空間」子分頁（仿 disktree，Rust 平行掃描＋treemap）、檔案頁補齊內容視窗與 ZIP 瀏覽；前版 v1.31.0 最重的幾段改 Rust：終端機宿主 `voiceink-term.exe`、用量掃描、資料夾大小、語音輸入熱鍵；常駐 sidecar 不再掛 conhost；前版 v1.30.0 主程序同步 I/O 改非同步＋逾時修「沒有回應」、全專案 UX 稽核、檔案頁排序／範圍切換／欄寬、終端機快捷鍵；再前 v1.29.0 語音轉文字頁多了錄音機、即時字幕留逐字稿紀錄；再前 v1.28.1 Telegram 切回來不再卡；再前 v1.25.0：檔案總管雙欄右欄變成真的能用、操作中心收進狀態列且同名時可覆蓋、
 資料夾監看不再漏事件；前版終端機 PATH 不再被 Ctrl+G 橋接蓋掉；再前檢查更新改走鏡像）。
 
-nav 十頁：聊天（預設，**專案工作區與終端機都在同一頁**）｜Telegram（官方網頁版 `web.telegram.org/a` 放進 `<webview>`，可並排多開最多 4 格（沒存過開 2 格；每格卡 600px，Web A 一律手機版版面）、共用 `persist:telegram`，每格頂端細列 ✕ 關／最右格 ＋ 再開，每格停的聊天室存 store `telegramPanes`（不用 localStorage：結束走 `app.exit()` 會掉最後幾秒的寫入）；`telegram-page.js`，第一次點才建）｜檔案｜CC代理（`data-page` 仍是 `ccswitch`）｜
+nav 十頁：聊天（預設，**專案工作區與終端機都在同一頁**）｜Telegram（官方網頁版 `web.telegram.org/a` 放進 `<webview>`，可並排多開最多 4 格（沒存過開 2 格；每格卡 600px，Web A 一律手機版版面）、共用 `persist:telegram`，一格載完等 1.5 秒才載下一格（同時開會有好幾格拿同一把金鑰一起連），每格頂端細列 ✕ 關（先導到 `about:blank` 再拿掉：直接拿掉 webview 不觸發 beforeunload，關到 Web A 的主分頁其他格會全斷）／最右格 ＋ 再開，每格停的聊天室存 store `telegramPanes`（不用 localStorage：結束走 `app.exit()` 會掉最後幾秒的寫入）；`telegram-page.js`，第一次點才建）｜檔案｜CC代理（`data-page` 仍是 `ccswitch`）｜
 AGY反代｜語音轉文字｜翻譯與 TTS｜系統監控｜HF模型｜設定。額度不再是一頁：收成工作區主區最下面那條，用量統計在 CC代理。
 
 ## 架構
+
+### 系統監控強制結束可提升權限；Telegram 多開穩定（2026-09-26）
+
+- **強制結束**：`killProcess` 收一個 pid 或整組陣列，先一般權限 `taskkill /F /T`；還活著的（`process.kill(pid,0)` 回 EPERM 算活著）再用 `Start-Process -Verb RunAs` 跳一次 UAC 砍。合併的那組一次送，只跳一次；UAC 取消回 `SYSMON_KILL_CANCELLED`。
+- **Telegram**：✕ 先導 `about:blank` 再拿掉（交棒給其他格）；格子一格一格載。9/25 19:08 那次登出是 Web A 自己 `signOut`（連線被判定壞掉就會登出並呼叫 `auth.LogOut`），存金鑰備份放回去救不了。當時 Urban VPN 開著約 2000 條連線，已停用觀察。
 
 ### 系統監控加「磁碟空間」子分頁（2026-09-25）
 

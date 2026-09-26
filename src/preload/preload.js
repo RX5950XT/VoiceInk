@@ -456,7 +456,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     inventory: () => ipcRenderer.invoke('sysmon:inventory'),
     /** 選到某一列才查路徑／擁有者；每輪都查會多 284ms */
     detail: (pid) => ipcRenderer.invoke('sysmon:detail', pid),
-    /** @param {number} pid @param {boolean} force true = taskkill /F /T */
+    /** @param {number | number[]} pid @param {boolean} force true = taskkill /F /T，權限不足會跳 UAC */
     kill: (pid, force) => ipcRenderer.invoke('sysmon:kill', pid, force === true),
     enableSensors: () => ipcRenderer.invoke('sysmon:enableSensors'),
     /** 代裝 PawnIO 核心驅動：下載網址與安裝參數都在 main，這裡送不出任何字串 */
